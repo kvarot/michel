@@ -31,7 +31,7 @@ Testé (tests automatisés) :
 
 Seulement déclaré (aucun test ne le garantit aujourd'hui) :
 
-- Une dépendance qui utiliserait directement `http.DefaultClient` ou `http.DefaultTransport` ne serait pas vue par la passerelle. `make lint` cherche un motif (`http.DefaultClient`, `http.Get(`, `http.Post(`) dans le code de Michel, mais pas dans les dépendances. Un test installant un transport par défaut qui refuse tout est prévu.
+- Une dépendance qui utiliserait directement `http.DefaultClient` ou `http.DefaultTransport` ne serait pas vue par la passerelle. `internal/egress/boundary_test.go` (lancé par `go test ./...` en CI, et par `make lint`) analyse le code de Michel hors de `internal/egress` et échoue sur `http.DefaultClient`, `http.DefaultTransport`, `http.Get/Post/Head/PostForm`, les littéraux `http.Client{}` et `http.Transport{}`, `net.Dial`, `net.DialTimeout` et `net.Dialer{}`, mais il ne lit pas les dépendances. Un test installant un transport par défaut qui refuse tout est prévu.
 
 ## Hors plan 1
 

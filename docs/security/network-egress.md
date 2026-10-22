@@ -31,7 +31,7 @@ Tested (automated tests):
 
 Declared only (not enforced by a test today):
 
-- A dependency that uses `http.DefaultClient` or `http.DefaultTransport` directly would not be seen by the gateway. `make lint` greps the Michel code for a pattern (`http.DefaultClient`, `http.Get(`, `http.Post(`), but not the dependencies. A test that installs a deny-all default transport is planned.
+- A dependency that uses `http.DefaultClient` or `http.DefaultTransport` directly would not be seen by the gateway. `internal/egress/boundary_test.go` (run by `go test ./...` in CI, and by `make lint`) parses the Michel code outside `internal/egress` and fails on `http.DefaultClient`, `http.DefaultTransport`, `http.Get/Post/Head/PostForm`, `http.Client{}` and `http.Transport{}` literals, `net.Dial`, `net.DialTimeout` and `net.Dialer{}`, but it does not read the dependencies. A test that installs a deny-all default transport is planned.
 
 ## Not in plan 1
 
