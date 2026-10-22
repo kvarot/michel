@@ -39,7 +39,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1) // one writer; serializes access and keeps pragmas per connection
 	if err := migrate(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("cannot prepare the database %s: %w. The file may be damaged; move it aside to start fresh", path, err)
+		return nil, fmt.Errorf("cannot prepare the database %s: %w. The file may be damaged. If the file is corrupted, restore it from a backup; Michel never deletes it for you.", path, err)
 	}
 	return &Store{db: db, path: path}, nil
 }

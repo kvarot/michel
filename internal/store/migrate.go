@@ -14,6 +14,10 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
+// beforeMigrationTx is a test hook run between the "already applied" check
+// and the migration transaction.
+var beforeMigrationTx func()
+
 func migrate(db *sql.DB) error {
 	ctx := context.Background()
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -49,9 +53,22 @@ func migrate(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		tx, err := db.BeginTx(ctx, nil)
+		if beforeMigrationTx != nil {
+			beforeMigrationTx()
+		}
+		tx, err := db.BeginTx(ctx, nil) // immediate: holds the write lock
 		if err != nil {
 			return err
+		}
+		// Another process may have applied it since the check above; under
+		// the write lock the answer is final.
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&n); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if n > 0 {
+			tx.Rollback()
+			continue
 		}
 		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 			tx.Rollback()
