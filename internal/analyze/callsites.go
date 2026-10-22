@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-const (
-	maxSites      = 200
-	maxSnippetLen = 160
-)
+const maxSnippetLen = 160
+
+// maxSites caps the kept sites; a variable only so tests can lower it.
+var maxSites = 200
 
 // CallSite is one line of the user's code that uses a package.
 type CallSite struct {
@@ -28,10 +28,16 @@ type CallSites struct {
 	Count      int        // total number of matching lines
 	Quality    string     // PHP: "psr4" | "name" | "low"; JS: "import"
 	Namespaces []string
+	// Unreadable counts files that could not be opened or fully read (e.g. a
+	// line over 1 MiB), so "no usage found" differs from "could not read".
+	Unreadable int
 }
 
 // FindCallSites looks for the lines of the user's code, under the manifest's
 // directory, that use pkg. It never writes and never touches the network.
+//
+// Known limitation: for PHP, the `use` line is the site. Unqualified short-name
+// usages after an import (`new Client(`) are not tracked.
 func FindCallSites(projectRoot, manifestRelPath, ecosystem, pkg string, exclude []string) (CallSites, error) {
 	manifestDir := filepath.Dir(filepath.Join(projectRoot, filepath.FromSlash(manifestRelPath)))
 	others, err := findOtherManifestDirs(projectRoot, manifestDir, exclude)
@@ -50,14 +56,23 @@ func FindCallSites(projectRoot, manifestRelPath, ecosystem, pkg string, exclude 
 // scanFiles runs match on every line of files and collects the sites.
 func scanFiles(projectRoot string, files []string, match func(line string) bool) (CallSites, error) {
 	var res CallSites
+	type entry struct{ abs, rel string }
+	entries := make([]entry, 0, len(files))
 	for _, f := range files {
 		rel, err := filepath.Rel(projectRoot, f)
 		if err != nil {
+			res.Unreadable++
 			continue
 		}
-		rel = filepath.ToSlash(rel)
+		entries = append(entries, entry{f, filepath.ToSlash(rel)})
+	}
+	// Slash order, so the kept sites are the same on every OS.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].rel < entries[j].rel })
+	for _, e := range entries {
+		f, rel := e.abs, e.rel
 		fh, err := os.Open(f)
 		if err != nil {
+			res.Unreadable++
 			continue
 		}
 		sc := bufio.NewScanner(fh)
@@ -76,14 +91,11 @@ func scanFiles(projectRoot string, files []string, match func(line string) bool)
 				})
 			}
 		}
+		if sc.Err() != nil {
+			res.Unreadable++
+		}
 		fh.Close()
 	}
-	sort.SliceStable(res.Sites, func(i, j int) bool {
-		if res.Sites[i].File != res.Sites[j].File {
-			return res.Sites[i].File < res.Sites[j].File
-		}
-		return res.Sites[i].Line < res.Sites[j].Line
-	})
 	return res, nil
 }
 
@@ -96,18 +108,19 @@ func snippet(line string) string {
 }
 
 func isTestPath(rel string) bool {
-	p := "/" + rel
+	lower := strings.ToLower(rel)
+	p := "/" + lower
 	for _, d := range []string{"/tests/", "/test/", "/__tests__/"} {
 		if strings.Contains(p, d) {
 			return true
 		}
 	}
-	if strings.HasSuffix(rel, "Test.php") {
+	if strings.HasSuffix(rel, "Test.php") || strings.HasSuffix(lower, "_test.php") {
 		return true
 	}
 	for _, kind := range []string{".test", ".spec"} {
-		for _, ext := range []string{".js", ".ts", ".jsx", ".tsx"} {
-			if strings.HasSuffix(rel, kind+ext) {
+		for _, ext := range []string{".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".vue"} {
+			if strings.HasSuffix(lower, kind+ext) {
 				return true
 			}
 		}

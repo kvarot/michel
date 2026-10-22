@@ -10,10 +10,10 @@ import (
 
 // vendorNamespaces reads the autoload.psr-4 / psr-0 namespaces of the
 // installed package, without the trailing backslash.
-func vendorNamespaces(manifestDir, pkg string) []string {
+func vendorNamespaces(manifestDir, pkg string) (nss, underscored []string) {
 	data, err := os.ReadFile(filepath.Join(manifestDir, "vendor", filepath.FromSlash(pkg), "composer.json"))
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var c struct {
 		Autoload struct {
@@ -22,21 +22,30 @@ func vendorNamespaces(manifestDir, pkg string) []string {
 		} `json:"autoload"`
 	}
 	if json.Unmarshal(data, &c) != nil {
-		return nil
+		return nil, nil
 	}
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range []map[string]json.RawMessage{c.Autoload.PSR4, c.Autoload.PSR0} {
 		for k := range m {
-			ns := strings.TrimRight(strings.TrimSpace(k), `\`)
-			if ns != "" && !seen[ns] {
+			k = strings.TrimSpace(k)
+			us := strings.HasSuffix(k, "_")
+			ns := strings.TrimRight(k, `\_`)
+			if ns == "" {
+				continue
+			}
+			if us {
+				underscored = append(underscored, ns+"_")
+			}
+			if !seen[ns] {
 				seen[ns] = true
 				out = append(out, ns)
 			}
 		}
 	}
 	sort.Strings(out)
-	return out
+	sort.Strings(underscored)
+	return out, underscored
 }
 
 // probableNamespace derives `Acme\HttpClient` from "acme/http-client".
@@ -54,10 +63,25 @@ func probableNamespace(pkg string) string {
 	return strings.Join(segs, `\`)
 }
 
-func isNSBoundary(c byte) bool { return c == ' ' || c == '\t' || c == '(' || c == ',' || c == '\\' }
-
 func isIdentByte(c byte) bool {
 	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
+}
+
+// boundaryBefore: start of line, or a non-identifier byte that is not a
+// backslash; after a backslash, the byte before it must be a non-identifier
+// too (so `App\Twig\Ext` does not match `Twig`, `\Acme\Vuln` matches `Acme\Vuln`).
+func boundaryBefore(s string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	c := s[i-1]
+	if isIdentByte(c) {
+		return false
+	}
+	if c == '\\' {
+		return i-1 == 0 || !isIdentByte(s[i-2])
+	}
+	return true
 }
 
 // lineHasNamespace reports whether the lowercased line references one of the
@@ -73,10 +97,11 @@ func lineHasNamespace(lower string, nss []string) bool {
 			}
 			i += from
 			from = i + 1
-			if i > 0 && !isNSBoundary(lower[i-1]) {
+			if !boundaryBefore(lower, i) {
 				continue
 			}
-			if end := i + len(ns); end < len(lower) && isIdentByte(lower[end]) {
+			// A namespace ending in "_" (psr-0 style) is a prefix of the class name.
+			if end := i + len(ns); !strings.HasSuffix(ns, "_") && end < len(lower) && isIdentByte(lower[end]) {
 				continue
 			}
 			return true
@@ -99,8 +124,8 @@ func findPHP(projectRoot, manifestDir string, others []string, pkg string, exclu
 			return lineHasNamespace(strings.ToLower(line), low)
 		})
 	}
-	if nss := vendorNamespaces(manifestDir, pkg); len(nss) > 0 {
-		res, err := search(nss)
+	if nss, us := vendorNamespaces(manifestDir, pkg); len(nss) > 0 {
+		res, err := search(append(append([]string{}, nss...), us...))
 		res.Quality, res.Namespaces = "psr4", nss
 		return res, err
 	}

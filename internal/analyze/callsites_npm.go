@@ -4,7 +4,7 @@ import "strings"
 
 func findJS(projectRoot, manifestDir string, others []string, pkg string, exclude []string) (CallSites, error) {
 	files, err := userFiles(projectRoot, manifestDir, others, exclude,
-		[]string{".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"})
+		[]string{".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".mts", ".cts", ".vue", ".svelte"})
 	if err != nil {
 		return CallSites{}, err
 	}
