@@ -17,14 +17,29 @@ type VerifyResult struct {
 	Head     string // hash of the last verified event
 }
 
+// Head anchor reasons reported by Verify.
+const (
+	ReasonTailTruncated = "tail truncated"
+	ReasonHeadAbsent    = "head anchor absent"
+)
+
 // Verify recomputes every hash in insertion order and stops at the first
 // event that does not match. It also compares the chain with the audit.head
-// side file written next to the database: if the file records more events
-// than the chain holds, or a different head hash, the Reason is
-// "tail truncated". That file raises the bar against deleting the newest
-// events, but it is not a signature: someone who can edit the database can
-// edit the file too.
+// side file written next to the database. The file is read before the chain
+// is walked: events recorded after that read are expected and fine. The
+// Reason is "tail truncated" when the chain no longer holds the event the
+// head points at (fewer events than the head count) or holds a different
+// one (hash mismatch at that position). When the file is missing the Reason
+// is "head anchor absent", which is not a broken chain. That file raises
+// the bar against deleting the newest events, but it is not a signature:
+// someone who can edit the database can edit the file too.
 func Verify(ctx context.Context, s *store.Store) (VerifyResult, error) {
+	n, h, ok := readHead(s.Path())
+	return verifyAgainst(ctx, s, n, h, ok)
+}
+
+// verifyAgainst walks the chain and checks it against a head read earlier.
+func verifyAgainst(ctx context.Context, s *store.Store, headCount int, headHash string, headOK bool) (VerifyResult, error) {
 	rows, err := s.DB().QueryContext(ctx, `SELECT id, ts, actor, action, target, result,
 		correlation_id, evidence, prev_hash, hash FROM audit_event ORDER BY rowid`)
 	if err != nil {
@@ -33,6 +48,7 @@ func Verify(ctx context.Context, s *store.Store) (VerifyResult, error) {
 	defer rows.Close()
 	var res VerifyResult
 	prev := ""
+	atHead := "" // hash of the event at position headCount, once walked
 	for rows.Next() {
 		var e Event
 		var evidence string
@@ -57,13 +73,19 @@ func Verify(ctx context.Context, s *store.Store) (VerifyResult, error) {
 		}
 		res.Checked++
 		prev = e.Hash
+		if res.Checked == headCount {
+			atHead = e.Hash
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return res, err
 	}
 	res.Head = prev
-	if n, h, ok := readHead(s.Path()); ok && (n > res.Checked || (n == res.Checked && h != prev)) {
-		res.Reason, res.Expected = "tail truncated", n
+	switch {
+	case !headOK:
+		res.Reason = ReasonHeadAbsent
+	case headCount > 0 && (res.Checked < headCount || atHead != headHash):
+		res.Reason, res.Expected = ReasonTailTruncated, headCount
 	}
 	return res, nil
 }

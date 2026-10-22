@@ -6,7 +6,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// renameAttempts and renameDelay bound the retries of the head rename: on
+// Windows a reader holding the file open makes the rename fail briefly.
+const (
+	renameAttempts = 5
+	renameDelay    = 20 * time.Millisecond
+)
+
+// rename is os.Rename; tests replace it to simulate sharing violations.
+var rename = os.Rename
 
 // HeadFile returns the path of the head anchor next to the database.
 func HeadFile(dbPath string) string { return filepath.Join(filepath.Dir(dbPath), "audit.head") }
@@ -18,11 +29,17 @@ func writeHead(dbPath string, count int, hash string) error {
 	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%d %s\n", count, hash)), 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
-		return err
+	var err error
+	for i := 0; i < renameAttempts; i++ {
+		if i > 0 {
+			time.Sleep(renameDelay)
+		}
+		if err = rename(tmp, dst); err == nil {
+			return nil
+		}
 	}
-	return nil
+	os.Remove(tmp)
+	return err
 }
 
 // readHead returns ok=false when the file is absent or unreadable.

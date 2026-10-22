@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -152,6 +153,19 @@ func TestAuditVerifyTailTruncated(t *testing.T) {
 	_, out, _, err := run(t, dir, "audit", "verify")
 	want := `audit: BROKEN at tail: tail truncated (expected 3 events, found 2)` + "\n"
 	if ExitCode(err) != 2 || out != want {
+		t.Errorf("out=%q err=%v", out, err)
+	}
+}
+
+func TestAuditVerifyHeadAnchorAbsent(t *testing.T) {
+	dir := t.TempDir()
+	run(t, dir, "noop")
+	if err := os.Remove(audit.HeadFile(filepath.Join(dir, "michel.db"))); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _, err := run(t, dir, "audit", "verify")
+	if err != nil || strings.Contains(out, "BROKEN") || !strings.Contains(out, "audit: head anchor absent") ||
+		!strings.HasPrefix(out, "audit: 1 events verified") {
 		t.Errorf("out=%q err=%v", out, err)
 	}
 }

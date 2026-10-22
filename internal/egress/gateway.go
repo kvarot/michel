@@ -26,12 +26,14 @@ type Attempt struct {
 	Reason  string
 }
 
-// Sink receives every Attempt (implemented by the audit logger).
-type Sink interface{ Record(Attempt) }
+// Sink receives every Attempt (implemented by the audit logger). A non-nil
+// error means the attempt left no durable trace: the gateway then refuses
+// the request even when the policy allows it (fail closed).
+type Sink interface{ Record(Attempt) error }
 
 type nopSink struct{}
 
-func (nopSink) Record(Attempt) {}
+func (nopSink) Record(Attempt) error { return nil }
 
 // Gateway decides and records outbound requests.
 type Gateway struct {
@@ -109,14 +111,15 @@ func (g *Gateway) Attempts() []Attempt {
 	return append([]Attempt(nil), g.attempts...)
 }
 
-func (g *Gateway) record(a Attempt) {
+// record keeps a in memory and hands it to the sink, returning the sink error.
+func (g *Gateway) record(a Attempt) error {
 	g.mu.Lock()
 	if len(g.attempts) >= maxAttempts {
 		g.attempts = append(g.attempts[:0], g.attempts[1:]...)
 	}
 	g.attempts = append(g.attempts, a)
 	g.mu.Unlock()
-	g.sink.Record(a)
+	return g.sink.Record(a)
 }
 
 func hostMatches(rule, host string) bool {

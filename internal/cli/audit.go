@@ -36,7 +36,7 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 					return err
 				}
 			}
-			tail := res.Reason == "tail truncated"
+			tail := res.Reason == audit.ReasonTailTruncated
 			if tail {
 				msg := fmt.Sprintf("audit: BROKEN at tail: tail truncated (expected %d events, found %d)", res.Expected, res.Checked)
 				if !asJSON {
@@ -56,6 +56,10 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 					fmt.Fprintf(deps.Stdout, "audit: %d events verified, head %.12s\n", res.Checked, res.Head)
 				} else {
 					fmt.Fprintf(deps.Stdout, "audit: %d events verified\n", res.Checked)
+				}
+				if res.Reason == audit.ReasonHeadAbsent {
+					fmt.Fprintf(deps.Stdout, "audit: head anchor absent (%s is missing), so the removal of the newest events cannot be checked. The next recorded event writes it again.\n",
+						audit.HeadFile(deps.Store.Path()))
 				}
 			}
 			return nil

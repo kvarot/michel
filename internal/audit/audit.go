@@ -32,11 +32,13 @@ type Logger struct {
 	now     func() time.Time
 	mu      sync.Mutex
 	entropy *ulid.MonotonicEntropy
+	commit  func(*sql.Tx) error // tests replace it to simulate a failed commit
 }
 
 // NewLogger builds a Logger writing to s. now gives the event time.
 func NewLogger(s *store.Store, now func() time.Time) *Logger {
-	return &Logger{s: s, now: now, entropy: ulid.Monotonic(rand.Reader, 0)}
+	return &Logger{s: s, now: now, entropy: ulid.Monotonic(rand.Reader, 0),
+		commit: func(tx *sql.Tx) error { return tx.Commit() }}
 }
 
 // canonical returns the JSON text of the hashed fields. Go sorts map keys,
@@ -101,12 +103,16 @@ func (l *Logger) Record(ctx context.Context, e Event) (Event, error) {
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_event`).Scan(&count); err != nil {
 		return Event{}, fmt.Errorf("cannot count the audit chain: %w", err)
 	}
-	// Written while the write lock is held, so heads land in chain order.
-	if err := writeHead(l.s.Path(), count, e.Hash); err != nil {
-		return Event{}, fmt.Errorf("cannot write the audit head file: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
+	if err := l.commit(tx); err != nil {
 		return Event{}, fmt.Errorf("cannot write to the audit log: %w", err)
+	}
+	// The head is written only once the event is durable, so it never points
+	// past the chain. It is written under l.mu, so heads from this process
+	// land in chain order. The database is the source of truth: a head that
+	// cannot be written is a warning, never a failed Record.
+	if err := writeHead(l.s.Path(), count, e.Hash); err != nil {
+		slog.Warn("audit: cannot update the head anchor file; audit verify may report it as absent or stale",
+			"path", HeadFile(l.s.Path()), "err", err)
 	}
 	return e, nil
 }
@@ -116,22 +122,25 @@ type egressSink struct{ l *Logger }
 // EgressSink returns a sink that records every egress attempt as an event.
 func (l *Logger) EgressSink() egress.Sink { return egressSink{l} }
 
-// Record never panics and never blocks the caller on a database error.
-func (s egressSink) Record(a egress.Attempt) {
+// Record never panics. It returns the write error so the gateway can refuse
+// an allowed request that would otherwise leave no audit trace.
+func (s egressSink) Record(a egress.Attempt) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("audit: cannot record egress attempt", "err", fmt.Sprint(r))
+			err = fmt.Errorf("cannot record egress attempt: %v", r)
 		}
 	}()
 	result := "denied"
 	if a.Allowed {
 		result = "allowed"
 	}
-	_, err := s.l.Record(context.Background(), Event{
+	_, err = s.l.Record(context.Background(), Event{
 		Actor: "egress", Action: "egress.attempt", Target: a.Host, Result: result,
 		Evidence: map[string]any{"purpose": a.Purpose, "reason": a.Reason},
 	})
 	if err != nil {
 		slog.Error("audit: cannot record egress attempt", "err", err)
 	}
+	return err
 }

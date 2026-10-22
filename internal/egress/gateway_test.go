@@ -120,7 +120,7 @@ func TestLoopbackLocalPurposeAllowed(t *testing.T) {
 
 type captureSink struct{ got []egress.Attempt }
 
-func (c *captureSink) Record(a egress.Attempt) { c.got = append(c.got, a) }
+func (c *captureSink) Record(a egress.Attempt) error { c.got = append(c.got, a); return nil }
 
 func TestAttemptNeverContainsQueryOrHeaders(t *testing.T) {
 	s := server(t)
@@ -229,5 +229,47 @@ func TestAttemptNeverLeaksOnAllowedPath(t *testing.T) {
 				t.Fatalf("leak %q in %+v", bad, a)
 			}
 		}
+	}
+}
+
+type failingSink struct{ got []egress.Attempt }
+
+func (f *failingSink) Record(a egress.Attempt) error {
+	f.got = append(f.got, a)
+	return errors.New("database is closed")
+}
+
+func TestAllowedRequestRefusedWhenAuditUnavailable(t *testing.T) {
+	hit := false
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	t.Cleanup(s.Close)
+	sink := &failingSink{}
+	g := egress.New(pol(policy.AllowRule{Host: "127.0.0.1", Purpose: "osv.db"}), sink)
+	resp, err := g.Client("osv.db").Get(s.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("expected the request to be refused")
+	}
+	if !errors.Is(err, egress.ErrEgressDenied) || !strings.Contains(err.Error(), "audit unavailable: database is closed") {
+		t.Fatalf("err = %v", err)
+	}
+	if hit {
+		t.Fatal("request reached the server although the audit write failed")
+	}
+	if len(sink.got) != 1 || len(g.Attempts()) != 1 || g.Attempts()[0].Host != "127.0.0.1" {
+		t.Fatalf("sink=%+v attempts=%+v", sink.got, g.Attempts())
+	}
+}
+
+func TestDeniedRequestUnchangedWhenAuditUnavailable(t *testing.T) {
+	s := server(t)
+	g := egress.New(pol(), &failingSink{})
+	resp, err := g.Client("osv.db").Get(s.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, egress.ErrEgressDenied) || !strings.Contains(err.Error(), "no rule for host") {
+		t.Fatalf("err = %v", err)
 	}
 }

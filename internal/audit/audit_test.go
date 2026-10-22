@@ -3,14 +3,20 @@ package audit
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kvarot/michel/internal/egress"
+	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/store"
 )
 
@@ -144,7 +150,9 @@ func TestEgressSinkRecordsDeniedWithoutSecrets(t *testing.T) {
 func TestEgressSinkDoesNotPanicOnClosedStore(t *testing.T) {
 	l, s := newLogger(t)
 	s.Close()
-	l.EgressSink().Record(egress.Attempt{Host: "x", Purpose: "p"})
+	if err := l.EgressSink().Record(egress.Attempt{Host: "x", Purpose: "p"}); err == nil {
+		t.Fatal("expected the sink to report the write error")
+	}
 }
 
 func TestConcurrentRecordKeepsChainValid(t *testing.T) {
@@ -210,5 +218,141 @@ func TestTwoStoresRecordConcurrently(t *testing.T) {
 	res, err := Verify(context.Background(), s1)
 	if err != nil || res.Broken != nil || res.Reason != "" || res.Checked != 40 {
 		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestGatewayRefusesAllowedRequestWhenAuditStoreClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request reached the server although the audit write failed")
+	}))
+	t.Cleanup(srv.Close)
+	l, s := newLogger(t)
+	p := policy.Defaults()
+	p.Sovereignty.Network.Allow = []policy.AllowRule{{Host: "127.0.0.1", Purpose: "osv.db"}}
+	g := egress.New(p, l.EgressSink())
+	s.Close()
+	resp, err := g.Client("osv.db").Get(srv.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("expected a refusal")
+	}
+	if !errors.Is(err, egress.ErrEgressDenied) || !strings.Contains(err.Error(), "audit unavailable") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(g.Attempts()) != 1 {
+		t.Fatalf("attempts = %+v", g.Attempts())
+	}
+}
+
+func TestVerifyIgnoresEventsWrittenAfterHeadWasRead(t *testing.T) {
+	l, s := newLogger(t)
+	record3(t, l)
+	n, h, ok := readHead(s.Path()) // verify reads the head first...
+	if !ok || n != 3 {
+		t.Fatalf("head = %d %s %v", n, h, ok)
+	}
+	record3(t, l) // ...a concurrent writer appends before the walk
+	res, err := verifyAgainst(context.Background(), s, n, h, ok)
+	if err != nil || res.Broken != nil || res.Reason != "" || res.Checked != 6 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestVerifyCleanWhenHeadBehindChain(t *testing.T) {
+	// Two processes write the head after their commits: the older count may
+	// land last. A head behind the chain is not truncation.
+	l, s := newLogger(t)
+	e1, _, _ := record3(t, l)
+	if err := writeHead(s.Path(), 1, e1.Hash); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Verify(context.Background(), s)
+	if err != nil || res.Broken != nil || res.Reason != "" || res.Checked != 3 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestFailedCommitLeavesHeadUntouched(t *testing.T) {
+	l, s := newLogger(t)
+	record3(t, l)
+	before, err := os.ReadFile(HeadFile(s.Path()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.commit = func(tx *sql.Tx) error { tx.Rollback(); return errors.New("disk full") }
+	if _, err := l.Record(context.Background(), Event{Actor: "t", Action: "x", Target: "y", Result: "ok"}); err == nil {
+		t.Fatal("expected Record to fail")
+	}
+	after, _ := os.ReadFile(HeadFile(s.Path()))
+	if string(before) != string(after) {
+		t.Fatalf("head moved past the chain: %q -> %q", before, after)
+	}
+	res, err := Verify(context.Background(), s)
+	if err != nil || res.Broken != nil || res.Reason != "" || res.Checked != 3 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestVerifyDetectsReplacedEventAtHeadPosition(t *testing.T) {
+	l, s := newLogger(t)
+	_, _, e3 := record3(t, l)
+	n, h, _ := readHead(s.Path())
+	// Drop the last event and append a new one: same count, other hash.
+	if _, err := s.DB().Exec(`DELETE FROM audit_event WHERE id=?`, e3.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Record(context.Background(), Event{Actor: "t", Action: "x", Target: "y", Result: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := verifyAgainst(context.Background(), s, n, h, true)
+	if err != nil || res.Reason != ReasonTailTruncated || res.Expected != 3 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestVerifyReportsMissingHead(t *testing.T) {
+	l, s := newLogger(t)
+	record3(t, l)
+	if err := os.Remove(HeadFile(s.Path())); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Verify(context.Background(), s)
+	if err != nil || res.Broken != nil || res.Reason != ReasonHeadAbsent || res.Checked != 3 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestHeadWriteFailureDoesNotFailRecord(t *testing.T) {
+	l, s := newLogger(t)
+	calls := 0
+	rename = func(string, string) error { calls++; return errors.New("sharing violation") }
+	t.Cleanup(func() { rename = os.Rename })
+	if _, err := l.Record(context.Background(), Event{Actor: "t", Action: "x", Target: "y", Result: "ok"}); err != nil {
+		t.Fatalf("Record failed on a head write error: %v", err)
+	}
+	if calls != renameAttempts {
+		t.Fatalf("rename tried %d times, want %d", calls, renameAttempts)
+	}
+	if _, err := os.Stat(HeadFile(s.Path()) + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temp head left behind: %v", err)
+	}
+}
+
+func TestHeadRenameRetriesTransientFailure(t *testing.T) {
+	_, s := newLogger(t)
+	calls := 0
+	rename = func(a, b string) error {
+		calls++
+		if calls < 3 {
+			return errors.New("sharing violation")
+		}
+		return os.Rename(a, b)
+	}
+	t.Cleanup(func() { rename = os.Rename })
+	if err := writeHead(s.Path(), 7, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if n, h, ok := readHead(s.Path()); !ok || n != 7 || h != "abc" {
+		t.Fatalf("head = %d %s %v", n, h, ok)
 	}
 }
