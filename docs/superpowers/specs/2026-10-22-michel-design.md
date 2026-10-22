@@ -201,7 +201,29 @@ Le brief ne contient **jamais** de secret ni de fichier de configuration sensibl
 - Page **Paramètres → Souveraineté et IA** (politique § 11).
 - Aucune revendication HDS : `docs/security/hds-readiness.md` liste ce qui est fourni et ce qui reste à faire.
 
-### 4.10 Ordre de réalisation (celui de la politique § 16, adapté)
+### 4.10 Mise à jour de Michel (décision Kévin : simple, à distance, ou notification + mise à jour simple)
+
+- `michel update check` : compare `buildinfo.Version` à la dernière release GitHub (`api.github.com`, purpose `michel.update`, destination à autoriser explicitement ; en `strict_local`, opt-in de configuration comme les bases OSV). Résultat affiché dans la CLI, la PWA (bandeau) et le digest (« Michel 1.3.0 disponible »).
+- `michel update apply` : télécharge le binaire de la plateforme, vérifie la **signature** (clé publique Ed25519 embarquée dans le binaire, signatures publiées avec chaque release ; `minisign` ou `cosign` au choix du builder) et l'empreinte SHA-256, remplace le binaire de façon atomique (renommage, l'ancien gardé en `michel.old` pour `michel update rollback`), relance le service. Jamais de mise à jour sans signature valide.
+- Réglage `update.mode: off | notify | auto` ; défaut `notify` hors `strict_local`, `off` en `strict_local`. `auto` n'existe que hors `strict_local` et se limite aux versions mineures / correctives (pas de saut majeur sans action).
+- Mode isolé : `michel update apply --from <fichier>` accepte un binaire + signature copiés à la main.
+- Chaque vérification, téléchargement, application ou rollback = événement d'audit avec versions avant/après et empreinte.
+- Les bases OSV et les modèles ont leur propre mécanisme (§ 4.7, § 4.9) ; `update` ne concerne que Michel lui-même.
+
+### 4.11 Expérience : simple, ludique, pédagogique (décision Kévin)
+
+Gérer quelque chose de compliqué n'autorise pas une interface que l'utilisateur ne comprend pas. Règles valables pour la PWA, la CLI, les digests et les briefs :
+
+- **Chaque faille est expliquée en langage courant, sans IA** : trois phrases produites par des gabarits déterministes depuis les données OSV et l'analyse : *C'est quoi* (type de faille, paquet, où il est utilisé chez toi), *Ce qui pourrait arriver* (impact concret, formulé pour un non-spécialiste, avec le niveau de certitude), *Ce que ça coûte de corriger* (saut de version, breaking changes, tests qui couvrent, temps estimé par palier). Le détail technique (CVSS, vecteur, références) reste accessible d'un clic, jamais imposé.
+- **Michel parle** : le prénom porte la voix de l'outil (« Michel a trouvé 3 nouveautés cette nuit, 1 mérite ton attention »), ton direct, une idée par phrase, zéro jargon sans infobulle. Pas de mascotte envahissante : une voix, pas un personnage animé.
+- **Onboarding guidé** : premier lancement = assistant en quatre écrans (projets à suivre, canaux de notification, palier IA proposé selon la machine, résumé de ce qui sort ou non du poste). Chaque écran explique *pourquoi* on demande ça. Aucune question dont la réponse n'a pas d'effet.
+- **Ludique, léger** : compteur de jours sans critique par projet, « 0 critique » affiché comme un état à conserver, progression visible quand on corrige (« 12 → 9 failles, 2 critiques → 0 »), et un mot de Michel quand tout est propre. Pas de points, pas de classement, pas de culpabilisation : les failles reportées avec justification ne sont pas des échecs.
+- **Chaque action dit ce qu'elle va faire avant de le faire** et ce qu'elle a fait après, avec la preuve (commande exécutée, tests lancés, re-scan) à portée de clic. Une erreur dit toujours *quoi*, *pourquoi* et *quoi faire ensuite*.
+- **CLI aussi** : mêmes gabarits ; `michel scan` termine par une phrase de synthèse en langage courant et la prochaine action suggérée ; `--json` pour les machines, `--quiet` pour les scripts.
+- **Glossaire intégré** (CVE, CVSS, KEV, dépendance transitive, lockfile, breaking change…) et liens « en savoir plus » vers des sources publiques stables.
+- Vérifié en revue par un lecteur non spécialiste : si une phrase de l'interface demande une explication orale, elle est réécrite.
+
+### 4.12 Ordre de réalisation (celui de la politique § 16, adapté)
 
 1. Squelette Go + politique YAML + refus par défaut + egress + audit minimal (fondations, testées).
 2. Scan osv-scalibr hors ligne, store, CLI `scan`, premier résultat sur the reference project.
@@ -212,6 +234,7 @@ Le brief ne contient **jamais** de secret ni de fichier de configuration sensibl
 7. Passerelle IA, registre, Ollama, paliers matériel, page Souveraineté ; niveau 3.
 8. Fournisseurs externes opt-in.
 9. Suite de tests de la politique § 13, docs § 14, export CycloneDX/VEX.
+10. Mise à jour signée de Michel (§ 4.10), onboarding guidé et passe pédagogique complète (§ 4.11) ; les gabarits d'explication en langage courant arrivent dès l'étape 3 (analyse) et accompagnent chaque étape suivante.
 
 Chaque étape livre quelque chose d'utilisable seul. Après chaque étape : tests exécutés, résultats réels notés dans le ledger.
 
