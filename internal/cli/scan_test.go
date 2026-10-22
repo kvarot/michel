@@ -78,7 +78,7 @@ func TestScanAndFindingsEndToEnd(t *testing.T) {
 		t.Fatalf("scan: %v", err)
 	}
 	for _, want := range []string{"project", "critical/high/medium/low/unknown", "demo", "1/1/1/0/0", "3/0",
-		"Michel found 3 new findings in demo, 1 critical. Next: michel findings --project demo --severity critical"} {
+		"Michel found 3 new findings in demo, 1 critical, analyzed 3 findings. Next: michel findings --project demo --severity critical"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("scan output lacks %q:\n%s", want, out)
 		}
