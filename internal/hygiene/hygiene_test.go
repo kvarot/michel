@@ -3,6 +3,7 @@ package hygiene
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -52,54 +53,78 @@ func TestNoPrivateProjectTraces(t *testing.T) {
 	}
 }
 
-// TestHygieneCatchesForbiddenTokens proves the hashed list still matches the
-// forbidden forms. The samples are stored rot13-encoded so that this file holds
-// no clear trace either; they are decoded into a temporary tree.
-func TestHygieneCatchesForbiddenTokens(t *testing.T) {
-	bad := []string{
-		"frr uggcf://example.invalid/k",
-		"Example Team grnz",
-		"ncv/service-a/ebhgrf",
-		"znvy: fbzrbar@example.pbz",
-		`cngu P:\Hfref\fbzrbar\k`,
-		"pq /Hfref/someone/fep",
-		"bcra <projects>/guvat",
-		"gur reference ncc",
+// TestHygieneMechanismCatchesAHashedToken proves the matching mechanism without
+// storing any private sample, encoded or not: it hashes a random token, adds
+// that digest to a copy of the list and checks the token is caught in every
+// form, and not as the prefix of a longer identifier.
+func TestHygieneMechanismCatchesAHashedToken(t *testing.T) {
+	if len(forbiddenDigests) < 8 {
+		t.Fatalf("forbidden list shrank to %d digests", len(forbiddenDigests))
 	}
-	good := []string{"zpyrna naq zpy_k fgnl", "n qrcraqrapl jngpure"}
+	raw := make([]byte, 10)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	tok := make([]byte, len(raw))
+	for i, b := range raw {
+		tok[i] = 'a' + b%26
+	}
+	token := "zq" + string(tok) // starts with letters, 12 bytes
+	sum := sha256.Sum256([]byte(token))
+	digests := map[string]bool{hex.EncodeToString(sum[:]): true}
+	for k := range forbiddenDigests {
+		digests[k] = true
+	}
+	mixed := strings.ToUpper(token[:4]) + token[4:]
+	caught := []string{
+		token,
+		"see /home/someone/" + token + "/src/a.php",
+		`C:\work\` + token + `\file.txt`,
+		"the my-" + token + "-app repository",
+		"hello " + mixed + " world",
+		"https://" + token + ".example.org/x",
+	}
+	notCaught := []string{
+		token + "extra is another identifier",
+		token + "_suffix stays allowed",
+		"x" + token + " is not the token either",
+	}
 	root := t.TempDir()
 	write := func(name string, lines []string) {
-		dec := make([]string, len(lines))
-		for i, l := range lines {
-			dec[i] = rot13(l)
-		}
-		if err := os.WriteFile(filepath.Join(root, name), []byte(strings.Join(dec, "\n")+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("bad.md", bad)
-	write("good.md", good)
-	violations, err := scanTree(root)
+	write("caught.md", caught)
+	write("allowed.md", notCaught)
+	violations, err := scanTreeWith(root, digests)
 	if err != nil {
 		t.Fatal(err)
 	}
 	hits := map[string]bool{}
 	for _, v := range violations {
-		if strings.HasPrefix(v, "good.md:") {
+		if strings.HasPrefix(v, "allowed.md:") {
 			t.Errorf("false positive: %s", v)
 		}
 		hits[strings.SplitN(v, ": ", 2)[0]] = true
 	}
-	for i := range bad {
-		if loc := "bad.md:" + itoa(i+1); !hits[loc] {
-			t.Errorf("sample line %d (%q once decoded) is not caught", i+1, bad[i])
+	for i := range caught {
+		if !hits["caught.md:"+itoa(i+1)] {
+			t.Errorf("form %d is not caught: %q", i+1, caught[i])
 		}
+	}
+	// The real list does not know the random token.
+	if v, _ := scanTreeWith(root, forbiddenDigests); len(v) != 0 {
+		t.Errorf("random token matched the real list: %v", v)
 	}
 }
 
-// scanTree walks root and reports every line holding a forbidden token, as
-// "path:line: forbidden token". The token itself is never printed.
-func scanTree(root string) ([]string, error) {
+// scanTree checks root against the forbidden list.
+func scanTree(root string) ([]string, error) { return scanTreeWith(root, forbiddenDigests) }
+
+// scanTreeWith walks root and reports every line holding a token whose digest
+// is in digests, as "path:line: forbidden token". The token is never printed.
+func scanTreeWith(root string, digests map[string]bool) ([]string, error) {
 	skipDirs := map[string]bool{".git": true, ".superpowers": true, "node_modules": true, "vendor": true, "bin": true, "dist": true}
 	skipFiles := map[string]bool{"go.mod": true, "go.sum": true}
 
@@ -130,7 +155,7 @@ func scanTree(root string) ([]string, error) {
 		line := 0
 		for sc.Scan() {
 			line++
-			if lineIsForbidden(strings.ToLower(sc.Text())) {
+			if lineIsForbidden(strings.ToLower(sc.Text()), digests) {
 				violations = append(violations, rel+":"+itoa(line)+": forbidden token")
 			}
 		}
@@ -140,15 +165,15 @@ func scanTree(root string) ([]string, error) {
 }
 
 // lineIsForbidden hashes every token of the lowercased line and every join of
-// 2 to maxJoin adjacent tokens.
-func lineIsForbidden(lower string) bool {
+// 2 to maxJoin adjacent tokens, and looks each digest up in digests.
+func lineIsForbidden(lower string, digests map[string]bool) bool {
 	toks := tokens(lower)
 	for i := range toks {
 		joined := ""
 		for j := i; j < len(toks) && j < i+maxJoin; j++ {
 			joined += toks[j]
 			sum := sha256.Sum256([]byte(joined))
-			if forbiddenDigests[hex.EncodeToString(sum[:])] {
+			if digests[hex.EncodeToString(sum[:])] {
 				return true
 			}
 		}
@@ -164,18 +189,6 @@ func tokens(s string) []string {
 // inside their word.
 func isWordRune(r rune) bool {
 	return r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || r >= 0x80
-}
-
-func rot13(s string) string {
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z':
-			return 'a' + (r-'a'+13)%26
-		case r >= 'A' && r <= 'Z':
-			return 'A' + (r-'A'+13)%26
-		}
-		return r
-	}, s)
 }
 
 func moduleRoot(t *testing.T) string {
