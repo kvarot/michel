@@ -67,6 +67,38 @@ michel audit list --last 20
 
 `scan` cherche les fichiers `composer.lock` et `package-lock.json`, en ignorant tout dossier `vendor/` et `node_modules/`. Une base OSV absente fait échouer le scan avant tout le reste, en indiquant la commande pour y remédier. Un manifeste corrompu est consigné comme échoué (statut de scan `partial`) et les autres manifestes sont quand même analysés. `audit verify` contrôle la chaîne de hachage du journal d'audit. Après un scan hors ligne, `audit list` ne doit montrer aucun événement `egress.attempt`.
 
+## Analyse
+
+```
+michel analyze --project monprojet [--force]
+michel analyze --all
+michel scan --project monprojet [--no-analyze]
+```
+
+`analyze` ne lit que les fichiers du projet (jamais le réseau, jamais une IA). Pour chaque finding nouveau ou en attente, il détermine comment le paquet est atteint (direct ou transitif, via quels paquets), quelle mise à jour le corrige et si votre contrainte de version l'autorise, où votre code utilise le paquet, quels tests couvrent ce code, ce que dit le journal des modifications local, puis un score de risque avec une recommandation (`auto_fix`, `handoff`, `report_only` ; voir [remediation-risk.fr.md](../remediation-risk.fr.md)). `scan` le lance automatiquement sauf avec `--no-analyze`. `--force` recalcule les analyses encore fraîches. La qualité de la recherche dépend de l'installation locale des dépendances (`vendor/`, `node_modules/`) : sans elles, Michel se rabat sur une recherche par nom plus faible et le dit.
+
+## Un finding en détail
+
+```
+michel finding <id-ou-préfixe> [--lang fr] [--json]
+michel findings --project monprojet --severity critical --explain
+```
+
+`finding` affiche trois phrases : Quoi (comment le paquet est utilisé dans votre code), Impact (gravité et probabilité que cela vous concerne), Coût (taille de la mise à jour, journal des modifications, tests, ce que Michel peut faire). Un préfixe d'id suffit s'il est sans ambiguïté. `findings --explain` affiche la même phrase « Quoi » sous chaque ligne.
+
+## Langue
+
+`--lang en|fr` (toute commande qui explique) l'emporte sur `assistant.lang` du fichier de politique, `en` par défaut. La langue ne change que la formulation : les faits, le score et les clés JSON sont identiques.
+
+## Réglages par projet
+
+```
+michel project set monprojet --core-package vendor/core --core-package autre-lib
+michel project set monprojet --risk major_jump=50 --risk many_call_sites_threshold=20
+```
+
+`--core-package` remplace toute la liste des paquets dont la mise à jour est plus risquée pour ce projet (`--core-package ''` la vide). `--risk clé=valeur` remplace une valeur de la section `risk.*` de la politique pour ce projet seulement ; les autres remplacements sont conservés. Relancez ensuite `michel analyze --project monprojet --force` pour les appliquer. Les clés et seuils sont décrits dans [remediation-risk.fr.md](../remediation-risk.fr.md) et listés dans `config.example.yaml`.
+
 ## Scripts
 
 `michel scan --json` affiche un objet :
@@ -86,3 +118,14 @@ michel audit list --last 20
 ```
 
 `failures` liste les projets dont le scan n'a pas pu s'exécuter du tout ; elle est vide en cas de succès. Les sévérités sans finding sont omises de `by_severity`.
+
+`michel analyze --json` affiche un objet :
+
+```json
+{
+  "results": [{"project": "monprojet", "analyzed": 215, "skipped": 0, "failed": 0, "duration_ms": 116401}],
+  "failures": []
+}
+```
+
+`michel finding <id> --json` affiche `{"finding": {...}, "analysis": {...}, "explanation": {...}}`. `finding` est le finding stocké (id, paquet, versions, sévérité, statut...). `analysis` contient `Path` (`Directness`, `Via`, `Constraint`), `Upgrade` (`Target`, `Jump`, `ConstraintAllows`), `Calls` (`Sites`, `Count`, `Quality` = `psr4|import|name|low`), `Coverage` (`TestFiles`, `Count`, `Method`), `Changelog` (`Available`, `Breaking`, `Excerpt`) et `Risk` (`Score`, `Recommendation`, `Warning`, `Terms`). `explanation` contient les trois phrases dans la langue demandée.
