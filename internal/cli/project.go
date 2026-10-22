@@ -66,7 +66,10 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 			}
 			added, err := projectRepo(deps).Add(ctx, p)
 			if err != nil {
-				msg := addDenialMessage(path, name, err)
+				msg, result := addDenialMessage(path, name, err), "denied"
+				if !isValidationErr(err) {
+					result, msg = "error", fmt.Sprintf("Cannot add project: %v. Michel could not save it; check that the data folder is writable and try again.", err)
+				}
 				ev := map[string]any{"path": path, "reason": msg}
 				if class != "" {
 					ev["classification"] = class
@@ -75,7 +78,7 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 					ev["fix_level"] = fixLevel
 				}
 				if _, aerr := deps.Audit.Record(ctx, audit.Event{
-					Actor: "cli", Action: "project.add", Target: name, Result: "denied", Evidence: ev,
+					Actor: "cli", Action: "project.add", Target: name, Result: result, Evidence: ev,
 				}); aerr != nil {
 					return fmt.Errorf("%s Also, Michel could not write the audit log: %w", msg, aerr)
 				}
@@ -164,4 +167,16 @@ func newProjectRemoveCmd(deps *Deps) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// isValidationErr reports whether err is a refusal of the input, as opposed to
+// a storage or system failure.
+func isValidationErr(err error) bool {
+	for _, s := range []error{project.ErrNotADirectory, project.ErrDuplicateName, project.ErrEmptyName,
+		project.ErrInvalidFixLevel, project.ErrInvalidClassification, project.ErrInvalidSourceType} {
+		if errors.Is(err, s) {
+			return true
+		}
+	}
+	return false
 }

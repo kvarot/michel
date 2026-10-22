@@ -195,3 +195,30 @@ func TestProjectRemove(t *testing.T) {
 		t.Errorf("events = %+v", ev)
 	}
 }
+
+func TestProjectAddStorageFailureIsErrorNotDenied(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	if _, _, _, err := run(t, dir, "noop"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.DB().Exec(`CREATE TRIGGER fail_insert BEFORE INSERT ON project BEGIN SELECT RAISE(ABORT, 'disk on fire'); END`)
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = run(t, dir, "project", "add", proj, "--name", "shop", "--test-cmd", "TOKEN=abc")
+	if err == nil || !strings.Contains(err.Error(), "disk on fire") {
+		t.Fatalf("err = %v", err)
+	}
+	ev := auditRows(t, dir, "project.add")
+	if len(ev) != 1 || ev[0].result != "error" {
+		t.Fatalf("events = %+v", ev)
+	}
+	if r, _ := ev[0].evidence["reason"].(string); !strings.Contains(r, "disk on fire") || strings.Contains(r, "TOKEN") {
+		t.Errorf("reason = %q", r)
+	}
+}
