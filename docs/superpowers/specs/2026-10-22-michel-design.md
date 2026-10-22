@@ -223,7 +223,19 @@ Gérer quelque chose de compliqué n'autorise pas une interface que l'utilisateu
 - **Glossaire intégré** (CVE, CVSS, KEV, dépendance transitive, lockfile, breaking change…) et liens « en savoir plus » vers des sources publiques stables.
 - Vérifié en revue par un lecteur non spécialiste : si une phrase de l'interface demande une explication orale, elle est réécrite.
 
-### 4.12 Ordre de réalisation (celui de la politique § 16, adapté)
+### 4.12 Cibles et agents : analyser les serveurs, pas seulement le code (décision Kévin, 2026-10-22)
+
+Le scan de lockfiles voit le code ; un collecteur sur le serveur voit ce qui tourne : version PHP et extensions, `php.ini` (`display_errors`, `expose_php`, `open_basedir`…), paquets OS (extracteurs dpkg / apk / rpm d'osv-scalibr, même base OSV hors ligne), images et conteneurs (Trivy en plugin), services exposés et versions (nginx, PostgreSQL, Redis), certificats, et la **dérive** entre le lockfile déployé et celui du dépôt.
+
+- **Modèle** : une entité `Target` (machine, conteneur ou image) distincte de `Project` ; un `Finding` se rattache à un `Project` ou à un `Target` ; même classification, même niveau de correction (plafonné à 1 sur une cible : rapport ou commande proposée, jamais d'application par l'agent ; un correctif serveur passe par le déploiement habituel de l'utilisateur). Réservé dans le schéma dès le plan digest.
+- **Deux modes de connexion, au choix de l'utilisateur par cible**, mêmes rapports, même collecteur (`michel collect`, lecture seule) :
+  1. **SSH, tirer** : Michel (poste ou instance centrale) ouvre la session, copie ou lance le collecteur, récupère le rapport. Rien n'écoute côté application. Durcissement imposé : utilisateur dédié, clé distincte, `authorized_keys` avec `command="… michel collect",no-pty,no-port-forwarding,no-agent-forwarding`, clé chiffrée localement, un événement d'audit par connexion (hôte, empreinte de clé, durée, empreinte du rapport).
+  2. **Agent, pousser, mTLS** : `michel agent` sur le serveur (timer systemd), enrôlement par jeton à usage unique, certificat client court renouvelé, allowlist egress réduite au central ; révocation par certificat. Le central n'ouvre qu'un port et n'accepte que son autorité.
+- **Pas d'OAuth pour la liaison machine-machine** ; OIDC (Keycloak de l'utilisateur) envisagé plus tard pour l'authentification des personnes sur l'instance centrale multi-utilisateurs. Auth locale par jeton en v1.
+- **Minimisation** : inventaires (nom, version, empreinte), jamais de fichiers de configuration bruts ; secrets masqués à la source ; rapport signé par le collecteur (identité, version, heure, empreinte des entrées) ; audit chaîné sur l'agent **et** sur le central.
+- **Quand** : plan « cibles et agents » après digest, briefs et remédiation (la collecte n'a de valeur qu'avec la boucle de décision) ; mode SSH d'abord (zéro surface exposée), mode agent avec l'instance centrale. Question ouverte, à trancher alors : où tourne l'instance centrale (poste de l'utilisateur avec tunnel, ou petit serveur dédié, ce qui conditionne le mode serveur et PostgreSQL).
+
+### 4.13 Ordre de réalisation (celui de la politique § 16, adapté)
 
 1. Squelette Go + politique YAML + refus par défaut + egress + audit minimal (fondations, testées).
 2. Scan osv-scalibr hors ligne, store, CLI `scan`, premier résultat sur the reference project.
@@ -235,6 +247,7 @@ Gérer quelque chose de compliqué n'autorise pas une interface que l'utilisateu
 8. Fournisseurs externes opt-in.
 9. Suite de tests de la politique § 13, docs § 14, export CycloneDX/VEX.
 10. Mise à jour signée de Michel (§ 4.10), onboarding guidé et passe pédagogique complète (§ 4.11) ; les gabarits d'explication en langage courant arrivent dès l'étape 3 (analyse) et accompagnent chaque étape suivante.
+11. Cibles et agents (§ 4.12) : entité `Target`, collecteur `michel collect`, mode SSH puis mode agent mTLS, paquets OS et conteneurs.
 
 Chaque étape livre quelque chose d'utilisable seul. Après chaque étape : tests exécutés, résultats réels notés dans le ledger.
 
