@@ -10,13 +10,20 @@ import (
 
 // VerifyResult is the outcome of walking the chain.
 type VerifyResult struct {
-	Checked int
-	Broken  *Event
-	Reason  string
+	Checked  int
+	Broken   *Event
+	Reason   string
+	Expected int    // events the head file says exist (only set when the tail is truncated)
+	Head     string // hash of the last verified event
 }
 
 // Verify recomputes every hash in insertion order and stops at the first
-// event that does not match.
+// event that does not match. It also compares the chain with the audit.head
+// side file written next to the database: if the file records more events
+// than the chain holds, or a different head hash, the Reason is
+// "tail truncated". That file raises the bar against deleting the newest
+// events, but it is not a signature: someone who can edit the database can
+// edit the file too.
 func Verify(ctx context.Context, s *store.Store) (VerifyResult, error) {
 	rows, err := s.DB().QueryContext(ctx, `SELECT id, ts, actor, action, target, result,
 		correlation_id, evidence, prev_hash, hash FROM audit_event ORDER BY rowid`)
@@ -51,5 +58,12 @@ func Verify(ctx context.Context, s *store.Store) (VerifyResult, error) {
 		res.Checked++
 		prev = e.Hash
 	}
-	return res, rows.Err()
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+	res.Head = prev
+	if n, h, ok := readHead(s.Path()); ok && (n > res.Checked || (n == res.Checked && h != prev)) {
+		res.Reason, res.Expected = "tail truncated", n
+	}
+	return res, nil
 }

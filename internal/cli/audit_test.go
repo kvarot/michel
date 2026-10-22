@@ -10,6 +10,7 @@ import (
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/store"
+	"github.com/spf13/cobra"
 )
 
 func run(t *testing.T, dir string, args ...string) (*Deps, string, string, error) {
@@ -18,6 +19,7 @@ func run(t *testing.T, dir string, args ...string) (*Deps, string, string, error
 	deps := &Deps{Stdout: &out, Stderr: &errOut, Now: time.Now}
 	t.Cleanup(func() { deps.Close() })
 	cmd := NewRootCmd(deps)
+	cmd.AddCommand(&cobra.Command{Use: "noop", RunE: func(*cobra.Command, []string) error { return nil }})
 	cmd.SetArgs(append([]string{"--config", filepath.Join(dir, "config.yaml"), "--data-dir", dir}, args...))
 	err := cmd.Execute()
 	deps.Close()
@@ -26,8 +28,12 @@ func run(t *testing.T, dir string, args ...string) (*Deps, string, string, error
 
 func TestRootRecordsAppStart(t *testing.T) {
 	dir := t.TempDir()
-	deps, out, _, err := run(t, dir, "audit", "verify")
-	if err != nil || out != "audit: 1 events verified\n" {
+	deps, _, _, err := run(t, dir, "noop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, out, _, err := run(t, dir, "audit", "verify")
+	if err != nil || !strings.HasPrefix(out, "audit: 1 events verified, head ") {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
 	if deps.Audit == nil || deps.Gateway == nil {
@@ -60,7 +66,7 @@ func TestVersionSkipsStore(t *testing.T) {
 func TestAuditVerifyExitCode2OnTamper(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ { // two app.start events
-		if _, _, _, err := run(t, dir, "audit", "list"); err != nil {
+		if _, _, _, err := run(t, dir, "noop"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -99,7 +105,7 @@ func TestAuditVerifyExitCode2OnTamper(t *testing.T) {
 func TestAuditListLast(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 3; i++ {
-		run(t, dir, "audit", "list")
+		run(t, dir, "noop")
 	}
 	_, out, _, err := run(t, dir, "audit", "list", "--last", "2")
 	if err != nil {
@@ -108,5 +114,44 @@ func TestAuditListLast(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], "ts") || !strings.Contains(lines[1], "app.start") {
 		t.Errorf("out = %q", out)
+	}
+}
+
+func TestAuditCommandsWriteNothing(t *testing.T) {
+	dir := t.TempDir()
+	run(t, dir, "noop")
+	count := func() int {
+		s, err := store.Open(filepath.Join(dir, "michel.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		var n int
+		s.DB().QueryRow(`SELECT COUNT(*) FROM audit_event`).Scan(&n)
+		return n
+	}
+	before := count()
+	for _, a := range [][]string{{"audit", "verify"}, {"audit", "list"}} {
+		if _, _, _, err := run(t, dir, a...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after := count(); after != before {
+		t.Errorf("events %d -> %d: audit commands must not write", before, after)
+	}
+}
+
+func TestAuditVerifyTailTruncated(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		run(t, dir, "noop")
+	}
+	s, _ := store.Open(filepath.Join(dir, "michel.db"))
+	s.DB().Exec(`DELETE FROM audit_event WHERE rowid = (SELECT MAX(rowid) FROM audit_event)`)
+	s.Close()
+	_, out, _, err := run(t, dir, "audit", "verify")
+	want := `audit: BROKEN at tail: tail truncated (expected 3 events, found 2)` + "\n"
+	if ExitCode(err) != 2 || out != want {
+		t.Errorf("out=%q err=%v", out, err)
 	}
 }

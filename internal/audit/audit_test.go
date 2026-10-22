@@ -164,3 +164,51 @@ func TestConcurrentRecordKeepsChainValid(t *testing.T) {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
 }
+
+func TestVerifyDetectsTruncatedTail(t *testing.T) {
+	l, s := newLogger(t)
+	_, _, e3 := record3(t, l)
+	s.DB().Exec(`DELETE FROM audit_event WHERE id=?`, e3.ID)
+	res, err := Verify(context.Background(), s)
+	if err != nil || res.Reason != "tail truncated" || res.Checked != 2 || res.Expected != 3 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	s.DB().Exec(`DELETE FROM audit_event`)
+	res, err = Verify(context.Background(), s)
+	if err != nil || res.Reason != "tail truncated" || res.Checked != 0 || res.Expected != 3 {
+		t.Fatalf("all deleted: res=%+v err=%v", res, err)
+	}
+}
+
+func TestTwoStoresRecordConcurrently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "michel.db")
+	s1, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s1.Close()
+	s2, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	l1, l2 := NewLogger(s1, time.Now), NewLogger(s2, time.Now)
+	errs := make(chan error, 40)
+	for i := 0; i < 20; i++ {
+		for _, l := range []*Logger{l1, l2} {
+			go func(l *Logger) {
+				_, err := l.Record(context.Background(), Event{Actor: "t", Action: "x", Target: "y", Result: "ok"})
+				errs <- err
+			}(l)
+		}
+	}
+	for i := 0; i < 40; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Verify(context.Background(), s1)
+	if err != nil || res.Broken != nil || res.Reason != "" || res.Checked != 40 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}

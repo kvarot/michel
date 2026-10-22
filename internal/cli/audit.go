@@ -28,13 +28,21 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 			}
 			asJSON, _ := cmd.Flags().GetBool("json")
 			if asJSON {
-				out := map[string]any{"checked": res.Checked, "broken": nil, "reason": res.Reason}
+				out := map[string]any{"checked": res.Checked, "broken": nil, "reason": res.Reason, "expected": res.Expected}
 				if res.Broken != nil {
 					out["broken"] = res.Broken
 				}
 				if err := json.NewEncoder(deps.Stdout).Encode(out); err != nil {
 					return err
 				}
+			}
+			tail := res.Reason == "tail truncated"
+			if tail {
+				msg := fmt.Sprintf("audit: BROKEN at tail: tail truncated (expected %d events, found %d)", res.Expected, res.Checked)
+				if !asJSON {
+					fmt.Fprintln(deps.Stdout, msg)
+				}
+				return &ExitError{Code: ExitCodeAuditBroken, Err: fmt.Errorf("%s", msg), Quiet: true}
 			}
 			if res.Broken != nil {
 				msg := fmt.Sprintf("audit: BROKEN at event %s: %s", res.Broken.ID, res.Reason)
@@ -44,7 +52,11 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 				return &ExitError{Code: ExitCodeAuditBroken, Err: fmt.Errorf("%s", msg), Quiet: true}
 			}
 			if !asJSON {
-				fmt.Fprintf(deps.Stdout, "audit: %d events verified\n", res.Checked)
+				if res.Head != "" {
+					fmt.Fprintf(deps.Stdout, "audit: %d events verified, head %.12s\n", res.Checked, res.Head)
+				} else {
+					fmt.Fprintf(deps.Stdout, "audit: %d events verified\n", res.Checked)
+				}
 			}
 			return nil
 		},

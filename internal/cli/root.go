@@ -129,6 +129,11 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 			}
 			deps.Store = st
 			deps.Audit = audit.NewLogger(st, deps.Now)
+			if hasAncestor(cmd, "audit") {
+				// Inspection commands must work on a locked or read-only copy,
+				// so they write nothing, not even app.start.
+				return nil
+			}
 			if _, err := deps.Audit.Record(context.Background(), audit.Event{
 				Actor: "cli", Action: "app.start", Target: buildinfo.Version, Result: "ok",
 				Evidence: map[string]any{

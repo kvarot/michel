@@ -13,7 +13,8 @@ import (
 
 // Store is an open, migrated SQLite database.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 // Open creates the parent directory, opens the database at path in WAL mode
@@ -26,6 +27,7 @@ func Open(path string) (*Store, error) {
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_txlock", "immediate") // BeginTx takes the write lock up front, so read-then-write is atomic across processes
 	dsn := "file:" + filepath.ToSlash(path) + "?" + q.Encode()
 	if filepath.IsAbs(path) && filepath.VolumeName(path) != "" {
 		dsn = "file:///" + filepath.ToSlash(path) + "?" + q.Encode()
@@ -39,8 +41,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("cannot prepare the database %s: %w. The file may be damaged; move it aside to start fresh", path, err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, path: path}, nil
 }
+
+// Path returns the database file path.
+func (s *Store) Path() string { return s.path }
 
 // DB returns the underlying handle.
 func (s *Store) DB() *sql.DB { return s.db }

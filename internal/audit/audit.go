@@ -74,24 +74,38 @@ func (l *Logger) Record(ctx context.Context, e Event) (Event, error) {
 	if err != nil {
 		return Event{}, fmt.Errorf("cannot encode the audit evidence: %w", err)
 	}
-	canon, err := canonical(e, evJSON)
-	if err != nil {
-		return Event{}, err
-	}
 
-	db := l.s.DB()
+	tx, err := l.s.DB().BeginTx(ctx, nil) // immediate: read-then-insert is atomic across processes
+	if err != nil {
+		return Event{}, fmt.Errorf("cannot write to the audit log: %w", err)
+	}
+	defer tx.Rollback()
 	prev := ""
-	err = db.QueryRowContext(ctx, `SELECT hash FROM audit_event ORDER BY rowid DESC LIMIT 1`).Scan(&prev)
+	err = tx.QueryRowContext(ctx, `SELECT hash FROM audit_event ORDER BY rowid DESC LIMIT 1`).Scan(&prev)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Event{}, fmt.Errorf("cannot read the audit chain: %w", err)
 	}
 	e.PrevHash = prev
+	canon, err := canonical(e, evJSON)
+	if err != nil {
+		return Event{}, err
+	}
 	e.Hash = chainHash(prev, canon)
-	_, err = db.ExecContext(ctx, `INSERT INTO audit_event
+	if _, err = tx.ExecContext(ctx, `INSERT INTO audit_event
 		(id, ts, actor, action, target, result, correlation_id, evidence, prev_hash, hash)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.TS, e.Actor, e.Action, e.Target, e.Result, e.CorrelationID, string(evJSON), e.PrevHash, e.Hash)
-	if err != nil {
+		e.ID, e.TS, e.Actor, e.Action, e.Target, e.Result, e.CorrelationID, string(evJSON), e.PrevHash, e.Hash); err != nil {
+		return Event{}, fmt.Errorf("cannot write to the audit log: %w", err)
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_event`).Scan(&count); err != nil {
+		return Event{}, fmt.Errorf("cannot count the audit chain: %w", err)
+	}
+	// Written while the write lock is held, so heads land in chain order.
+	if err := writeHead(l.s.Path(), count, e.Hash); err != nil {
+		return Event{}, fmt.Errorf("cannot write the audit head file: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return Event{}, fmt.Errorf("cannot write to the audit log: %w", err)
 	}
 	return e, nil
