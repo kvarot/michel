@@ -11,7 +11,7 @@ Status: plans 1 and 2 delivered. Plan 1: offline scan of Composer and npm lockfi
 ```
 go build -o bin/michel ./cmd/michel
 bin/michel db update          # needs a network allow rule, see docs/operations/offline-installation.md
-bin/michel project add /path/to/project --name myproject --classification health
+bin/michel project add /path/to/project --name myproject --classification sensitive
 bin/michel scan --project myproject
 bin/michel findings --project myproject --severity critical
 bin/michel audit verify

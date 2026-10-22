@@ -23,37 +23,37 @@ Configuration unchanged from plan 1 (`<config-dir>/michel/config.yaml`, default 
 
 A second run without `--force` analyzed 0, skipped 215, failed 0 in 28 ms (analyses are fresh).
 
-## Aggregates (215 findings, 12 critical)
+## Aggregates (215 findings)
 
-- Path: 70 direct, 145 transitive.
+- Analyzed: 215.
 - Recommendation: `auto_fix` 114, `handoff` 100 (of which 10 with `warning`), `report_only` 1.
-- Call-site quality: `psr4|import` 214 (99.5 %: 76 psr4, 138 import), `name` 0, `low` 1.
-- Local changelog available: 65 of 215 (30 %).
-- At least one covering test: 13 of 215 (6 %); method `callsite` 5, `reference` 8, `none` 202.
-- Upgrade target known: 214 of 215. Declared version constraint known: 70 of 215 (the direct dependencies; a transitive package has no constraint of its own in the project manifest).
+- Call-site quality: found by namespace or import: 214, by name: 0, not searchable: 1.
+- Local changelog available: 65.
+- At least one covering test (heuristic): 13.
+- Declared version constraint known (derived: direct dependencies with a declared constraint): 70.
 
-Reading: the dependencies are installed locally, so the call-site search ran at full quality for nearly all findings. Test coverage is low because most vulnerable packages are build or tooling dependencies that no test imports; the changelog is available only when the package is present in `vendor/` or `node_modules/` with a changelog file.
+These figures predate the final review wave (reference coverage no longer cancels the `no_tests` term, an unknown jump is always handed over), so a new run would shift some recommendations from `auto_fix` to `handoff`.
 
 ## Three sentences, fictional finding
 
-Fixture project `demo`, package `acme/lib` (not a real package).
+Fixture project `demo`, package `acme/lib` (not a real package), project at fix level 2.
 
 EN:
 
 ```
 acme/lib 1.2.0 — high — ACME-2026-0002 — project demo — composer.lock
 
-What: acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12.
+What: acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: "Path traversal in acme/lib"
 Impact: This flaw is serious. Michel is fairly sure it matters to you.
-Cost: A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2). Constraint allows it: a plain update is enough.
+Cost: A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough.
 ```
 
 FR (`--lang fr`):
 
 ```
-Quoi : acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12.
-Impact : Cette faille est grave. Michel est assez sûr qu'elle te concerne.
-Coût : Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible trouvé dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2). Ta contrainte l'autorise : une simple mise à jour suffit.
+Quoi : acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »
+Impact : Cette faille est grave. Michel est plutôt sûr que ça te concerne.
+Coût : Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit.
 ```
 
 The wording is the unit-test sample of the explain package; real renderings on the reference project were read locally and are not reproduced.

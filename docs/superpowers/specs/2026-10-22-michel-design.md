@@ -11,7 +11,7 @@
 
 ## 1. Intention
 
-L'auteur maintient une dizaine de dépôts (PHP/Composer, Node/npm, bientôt Go), dont un SaaS de santé. Aujourd'hui la veille sécurité = lancer `osv-scanner` à la main, lire 256 lignes (233 vulnérabilités sur 65 paquets le 2026-10-22 pour le seul projet de référence), trier de tête, bumper une par une. Pas tenable au quotidien, et impossible de savoir ce qui a changé depuis hier.
+L'auteur maintient une dizaine de dépôts (PHP/Composer, Node/npm, bientôt Go). Aujourd'hui la veille sécurité = lancer `osv-scanner` à la main, lire plusieurs centaines de vulnérabilités connues sur un seul projet le jour du premier scan, trier de tête, bumper une par une. Pas tenable au quotidien, et impossible de savoir ce qui a changé depuis hier.
 
 Michel remplace ça par un **outil local, open source, qui tourne chaque jour** sur les projets choisis, liste les failles connues, dit **comment** les corriger, **à quel coût** et **avec quels effets de bord**, pour que l'utilisateur décide. Quand le risque est faible, il corrige dans un environnement jetable et prouve que c'est corrigé. Quand le risque est élevé, il **ne tente pas** : il produit un dossier de correction compact qu'une IA de codage (Claude Code, etc.) reprend sans re-parcourir le dépôt.
 
@@ -96,7 +96,7 @@ Le modèle IA n'a accès qu'à `internal/ai` ; il ne peut appeler ni `policy`, n
 
 ### 4.3 Modèle de données (entités principales)
 
-- **Project** : id, nom, `source` (`local_path` | `git_remote`), chemin, manifestes détectés, `classification` (publique … santé), `fix_level` (0-3, défaut 1), commande de tests déclarée, commande d'installation (`composer install` / `npm ci`), **préparation du worktree** (liste explicite de fichiers gitignorés à copier, ex. `tests/php/phpunit.phar`, `.env.test`, et commande `prepare` optionnelle ; déclarées par l'utilisateur, exécutées uniquement dans le worktree, chemins exclus des briefs, logs et prompts), exclusions, actif.
+- **Project** : id, nom, `source` (`local_path` | `git_remote`), chemin, manifestes détectés, `classification` (publique … santé), `fix_level` (0-3, défaut 1), commande de tests déclarée, commande d'installation (`composer install` / `npm ci`), **préparation du worktree** (liste explicite de fichiers gitignorés à copier, ex. `vendor/bin/phpunit`, `.env.test`, et commande `prepare` optionnelle ; déclarées par l'utilisateur, exécutées uniquement dans le worktree, chemins exclus des briefs, logs et prompts), exclusions, actif.
 - **Scan** : id, project, horodatage UTC, version base OSV + fraîcheur, version osv-scalibr, empreinte des lockfiles, statut, durée.
 - **Finding** : id stable = hash(project, **chemin du manifeste**, écosystème, paquet, id OSV) : un projet multi-lockfiles (plusieurs `composer.lock` et `package-lock.json` dans un monorepo) donne une faille par lockfile, chacune avec sa version installée et sa commande de correction ; le digest regroupe par paquet pour l'affichage. Scan de première et dernière détection, sévérité (CVSS + KEV si dispo), version installée, versions corrigées, chemin de dépendance (directe / transitive, via qui), `semver_jump` (patch | minor | major | none), statut dérivé (nouvelle | en attente | décidée | corrigée | disparue).
 - **Analysis** (par finding, déterministe) : points d'appel `fichier:ligne` (namespace PHP / import JS), tests couvrant ces fichiers, extrait de changelog entre version installée et corrigée, breaking changes détectés (mots-clés + sections `BREAKING`), `risk_score` (§ 4.5), recommandation (`auto_fix` | `handoff` | `report_only`).
@@ -156,7 +156,7 @@ composer update guzzlehttp/guzzle:^7.4.5 --with-all-dependencies
 ## Breaking
 none in CHANGELOG 7.4.0..7.4.5
 ## Call sites (12, top 5)
-src/Http/Client.php:41  new Client([...])
+src/Http/ApiClient.php:41  new Client([...])
 ...
 ## Tests
 none cover. Run: vendor/bin/phpunit
