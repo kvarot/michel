@@ -95,8 +95,11 @@ func newAnalyzeCmd(deps *Deps) *cobra.Command {
 					problems = true
 					continue
 				}
+				// Errors also carry audit-write failures: the run is then not clean
+				// even if every analysis was saved.
 				for _, e := range r.Errors {
 					failures = append(failures, failure{p.Name, e.Error()})
+					problems = true
 				}
 				if r.Failed > 0 {
 					problems = true

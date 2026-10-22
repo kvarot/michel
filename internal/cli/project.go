@@ -308,6 +308,11 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 				return fmt.Errorf("Project %s was updated but Michel could not write the audit log: %w. Check that the data folder is writable", p.Name, err)
 			}
 			fmt.Fprintf(deps.Stdout, "Updated project %s: %s.\n", p.Name, strings.Join(fields, ", "))
+			if fl.Changed("core-package") || fl.Changed("risk") {
+				// The stored analyses no longer match these settings (their
+				// inputs hash differs): say when they are refreshed.
+				fmt.Fprintf(deps.Stdout, "Analysis will be recomputed on the next scan or `michel analyze --project %s`.\n", p.Name)
+			}
 			return nil
 		},
 	}

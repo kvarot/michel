@@ -58,28 +58,49 @@ func resolveFinding(ctx context.Context, deps *Deps, idOrPrefix string) (scan.Fi
 		names[p.ID], byID[p.ID] = p.Name, p
 	}
 	if len(pick) > 1 {
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "The id prefix %q matches %d findings. Type more characters of the id. Candidates:", idOrPrefix, len(pick))
-		for i, f := range pick {
-			if i == maxAmbiguousShown {
-				fmt.Fprintf(&sb, "\n  ... and %d more", len(pick)-maxAmbiguousShown)
-				break
-			}
-			fmt.Fprintf(&sb, "\n  %s  %s %s (%s) in project %s", f.ID, f.Package, f.InstalledVersion, f.OSVID, names[f.ProjectID])
-		}
-		return scan.Finding{}, project.Project{}, errors.New(sb.String())
+		return scan.Finding{}, project.Project{}, errors.New(ambiguousPrefixMessage(idOrPrefix, pick, names))
 	}
 	return pick[0], byID[pick[0].ProjectID], nil
 }
 
-// loadFacts reads the stored analysis of a finding and builds its facts.
-func loadFacts(ctx context.Context, deps *Deps, f scan.Finding) (analyze.Analysis, bool, explain.Facts, error) {
+// ambiguousPrefixMessage lists the candidates of an id prefix. The lookup
+// stops at scan.MaxPrefixMatches, so a full result says "at least".
+func ambiguousPrefixMessage(prefix string, pick []scan.Finding, names map[string]string) string {
+	var sb strings.Builder
+	capped := len(pick) >= scan.MaxPrefixMatches
+	count := fmt.Sprintf("%d findings", len(pick))
+	if capped {
+		count = fmt.Sprintf("at least %d findings", scan.MaxPrefixMatches)
+	}
+	fmt.Fprintf(&sb, "The id prefix %q matches %s. Type more characters of the id. Candidates:", prefix, count)
+	for i, f := range pick {
+		if i == maxAmbiguousShown {
+			if capped {
+				fmt.Fprintf(&sb, "\n  ... and more")
+			} else {
+				fmt.Fprintf(&sb, "\n  ... and %d more", len(pick)-maxAmbiguousShown)
+			}
+			break
+		}
+		fmt.Fprintf(&sb, "\n  %s  %s %s (%s) in project %s", f.ID, safe(f.Package), safe(f.InstalledVersion), safe(f.OSVID), names[f.ProjectID])
+	}
+	return sb.String()
+}
+
+// loadFacts reads the stored analysis of a finding and builds its facts, with
+// the fix level of its project.
+func loadFacts(ctx context.Context, deps *Deps, p project.Project, f scan.Finding) (analyze.Analysis, bool, explain.Facts, error) {
 	a, ok, err := analyze.NewRepo(deps.Store).Get(ctx, f.ID)
 	if err != nil {
 		return analyze.Analysis{}, false, explain.Facts{}, err
 	}
-	return a, ok, explain.FactsFrom(f, a, ok), nil
+	facts := explain.FactsFrom(f, a, ok)
+	facts.FixLevel = p.FixLevel
+	return a, ok, facts, nil
 }
+
+// safe strips control characters from untrusted text before it is printed.
+func safe(s string) string { return scan.SanitizeText(s) }
 
 func newFindingCmd(deps *Deps) *cobra.Command {
 	c := &cobra.Command{
@@ -95,7 +116,7 @@ func newFindingCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			a, hasA, facts, err := loadFacts(ctx, deps, fi)
+			a, hasA, facts, err := loadFacts(ctx, deps, p, fi)
 			if err != nil {
 				return err
 			}
@@ -130,15 +151,17 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 		colon = " :"
 	}
 	H := func(k string) string { return L(k) + colon }
-	fmt.Fprintf(w, "%s %s — %s — %s — %s %s — %s\n\n", fi.Package, fi.InstalledVersion, fi.SeverityLabel, fi.OSVID, L("project"), p.Name, fi.ManifestRelPath)
+	// Package names, versions, ids, paths and changelog text come from
+	// outside: facts are already sanitized, the rest goes through safe.
+	fmt.Fprintf(w, "%s %s — %s — %s — %s %s — %s\n\n", facts.Package, facts.Installed, safe(fi.SeverityLabel), facts.OSVID, L("project"), p.Name, facts.ManifestRelPath)
 	fmt.Fprintf(w, "%s %s\n%s %s\n%s %s\n\n", H("what"), ex.What, H("impact"), ex.Impact, H("cost"), ex.Cost)
 
 	fmt.Fprintf(w, "%s\n", L("facts"))
 	fixed := L("none")
 	if len(fi.FixedVersions) > 0 {
-		fixed = strings.Join(fi.FixedVersions, ", ")
+		fixed = safe(strings.Join(fi.FixedVersions, ", "))
 	}
-	versions := fmt.Sprintf("%s %s, %s %s", L("installed"), fi.InstalledVersion, H("fixed"), fixed)
+	versions := fmt.Sprintf("%s %s, %s %s", L("installed"), facts.Installed, H("fixed"), fixed)
 	if facts.Target != "" {
 		versions += fmt.Sprintf(", %s %s (%s)", L("target"), facts.Target, explain.Enum(lang, "jump", string(facts.Jump)))
 	}
@@ -152,12 +175,12 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 	case analyze.Direct:
 		fmt.Fprintf(w, "  %s %s\n", H("path"), L("direct"))
 	case analyze.Transitive:
-		fmt.Fprintf(w, "  %s %s %s\n", H("path"), L("transitive"), strings.Join(a.Path.Via, " > "))
+		fmt.Fprintf(w, "  %s %s %s\n", H("path"), L("transitive"), strings.Join(facts.Via, " > "))
 	default:
 		fmt.Fprintf(w, "  %s %s\n", H("path"), L("unknown"))
 	}
-	if a.Path.Constraint != "" {
-		fmt.Fprintf(w, "  %s %s\n", H("constraint"), a.Path.Constraint)
+	if facts.Constraint != "" {
+		fmt.Fprintf(w, "  %s %s\n", H("constraint"), facts.Constraint)
 	}
 	fmt.Fprintf(w, "  %s %d (%s)\n", H("calls"), a.Calls.Count, explain.Enum(lang, "quality", a.Calls.Quality))
 	for i, s := range a.Calls.Sites {
@@ -165,7 +188,7 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 			fmt.Fprintf(w, "    "+L("more")+"\n", a.Calls.Count-maxCallSitesShown)
 			break
 		}
-		fmt.Fprintf(w, "    %s:%d\n", s.File, s.Line)
+		fmt.Fprintf(w, "    %s:%d\n", safe(s.File), s.Line)
 	}
 	testsLine := explain.TestsLine(lang, a.Coverage.Count)
 	if a.Coverage.Count > 0 {
@@ -175,12 +198,14 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 	switch {
 	case !a.Changelog.Available:
 		fmt.Fprintf(w, "  %s %s\n", H("changelog"), L("nochangelog"))
+	case a.Changelog.VersionsUnread():
+		fmt.Fprintf(w, "  %s %s, %s\n", H("changelog"), safe(a.Changelog.Source), L("noversions"))
 	case a.Changelog.Breaking:
-		fmt.Fprintf(w, "  %s %s (%d %s)\n", H("changelog"), a.Changelog.Source, max(len(a.Changelog.BreakingLines), 1), L("breaks"))
+		fmt.Fprintf(w, "  %s %s (%d %s)\n", H("changelog"), safe(a.Changelog.Source), max(len(a.Changelog.BreakingLines), 1), L("breaks"))
 	default:
-		fmt.Fprintf(w, "  %s %s, %s\n", H("changelog"), a.Changelog.Source, L("nobreak"))
+		fmt.Fprintf(w, "  %s %s, %s\n", H("changelog"), safe(a.Changelog.Source), L("nobreak"))
 	}
-	for i, l := range a.Changelog.BreakingLines {
+	for i, l := range facts.BreakingLines {
 		if i == maxBreakingShown {
 			break
 		}
@@ -193,11 +218,15 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 				fmt.Fprintf(w, "    ...\n")
 				break
 			}
-			fmt.Fprintf(w, "    | %s\n", strings.TrimRight(l, "\r"))
+			fmt.Fprintf(w, "    | %s\n", safe(strings.TrimRight(l, "\r")))
 		}
 	}
-	fmt.Fprintf(w, "  %s %s %d/100, %s %s", H("risk"), L("score"), a.Risk.Score, L("recommendation"), explain.Enum(lang, "rec", string(a.Risk.Recommendation)))
-	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  %s %s %d/100, %s %s\n", H("risk"), L("score"), a.Risk.Score, L("recommendation"), explain.Enum(lang, "rec", string(a.Risk.Recommendation)))
+	fmt.Fprintf(w, "    %s\n", explain.RiskTerms(lang, a.Risk.Terms))
+	if a.Risk.Warning {
+		eff, _ := analyze.EffectiveRisk(deps.Policy.Risk, p.RiskOverrides)
+		fmt.Fprintf(w, "  %s\n", explain.RiskWarning(lang, eff.HandoffUpTo))
+	}
 	printGlossary(w, lang, facts)
 }
 

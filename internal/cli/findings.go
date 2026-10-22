@@ -79,7 +79,7 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 				if len(f.FixedVersions) > 0 {
 					fixed = strings.Join(f.FixedVersions, ",")
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f.SeverityLabel, f.Package, f.InstalledVersion, fixed, f.OSVID, f.ManifestRelPath, f.Status)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safe(f.SeverityLabel), safe(f.Package), safe(f.InstalledVersion), safe(fixed), safe(f.OSVID), safe(f.ManifestRelPath), f.Status)
 			}
 			if err := tw.Flush(); err != nil {
 				return err
@@ -91,7 +91,7 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 				if !explainRows {
 					continue
 				}
-				_, _, facts, err := loadFacts(ctx, deps, f)
+				_, _, facts, err := loadFacts(ctx, deps, p, f)
 				if err != nil {
 					return err
 				}
