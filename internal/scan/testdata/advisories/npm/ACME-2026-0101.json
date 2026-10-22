@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.6.0",
+  "id": "ACME-2026-0101",
+  "modified": "2026-10-01T00:00:00Z",
+  "summary": "Prototype pollution in vuln-pkg",
+  "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"}],
+  "affected": [
+    {"package": {"ecosystem": "npm", "name": "vuln-pkg"},
+     "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "1.0.1"}]}]}
+  ]
+}
