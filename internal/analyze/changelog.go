@@ -35,16 +35,18 @@ type Changelog struct {
 }
 
 var (
-	headingRe = regexp.MustCompile(`^ {0,3}#{1,3}[ \t]+(.*)$`)
-	versionRe = regexp.MustCompile(`(?:^|[\s\[(])v?(\d+\.\d+(?:\.\d+)*(?:-[0-9A-Za-z.]+)?(?:\+[0-9A-Za-z.]+)?)`)
-	unrelRe   = regexp.MustCompile(`(?i)\b(unreleased|next)\b`)
+	// Release headings are level 1 or 2 only; level 3 is a sub-heading.
+	headingRe = regexp.MustCompile(`^ {0,3}#{1,2}[ \t]+(.*)$`)
+	fenceRe   = regexp.MustCompile("^ {0,3}(```|~~~)")
+	versionRe = regexp.MustCompile(`^\[?[vV]?(\d+\.\d+(?:\.\d+)*(?:-[0-9A-Za-z.]+)?(?:\+[0-9A-Za-z.]+)?)`)
+	unrelRe   = regexp.MustCompile(`(?i)^\[?(unreleased|next)\]?$`)
 	breakHead = regexp.MustCompile(`(?i)^ {0,3}#{1,6}[ \t]*(breaking|removed)\b`)
-	breakText = regexp.MustCompile(`(?i)breaking|bc break|removed|dropped support|no longer`)
+	breakText = regexp.MustCompile(`(?i)\b(breaking|bc break|removed|dropped support|no longer)\b`)
 )
 
 // ReadChangelog extracts the changelog sections newer than installed and up to
 // target for pkg, from <manifestDir>/vendor (Packagist) or
-// <manifestDir>/node_modules (npm). Limitation: only ATX headings (# to ###)
+// <manifestDir>/node_modules (npm). Limitation: only ATX headings (# and ##)
 // are recognised as section titles; Setext headings (underlined with === or
 // ---) are treated as plain text. When installed does not parse, there is no
 // lower bound.
@@ -108,10 +110,17 @@ func ReadChangelog(projectRoot, manifestRelPath, ecosystem, pkg, installed, targ
 	lines := strings.Split(text, "\n")
 	var kept []string
 	keeping, sawVersion := false, false
+	fence := ""
 	for _, line := range lines {
-		if m := headingRe.FindStringSubmatch(line); m != nil {
-			title := m[1]
-			if unrelRe.MatchString(title) && versionRe.FindString(title) == "" {
+		if fm := fenceRe.FindStringSubmatch(line); fm != nil {
+			if fence == "" {
+				fence = fm[1]
+			} else if fence == fm[1] {
+				fence = ""
+			}
+		} else if m := headingRe.FindStringSubmatch(line); m != nil && fence == "" {
+			title := strings.TrimSpace(m[1])
+			if unrelRe.MatchString(title) {
 				keeping = false
 				continue
 			}
@@ -128,15 +137,22 @@ func ReadChangelog(projectRoot, manifestRelPath, ecosystem, pkg, installed, targ
 			kept = append(kept, line)
 		}
 	}
+	var trunc bool
 	if !sawVersion {
 		cl.Note = "no version headings"
-		cl.Excerpt = cutExcerpt(text)
+		cl.Excerpt, trunc = cutExcerpt(text)
 	} else {
-		cl.Excerpt = cutExcerpt(strings.Join(kept, "\n"))
+		cl.Excerpt, trunc = cutExcerpt(strings.Join(kept, "\n"))
 		if strings.TrimSpace(cl.Excerpt) == "" {
 			cl.Excerpt = ""
 			cl.Note = "no matching sections"
 		}
+	}
+	if trunc {
+		if cl.Note != "" {
+			cl.Note += "; "
+		}
+		cl.Note += "excerpt truncated"
 	}
 	cl.BreakingLines = breakingLines(cl.Excerpt)
 	cl.Breaking = len(cl.BreakingLines) > 0
@@ -174,21 +190,24 @@ func findChangelogFile(dir string) string {
 }
 
 // cutExcerpt trims s to at most maxExcerptBytes, on a line boundary when
-// possible and never inside a rune.
-func cutExcerpt(s string) string {
+// possible and never inside a rune. The bool reports whether it cut.
+func cutExcerpt(s string) (string, bool) {
 	s = strings.TrimRight(s, "\n ")
 	s = strings.TrimLeft(s, "\n")
 	if len(s) <= maxExcerptBytes {
-		return s
+		return s, false
 	}
 	cut := s[:maxExcerptBytes]
+	if s[maxExcerptBytes] == '\n' {
+		return strings.TrimRight(cut, "\n "), true
+	}
 	if i := strings.LastIndex(cut, "\n"); i > 0 {
-		return strings.TrimRight(cut[:i], "\n ")
+		return strings.TrimRight(cut[:i], "\n "), true
 	}
 	for len(cut) > 0 && !utf8.ValidString(cut) {
 		cut = cut[:len(cut)-1]
 	}
-	return cut
+	return cut, true
 }
 
 func breakingLines(excerpt string) []string {

@@ -136,3 +136,58 @@ func TestChangelogCRLFNpmScopedAndLarge(t *testing.T) {
 		t.Fatalf("%+v", cl)
 	}
 }
+
+func TestChangelogSubHeadingsAndCodeDoNotSplitSections(t *testing.T) {
+	doc := "# Changelog\n\n## 2.0.0\n\n### Dropped support for PHP 7.4\n\n### Next steps\n\n```sh\n# comment 2.0\n## 1.0.0\n```\n\n~~~\n## Unreleased\n~~~\n\nend of two\n\n## 1.0.0\n\n- first\n"
+	root := setupChangelogBytes(t, []byte(doc), "CHANGELOG.md")
+	cl := ReadChangelog(root, "composer.lock", "Packagist", "acme/vuln", "1.0.0", "2.0.0")
+	for _, want := range []string{"### Dropped support for PHP 7.4", "### Next steps", "# comment 2.0", "## Unreleased", "end of two"} {
+		if !strings.Contains(cl.Excerpt, want) {
+			t.Errorf("missing %q in %q", want, cl.Excerpt)
+		}
+	}
+	if strings.Contains(cl.Excerpt, "- first") {
+		t.Errorf("1.0.0 section leaked: %q", cl.Excerpt)
+	}
+	if !cl.Breaking || cl.BreakingLines[0] != "### Dropped support for PHP 7.4" {
+		t.Errorf("%+v", cl)
+	}
+}
+
+func TestChangelogUnreleasedExactAndPrerelease(t *testing.T) {
+	doc := "## [Unreleased]\n\n- wip\n\n## v2.0.0-rc.1 (2024)\n\n- rc\n\n## 1.5.0\n\n- old\n"
+	root := setupChangelogBytes(t, []byte(doc), "CHANGELOG.md")
+	cl := ReadChangelog(root, "composer.lock", "Packagist", "acme/vuln", "1.5.0", "2.0.0")
+	if !strings.Contains(cl.Excerpt, "v2.0.0-rc.1") || strings.Contains(cl.Excerpt, "wip") || strings.Contains(cl.Excerpt, "old") {
+		t.Fatalf("%q", cl.Excerpt)
+	}
+}
+
+func TestChangelogRejectsDotDotPackage(t *testing.T) {
+	root := setupChangelog(t, "keepachangelog.md", "CHANGELOG.md")
+	cl := ReadChangelog(root, "composer.lock", "Packagist", "acme/../acme/vuln", "1.0.0", "1.2.0")
+	if cl.Available || cl.Note != "invalid package name" {
+		t.Fatalf("%+v", cl)
+	}
+}
+
+func TestChangelogBreakingWordBoundariesAndTruncNote(t *testing.T) {
+	root := setupChangelogBytes(t, []byte("## 1.1.0\n\n- unremoved things, nonbreaking\n"), "CHANGELOG.md")
+	cl := ReadChangelog(root, "composer.lock", "Packagist", "acme/vuln", "1.0.0", "1.1.0")
+	if cl.Breaking {
+		t.Fatalf("%+v", cl)
+	}
+	// The 4097th byte is a newline: the full 4096-byte line is kept.
+	doc := "## 1.1.0\n" + strings.Repeat("a", 4087) + "\nbbbb\n"
+	root = setupChangelogBytes(t, []byte(doc), "CHANGELOG.md")
+	cl = ReadChangelog(root, "composer.lock", "Packagist", "acme/vuln", "1.0.0", "1.1.0")
+	if len(cl.Excerpt) != 4096 || strings.Contains(cl.Excerpt, "bbbb") || cl.Note != "excerpt truncated" {
+		t.Fatalf("len=%d note=%q", len(cl.Excerpt), cl.Note)
+	}
+	// Mid-rune cut: "a" + é×N leaves byte 4096 inside a rune.
+	root = setupChangelogBytes(t, []byte("a"+strings.Repeat("é", 5000)), "CHANGELOG.md")
+	cl = ReadChangelog(root, "composer.lock", "Packagist", "acme/vuln", "1.0.0", "1.1.0")
+	if len(cl.Excerpt) != 4095 || !utf8.ValidString(cl.Excerpt) {
+		t.Fatalf("len=%d", len(cl.Excerpt))
+	}
+}
