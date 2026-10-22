@@ -15,3 +15,5 @@
 # IDE
 .idea/
 .vscode/
+# superpowers scratch
+/.superpowers/

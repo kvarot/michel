@@ -1,0 +1,4 @@
+sovereignty:
+  mode: standard
+db:
+  auto_update: true

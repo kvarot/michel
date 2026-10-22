@@ -1,0 +1,9 @@
+{
+  "_readme": ["fixture"],
+  "content-hash": "0000000000000000000000000000000a",
+  "packages": [
+    {"name": "acme/vuln", "version": "1.0.0"},
+    {"name": "acme/safe", "version": "2.0.0"}
+  ],
+  "packages-dev": []
+}

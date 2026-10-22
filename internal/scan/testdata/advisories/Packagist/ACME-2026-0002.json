@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.6.0",
+  "id": "ACME-2026-0002",
+  "modified": "2026-10-01T00:00:00Z",
+  "summary": "Information disclosure in acme/vuln",
+  "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"}],
+  "affected": [
+    {"package": {"ecosystem": "Packagist", "name": "acme/vuln"},
+     "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "1.0.2"}]}]}
+  ]
+}
