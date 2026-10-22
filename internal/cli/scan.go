@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -62,7 +64,9 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			root := dbRoot(cmd, deps)
 			dataDir, _ := cmd.Flags().GetString("data-dir")
 			sdeps := scan.Deps{Store: deps.Store, Audit: deps.Audit, Gateway: deps.Gateway, Now: deps.Now,
-				Version: buildinfo.Version, DataDir: dataDir}
+				Version: buildinfo.Version, DataDir: dataDir,
+				// Scanner warnings (unknown config keys, unused ignores) reach the user.
+				LogHandler: scannerLogHandler(deps.Stderr)}
 			asJSON, _ := cmd.Flags().GetBool("json")
 
 			results := []scan.Result{}
@@ -99,7 +103,6 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					return err
 				}
 			} else {
-				printScan(deps, results)
 				for _, r := range results {
 					for _, w := range r.Warnings {
 						fmt.Fprintln(deps.Stderr, ignoredConfigWarning(targets, r.Project, w))
@@ -109,7 +112,15 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					}
 				}
 				for _, f := range failures {
-					fmt.Fprintf(deps.Stderr, "error: %s\n", f)
+					fmt.Fprintf(deps.Stderr, "error: %s: %s\n", f.Project, f.Error)
+				}
+				printScan(deps, results)
+				switch {
+				case len(results) == 0:
+					fmt.Fprintln(deps.Stdout, "Michel could not scan any project. Read the errors above, fix them, then run the scan again.")
+				case len(failures) > 0:
+					fmt.Fprintf(deps.Stdout, "Michel could not scan %s; read the errors above, fix them, then run the scan again.\n",
+						plural(len(failures), "project", "projects"))
 				}
 			}
 			if problems {
@@ -125,7 +136,12 @@ func newScanCmd(deps *Deps) *cobra.Command {
 	return c
 }
 
+// printScan prints the results table and one summary sentence per project.
+// It prints nothing when there is no result.
 func printScan(deps *Deps, results []scan.Result) {
+	if len(results) == 0 {
+		return
+	}
 	tw := tabwriter.NewWriter(deps.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "project\tmanifests\tpackages\tfindings\tcritical/high/medium/low/unknown\tnew/gone")
 	for _, r := range results {
@@ -203,4 +219,10 @@ func ignoredConfigWarning(projects []project.Project, name, rel string) string {
 	}
 	return fmt.Sprintf("Warning: %s contains osv-scanner ignore rules; Michel does not apply them. "+
 		"Decide on findings with michel decide (plan 3) instead.", path)
+}
+
+// scannerLogHandler passes osv-scanner warnings and errors to w and drops
+// its informational chatter.
+func scannerLogHandler(w io.Writer) slog.Handler {
+	return slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn})
 }

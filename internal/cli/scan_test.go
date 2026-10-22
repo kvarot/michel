@@ -3,6 +3,7 @@ package cli
 import (
 	"archive/zip"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,5 +193,50 @@ func TestScanWarnsAboutProjectScannerConfig(t *testing.T) {
 	}
 	if rows := auditRows(t, dir, "scan.finish"); len(rows) != 1 || rows[0].evidence["ignored_config_files"] == nil {
 		t.Errorf("scan.finish = %+v", rows)
+	}
+}
+
+func TestScanTextReportsFailuresPlainly(t *testing.T) {
+	dir, db := t.TempDir(), buildTestOSVDB(t)
+	if _, _, _, err := run(t, dir, "project", "add", t.TempDir(), "--name", "empty"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, errOut, err := run(t, dir, "scan", "--all", "--osv-db", db)
+	if ExitCode(err) != 1 {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(errOut, "error: empty: Michel found no composer.lock") || strings.Contains(errOut, "{empty") {
+		t.Errorf("stderr = %q", errOut)
+	}
+	if strings.Contains(out, "critical/high") || !strings.HasSuffix(out, "Michel could not scan any project. Read the errors above, fix them, then run the scan again.\n") {
+		t.Errorf("stdout = %q", out)
+	}
+
+	// One project scanned, one failed: table, summary, then the failure count.
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "good"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _, _ = run(t, dir, "scan", "--all", "--osv-db", db)
+	if !strings.Contains(out, "critical/high") || !strings.Contains(out, "Michel found 3 new findings in good") ||
+		!strings.HasSuffix(out, "Michel could not scan 1 project; read the errors above, fix them, then run the scan again.\n") {
+		t.Errorf("stdout = %q", out)
+	}
+}
+
+func TestScannerLogHandlerKeepsWarningsOnly(t *testing.T) {
+	var buf strings.Builder
+	h := scannerLogHandler(&buf)
+	l := slog.New(h)
+	l.Info("chatter")
+	l.Warn("unknown key in config")
+	if s := buf.String(); strings.Contains(s, "chatter") || !strings.Contains(s, "unknown key in config") {
+		t.Errorf("log = %q", s)
+	}
+}
+
+func TestFindingsHelpSaysGoneIsNotAFix(t *testing.T) {
+	_, out, _, err := run(t, t.TempDir(), "findings", "--help")
+	if err != nil || !strings.Contains(out, "no longer seen at the last scan, not proof of a fix") || strings.Contains(out, "fixed or removed") {
+		t.Errorf("out=%q err=%v", out, err)
 	}
 }

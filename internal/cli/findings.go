@@ -31,7 +31,7 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "findings",
 		Short: "List the vulnerabilities found in a project",
-		Long:  "Findings lists what the last scans found. By default it hides findings that are gone (fixed or removed); use --status all to see them.",
+		Long:  "Findings lists what the last scans found. By default it hides findings that are gone (no longer seen at the last scan, not proof of a fix); use --status all to see them.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -82,7 +82,7 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 	}
 	f := c.Flags()
 	f.StringVar(&name, "project", "", "name of the project (required)")
-	f.StringVar(&status, "status", "", "only this status: new, pending, gone or all (default: everything except gone)")
+	f.StringVar(&status, "status", "", "only this status: new, pending, gone (no longer seen at the last scan, not proof of a fix) or all (default: everything except gone)")
 	f.StringVar(&severity, "severity", "", "only this severity: critical, high, medium, low or unknown")
 	return c
 }
