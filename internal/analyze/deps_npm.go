@@ -13,6 +13,7 @@ type npmEntry struct {
 	Dependencies         map[string]string `json:"dependencies"`
 	OptionalDependencies map[string]string `json:"optionalDependencies"`
 	DevDependencies      map[string]string `json:"devDependencies"`
+	PeerDependencies     map[string]string `json:"peerDependencies"`
 }
 
 func loadNpm(dir string) (*DepGraph, error) {
@@ -33,12 +34,19 @@ func loadNpm(dir string) (*DepGraph, error) {
 	}
 	g := &DepGraph{Ecosystem: "npm", Root: map[string]string{}, Requires: map[string][]string{}}
 	// Plan 2 does not model npm's tree resolution: when a name appears at several
-	// paths, the first occurrence (lexical path order) provides Requires.
+	// paths, the shallowest copy (fewest node_modules/ segments, then lexical
+	// path order) is the hoisted one and provides Requires.
 	paths := make([]string, 0, len(lock.Packages))
 	for p := range lock.Packages {
 		paths = append(paths, p)
 	}
-	sort.Strings(paths)
+	sort.Slice(paths, func(i, j int) bool {
+		di, dj := strings.Count(paths[i], "node_modules/"), strings.Count(paths[j], "node_modules/")
+		if di != dj {
+			return di < dj
+		}
+		return paths[i] < paths[j]
+	})
 	for _, p := range paths {
 		if p == "" {
 			continue
@@ -62,7 +70,7 @@ func loadNpm(dir string) (*DepGraph, error) {
 		g.Requires[name] = deps
 	}
 	if root, ok := lock.Packages[""]; ok {
-		addAll(g.Root, root.Dependencies, root.DevDependencies)
+		addAll(g.Root, root.Dependencies, root.DevDependencies, root.OptionalDependencies, root.PeerDependencies)
 		g.HasRootManifest = true
 		return g, nil
 	}
@@ -77,7 +85,7 @@ func loadNpm(dir string) (*DepGraph, error) {
 	if err := json.Unmarshal(pj, &root); err != nil {
 		return nil, fmt.Errorf("parse package.json: %w", err)
 	}
-	addAll(g.Root, root.Dependencies, root.DevDependencies)
+	addAll(g.Root, root.Dependencies, root.DevDependencies, root.OptionalDependencies, root.PeerDependencies)
 	g.HasRootManifest = true
 	return g, nil
 }

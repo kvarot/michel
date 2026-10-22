@@ -121,3 +121,83 @@ func TestMissingLockfileIsError(t *testing.T) {
 		t.Fatal("expected unsupported ecosystem error")
 	}
 }
+
+func writeNpm(t *testing.T, lock string) *DepGraph {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(lock), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g, err := LoadDepGraph(dir, "npm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+func TestNpmHoistedCopyWinsForRequires(t *testing.T) {
+	g := writeNpm(t, `{"lockfileVersion":3,"packages":{
+"":{"dependencies":{"a":"1"}},
+"node_modules/a":{"version":"1.0.0"},
+"node_modules/a/node_modules/x":{"version":"1.0.0","dependencies":{"nested-only":"1"}},
+"node_modules/x":{"version":"2.0.0","dependencies":{"top-only":"1"}}}}`)
+	if got := g.Requires["x"]; !reflect.DeepEqual(got, []string{"top-only"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestNpmRootOptionalAndPeerAreDirect(t *testing.T) {
+	g := writeNpm(t, `{"lockfileVersion":3,"packages":{
+"":{"optionalDependencies":{"opt":"^1"},"peerDependencies":{"peer":"^2"}},
+"node_modules/opt":{"version":"1.0.0"},"node_modules/peer":{"version":"2.0.0"}}}`)
+	if p := g.PathTo("opt"); p.Directness != "direct" || p.Constraint != "^1" {
+		t.Fatalf("%+v", p)
+	}
+	if p := g.PathTo("peer"); p.Directness != "direct" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestPathToCycleTerminates(t *testing.T) {
+	g := &DepGraph{Ecosystem: "npm", HasRootManifest: true, Root: map[string]string{"a": ""},
+		Requires: map[string][]string{"a": {"b"}, "b": {"a", "c"}}}
+	if p := g.PathTo("c"); !reflect.DeepEqual(p.Via, []string{"a", "b"}) {
+		t.Fatalf("%+v", p)
+	}
+	if p := g.PathTo("zzz"); p.Directness != "unknown" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestPathToDirectWinsOverTransitive(t *testing.T) {
+	g := &DepGraph{Ecosystem: "npm", HasRootManifest: true, Root: map[string]string{"a": "", "b": "^1"},
+		Requires: map[string][]string{"a": {"b"}}}
+	if p := g.PathTo("b"); p.Directness != "direct" || len(p.Via) != 0 {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestPathToTieBrokenLexically(t *testing.T) {
+	g := &DepGraph{Ecosystem: "npm", HasRootManifest: true, Root: map[string]string{"z": "", "m": ""},
+		Requires: map[string][]string{"z": {"t"}, "m": {"t"}}}
+	for i := 0; i < 20; i++ {
+		if p := g.PathTo("t"); !reflect.DeepEqual(p.Via, []string{"m"}) {
+			t.Fatalf("%+v", p)
+		}
+	}
+}
+
+func TestComposerDevOnlyTransitiveReachable(t *testing.T) {
+	g := &DepGraph{Ecosystem: "Packagist", HasRootManifest: true, Root: map[string]string{"acme/devtool": "^2"},
+		Requires: map[string][]string{"acme/devtool": {"acme/devdep"}}}
+	if p := g.PathTo("acme/devdep"); p.Directness != "transitive" || !reflect.DeepEqual(p.Via, []string{"acme/devtool"}) {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestNpmNamesAreCaseSensitive(t *testing.T) {
+	g := load(t, "npm", "npm")
+	if p := g.PathTo("App-Pkg"); p.Directness != "unknown" {
+		t.Fatalf("%+v", p)
+	}
+}
