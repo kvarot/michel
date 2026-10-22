@@ -1,0 +1,5 @@
+{"packages":[
+{"name":"Acme/App","version":"1.2.0","require":{"php":">=8.1","ext-json":"*","lib-pcre":"*","composer-plugin-api":"^2.0","acme/lib":"^1.0"}},
+{"name":"acme/lib","version":"1.1.0","require":{"acme/vuln":"^3.0"}},
+{"name":"acme/vuln","version":"3.0.1"}],
+"packages-dev":[{"name":"acme/devtool","version":"2.0.0","require":{"acme/lib":"*"}}]}
