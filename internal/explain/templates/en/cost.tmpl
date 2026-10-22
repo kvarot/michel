@@ -12,5 +12,5 @@ Michel could not tell how big the update is ({{.Installed}} → {{.Target}}).
 {{- if and .HasAnalysis (ne .Target "")}} {{if .Breaking}}{{.BreakingCount}} breaking {{plural .BreakingCount "change" "changes"}} mentioned in the changelog.{{else if .ChangelogAvailable}}No breaking change found in the changelog.{{else}}Changelog not available offline.{{end}}
 {{- if gt .TestCount 0}} {{.TestCount}} test {{plural .TestCount "file covers" "files cover"}} the code that uses it.{{else}} No test covers that code.{{end}}
 {{- end -}}
-{{- if eq .Risk.Recommendation "auto_fix"}} Michel can try this fix for you (level 2).{{else if eq .Risk.Recommendation "handoff"}} Best handed to you or your coding assistant with a brief.{{else if eq .Risk.Recommendation "report_only"}} Nothing to update for now.{{end -}}
+{{- if eq .Target ""}}{{else if eq .Risk.Recommendation "auto_fix"}} Michel can try this fix for you (level 2: automatic fix, to be approved).{{else if eq .Risk.Recommendation "handoff"}} Best handed to you or your coding assistant with a brief.{{else if eq .Risk.Recommendation "report_only"}} Nothing to update for now.{{end -}}
 {{- if and (ne .Target "") .ConstraintKnown}} {{if .ConstraintOK}}Constraint allows it: a plain update is enough.{{else}}Your constraint ({{.Constraint}}) blocks it: the constraint must change.{{end}}{{end -}}

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/kvarot/michel/internal/analyze"
@@ -86,6 +87,12 @@ func relOnly(p string) string {
 }
 
 func shorten(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
 	s = strings.Join(strings.Fields(s), " ")
 	if utf8.RuneCountInString(s) <= maxSummary {
 		return s

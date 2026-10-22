@@ -1,2 +1,2 @@
-This flaw {{severityWord .SeverityLabel}}. {{ if eq .Certainty "high" }}Michel is fairly sure it matters to you.{{ else if eq .Certainty "medium" }}Michel is not sure it matters to you.{{ else }}Michel could not check whether it matters to you.{{ end }}
+This flaw {{severityWord .SeverityLabel}}. {{ if eq .Certainty "high" }}Michel is fairly sure it matters to you.{{ else if eq .Certainty "medium" }}Michel is not sure it matters to you.{{ else if not .HasAnalysis }}Michel has not checked yet whether it matters to you.{{ else }}Michel could not check whether it matters to you.{{ end }}
 {{- if and (eq .Directness "transitive") .Via}} It reaches you through {{index .Via 0}}.{{end -}}

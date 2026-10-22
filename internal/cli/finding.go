@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
+	"io"
 	"strings"
 
 	"github.com/kvarot/michel/internal/analyze"
@@ -126,19 +125,24 @@ func newFindingCmd(deps *Deps) *cobra.Command {
 func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Project, a analyze.Analysis, hasA bool, facts explain.Facts, ex explain.Explanation) {
 	w := deps.Stdout
 	L := func(k string) string { return explain.Label(lang, k) }
+	colon := ":"
+	if lang == explain.FR {
+		colon = " :"
+	}
+	H := func(k string) string { return L(k) + colon }
 	fmt.Fprintf(w, "%s %s — %s — %s — %s %s — %s\n\n", fi.Package, fi.InstalledVersion, fi.SeverityLabel, fi.OSVID, L("project"), p.Name, fi.ManifestRelPath)
-	fmt.Fprintf(w, "%s: %s\n%s: %s\n%s: %s\n\n", L("what"), ex.What, L("impact"), ex.Impact, L("cost"), ex.Cost)
+	fmt.Fprintf(w, "%s %s\n%s %s\n%s %s\n\n", H("what"), ex.What, H("impact"), ex.Impact, H("cost"), ex.Cost)
 
 	fmt.Fprintf(w, "%s\n", L("facts"))
 	fixed := L("none")
 	if len(fi.FixedVersions) > 0 {
 		fixed = strings.Join(fi.FixedVersions, ", ")
 	}
-	versions := fmt.Sprintf("%s %s, %s %s", L("installed"), fi.InstalledVersion, L("fixed"), fixed)
+	versions := fmt.Sprintf("%s %s, %s %s", L("installed"), fi.InstalledVersion, H("fixed"), fixed)
 	if facts.Target != "" {
-		versions += fmt.Sprintf(", %s %s (%s)", L("target"), facts.Target, facts.Jump)
+		versions += fmt.Sprintf(", %s %s (%s)", L("target"), facts.Target, explain.Enum(lang, "jump", string(facts.Jump)))
 	}
-	fmt.Fprintf(w, "  %s: %s\n", L("versions"), versions)
+	fmt.Fprintf(w, "  %s %s\n", H("versions"), versions)
 	if !hasA {
 		fmt.Fprintf(w, "\n"+L("hint")+"\n", p.Name)
 		printGlossary(w, lang, facts)
@@ -146,16 +150,16 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 	}
 	switch a.Path.Directness {
 	case analyze.Direct:
-		fmt.Fprintf(w, "  %s: %s\n", L("path"), L("direct"))
+		fmt.Fprintf(w, "  %s %s\n", H("path"), L("direct"))
 	case analyze.Transitive:
-		fmt.Fprintf(w, "  %s: %s %s\n", L("path"), L("transitive"), strings.Join(a.Path.Via, " > "))
+		fmt.Fprintf(w, "  %s %s %s\n", H("path"), L("transitive"), strings.Join(a.Path.Via, " > "))
 	default:
-		fmt.Fprintf(w, "  %s: %s\n", L("path"), L("unknown"))
+		fmt.Fprintf(w, "  %s %s\n", H("path"), L("unknown"))
 	}
 	if a.Path.Constraint != "" {
-		fmt.Fprintf(w, "  %s: %s\n", L("constraint"), a.Path.Constraint)
+		fmt.Fprintf(w, "  %s %s\n", H("constraint"), a.Path.Constraint)
 	}
-	fmt.Fprintf(w, "  %s: %d (%s)\n", L("calls"), a.Calls.Count, orDash(a.Calls.Quality))
+	fmt.Fprintf(w, "  %s %d (%s)\n", H("calls"), a.Calls.Count, explain.Enum(lang, "quality", a.Calls.Quality))
 	for i, s := range a.Calls.Sites {
 		if i == maxCallSitesShown {
 			fmt.Fprintf(w, "    "+L("more")+"\n", a.Calls.Count-maxCallSitesShown)
@@ -163,14 +167,18 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 		}
 		fmt.Fprintf(w, "    %s:%d\n", s.File, s.Line)
 	}
-	fmt.Fprintf(w, "  %s: %d %s (%s)\n", L("tests"), a.Coverage.Count, L("covering"), orDash(a.Coverage.Method))
+	testsLine := explain.TestsLine(lang, a.Coverage.Count)
+	if a.Coverage.Count > 0 {
+		testsLine += " (" + explain.Enum(lang, "method", a.Coverage.Method) + ")"
+	}
+	fmt.Fprintf(w, "  %s %s\n", H("tests"), testsLine)
 	switch {
 	case !a.Changelog.Available:
-		fmt.Fprintf(w, "  %s: %s\n", L("changelog"), L("nochangelog"))
+		fmt.Fprintf(w, "  %s %s\n", H("changelog"), L("nochangelog"))
 	case a.Changelog.Breaking:
-		fmt.Fprintf(w, "  %s: %s (%d %s)\n", L("changelog"), a.Changelog.Source, max(len(a.Changelog.BreakingLines), 1), L("breaks"))
+		fmt.Fprintf(w, "  %s %s (%d %s)\n", H("changelog"), a.Changelog.Source, max(len(a.Changelog.BreakingLines), 1), L("breaks"))
 	default:
-		fmt.Fprintf(w, "  %s: %s, %s\n", L("changelog"), a.Changelog.Source, L("nobreak"))
+		fmt.Fprintf(w, "  %s %s, %s\n", H("changelog"), a.Changelog.Source, L("nobreak"))
 	}
 	for i, l := range a.Changelog.BreakingLines {
 		if i == maxBreakingShown {
@@ -188,29 +196,13 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 			fmt.Fprintf(w, "    | %s\n", strings.TrimRight(l, "\r"))
 		}
 	}
-	terms := make([]string, 0, len(a.Risk.Terms))
-	for _, k := range slices.Sorted(maps.Keys(a.Risk.Terms)) {
-		if a.Risk.Terms[k] != 0 {
-			terms = append(terms, fmt.Sprintf("%s +%d", k, a.Risk.Terms[k]))
-		}
-	}
-	fmt.Fprintf(w, "  %s: %s %d/100, %s %s", L("risk"), L("score"), a.Risk.Score, L("recommendation"), a.Risk.Recommendation)
-	if len(terms) > 0 {
-		fmt.Fprintf(w, " (%s)", strings.Join(terms, ", "))
-	}
+	fmt.Fprintf(w, "  %s %s %d/100, %s %s", H("risk"), L("score"), a.Risk.Score, L("recommendation"), explain.Enum(lang, "rec", string(a.Risk.Recommendation)))
 	fmt.Fprintln(w)
 	printGlossary(w, lang, facts)
 }
 
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
-}
-
 // printGlossary defines only the terms the output used.
-func printGlossary(w interface{ Write([]byte) (int, error) }, lang explain.Lang, f explain.Facts) {
+func printGlossary(w io.Writer, lang explain.Lang, f explain.Facts) {
 	var keys []string
 	if f.Directness == analyze.Transitive {
 		keys = append(keys, "transitive")

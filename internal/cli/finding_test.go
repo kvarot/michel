@@ -57,7 +57,7 @@ func TestFindingDetailShowsExplanation(t *testing.T) {
 	}
 
 	_, out, _, err = run(t, dir, "finding", list[0].ID[:8], "--lang", "fr")
-	if err != nil || !strings.Contains(out, "Quoi: ") || !strings.Contains(out, "Coût: ") {
+	if err != nil || !strings.Contains(out, "Quoi : ") || !strings.Contains(out, "Coût : ") {
 		t.Errorf("fr: %v\n%s", err, out)
 	}
 
@@ -131,7 +131,7 @@ func TestLangFlagOverridesPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps, out, _, err := run(t, dir, "finding", list[0].ID)
-	if err != nil || deps.Lang != "fr" || !strings.Contains(out, "Quoi: ") {
+	if err != nil || deps.Lang != "fr" || !strings.Contains(out, "Quoi : ") {
 		t.Errorf("policy fr: %v lang=%s\n%s", err, deps.Lang, out)
 	}
 	deps, out, _, err = run(t, dir, "finding", list[0].ID, "--lang", "en")
@@ -163,6 +163,21 @@ func TestFindingsExplainIndentsWhatUnderEachRow(t *testing.T) {
 		_, plain, _, _ := run(t, dir, "findings", "--project", "demo")
 		if strings.Count(plain, "\n") != 1+len(list) {
 			t.Errorf("plain table changed:\n%s", plain)
+		}
+	}
+}
+
+func TestFindingFactsHaveNoRawEnums(t *testing.T) {
+	dir, list := scannedDemo(t, true)
+	for _, l := range []string{"en", "FR"} {
+		_, out, _, err := run(t, dir, "finding", list[0].ID, "--lang", l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range []string{"auto_fix", "handoff", "report_only", "no_tests", "(low)", "(patch)"} {
+			if strings.Contains(out, raw) {
+				t.Errorf("%s: raw value %q in:\n%s", l, raw, out)
+			}
 		}
 	}
 }

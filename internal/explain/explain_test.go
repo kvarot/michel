@@ -42,14 +42,14 @@ func TestRenderEnglishThreeSentences(t *testing.T) {
 	has(t, "what", e.What, "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12.", `The advisory says: "Path traversal in acme/lib"`)
 	has(t, "impact", e.Impact, "This flaw is serious.", "Michel is fairly sure it matters to you.")
 	has(t, "cost", e.Cost, "A small patch update (1.2.0 → 1.2.5).", "No breaking change found in the changelog.",
-		"1 test file covers the code that uses it.", "Michel can try this fix for you (level 2).", "Constraint allows it")
+		"1 test file covers the code that uses it.", "Michel can try this fix for you (level 2: automatic fix, to be approved).", "Constraint allows it")
 }
 
 func TestRenderFrenchThreeSentences(t *testing.T) {
 	e := mustRender(t, FR, sampleFacts())
 	has(t, "what", e.What, "2 endroits de ton code", "par exemple src/Foo.php:12", "L'avis dit")
 	has(t, "impact", e.Impact, "Cette faille est grave.", "Michel est plutôt sûr")
-	has(t, "cost", e.Cost, "petite mise à jour corrective", "Aucun changement cassant", "1 fichier de test couvre",
+	has(t, "cost", e.Cost, "petite mise à jour corrective", "Aucun changement incompatible", "1 fichier de test couvre",
 		"Michel peut tenter cette correction", "Ta contrainte l'autorise")
 }
 
@@ -64,22 +64,25 @@ func TestRenderTransitiveBlockedBreaking(t *testing.T) {
 	has(t, "cost", e.Cost, "A major update that may change how the package works", "2 breaking changes mentioned",
 		"No test covers that code.", "Best handed to you", "Your constraint (~1.2.0) blocks it")
 	e = mustRender(t, FR, f)
-	has(t, "impact", e.Impact, "Elle t'arrive par vendor/parent.")
-	has(t, "cost", e.Cost, "mise à jour majeure", "2 changements cassants signalés", "Aucun test ne couvre", "Ta contrainte (~1.2.0) la bloque")
+	has(t, "impact", e.Impact, "Elle te parvient via vendor/parent.")
+	has(t, "cost", e.Cost, "mise à jour majeure", "2 changements incompatibles signalés", "Aucun test ne couvre", "Ta contrainte (~1.2.0) la bloque")
 }
 
 func TestRenderUnknownJumpIsHonest(t *testing.T) {
 	f := sampleFacts()
 	f.Jump = analyze.JumpUnknown
 	has(t, "en", mustRender(t, EN, f).Cost, "could not tell how big the update is")
-	has(t, "fr", mustRender(t, FR, f).Cost, "n'a pas pu savoir l'ampleur")
+	has(t, "fr", mustRender(t, FR, f).Cost, "n'a pas pu mesurer l'ampleur")
 }
 
 func TestRenderNoFix(t *testing.T) {
 	f := sampleFacts()
 	f.Target, f.Jump, f.Risk.Recommendation = "", analyze.JumpNone, analyze.RecReportOnly
 	e := mustRender(t, EN, f)
-	has(t, "en", e.Cost, "No fixed version exists yet: nothing to update, keep watching.", "Nothing to update for now.")
+	has(t, "en", e.Cost, "No fixed version exists yet: nothing to update, keep watching.")
+	if strings.Contains(e.Cost, "Nothing to update for now") {
+		t.Errorf("no-fix cost repeats itself: %s", e.Cost)
+	}
 	if strings.Contains(e.Cost, "changelog") || strings.Contains(e.Cost, "Constraint") {
 		t.Errorf("no-fix cost mentions an upgrade: %s", e.Cost)
 	}
@@ -107,7 +110,7 @@ func TestRenderWithoutAnalysis(t *testing.T) {
 	}
 	e := mustRender(t, EN, f)
 	has(t, "what", e.What, "has not been searched for in your code yet")
-	has(t, "impact", e.Impact, "could let an attacker take control", "could not check")
+	has(t, "impact", e.Impact, "could let an attacker take control", "has not checked yet")
 	has(t, "cost", e.Cost, "A small patch update (1.0.0 → 1.0.2).")
 }
 

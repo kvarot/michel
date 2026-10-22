@@ -33,38 +33,3 @@ func Term(lang Lang, key string) string {
 func Terms() []string {
 	return []string{"cve", "cvss", "kev", "transitive", "lockfile", "breaking", "semver"}
 }
-
-var labels = map[Lang]map[string]string{
-	EN: {
-		"what": "What", "impact": "Impact", "cost": "Cost", "facts": "Facts", "path": "Path",
-		"versions": "Versions", "constraint": "Constraint", "calls": "Call sites", "tests": "Tests",
-		"changelog": "Changelog", "risk": "Risk", "glossary": "Glossary", "project": "project",
-		"direct": "direct dependency", "transitive": "transitive, through", "unknown": "unknown",
-		"installed": "installed", "fixed": "fixed", "target": "target", "none": "none",
-		"hint": `Run "michel analyze --project %s" to complete this view.`,
-		"more": "and %d more", "score": "score", "recommendation": "recommendation",
-		"nochangelog": "not available offline", "nobreak": "no breaking change found", "breaks": "breaking changes",
-		"covering": "covering test files", "term_breaking": "breaking change", "term_transitive": "transitive",
-	},
-	FR: {
-		"what": "Quoi", "impact": "Impact", "cost": "Coût", "facts": "Faits", "path": "Chemin",
-		"versions": "Versions", "constraint": "Contrainte", "calls": "Points d'appel", "tests": "Tests",
-		"changelog": "Journal des modifications", "risk": "Risque", "glossary": "Glossaire", "project": "projet",
-		"direct": "dépendance directe", "transitive": "transitive, via", "unknown": "inconnu",
-		"installed": "installée", "fixed": "corrigées", "target": "cible", "none": "aucune",
-		"hint": `Lance « michel analyze --project %s » pour compléter cette fiche.`,
-		"more": "et %d de plus", "score": "note", "recommendation": "recommandation",
-		"nochangelog": "indisponible hors ligne", "nobreak": "aucun changement cassant repéré", "breaks": "changements cassants",
-		"covering": "fichiers de test qui couvrent", "term_breaking": "changement cassant", "term_transitive": "transitive",
-	},
-}
-
-// Label returns a small piece of interface text (a heading, a hint).
-func Label(lang Lang, key string) string {
-	if m, ok := labels[lang]; ok {
-		if s, ok := m[key]; ok {
-			return s
-		}
-	}
-	return labels[EN][key]
-}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kvarot/michel/internal/audit"
@@ -118,6 +119,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 			}
 			deps.Policy, deps.PolicySource = p, src
 			lang, _ := flags.GetString("lang")
+			lang = strings.ToLower(strings.TrimSpace(lang))
 			if lang == "" {
 				lang = p.Assistant.Lang
 			}

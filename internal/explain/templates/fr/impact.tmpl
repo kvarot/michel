@@ -1,2 +1,2 @@
-Cette faille {{severityWord .SeverityLabel}}. {{ if eq .Certainty "high" }}Michel est plutôt sûr que ça te concerne.{{ else if eq .Certainty "medium" }}Michel n'est pas sûr que ça te concerne.{{ else }}Michel n'a pas pu vérifier si ça te concerne.{{ end }}
-{{- if and (eq .Directness "transitive") .Via}} Elle t'arrive par {{index .Via 0}}.{{end -}}
+Cette faille {{severityWord .SeverityLabel}}. {{ if eq .Certainty "high" }}Michel est plutôt sûr que ça te concerne.{{ else if eq .Certainty "medium" }}Michel n'est pas sûr que ça te concerne.{{ else if not .HasAnalysis }}Michel n'a pas encore vérifié si ça te concerne.{{ else }}Michel n'a pas pu vérifier si ça te concerne.{{ end }}
+{{- if and (eq .Directness "transitive") .Via}} Elle te parvient via {{index .Via 0}}.{{end -}}

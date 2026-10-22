@@ -7,10 +7,10 @@ Une mise à jour mineure ({{.Installed}} → {{.Target}}).
 {{- else if eq .Jump "major" -}}
 Une mise à jour majeure, qui peut changer le fonctionnement du paquet ({{.Installed}} → {{.Target}}).
 {{- else -}}
-Michel n'a pas pu savoir l'ampleur de la mise à jour ({{.Installed}} → {{.Target}}).
+Michel n'a pas pu mesurer l'ampleur de la mise à jour ({{.Installed}} → {{.Target}}).
 {{- end -}}
-{{- if and .HasAnalysis (ne .Target "")}} {{if .Breaking}}{{.BreakingCount}} {{plural .BreakingCount "changement cassant signalé" "changements cassants signalés"}} dans le journal des modifications.{{else if .ChangelogAvailable}}Aucun changement cassant repéré dans le journal des modifications.{{else}}Journal des modifications indisponible hors ligne.{{end}}
+{{- if and .HasAnalysis (ne .Target "")}} {{if .Breaking}}{{.BreakingCount}} {{plural .BreakingCount "changement incompatible signalé" "changements incompatibles signalés"}} dans le journal des modifications.{{else if .ChangelogAvailable}}Aucun changement incompatible repéré dans le journal des modifications.{{else}}Journal des modifications indisponible hors ligne.{{end}}
 {{- if gt .TestCount 0}} {{.TestCount}} {{plural .TestCount "fichier de test couvre" "fichiers de test couvrent"}} le code qui l'utilise.{{else}} Aucun test ne couvre ce code.{{end}}
 {{- end -}}
-{{- if eq .Risk.Recommendation "auto_fix"}} Michel peut tenter cette correction pour toi (niveau 2).{{else if eq .Risk.Recommendation "handoff"}} Mieux vaut la confier à toi ou à ton assistant de code, avec un brief.{{else if eq .Risk.Recommendation "report_only"}} Rien à mettre à jour pour l'instant.{{end -}}
+{{- if eq .Target ""}}{{else if eq .Risk.Recommendation "auto_fix"}} Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider).{{else if eq .Risk.Recommendation "handoff"}} À faire par toi ou ton assistant de code, avec un descriptif précis.{{else if eq .Risk.Recommendation "report_only"}} Rien à mettre à jour pour l'instant.{{end -}}
 {{- if and (ne .Target "") .ConstraintKnown}} {{if .ConstraintOK}}Ta contrainte l'autorise : une simple mise à jour suffit.{{else}}Ta contrainte ({{.Constraint}}) la bloque : il faut d'abord la modifier.{{end}}{{end -}}
