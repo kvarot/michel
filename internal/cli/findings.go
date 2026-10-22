@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/kvarot/michel/internal/explain"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/spf13/cobra"
@@ -28,6 +30,7 @@ func oneOf(v string, list []string) bool {
 
 func newFindingsCmd(deps *Deps) *cobra.Command {
 	var name, status, severity string
+	var explainRows bool
 	c := &cobra.Command{
 		Use:   "findings",
 		Short: "List the vulnerabilities found in a project",
@@ -68,7 +71,8 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 				fmt.Fprintf(deps.Stdout, "No findings to show for %s. Run 'michel scan --project %s' to refresh them.\n", p.Name, p.Name)
 				return nil
 			}
-			tw := tabwriter.NewWriter(deps.Stdout, 0, 4, 2, ' ', 0)
+			var table bytes.Buffer
+			tw := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "severity\tpackage\tinstalled\tfixed\tosv_id\tmanifest\tstatus")
 			for _, f := range list {
 				fixed := "-"
@@ -77,12 +81,33 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 				}
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f.SeverityLabel, f.Package, f.InstalledVersion, fixed, f.OSVID, f.ManifestRelPath, f.Status)
 			}
-			return tw.Flush()
+			if err := tw.Flush(); err != nil {
+				return err
+			}
+			rows := strings.Split(strings.TrimRight(table.String(), "\n"), "\n")
+			fmt.Fprintln(deps.Stdout, rows[0])
+			for i, f := range list {
+				fmt.Fprintln(deps.Stdout, rows[i+1])
+				if !explainRows {
+					continue
+				}
+				_, _, facts, err := loadFacts(ctx, deps, f)
+				if err != nil {
+					return err
+				}
+				ex, err := explain.Render(explainLang(deps), facts)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(deps.Stdout, "  %s\n", ex.What)
+			}
+			return nil
 		},
 	}
 	f := c.Flags()
 	f.StringVar(&name, "project", "", "name of the project (required)")
 	f.StringVar(&status, "status", "", "only this status: new, pending, gone (no longer seen at the last scan, not proof of a fix) or all (default: everything except gone)")
+	f.BoolVar(&explainRows, "explain", false, "also print, for each finding, one plain sentence saying where your code uses the package")
 	f.StringVar(&severity, "severity", "", "only this severity: critical, high, medium, low or unknown")
 	return c
 }

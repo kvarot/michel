@@ -42,7 +42,7 @@ func TestRenderEnglishThreeSentences(t *testing.T) {
 	has(t, "what", e.What, "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12.", `The advisory says: "Path traversal in acme/lib"`)
 	has(t, "impact", e.Impact, "This flaw is serious.", "Michel is fairly sure it matters to you.")
 	has(t, "cost", e.Cost, "A small patch update (1.2.0 → 1.2.5).", "No breaking change found in the changelog.",
-		"1 test file cover the code that uses it.", "Michel can try this fix for you (level 2).", "Constraint allows it")
+		"1 test file covers the code that uses it.", "Michel can try this fix for you (level 2).", "Constraint allows it")
 }
 
 func TestRenderFrenchThreeSentences(t *testing.T) {
@@ -135,16 +135,16 @@ func TestCertainty(t *testing.T) {
 func TestRenderNeverContainsAbsolutePath(t *testing.T) {
 	a := analyze.Analysis{}
 	a.Calls.Count, a.Calls.Quality = 1, "psr4"
-	a.Calls.Sites = []analyze.CallSite{{File: `%UserProfile%\proj\src\Foo.php`, Line: 3}}
+	a.Calls.Sites = []analyze.CallSite{{File: `E:\work\proj\src\Foo.php`, Line: 3}}
 	for _, l := range []Lang{EN, FR} {
 		e := mustRender(t, l, FactsFrom(scan.Finding{Package: "p"}, a, true))
 		all := e.What + e.Impact + e.Cost
-		if strings.Contains(all, `C:`) || strings.Contains(all, `Users`) || strings.Contains(all, `\`) {
+		if strings.Contains(all, `E:`) || strings.Contains(all, `work`) || strings.Contains(all, `\`) {
 			t.Errorf("%s: absolute path leaked: %s", l, all)
 		}
 	}
-	a.Calls.Sites[0].File = "/home/kevin/proj/src/Foo.php"
-	if e := mustRender(t, EN, FactsFrom(scan.Finding{Package: "p"}, a, true)); strings.Contains(e.What, "/home") {
+	a.Calls.Sites[0].File = "/srv/work/proj/src/Foo.php"
+	if e := mustRender(t, EN, FactsFrom(scan.Finding{Package: "p"}, a, true)); strings.Contains(e.What, "/srv") {
 		t.Errorf("leak: %s", e.What)
 	}
 }

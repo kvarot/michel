@@ -44,7 +44,7 @@ var labels = map[Lang]map[string]string{
 		"hint": `Run "michel analyze --project %s" to complete this view.`,
 		"more": "and %d more", "score": "score", "recommendation": "recommendation",
 		"nochangelog": "not available offline", "nobreak": "no breaking change found", "breaks": "breaking changes",
-		"covering": "covering test files",
+		"covering": "covering test files", "term_breaking": "breaking change", "term_transitive": "transitive",
 	},
 	FR: {
 		"what": "Quoi", "impact": "Impact", "cost": "Coût", "facts": "Faits", "path": "Chemin",
@@ -55,7 +55,7 @@ var labels = map[Lang]map[string]string{
 		"hint": `Lance « michel analyze --project %s » pour compléter cette fiche.`,
 		"more": "et %d de plus", "score": "note", "recommendation": "recommandation",
 		"nochangelog": "indisponible hors ligne", "nobreak": "aucun changement cassant repéré", "breaks": "changements cassants",
-		"covering": "fichiers de test qui couvrent",
+		"covering": "fichiers de test qui couvrent", "term_breaking": "changement cassant", "term_transitive": "transitive",
 	},
 }
 

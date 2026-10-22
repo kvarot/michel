@@ -186,3 +186,34 @@ func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Fi
 	})
 	return out, nil
 }
+
+// FindByIDPrefix returns every finding, in any project and any status, whose
+// id starts with prefix (at most 50). An empty prefix matches nothing.
+func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, error) {
+	if prefix == "" {
+		return []Finding{}, nil
+	}
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases,
+		severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary
+		FROM finding WHERE substr(id, 1, ?) = ? ORDER BY id LIMIT 50`, len(prefix), prefix)
+	if err != nil {
+		return nil, fmt.Errorf("cannot look the finding up: %w", err)
+	}
+	defer rows.Close()
+	out := []Finding{}
+	for rows.Next() {
+		var f Finding
+		var cvss sql.NullFloat64
+		var aliases, fixed, groups string
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.ManifestRelPath, &f.Ecosystem, &f.Package, &f.OSVID, &aliases,
+			&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary); err != nil {
+			return nil, err
+		}
+		f.CVSS = cvss.Float64
+		_ = json.Unmarshal([]byte(aliases), &f.Aliases)
+		_ = json.Unmarshal([]byte(fixed), &f.FixedVersions)
+		_ = json.Unmarshal([]byte(groups), &f.DepGroups)
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}

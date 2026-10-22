@@ -45,6 +45,9 @@ type Deps struct {
 	// subcommand runs.
 	Policy       policy.Policy
 	PolicySource policy.Source
+	// Lang is the resolved language of generated text ("en" or "fr"): the
+	// --lang flag, else the policy's assistant.lang, else "en".
+	Lang string
 
 	// Store, Audit and Gateway are set by the root command for every command
 	// except help, completion and version.
@@ -114,6 +117,18 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 						"Fix the file or delete it to use the built-in strict_local defaults.", cfgPath, err)}
 			}
 			deps.Policy, deps.PolicySource = p, src
+			lang, _ := flags.GetString("lang")
+			if lang == "" {
+				lang = p.Assistant.Lang
+			}
+			if lang == "" {
+				lang = "en"
+			}
+			if lang != "en" && lang != "fr" {
+				return &ExitError{Code: ExitCodePolicy, Err: fmt.Errorf(
+					"Unknown language %q. Use --lang en or --lang fr.", lang)}
+			}
+			deps.Lang = lang
 			if src == policy.SourceFile {
 				fmt.Fprintf(deps.Stderr, "policy: file %s\n", cfgPath)
 			} else {
@@ -159,6 +174,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	flags.String("config", filepath.Join(dataDir, "config.yaml"), "path to the policy file")
 	flags.String("data-dir", dataDir, "directory where michel stores its data")
 	flags.Bool("json", false, "print results as JSON")
+	flags.String("lang", "", "language of the explanations: en or fr (default: assistant.lang of the policy)")
 
 	root.AddCommand(newVersionCmd(deps))
 	root.AddCommand(newAuditCmd(deps))
@@ -167,6 +183,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newScanCmd(deps))
 	root.AddCommand(newAnalyzeCmd(deps))
 	root.AddCommand(newFindingsCmd(deps))
+	root.AddCommand(newFindingCmd(deps))
 	return root
 }
 
