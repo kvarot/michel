@@ -29,23 +29,13 @@ Added project demo (<path to the project>), classification health, fix level 1.
 
 ```
 project  manifests  packages  findings  critical/high/medium/low/unknown  new/gone
-demo      7          1369      215       12/66/116/21/0                    215/0
+demo     7          1369      215       12/66/116/21/0                    215/0
 Michel found 215 new findings in demo, 12 critical. Next: michel findings --project demo --severity critical
 ```
 
 Duration about 17 s, exit code 0, no failures.
 
-Manifests scanned (7), with package counts:
-
-| Manifest | Packages |
-|---|---|
-| api/service-a/composer.lock | 136 |
-| api/service-b/composer.lock | 141 |
-| front/package-lock.json | 276 |
-| lib/composer.lock | 202 |
-| tooling/package-lock.json | 499 |
-| app/composer.lock | 111 |
-| e2e/package-lock.json | 4 |
+Manifests scanned: 7 (4 composer.lock, 3 package-lock.json; paths deliberately not listed). Packages per manifest ranged from 4 to 499.
 
 Counts by severity: critical 12, high 66, medium 116, low 21, unknown 0. Manifests: 7.
 
