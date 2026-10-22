@@ -92,17 +92,13 @@ func PlanUpgrade(ecosystem, installed string, fixed []string, constraint string)
 	}
 	up.Target = bestStr
 
+	// An unparsable installed version (e.g. dev-master) gives an unknown jump
+	// and leaves the constraint unevaluated.
 	if instErr != nil {
 		up.Jump = JumpUnknown
-	} else {
-		up.Jump = jumpBetween(inst, best)
-	}
-
-	// Brief table: an unparsable installed version (e.g. dev-master) leaves the
-	// constraint unevaluated.
-	if instErr != nil {
 		return up
 	}
+	up.Jump = jumpBetween(inst, best)
 	if allowed, ok := constraintAllows(sys, constraint, best); ok {
 		up.ConstraintAllows = &allowed
 	}
@@ -174,7 +170,7 @@ var (
 
 func composerAllows(constraint string, v *semver.Version) (allowed, ok bool) {
 	for _, group := range composerOr.Split(constraint, -1) {
-		group = composerRange.ReplaceAllString(group, ">=$1 <=$2")
+		group = composerRange.ReplaceAllStringFunc(group, hyphenRange)
 		group = composerOpGap.ReplaceAllString(strings.TrimSpace(group), "$1")
 		if group == "" {
 			return false, false
@@ -206,6 +202,9 @@ func composerAtom(atom string, v *semver.Version) (match, valid bool) {
 	}
 	atom = strings.TrimLeft(atom, "vV")
 	if strings.HasSuffix(atom, ".*") || strings.HasSuffix(atom, ".x") {
+		if op != "" {
+			return false, false
+		}
 		prefix := strings.Split(strings.TrimSuffix(strings.TrimSuffix(atom, ".*"), ".x"), ".")
 		got := numbers(v)
 		for i, p := range prefix {
@@ -241,8 +240,11 @@ func composerAtom(atom string, v *semver.Version) (match, valid bool) {
 		return cmp <= 0, true
 	case "~":
 		// ~1.2 = >=1.2 <2.0 ; ~1.2.3 = >=1.2.3 <1.3.0 ; ~1 = >=1 <2.
+		// ~1.2.3.4 = >=1.2.3.4 <1.2.4.
 		upper := [3]uint64{b[0] + 1, 0, 0}
-		if parts >= 3 {
+		if parts >= 4 {
+			upper = [3]uint64{b[0], b[1], b[2] + 1}
+		} else if parts == 3 {
 			upper = [3]uint64{b[0], b[1] + 1, 0}
 		}
 		return cmp >= 0 && less(numbers(v), upper), true
@@ -268,4 +270,20 @@ func less(a, b [3]uint64) bool {
 		}
 	}
 	return false
+}
+
+// hyphenRange rewrites "A - B" as ">=A <=B", or ">=A <B'" when B has fewer than
+// three parts (Composer: 1.0 - 2.0 = >=1.0.0 <2.1.0), B' being B with its last
+// given component incremented.
+func hyphenRange(m string) string {
+	sub := composerRange.FindStringSubmatch(m)
+	lo, hi := sub[1], sub[2]
+	parts := strings.Split(strings.TrimLeft(hi, "vV"), ".")
+	if len(parts) < 3 {
+		if n, err := strconv.ParseUint(parts[len(parts)-1], 10, 64); err == nil {
+			parts[len(parts)-1] = strconv.FormatUint(n+1, 10)
+			return ">=" + lo + " <" + strings.Join(parts, ".")
+		}
+	}
+	return ">=" + lo + " <=" + hi
 }
