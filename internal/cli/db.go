@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -68,14 +69,26 @@ func newDBUpdateCmd(deps *Deps) *cobra.Command {
 			ev := map[string]any{"ecosystems": done, "sizes": sizes, "fetched_at": fetched}
 			if err != nil {
 				result := "error"
-				if errors.Is(err, egress.ErrEgressDenied) {
+				denied := errors.Is(err, egress.ErrEgressDenied)
+				if denied {
 					result = "denied"
 				}
+				failed := ecos[len(st)]
+				ev["attempted"] = ecos
+				ev["completed"] = done
+				ev["failed"] = failed
 				ev["reason"] = err.Error()
-				msg := fmt.Sprintf("Database update failed: %v. The previous database, if any, was kept. "+
-					"Check your network and the policy, then run 'michel db update' again.", err)
+				msg := fmt.Sprintf("Database update failed for %s: %v. ", failed, err)
+				if len(done) > 0 {
+					msg += fmt.Sprintf("Already installed and kept: %s. ", strings.Join(done, ", "))
+				}
+				msg += "The previous database for the failed ecosystem, if any, was kept. " +
+					"Check your network and the policy, then run 'michel db update' again."
 				if aerr := record(result, ev); aerr != nil {
 					return fmt.Errorf("%s Also, Michel could not write the audit log: %w", msg, aerr)
+				}
+				if denied {
+					return &ExitError{Code: ExitCodePolicy, Err: errors.New(msg)}
 				}
 				return errors.New(msg)
 			}

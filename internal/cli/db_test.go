@@ -131,3 +131,51 @@ func TestDBStatusStates(t *testing.T) {
 		t.Errorf("out = %q", out)
 	}
 }
+
+func TestDBUpdateDeniedByGatewayExitsPolicy(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	defer osvdb.SetBaseURLForTest(srv.URL)()
+	dir := t.TempDir()
+	writeCfg(t, dir, osvdb.Host) // passes the pre-check, but 127.0.0.1 is not allowed
+	_, _, _, err := run(t, dir, "db", "update", "--osv-db", t.TempDir())
+	if err == nil || ExitCode(err) != ExitCodePolicy {
+		t.Fatalf("err = %v code %d", err, ExitCode(err))
+	}
+	ev := auditRows(t, dir, "osv.db.update")
+	if len(ev) != 1 || ev[0].result != "denied" || ev[0].evidence["failed"] != "Packagist" {
+		t.Fatalf("events = %+v", ev)
+	}
+}
+
+func TestDBUpdatePartialFailureEvidence(t *testing.T) {
+	z := zipBytes(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/npm/") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(z)
+	}))
+	defer srv.Close()
+	defer osvdb.SetBaseURLForTest(srv.URL)()
+	dir := t.TempDir()
+	writeCfg(t, dir, osvdb.Host, "127.0.0.1")
+	_, _, _, err := run(t, dir, "db", "update", "--osv-db", t.TempDir())
+	if err == nil || ExitCode(err) != 1 {
+		t.Fatalf("err = %v code %d", err, ExitCode(err))
+	}
+	for _, want := range []string{"failed for npm", "Already installed and kept: Packagist"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message lacks %q: %v", want, err)
+		}
+	}
+	ev := auditRows(t, dir, "osv.db.update")
+	if len(ev) != 1 || ev[0].result != "error" {
+		t.Fatalf("events = %+v", ev)
+	}
+	e := ev[0].evidence
+	if e["failed"] != "npm" || len(e["attempted"].([]any)) != 2 || len(e["completed"].([]any)) != 1 {
+		t.Errorf("evidence = %+v", e)
+	}
+}

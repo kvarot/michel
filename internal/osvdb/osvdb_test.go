@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,5 +179,90 @@ func TestStatusesReportsFetchedAt(t *testing.T) {
 	n := st[1]
 	if !n.Present || n.SizeBytes != 5 || !n.FetchedAt.Equal(time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)) {
 		t.Errorf("npm = %+v", n)
+	}
+}
+
+func TestUpdateRejectsOversizedDownload(t *testing.T) {
+	body := makeZip(t)
+	for _, announce := range []bool{true, false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !announce {
+				w.Header().Set("Transfer-Encoding", "chunked")
+				w.(http.Flusher).Flush()
+			}
+			w.Write(body)
+		}))
+		setBase(t, srv.URL)
+		restore := SetLimitsForTest(int64(len(body)-1), 10, 1<<20)
+		root := t.TempDir()
+		_, err := Update(context.Background(), root, gateway(t, srv.URL, true).Client("osv.db"), []string{"npm"}, fixed)
+		restore()
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), "limit") {
+			t.Fatalf("announce=%v err = %v", announce, err)
+		}
+		if _, err := os.Stat(ZipPath(root, "npm")); err == nil {
+			t.Error("file installed")
+		}
+		if _, err := os.Stat(ZipPath(root, "npm") + ".tmp"); err == nil {
+			t.Error("temp left")
+		}
+	}
+}
+
+func TestUpdateRejectsZipBomb(t *testing.T) {
+	var b bytes.Buffer
+	w := zip.NewWriter(&b)
+	f, _ := w.Create("a.json")
+	f.Write(bytes.Repeat([]byte("a"), 5000))
+	w.Create("b.json")
+	w.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { rw.Write(b.Bytes()) }))
+	defer srv.Close()
+	setBase(t, srv.URL)
+	root := t.TempDir()
+	zp := ZipPath(root, "npm")
+	os.MkdirAll(filepath.Dir(zp), 0o750)
+	os.WriteFile(zp, []byte("old"), 0o640)
+	for _, lim := range []struct {
+		entries int
+		size    uint64
+	}{{10, 1000}, {1, 1 << 20}} {
+		restore := SetLimitsForTest(1<<20, lim.entries, lim.size)
+		_, err := Update(context.Background(), root, gateway(t, srv.URL, true).Client("osv.db"), []string{"npm"}, fixed)
+		restore()
+		if err == nil || !strings.Contains(err.Error(), "limit") {
+			t.Fatalf("limits %+v err = %v", lim, err)
+		}
+		if got, _ := os.ReadFile(zp); string(got) != "old" {
+			t.Errorf("old database lost: %q", got)
+		}
+		if _, err := os.Stat(zp + ".tmp"); err == nil {
+			t.Error("temp left")
+		}
+	}
+}
+
+func TestInstallKeepsOldFileWhenReplaceFails(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "all.zip")
+	tmp := dst + ".tmp"
+	os.WriteFile(dst, []byte("old"), 0o640)
+	// Missing source: every rename fails.
+	if err := install(tmp, dst); err == nil {
+		t.Fatal("expected error")
+	}
+	if got, _ := os.ReadFile(dst); string(got) != "old" {
+		t.Errorf("old database lost: %q", got)
+	}
+	os.WriteFile(tmp, []byte("new"), 0o640)
+	if err := install(tmp, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(dst); string(got) != "new" {
+		t.Errorf("got %q", got)
+	}
+	if _, err := os.Stat(dst + ".old"); err == nil {
+		t.Error(".old left")
 	}
 }

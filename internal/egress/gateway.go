@@ -51,6 +51,9 @@ func New(p policy.Policy, sink Sink) *Gateway {
 	}
 	inner := http.DefaultTransport.(*http.Transport).Clone()
 	inner.Proxy = nil // ignore HTTP_PROXY and friends
+	inner.ResponseHeaderTimeout = 30 * time.Second
+	inner.TLSHandshakeTimeout = 15 * time.Second
+	inner.IdleConnTimeout = 90 * time.Second
 	return &Gateway{
 		mode:  p.Sovereignty.Mode,
 		rules: append([]policy.AllowRule(nil), p.Sovereignty.Network.Allow...),
@@ -63,14 +66,16 @@ func New(p policy.Policy, sink Sink) *Gateway {
 func (g *Gateway) Mode() policy.Mode { return g.mode }
 
 // Client returns an HTTP client bound to purpose. It panics if purpose is
-// empty: an unlabelled request is a programming error.
+// empty: an unlabelled request is a programming error. The client has no
+// overall Timeout (it would cut large downloads); the transport bounds
+// connection, TLS and response-header waits, and callers bound the whole
+// request with a context deadline.
 func (g *Gateway) Client(purpose string) *http.Client {
 	if purpose == "" {
 		panic("egress: Client requires a non-empty purpose")
 	}
 	return &http.Client{
 		Transport: checkedTransport{g: g, purpose: purpose},
-		Timeout:   30 * time.Second,
 	}
 }
 
