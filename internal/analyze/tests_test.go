@@ -186,8 +186,8 @@ func TestCoverageUnreadableTestFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 1 from the call-site search plus 1 from the reference scan (same file, by design: sum).
-	if cov.Method != "none" || cov.Unreadable != 2 {
+	// Same file hit by the call-site search and the reference scan: counted once.
+	if cov.Method != "none" || cov.Unreadable != 1 {
 		t.Fatalf("%+v", cov)
 	}
 }
@@ -213,7 +213,7 @@ func TestCoverageCountBeyondTestFilesCap(t *testing.T) {
 	}
 }
 
-func TestCoverageUnreadableFromCallSites(t *testing.T) {
+func TestCoverageUnreadableSourceNotCounted(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"composer.lock":                  "{}",
 		"src/BigSrc.php":                 "<?php\n" + strings.Repeat("x", (1<<20)+10) + "\n",
@@ -228,7 +228,7 @@ func TestCoverageUnreadableFromCallSites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cov.Method != "callsite" || cov.Unreadable != 1 {
+	if cov.Method != "callsite" || cov.Unreadable != 0 {
 		t.Fatalf("%+v", cov)
 	}
 }

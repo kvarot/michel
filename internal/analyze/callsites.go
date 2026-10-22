@@ -33,6 +33,8 @@ type CallSites struct {
 	// Unreadable counts files that could not be opened or fully read (e.g. a
 	// line over 1 MiB), so "no usage found" differs from "could not read".
 	Unreadable int
+	// UnreadablePaths lists those files (relative, forward slashes, sorted).
+	UnreadablePaths []string
 	// Computed from ALL hits, independent of the Sites cap.
 	TestFiles     []string // distinct test files with a hit, sorted, at most 50
 	TestFileCount int      // distinct test files with a hit, before the TestFiles cap
@@ -81,6 +83,7 @@ func scanFiles(projectRoot string, files []string, match func(line string) bool)
 		fh, err := os.Open(f)
 		if err != nil {
 			res.Unreadable++
+			res.UnreadablePaths = append(res.UnreadablePaths, rel)
 			continue
 		}
 		sc := bufio.NewScanner(fh)
@@ -102,6 +105,7 @@ func scanFiles(projectRoot string, files []string, match func(line string) bool)
 		}
 		if sc.Err() != nil {
 			res.Unreadable++
+			res.UnreadablePaths = append(res.UnreadablePaths, rel)
 		}
 		fh.Close()
 		if hits > 0 {

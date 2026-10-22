@@ -21,8 +21,9 @@ type Coverage struct {
 	// Skipped lists the base names ignored by the reference rule because they
 	// are too short or too generic to be meaningful.
 	Skipped []string
-	// Unreadable counts files that could not be opened or fully read, during the
-	// call-site search and the reference scan.
+	// Unreadable counts distinct test files that could not be opened or fully
+	// read, in the call-site search or the reference scan. Unreadable source
+	// files are only in CallSites.Unreadable.
 	// Files over 2 MiB are dropped earlier by the shared walk, uncounted.
 	Unreadable int
 }
@@ -69,21 +70,29 @@ func FindCoveringTests(projectRoot, manifestRelPath string, sites CallSites, eco
 	}
 	sort.Strings(cov.Skipped)
 
+	unreadable := map[string]bool{}
+	for _, p := range sites.UnreadablePaths {
+		if isTestPath(p) {
+			unreadable[p] = true
+		}
+	}
+
 	if sites.TestHitCount > 0 {
 		c := capCoverage(sites.TestFiles)
-		c.Method, c.Skipped, c.Unreadable = "callsite", cov.Skipped, sites.Unreadable
+		c.Method, c.Skipped, c.Unreadable = "callsite", cov.Skipped, len(unreadable)
 		c.Count = sites.TestFileCount
 		return c, nil
 	}
 	exts := testExtensions(ecosystem)
 	if len(names) == 0 || exts == nil {
-		cov.Unreadable = sites.Unreadable
+		cov.Unreadable = len(unreadable)
 		return cov, nil
 	}
 
 	manifestDir := filepath.Dir(filepath.Join(projectRoot, filepath.FromSlash(manifestRelPath)))
 	others, err := findOtherManifestDirs(projectRoot, manifestDir, exclude)
 	if err != nil {
+		cov.Unreadable = len(unreadable)
 		return cov, err
 	}
 	files, err := userFiles(projectRoot, manifestDir, others, exclude, exts)
@@ -106,17 +115,17 @@ func FindCoveringTests(projectRoot, manifestRelPath string, sites CallSites, eco
 		}
 		hit, ok := referencesAny(f, res)
 		if !ok {
-			cov.Unreadable++
+			unreadable[rel] = true
 		} else if hit {
 			found = append(found, rel)
 		}
 	}
 	if len(found) == 0 {
-		cov.Unreadable += sites.Unreadable
+		cov.Unreadable = len(unreadable)
 		return cov, nil
 	}
 	c := capCoverage(found)
-	c.Method, c.Skipped, c.Unreadable = "reference", cov.Skipped, cov.Unreadable+sites.Unreadable
+	c.Method, c.Skipped, c.Unreadable = "reference", cov.Skipped, len(unreadable)
 	return c, nil
 }
 
