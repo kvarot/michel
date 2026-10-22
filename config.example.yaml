@@ -1,0 +1,28 @@
+# Michel sovereignty policy. Every value below is the built-in default.
+# Delete this file and Michel behaves exactly the same.
+sovereignty:
+  mode: strict_local            # strict_local | standard
+  data_classification: internal # public | internal | confidential | sensitive | health
+  ai:
+    provider_policy: local_only
+    external_providers_enabled: false
+    model_downloads_enabled: false
+    automatic_model_updates: false
+  network:
+    default_egress: deny        # strict_local requires "deny"
+    telemetry_enabled: false
+    remote_error_reporting: false
+    allow: []                   # each rule needs a host and a purpose
+  audit:
+    enabled: true
+    integrity_protection: hash_chain
+    prompt_content_retention: none
+  remediation:
+    isolated_execution_required: true
+    production_deployment_allowed: false # must stay false
+    human_approval_required_for_merge: true
+db:
+  auto_update: false
+  # osv_path: defaults to <data-dir>/osv
+assistant:
+  name: Michel

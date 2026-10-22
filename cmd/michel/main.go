@@ -13,6 +13,6 @@ func main() {
 	deps := &cli.Deps{Stdout: os.Stdout, Stderr: os.Stderr, Now: time.Now}
 	if err := cli.NewRootCmd(deps).Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "michel:", err)
-		os.Exit(1)
+		os.Exit(cli.ExitCode(err))
 	}
 }
