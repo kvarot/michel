@@ -10,7 +10,8 @@ import (
 	"strings"
 )
 
-const maxTestFiles = 50
+// maxTestFiles is a variable only so tests can lower it.
+var maxTestFiles = 50
 
 // Coverage tells whether tests cover the files that use a vulnerable package.
 type Coverage struct {
@@ -20,7 +21,8 @@ type Coverage struct {
 	// Skipped lists the base names ignored by the reference rule because they
 	// are too short or too generic to be meaningful.
 	Skipped []string
-	// Unreadable counts test files that could not be opened or fully read.
+	// Unreadable counts files that could not be opened or fully read, during the
+	// call-site search and the reference scan.
 	// Files over 2 MiB are dropped earlier by the shared walk, uncounted.
 	Unreadable int
 }
@@ -69,11 +71,13 @@ func FindCoveringTests(projectRoot, manifestRelPath string, sites CallSites, eco
 
 	if sites.TestHitCount > 0 {
 		c := capCoverage(sites.TestFiles)
-		c.Method, c.Skipped, c.Unreadable = "callsite", cov.Skipped, cov.Unreadable
+		c.Method, c.Skipped, c.Unreadable = "callsite", cov.Skipped, sites.Unreadable
+		c.Count = sites.TestFileCount
 		return c, nil
 	}
 	exts := testExtensions(ecosystem)
 	if len(names) == 0 || exts == nil {
+		cov.Unreadable = sites.Unreadable
 		return cov, nil
 	}
 
@@ -108,10 +112,11 @@ func FindCoveringTests(projectRoot, manifestRelPath string, sites CallSites, eco
 		}
 	}
 	if len(found) == 0 {
+		cov.Unreadable += sites.Unreadable
 		return cov, nil
 	}
 	c := capCoverage(found)
-	c.Method, c.Skipped, c.Unreadable = "reference", cov.Skipped, cov.Unreadable
+	c.Method, c.Skipped, c.Unreadable = "reference", cov.Skipped, cov.Unreadable+sites.Unreadable
 	return c, nil
 }
 

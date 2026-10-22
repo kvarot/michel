@@ -10,6 +10,8 @@ import (
 
 const maxSnippetLen = 160
 
+const maxSourceFiles = 200
+
 // maxSites caps the kept sites; a variable only so tests can lower it.
 var maxSites = 200
 
@@ -32,9 +34,10 @@ type CallSites struct {
 	// line over 1 MiB), so "no usage found" differs from "could not read".
 	Unreadable int
 	// Computed from ALL hits, independent of the Sites cap.
-	TestFiles    []string // distinct test files with a hit, sorted, at most 50
-	TestHitCount int      // total hits in test files
-	SourceFiles  []string // distinct non-test files with a hit, sorted, at most 200
+	TestFiles     []string // distinct test files with a hit, sorted, at most 50
+	TestFileCount int      // distinct test files with a hit, before the TestFiles cap
+	TestHitCount  int      // total hits in test files
+	SourceFiles   []string // distinct non-test files with a hit, sorted, at most 200
 }
 
 // FindCallSites looks for the lines of the user's code, under the manifest's
@@ -103,11 +106,12 @@ func scanFiles(projectRoot string, files []string, match func(line string) bool)
 		fh.Close()
 		if hits > 0 {
 			if isTestPath(rel) {
+				res.TestFileCount++
 				res.TestHitCount += hits
 				if len(res.TestFiles) < maxTestFiles {
 					res.TestFiles = append(res.TestFiles, rel)
 				}
-			} else if len(res.SourceFiles) < maxSites {
+			} else if len(res.SourceFiles) < maxSourceFiles {
 				res.SourceFiles = append(res.SourceFiles, rel)
 			}
 		}

@@ -190,3 +190,44 @@ func TestCoverageUnreadableTestFile(t *testing.T) {
 		t.Fatalf("%+v", cov)
 	}
 }
+
+func TestCoverageCountBeyondTestFilesCap(t *testing.T) {
+	old := maxTestFiles
+	maxTestFiles = 2
+	defer func() { maxTestFiles = old }()
+	root := writeTree(t, map[string]string{
+		"composer.lock":                  "{}",
+		"tests/ATest.php":                useClient,
+		"tests/BTest.php":                useClient,
+		"tests/CTest.php":                useClient,
+		"vendor/acme/vuln/composer.json": "{}",
+	})
+	cs, _ := FindCallSites(root, "composer.lock", "composer", "acme/vuln", nil)
+	cov, err := FindCoveringTests(root, "composer.lock", cs, "composer", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cov.Method != "callsite" || cov.Count != 3 || len(cov.TestFiles) != 2 {
+		t.Fatalf("%+v", cov)
+	}
+}
+
+func TestCoverageUnreadableFromCallSites(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"composer.lock":                  "{}",
+		"src/BigSrc.php":                 "<?php\n" + strings.Repeat("x", (1<<20)+10) + "\n",
+		"tests/ATest.php":                useClient,
+		"vendor/acme/vuln/composer.json": "{}",
+	})
+	cs, _ := FindCallSites(root, "composer.lock", "composer", "acme/vuln", nil)
+	if cs.Unreadable != 1 {
+		t.Fatalf("setup: %+v", cs)
+	}
+	cov, err := FindCoveringTests(root, "composer.lock", cs, "composer", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cov.Method != "callsite" || cov.Unreadable != 1 {
+		t.Fatalf("%+v", cov)
+	}
+}
