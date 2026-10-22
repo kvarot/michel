@@ -182,3 +182,52 @@ func TestAttemptsCappedAndCopied(t *testing.T) {
 		t.Fatal("not a copy")
 	}
 }
+
+func TestRedirectToDisallowedHostDenied(t *testing.T) {
+	b := server(t)
+	bURL := strings.Replace(b.URL, "127.0.0.1", "localhost", 1)
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, bURL, http.StatusFound)
+	}))
+	t.Cleanup(a.Close)
+	g := egress.New(pol(policy.AllowRule{Host: "127.0.0.1", Purpose: "x"}), nil)
+	resp, err := g.Client("x").Get(a.URL)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("expected redirect to be denied")
+	}
+	if !errors.Is(err, egress.ErrEgressDenied) {
+		t.Fatalf("want ErrEgressDenied, got %v", err)
+	}
+	at := g.Attempts()
+	if len(at) != 2 || !at[0].Allowed || at[1].Allowed || at[1].Host != "localhost" {
+		t.Fatalf("bad attempts: %+v", at)
+	}
+}
+
+func TestAttemptNeverLeaksOnAllowedPath(t *testing.T) {
+	s := server(t)
+	sink := &captureSink{}
+	g := egress.New(pol(policy.AllowRule{Host: "127.0.0.1", Purpose: "osv.db"}), sink)
+	req, _ := http.NewRequest("GET", s.URL+"/secret/path?token=SEKRET", nil)
+	req.Header.Set("Authorization", "Bearer SEKRET")
+	resp, err := g.Client("osv.db").Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(sink.got) != 1 {
+		t.Fatalf("sink got %d", len(sink.got))
+	}
+	for _, a := range append(append([]egress.Attempt{}, sink.got...), g.Attempts()...) {
+		if !a.Allowed {
+			t.Fatalf("expected allowed: %+v", a)
+		}
+		all := strings.ToLower(a.Host + "|" + a.Purpose + "|" + a.Reason)
+		for _, bad := range []string{"sekret", "secret", "token", "bearer", "/path"} {
+			if strings.Contains(all, bad) {
+				t.Fatalf("leak %q in %+v", bad, a)
+			}
+		}
+	}
+}
