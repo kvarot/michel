@@ -186,7 +186,8 @@ func TestCoverageUnreadableTestFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cov.Method != "none" || cov.Unreadable != 1 {
+	// 1 from the call-site search plus 1 from the reference scan (same file, by design: sum).
+	if cov.Method != "none" || cov.Unreadable != 2 {
 		t.Fatalf("%+v", cov)
 	}
 }
