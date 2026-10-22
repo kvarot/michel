@@ -1,0 +1,17 @@
+# build
+/bin/
+/dist/
+/web/node_modules/
+/web/dist/
+# local data
+/data/
+*.db
+*.db-wal
+*.db-shm
+# env
+.env
+.env.*
+!.env.example
+# IDE
+.idea/
+.vscode/
