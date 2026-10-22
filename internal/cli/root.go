@@ -162,6 +162,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 
 	root.AddCommand(newVersionCmd(deps))
 	root.AddCommand(newAuditCmd(deps))
+	root.AddCommand(newProjectCmd(deps))
 	return root
 }
 
