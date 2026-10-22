@@ -149,6 +149,7 @@ func scan(s scanner) (Project, error) {
 	if err := json.Unmarshal([]byte(over), &p.RiskOverrides); err != nil {
 		return Project{}, fmt.Errorf("project %s has unreadable risk overrides %q: %w", p.Name, over, err)
 	}
+	_ = normalizeExtras(&p) // a stored JSON null becomes an empty value; unknown stored keys are left as they are
 	p.Active = active != 0
 	t, err := time.Parse(time.RFC3339, created)
 	if err != nil {

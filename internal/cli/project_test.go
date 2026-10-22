@@ -379,3 +379,21 @@ func TestProjectSetRejectsBadInput(t *testing.T) {
 		t.Errorf("audit rows = %d", n)
 	}
 }
+
+func TestProjectSetRefusesInconsistentThresholds(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "shop"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := run(t, dir, "project", "set", "shop", "--risk", "auto_fix_below=70")
+	if err == nil || !strings.Contains(err.Error(), "auto_fix_below=70") || !strings.Contains(err.Error(), "handoff_up_to=60") {
+		t.Fatalf("err = %v", err)
+	}
+	ev := auditRows(t, dir, "project.set")
+	if len(ev) != 1 || ev[0].result != "denied" {
+		t.Fatalf("events = %+v", ev)
+	}
+	if _, _, _, err := run(t, dir, "project", "set", "shop", "--risk", "auto_fix_below=70", "--risk", "handoff_up_to=90"); err != nil {
+		t.Fatalf("consistent pair refused: %v", err)
+	}
+}

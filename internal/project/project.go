@@ -25,7 +25,7 @@ type Project struct {
 	InstallCmd     string                `json:"install_cmd"`
 	Active         bool                  `json:"active"`
 	// CorePackages are the packages whose upgrade is riskier for this project
-	// (lowercased for Composer, as-is for npm).
+	// (stored as typed; matching is done per ecosystem).
 	CorePackages []string `json:"core_packages"`
 	// RiskOverrides replaces risk-score values for this project; keys are the
 	// policy.RiskKeys names.

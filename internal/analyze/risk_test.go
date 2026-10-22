@@ -102,3 +102,21 @@ func TestProjectOverridesApply(t *testing.T) {
 		t.Fatalf("threshold override: %+v", r)
 	}
 }
+
+func TestScoreRiskOverrideZeroesTerm(t *testing.T) {
+	r := ScoreRisk(cfg(), map[string]int{"major_jump": 0}, RiskInput{Jump: JumpMajor, TestCount: 1, HasFix: true})
+	if r.Score != 0 || r.Terms["major_jump"] != 0 || r.Recommendation != RecAutoFix {
+		t.Fatalf("got %+v", r)
+	}
+}
+
+func TestScoreRiskInconsistentThresholdsFallBack(t *testing.T) {
+	in := RiskInput{Jump: JumpMajor, TestCount: 1, HasFix: true} // score 40
+	r := ScoreRisk(cfg(), map[string]int{"auto_fix_below": 70}, in)
+	if r.Terms["thresholds_fallback"] != 1 || r.Recommendation != RecHandoff || r.Score != 40 {
+		t.Fatalf("got %+v", r)
+	}
+	if r := ScoreRisk(cfg(), nil, in); r.Terms["thresholds_fallback"] != 0 {
+		t.Errorf("fallback marker without cause: %v", r.Terms)
+	}
+}

@@ -29,7 +29,9 @@ When the size of the jump cannot be determined (`unknown`), `major_jump` adds 0 
 | 30 to 60 inclusive (`handoff_up_to`) | `handoff` |
 | above 60 | `handoff`, with a warning |
 
-When no fixed version exists, the recommendation is `report_only`. The score is still computed and shown.
+When no fixed version exists, the recommendation is `report_only`. The score is still computed and shown, and the warning can still appear with `report_only` when the score is above 60.
+
+A project override that would make the thresholds inconsistent (`auto_fix_below` not below `handoff_up_to`) is refused by `project set`; if one is ever stored anyway, scoring falls back to the policy thresholds and records `thresholds_fallback: 1`.
 
 ## Where the values live
 

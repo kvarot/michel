@@ -29,7 +29,9 @@ Quand la taille du saut est impossible à déterminer (`unknown`), `major_jump` 
 | de 30 à 60 inclus (`handoff_up_to`) | `handoff` |
 | plus de 60 | `handoff`, avec un avertissement |
 
-Quand aucune version corrigée n'existe, la recommandation est `report_only`. Le score est tout de même calculé et affiché.
+Quand aucune version corrigée n'existe, la recommandation est `report_only`. Le score est tout de même calculé et affiché, et l'avertissement peut quand même apparaître avec `report_only` quand le score dépasse 60.
+
+Une surcharge de projet qui rendrait les seuils incohérents (`auto_fix_below` pas inférieur à `handoff_up_to`) est refusée par `project set` ; si elle était malgré tout stockée, le calcul revient aux seuils de la politique et enregistre `thresholds_fallback: 1`.
 
 ## Où vivent les valeurs
 

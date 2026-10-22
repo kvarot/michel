@@ -291,6 +291,11 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			if fl.Changed("install-cmd") {
 				p.InstallCmd = installCmd
 			}
+			if merged := deps.Policy.Risk.WithOverrides(p.RiskOverrides); policy.ValidateRisk(merged) != nil {
+				return fail("denied", fmt.Sprintf("Cannot update project %s: these overrides give auto_fix_below=%d and handoff_up_to=%d. "+
+					"auto_fix_below must stay below handoff_up_to, which must be at most 100; terms must be 0 to 100. Nothing was changed.",
+					name, merged.AutoFixBelow, merged.HandoffUpTo), ev)
+			}
 			if err := repo.Update(ctx, p); err != nil {
 				if isValidationErr(err) {
 					return fail("denied", fmt.Sprintf("Cannot update project %s: %v. Nothing was changed.", name, err), ev)

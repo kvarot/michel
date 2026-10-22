@@ -42,7 +42,7 @@ func Validate(p Policy) error {
 	default:
 		return fmt.Errorf("assistant.lang %q is unknown (use \"en\" or \"fr\")", p.Assistant.Lang)
 	}
-	if err := validateRisk(p.Risk); err != nil {
+	if err := ValidateRisk(p.Risk); err != nil {
 		return err
 	}
 	for i, r := range s.Network.Allow {
@@ -68,7 +68,9 @@ func checkHost(h string) error {
 	return nil
 }
 
-func validateRisk(r RiskConfig) error {
+// ValidateRisk checks term ranges, the call-site threshold and the
+// auto_fix_below < handoff_up_to invariant.
+func ValidateRisk(r RiskConfig) error {
 	for _, t := range []struct {
 		key string
 		v   int

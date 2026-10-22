@@ -40,7 +40,14 @@ type Risk struct {
 // overrides (per-project, known keys only) replace values of cfg. No AI input
 // ever reaches this function: the model cannot change the score.
 func ScoreRisk(cfg policy.RiskConfig, overrides map[string]int, in RiskInput) Risk {
+	base := cfg
 	cfg = cfg.WithOverrides(overrides)
+	fallback := false
+	if cfg.AutoFixBelow < 0 || cfg.AutoFixBelow >= cfg.HandoffUpTo || cfg.HandoffUpTo > 100 {
+		// Inconsistent thresholds from overrides: keep the policy thresholds.
+		cfg.AutoFixBelow, cfg.HandoffUpTo = base.AutoFixBelow, base.HandoffUpTo
+		fallback = true
+	}
 	pts := func(on bool, v int) int {
 		if on {
 			return v
@@ -58,8 +65,14 @@ func ScoreRisk(cfg policy.RiskConfig, overrides map[string]int, in RiskInput) Ri
 	if in.Jump == JumpUnknown {
 		terms["major_jump_unknown"] = 0
 	}
+	if fallback {
+		terms["thresholds_fallback"] = 1
+	}
 	score := 0
-	for _, v := range terms {
+	for k, v := range terms {
+		if k == "thresholds_fallback" {
+			continue
+		}
 		score += v
 	}
 	if score > 100 {

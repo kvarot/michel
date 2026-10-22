@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,5 +108,45 @@ func TestMigration0002Applies(t *testing.T) {
 	}
 	if _, err := s.DB().Exec(`SELECT finding_id, risk_score, recommendation, warning FROM analysis LIMIT 1`); err != nil {
 		t.Errorf("analysis table: %v", err)
+	}
+}
+
+func TestMigration0002UpgradesExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "michel.db")
+	db, err := sql.Open("sqlite", "file:///"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := migrationFS.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
+		string(body),
+		`INSERT INTO schema_migrations VALUES (1, '2026-01-01T00:00:00Z')`,
+		`INSERT INTO project (id, name, source_type, path, classification, created_at) VALUES ('p1','old','local_path','/x','sensitive','2026-01-01T00:00:00Z')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var name, core, over string
+	if err := s.DB().QueryRow(`SELECT name, core_packages, risk_overrides FROM project WHERE id='p1'`).Scan(&name, &core, &over); err != nil {
+		t.Fatal(err)
+	}
+	if name != "old" || core != "[]" || over != "{}" {
+		t.Errorf("row = %q %q %q", name, core, over)
+	}
+	var versions string
+	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2" {
+		t.Errorf("versions = %q err %v", versions, err)
 	}
 }
