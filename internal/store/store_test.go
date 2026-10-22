@@ -15,7 +15,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 			t.Fatalf("open #%d: %v", i, err)
 		}
 		var n int
-		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 1 {
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 2 {
 			t.Fatalf("schema_migrations rows = %d, err %v", n, err)
 		}
 		var mode string
@@ -57,7 +57,7 @@ func TestMigrationAppliedByAnotherProcessMeanwhileIsSkipped(t *testing.T) {
 	}
 	defer s.Close()
 	var n int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 1 {
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("schema_migrations rows = %d err %v", n, err)
 	}
 }
@@ -76,5 +76,36 @@ func TestOpenErrorDoesNotAdviseDeletingTheFile(t *testing.T) {
 	if strings.Contains(msg, "move it aside") || strings.Contains(msg, "start fresh") ||
 		!strings.Contains(msg, "restore it from a backup; Michel never deletes it for you") {
 		t.Errorf("message = %q", msg)
+	}
+}
+
+func TestMigration0002Applies(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	have := map[string]bool{}
+	rows, err := s.DB().Query(`PRAGMA table_info(project)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		have[name] = true
+	}
+	rows.Close()
+	for _, c := range []string{"core_packages", "risk_overrides"} {
+		if !have[c] {
+			t.Errorf("project.%s missing", c)
+		}
+	}
+	if _, err := s.DB().Exec(`SELECT finding_id, risk_score, recommendation, warning FROM analysis LIMIT 1`); err != nil {
+		t.Errorf("analysis table: %v", err)
 	}
 }
