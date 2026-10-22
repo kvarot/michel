@@ -95,8 +95,11 @@ func TestScanAndFindingsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var res []map[string]any
-	if err := json.Unmarshal([]byte(out), &res); err != nil || len(res) != 1 || res[0]["status"] != "ok" || res[0]["new"].(float64) != 0 {
+	var doc struct {
+		Results  []map[string]any `json:"results"`
+		Failures []any            `json:"failures"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil || len(doc.Results) != 1 || len(doc.Failures) != 0 || doc.Results[0]["status"] != "ok" || doc.Results[0]["new"].(float64) != 0 {
 		t.Errorf("json = %v %s", err, out)
 	}
 	if rows := auditRows(t, dir, "scan.finish"); len(rows) != 2 || rows[0].result != "ok" {
@@ -136,5 +139,30 @@ func TestScanCorruptManifestExitsOne(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "cannot parse composer.lock") || !strings.Contains(out, "broken") {
 		t.Errorf("stdout %q stderr %q", out, errOut)
+	}
+}
+
+func TestScanJSONReportsPerProjectFailures(t *testing.T) {
+	dir, db := t.TempDir(), buildTestOSVDB(t)
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "good"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "project", "add", t.TempDir(), "--name", "empty"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _, err := run(t, dir, "scan", "--all", "--osv-db", db, "--json")
+	if ExitCode(err) != 1 || err == nil {
+		t.Fatalf("err = %v", err)
+	}
+	var doc struct {
+		Results  []map[string]any    `json:"results"`
+		Failures []map[string]string `json:"failures"`
+	}
+	if jerr := json.Unmarshal([]byte(out), &doc); jerr != nil {
+		t.Fatal(jerr, out)
+	}
+	if len(doc.Results) != 1 || len(doc.Failures) != 1 || doc.Failures[0]["project"] != "empty" ||
+		!strings.Contains(doc.Failures[0]["error"], "michel project list") {
+		t.Errorf("doc = %+v", doc)
 	}
 }

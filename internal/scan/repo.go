@@ -31,16 +31,16 @@ func jsonList(s []string) string {
 //
 //	present and unknown          -> new
 //	present and new/pending      -> pending
-//	present and gone             -> pending (counted as new: it came back)
+//	present and gone             -> pending (counted as reappeared)
 //	absent and not gone          -> gone
 //
 // Findings of manifests listed in unread are neither refreshed nor closed:
 // the scan could not read that file, so absence proves nothing.
-func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool) (newN, still, gone int, err error) {
+func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool) (newN, still, reappeared, gone int, err error) {
 	ts := now.UTC().Format(time.RFC3339)
 	rows, err := tx.QueryContext(ctx, `SELECT id, manifest_rel_path, status FROM finding WHERE project_id = ?`, projectID)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("cannot read the existing findings: %w", err)
+		return 0, 0, 0, 0, fmt.Errorf("cannot read the existing findings: %w", err)
 	}
 	type known struct{ manifest, status string }
 	existing := map[string]known{}
@@ -49,13 +49,13 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 		var k known
 		if err := rows.Scan(&id, &k.manifest, &k.status); err != nil {
 			rows.Close()
-			return 0, 0, 0, err
+			return 0, 0, 0, 0, err
 		}
 		existing[id] = k
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	rows.Close()
 
@@ -64,18 +64,18 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	defer ins.Close()
 	upd, err := tx.PrepareContext(ctx, `UPDATE finding SET aliases=?, severity_label=?, cvss_score=?, installed_version=?,
 		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=? WHERE id=?`)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	defer upd.Close()
 	closeStmt, err := tx.PrepareContext(ctx, `UPDATE finding SET status=? WHERE id=?`)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	defer closeStmt.Close()
 
@@ -91,17 +91,17 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 			if _, err := ins.ExecContext(ctx, f.ID, projectID, f.ManifestRelPath, f.Ecosystem, f.Package, f.OSVID,
 				jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion, jsonList(f.FixedVersions), jsonList(f.DepGroups),
 				StatusNew, scanID, scanID, ts, ts, f.Summary); err != nil {
-				return 0, 0, 0, fmt.Errorf("cannot save finding %s: %w", f.OSVID, err)
+				return 0, 0, 0, 0, fmt.Errorf("cannot save finding %s: %w", f.OSVID, err)
 			}
 			newN++
 			continue
 		}
 		if _, err := upd.ExecContext(ctx, jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion,
 			jsonList(f.FixedVersions), jsonList(f.DepGroups), StatusPending, scanID, ts, f.Summary, f.ID); err != nil {
-			return 0, 0, 0, fmt.Errorf("cannot update finding %s: %w", f.OSVID, err)
+			return 0, 0, 0, 0, fmt.Errorf("cannot update finding %s: %w", f.OSVID, err)
 		}
 		if k.status == StatusGone {
-			newN++
+			reappeared++
 		} else {
 			still++
 		}
@@ -117,11 +117,11 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 			continue
 		}
 		if _, err := closeStmt.ExecContext(ctx, StatusGone, id); err != nil {
-			return 0, 0, 0, fmt.Errorf("cannot close finding %s: %w", id, err)
+			return 0, 0, 0, 0, fmt.Errorf("cannot close finding %s: %w", id, err)
 		}
 		gone++
 	}
-	return newN, still, gone, nil
+	return newN, still, reappeared, gone, nil
 }
 
 // Repo reads findings from the store.

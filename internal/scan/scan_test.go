@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -224,7 +225,7 @@ func TestRunStatusTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = e.run(t)
-	if r.New != 2 || r.Still != 1 {
+	if r.New != 0 || r.Reappeared != 2 || r.Still != 1 {
 		t.Fatalf("scan 4: %+v", r)
 	}
 	for id, s := range e.statuses(t) {
@@ -330,5 +331,69 @@ func TestRunSkipsInstalledDependencies(t *testing.T) {
 	r := e.run(t)
 	if len(r.Manifests) != 2 || r.New != 3 {
 		t.Errorf("manifests %+v new %d", r.Manifests, r.New)
+	}
+}
+
+func TestRunNoManifestsKeepsFindingsAndFails(t *testing.T) {
+	e := newEnv(t, "project-a")
+	e.run(t)
+	for _, f := range []string{"composer.lock", filepath.Join("web", "package-lock.json")} {
+		if err := os.Remove(filepath.Join(e.proj.Path, f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := Run(context.Background(), e.deps, e.proj, Options{OSVRoot: osvRoot})
+	if !errors.Is(err, ErrNoManifests) || r.Status != ScanFailed {
+		t.Fatalf("err %v status %s", err, r.Status)
+	}
+	for id, s := range e.statuses(t) {
+		if s != StatusNew {
+			t.Errorf("%s is %s, want it untouched", id, s)
+		}
+	}
+	var status, msg string
+	if err := e.st.DB().QueryRow(`SELECT status, error FROM scan WHERE id=?`, r.ScanID).Scan(&status, &msg); err != nil ||
+		status != "failed" || msg != "no composer.lock or package-lock.json found under "+e.proj.Path {
+		t.Errorf("scan row %q %q %v", status, msg, err)
+	}
+	var ev string
+	if err := e.st.DB().QueryRow(`SELECT evidence FROM audit_event WHERE action='scan.finish' ORDER BY rowid DESC LIMIT 1`).Scan(&ev); err != nil ||
+		!strings.Contains(ev, `"reason":"no_manifests"`) {
+		t.Errorf("evidence %q %v", ev, err)
+	}
+}
+
+func TestRunSkipsSymlinkedLockfile(t *testing.T) {
+	e := newEnv(t, "project-a")
+	outside := filepath.Join(t.TempDir(), "composer.lock")
+	b, _ := os.ReadFile(filepath.Join("testdata", "project-a", "composer.lock"))
+	if err := os.WriteFile(outside, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(e.proj.Path, "linked"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(e.proj.Path, "linked", "composer.lock")); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	r := e.run(t)
+	for _, m := range r.Manifests {
+		if strings.HasPrefix(m.RelPath, "linked/") {
+			t.Errorf("symlinked lockfile was recorded: %+v", m)
+		}
+	}
+	var n int
+	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM scan_manifest WHERE rel_path LIKE 'linked/%'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows %d %v", n, err)
+	}
+}
+
+func TestRelPathOutsideRootIsAnError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "proj")
+	if _, err := relPath(root, filepath.Join(filepath.Dir(root), "other", "composer.lock")); err == nil {
+		t.Error("expected an error for a path outside the project")
+	}
+	if rel, err := relPath(root, filepath.Join(root, "a", "composer.lock")); err != nil || rel != "a/composer.lock" {
+		t.Errorf("rel %q err %v", rel, err)
 	}
 }

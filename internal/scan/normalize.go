@@ -3,9 +3,11 @@ package scan
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/google/osv-scanner/v2/pkg/models"
 	"github.com/ossf/osv-schema/bindings/go/osvschema"
@@ -52,11 +54,13 @@ func FindingID(projectID, manifestRelPath, ecosystem, pkg, osvID string) string 
 }
 
 // relPath returns the slash-separated path of source relative to root.
-func relPath(root, source string) string {
-	if rel, err := filepath.Rel(root, source); err == nil {
-		return filepath.ToSlash(rel)
+// It fails when source is not inside root.
+func relPath(root, source string) (string, error) {
+	rel, err := filepath.Rel(root, source)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is not inside the project folder %s", source, root)
 	}
-	return filepath.ToSlash(source)
+	return filepath.ToSlash(rel), nil
 }
 
 // FixedVersions returns the "fixed" events of the ECOSYSTEM and SEMVER ranges
@@ -109,7 +113,14 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 	manifests := []ManifestResult{}
 	seen := map[string]bool{}
 	for _, res := range r.Results {
-		rel := relPath(projectRoot, res.Source.Path)
+		rel, rerr := relPath(projectRoot, res.Source.Path)
+		if rerr != nil {
+			manifests = append(manifests, ManifestResult{
+				RelPath: filepath.ToSlash(res.Source.Path), Packages: len(res.Packages),
+				Err: fmt.Errorf("cannot place %s in the project: %w", res.Source.Path, rerr),
+			})
+			continue
+		}
 		mr := ManifestResult{RelPath: rel, Packages: len(res.Packages)}
 		for _, pv := range res.Packages {
 			if mr.Ecosystem == "" {

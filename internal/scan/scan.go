@@ -41,6 +41,9 @@ const (
 	ScanFailed  = "failed"
 )
 
+// ErrNoManifests means the project folder holds no lockfile Michel reads.
+var ErrNoManifests = errors.New("no composer.lock or package-lock.json found")
+
 // Deps are the collaborators of Run.
 type Deps struct {
 	Store   *store.Store
@@ -67,6 +70,7 @@ type Result struct {
 	Manifests  []ManifestResult `json:"manifests"`
 	New        int              `json:"new"`
 	Still      int              `json:"still"`
+	Reappeared int              `json:"reappeared"`
 	Gone       int              `json:"gone"`
 	BySeverity map[string]int   `json:"by_severity"`
 	Errors     []error          `json:"-"`
@@ -112,7 +116,16 @@ func findLockfiles(root string, exclude []string) ([]lockfile, error) {
 			return nil
 		}
 		if eco, ok := lockfiles[d.Name()]; ok {
-			out = append(out, lockfile{rel: relPath(root, path), abs: path, ecosystem: eco})
+			if d.Type()&fs.ModeSymlink != 0 {
+				slog.Debug("skipping symlinked lockfile", "path", path)
+				return nil
+			}
+			rel, rerr := relPath(root, path)
+			if rerr != nil {
+				slog.Debug("skipping lockfile outside the project", "path", path, "err", rerr)
+				return nil
+			}
+			out = append(out, lockfile{rel: rel, abs: path, ecosystem: eco})
 		}
 		return nil
 	})
@@ -183,17 +196,27 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 	}
 	record("scan.start", p.Name, "ok", map[string]any{"project_id": p.ID, "osv_db_root": opt.OSVRoot})
 
-	fail := func(err error) (Result, error) {
+	failWith := func(stored string, err error, ev map[string]any) (Result, error) {
 		res.Status = ScanFailed
 		_, _ = db.ExecContext(context.WithoutCancel(ctx), `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=?`,
-			ScanFailed, deps.Now().UTC().Format(time.RFC3339), err.Error(), res.ScanID)
-		record("scan.finish", p.Name, ScanFailed, map[string]any{"error": err.Error()})
+			ScanFailed, deps.Now().UTC().Format(time.RFC3339), stored, res.ScanID)
+		ev["error"] = stored
+		record("scan.finish", p.Name, ScanFailed, ev)
 		return res, err
+	}
+	fail := func(err error) (Result, error) {
+		return failWith(err.Error(), err, map[string]any{})
 	}
 
 	found, err := findLockfiles(p.Path, exclude)
 	if err != nil {
 		return fail(fmt.Errorf("Michel cannot read the folder %s: %w. Check that it still exists", p.Path, err))
+	}
+	if len(found) == 0 {
+		// Existing findings keep their status: an empty or unmounted folder
+		// proves nothing about what was fixed.
+		return failWith("no composer.lock or package-lock.json found under "+p.Path,
+			fmt.Errorf("%w under %s", ErrNoManifests, p.Path), map[string]any{"reason": "no_manifests"})
 	}
 
 	handler := deps.LogHandler
@@ -222,6 +245,26 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 	}
 
 	findings, manifests := Normalize(p.ID, p.Path, vr)
+	// Only lockfiles Michel's own walk accepted count (no symlinks, none
+	// outside the project), whatever the scanner returned.
+	accepted := map[string]bool{}
+	for _, lf := range found {
+		accepted[lf.rel] = true
+	}
+	keptM := manifests[:0]
+	for _, m := range manifests {
+		if accepted[m.RelPath] || m.Err != nil {
+			keptM = append(keptM, m)
+		}
+	}
+	manifests = keptM
+	keptF := findings[:0]
+	for _, f := range findings {
+		if accepted[f.ManifestRelPath] {
+			keptF = append(keptF, f)
+		}
+	}
+	findings = keptF
 	index := map[string]int{}
 	for i, m := range manifests {
 		index[m.RelPath] = i
@@ -278,7 +321,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		if err := insertManifests(ctx, tx, res.ScanID, manifests); err != nil {
 			return err
 		}
-		res.New, res.Still, res.Gone, err = applyScan(ctx, tx, p.ID, res.ScanID, finished, findings, unread)
+		res.New, res.Still, res.Reappeared, res.Gone, err = applyScan(ctx, tx, p.ID, res.ScanID, finished, findings, unread)
 		if err != nil {
 			return err
 		}
@@ -302,7 +345,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		record("scan.manifest", m.RelPath, result, ev)
 	}
 	record("scan.finish", p.Name, status, map[string]any{
-		"new": res.New, "still": res.Still, "gone": res.Gone, "by_severity": res.BySeverity,
+		"new": res.New, "still": res.Still, "reappeared": res.Reappeared, "gone": res.Gone, "by_severity": res.BySeverity,
 		"manifests": len(manifests), "duration_ms": finished.Sub(started).Milliseconds(),
 	})
 	return res, nil

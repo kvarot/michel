@@ -58,8 +58,12 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			sdeps := scan.Deps{Store: deps.Store, Audit: deps.Audit, Gateway: deps.Gateway, Now: deps.Now, Version: buildinfo.Version}
 			asJSON, _ := cmd.Flags().GetBool("json")
 
-			var results []scan.Result
-			var failures []string
+			results := []scan.Result{}
+			type failure struct {
+				Project string `json:"project"`
+				Error   string `json:"error"`
+			}
+			failures := []failure{}
 			problems := false
 			for _, p := range targets {
 				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root})
@@ -67,7 +71,11 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					if errors.Is(err, osvdb.ErrDatabaseMissing) && !all {
 						return err
 					}
-					failures = append(failures, fmt.Sprintf("%s: %v", p.Name, err))
+					msg := err.Error()
+					if errors.Is(err, scan.ErrNoManifests) {
+						msg = noManifestsMessage(p)
+					}
+					failures = append(failures, failure{Project: p.Name, Error: msg})
 					problems = true
 					continue
 				}
@@ -77,7 +85,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				}
 			}
 			if asJSON {
-				if err := json.NewEncoder(deps.Stdout).Encode(results); err != nil {
+				if err := json.NewEncoder(deps.Stdout).Encode(struct {
+					Results  []scan.Result `json:"results"`
+					Failures []failure     `json:"failures"`
+				}{results, failures}); err != nil {
 					return err
 				}
 			} else {
@@ -130,26 +141,42 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
+// noManifestsMessage explains a scan that found no lockfile: what, why, next.
+func noManifestsMessage(p project.Project) string {
+	return fmt.Sprintf("Michel found no composer.lock or package-lock.json under %s, so it scanned nothing and kept the earlier findings of %s. "+
+		"Michel only scans lockfiles; the folder may be empty or unmounted, or the lockfiles may sit under an excluded folder (node_modules, vendor, .git). "+
+		"Check the path with 'michel project list', or add the lockfile and scan again.", p.Path, p.Name)
+}
+
 // summarySentence is the plain-language end of a scan, with the next action.
 func summarySentence(r scan.Result) string {
 	crit := r.BySeverity["critical"]
 	var s strings.Builder
-	switch {
-	case len(r.Manifests) == 0:
-		return fmt.Sprintf("Michel found no composer.lock or package-lock.json in %s. Next: michel project list", r.Project)
-	case r.New == 0:
+	if r.New == 0 {
 		fmt.Fprintf(&s, "Michel found no new findings in %s", r.Project)
-		if r.Gone > 0 {
-			fmt.Fprintf(&s, ", and %s fixed", plural(r.Gone, "finding is", "findings are"))
-		}
-		fmt.Fprintf(&s, ". Next: michel findings --project %s", r.Project)
-		return s.String()
-	}
-	fmt.Fprintf(&s, "Michel found %s in %s", plural(r.New, "new finding", "new findings"), r.Project)
-	if crit > 0 {
-		fmt.Fprintf(&s, ", %d critical. Next: michel findings --project %s --severity critical", crit, r.Project)
 	} else {
+		fmt.Fprintf(&s, "Michel found %s in %s", plural(r.New, "new finding", "new findings"), r.Project)
+		if crit > 0 {
+			fmt.Fprintf(&s, ", %d critical", crit)
+		}
+	}
+	if r.Reappeared > 0 {
+		verb := "findings came back after being gone"
+		if r.Reappeared == 1 {
+			verb = "finding came back after being gone"
+		}
+		fmt.Fprintf(&s, "; %d %s", r.Reappeared, verb)
+	}
+	if r.Gone > 0 {
+		fmt.Fprintf(&s, "; %s", plural(r.Gone, "finding is gone", "findings are gone"))
+	}
+	switch {
+	case r.New > 0 && crit > 0:
+		fmt.Fprintf(&s, ". Next: michel findings --project %s --severity critical", r.Project)
+	case r.New > 0:
 		fmt.Fprintf(&s, ". Next: michel findings --project %s --status new", r.Project)
+	default:
+		fmt.Fprintf(&s, ". Next: michel findings --project %s", r.Project)
 	}
 	return s.String()
 }
