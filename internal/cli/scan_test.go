@@ -166,3 +166,31 @@ func TestScanJSONReportsPerProjectFailures(t *testing.T) {
 		t.Errorf("doc = %+v", doc)
 	}
 }
+
+func TestScanWarnsAboutProjectScannerConfig(t *testing.T) {
+	dir, db, proj := t.TempDir(), buildTestOSVDB(t), copyProject(t, "project-a")
+	if err := os.WriteFile(filepath.Join(proj, "web", "osv-scanner.toml"), []byte("[[IgnoredVulns]]\nid = \"ACME-2026-0101\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, errOut, err := run(t, dir, "scan", "--project", "demo", "--osv-db", db)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	want := "Warning: " + filepath.Join(proj, "web", "osv-scanner.toml") + " contains osv-scanner ignore rules; Michel does not apply them. " +
+		"Decide on findings with michel decide (plan 3) instead.\n"
+	if !strings.Contains(errOut, want) {
+		t.Errorf("stderr lacks the warning:\n%s", errOut)
+	}
+	if !strings.Contains(out, "Michel found 3 new findings in demo") {
+		t.Errorf("the ignore rule was applied:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "osv-scanner-override.toml")); err != nil {
+		t.Errorf("override config not in the data dir: %v", err)
+	}
+	if rows := auditRows(t, dir, "scan.finish"); len(rows) != 1 || rows[0].evidence["ignored_config_files"] == nil {
+		t.Errorf("scan.finish = %+v", rows)
+	}
+}

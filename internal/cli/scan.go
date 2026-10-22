@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -59,7 +60,9 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				targets = []project.Project{p}
 			}
 			root := dbRoot(cmd, deps)
-			sdeps := scan.Deps{Store: deps.Store, Audit: deps.Audit, Gateway: deps.Gateway, Now: deps.Now, Version: buildinfo.Version}
+			dataDir, _ := cmd.Flags().GetString("data-dir")
+			sdeps := scan.Deps{Store: deps.Store, Audit: deps.Audit, Gateway: deps.Gateway, Now: deps.Now,
+				Version: buildinfo.Version, DataDir: dataDir}
 			asJSON, _ := cmd.Flags().GetBool("json")
 
 			results := []scan.Result{}
@@ -98,6 +101,9 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			} else {
 				printScan(deps, results)
 				for _, r := range results {
+					for _, w := range r.Warnings {
+						fmt.Fprintln(deps.Stderr, ignoredConfigWarning(targets, r.Project, w))
+					}
 					for _, e := range r.Errors {
 						fmt.Fprintf(deps.Stderr, "warning: %s: %v. Fix or remove the file, then scan again; its earlier findings were kept.\n", r.Project, e)
 					}
@@ -183,4 +189,18 @@ func summarySentence(r scan.Result) string {
 		fmt.Fprintf(&s, ". Next: michel findings --project %s", r.Project)
 	}
 	return s.String()
+}
+
+// ignoredConfigWarning tells that an osv-scanner.toml in the project was not
+// applied. rel is relative to the project folder; the line shows the full path.
+func ignoredConfigWarning(projects []project.Project, name, rel string) string {
+	path := rel
+	for _, p := range projects {
+		if p.Name == name {
+			path = filepath.Join(p.Path, filepath.FromSlash(rel))
+			break
+		}
+	}
+	return fmt.Sprintf("Warning: %s contains osv-scanner ignore rules; Michel does not apply them. "+
+		"Decide on findings with michel decide (plan 3) instead.", path)
 }

@@ -53,6 +53,53 @@ type Deps struct {
 	Version string
 	// LogHandler receives osv-scanner's logs. Nil discards them.
 	LogHandler slog.Handler
+	// DataDir is Michel's data folder, where the scanner override config
+	// lives. Empty means the folder of the store.
+	DataDir string
+}
+
+// ScannerConfigName is the per-folder osv-scanner configuration file. Michel
+// never applies it: its ignore rules would hide findings with no trace.
+const ScannerConfigName = "osv-scanner.toml"
+
+// OverrideConfigName is the empty osv-scanner configuration Michel owns in
+// its data folder and hands to every scan, so that no osv-scanner.toml
+// found in a project is loaded.
+const OverrideConfigName = "osv-scanner-override.toml"
+
+const overrideContent = "# Owned by Michel: an empty osv-scanner configuration used for every scan so that\n" +
+	"# no osv-scanner.toml inside a project can hide findings. Michel rewrites this file;\n" +
+	"# decide on findings with Michel instead of editing it.\n"
+
+// ensureOverrideConfig writes Michel's empty scanner configuration in
+// dataDir when it is absent or was changed, and returns its path.
+func ensureOverrideConfig(dataDir string) (string, error) {
+	path := filepath.Join(dataDir, OverrideConfigName)
+	if b, err := os.ReadFile(path); err == nil && string(b) == overrideContent {
+		return path, nil
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dataDir, OverrideConfigName+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	_, werr := tmp.WriteString(overrideContent)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil {
+		os.Remove(tmp.Name())
+		return "", errors.Join(werr, cerr)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		// Another scan may have written the same content meanwhile.
+		if b, rerr := os.ReadFile(path); rerr == nil && string(b) == overrideContent {
+			return path, nil
+		}
+		return "", err
+	}
+	return path, nil
 }
 
 // Options tunes a scan.
@@ -75,6 +122,9 @@ type Result struct {
 	BySeverity map[string]int   `json:"by_severity"`
 	Errors     []error          `json:"-"`
 	ErrorTexts []string         `json:"errors,omitempty"`
+	// Warnings lists the osv-scanner.toml files met in the project
+	// (relative paths). Michel does not apply them.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // lockfile names Michel reads, with their OSV ecosystem.
@@ -100,8 +150,11 @@ func globExcludes(names []string) []string {
 
 type lockfile struct{ rel, abs, ecosystem string }
 
-func findLockfiles(root string, exclude []string) ([]lockfile, error) {
+// findLockfiles walks the project and returns the lockfiles Michel reads,
+// plus the relative paths of the osv-scanner.toml files it met.
+func findLockfiles(root string, exclude []string) ([]lockfile, []string, error) {
 	var out []lockfile
+	configs := []string{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if path == root {
@@ -112,6 +165,12 @@ func findLockfiles(root string, exclude []string) ([]lockfile, error) {
 		if d.IsDir() {
 			if path != root && slices.Contains(exclude, d.Name()) {
 				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == ScannerConfigName {
+			if rel, rerr := relPath(root, path); rerr == nil {
+				configs = append(configs, rel)
 			}
 			return nil
 		}
@@ -129,7 +188,7 @@ func findLockfiles(root string, exclude []string) ([]lockfile, error) {
 		}
 		return nil
 	})
-	return out, err
+	return out, configs, err
 }
 
 // checkContent tells whether a lockfile the scanner returned nothing for is
@@ -208,7 +267,10 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		return failWith(err.Error(), err, map[string]any{})
 	}
 
-	found, err := findLockfiles(p.Path, exclude)
+	found, configs, err := findLockfiles(p.Path, exclude)
+	if len(configs) > 0 {
+		res.Warnings = configs
+	}
 	if err != nil {
 		return fail(fmt.Errorf("Michel cannot read the folder %s: %w. Check that it still exists", p.Path, err))
 	}
@@ -224,7 +286,19 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		handler = slog.NewTextHandler(io.Discard, nil)
 	}
 	osvscanner.SetLogger(handler)
+	dataDir := deps.DataDir
+	if dataDir == "" {
+		dataDir = filepath.Dir(deps.Store.Path())
+	}
+	// Without an override, osv-scanner loads any osv-scanner.toml next to a
+	// lockfile and drops the vulnerabilities it ignores before Michel sees
+	// them. Michel's own empty file replaces every per-folder config.
+	override, err := ensureOverrideConfig(dataDir)
+	if err != nil {
+		return fail(fmt.Errorf("Michel cannot prepare the scanner configuration in %s: %w. Nothing was changed; check that the data folder is writable and run the scan again", dataDir, err))
+	}
 	vr, derr := osvscanner.DoScan(osvscanner.ScannerActions{
+		ConfigOverridePath:    override,
 		DirectoryPaths:        []string{p.Path},
 		Recursive:             true,
 		CompareOffline:        true,
@@ -347,6 +421,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 	record("scan.finish", p.Name, status, map[string]any{
 		"new": res.New, "still": res.Still, "reappeared": res.Reappeared, "gone": res.Gone, "by_severity": res.BySeverity,
 		"manifests": len(manifests), "duration_ms": finished.Sub(started).Milliseconds(),
+		"ignored_config_files": configs,
 	})
 	return res, nil
 }

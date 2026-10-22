@@ -397,3 +397,50 @@ func TestRelPathOutsideRootIsAnError(t *testing.T) {
 		t.Errorf("rel %q err %v", rel, err)
 	}
 }
+
+func TestProjectScannerConfigIsNotApplied(t *testing.T) {
+	e := newEnv(t, "project-a")
+	if r := e.run(t); r.New != 3 || len(r.Warnings) != 0 {
+		t.Fatalf("scan 1: %+v", r)
+	}
+	cfg := filepath.Join(e.proj.Path, "web", ScannerConfigName)
+	if err := os.WriteFile(cfg, []byte("[[IgnoredVulns]]\nid = \"ACME-2026-0101\"\nreason = \"hidden\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := e.run(t)
+	if r.Gone != 0 || r.Still != 3 {
+		t.Fatalf("scan 2: the project config hid a finding: %+v", r)
+	}
+	if s := e.statuses(t)["ACME-2026-0101"]; s == "" || s == StatusGone {
+		t.Fatalf("ACME-2026-0101 status = %q", s)
+	}
+	if len(r.Warnings) != 1 || r.Warnings[0] != "web/osv-scanner.toml" {
+		t.Fatalf("warnings = %v", r.Warnings)
+	}
+	var ev string
+	if err := e.st.DB().QueryRow(`SELECT evidence FROM audit_event WHERE action = 'scan.finish' ORDER BY rowid DESC LIMIT 1`).Scan(&ev); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ev, `"ignored_config_files":["web/osv-scanner.toml"]`) {
+		t.Fatalf("scan.finish evidence = %s", ev)
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(e.st.Path()), OverrideConfigName))
+	if err != nil || string(b) != overrideContent {
+		t.Fatalf("override file: %q %v", b, err)
+	}
+}
+
+func TestOverrideConfigIsRestoredWhenEdited(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, OverrideConfigName)
+	if err := os.WriteFile(path, []byte("[[IgnoredVulns]]\nid = \"ACME-2026-0101\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ensureOverrideConfig(dir)
+	if err != nil || got != path {
+		t.Fatalf("path %s err %v", got, err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != overrideContent {
+		t.Fatalf("content = %q", b)
+	}
+}
