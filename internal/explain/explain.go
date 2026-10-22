@@ -32,37 +32,54 @@ const (
 // Valid tells whether l is a supported language.
 func (l Lang) Valid() bool { return l == EN || l == FR }
 
-// Facts is everything the templates may mention.
+// Facts is everything the templates may mention. Text that comes from
+// outside (advisories, package names, file names, changelogs) is stripped of
+// control characters by FactsFrom.
 type Facts struct {
-	Package, Ecosystem, OSVID, Summary, SeverityLabel string
-	CVSS                                              float64
-	Installed, Target                                 string
-	Jump                                              analyze.Jump
-	Directness                                        analyze.Directness
-	Via                                               []string
-	CallSiteCount                                     int
-	CallSitesQuality                                  string
-	TestCount                                         int
-	TestMethod                                        string
-	ChangelogAvailable, Breaking                      bool
-	BreakingLines                                     []string
-	Risk                                              analyze.Risk
-	ManifestRelPath                                   string
+	Package          string             `json:"package"`
+	Ecosystem        string             `json:"ecosystem"`
+	OSVID            string             `json:"osv_id"`
+	Summary          string             `json:"summary"`
+	SeverityLabel    string             `json:"severity"`
+	CVSS             float64            `json:"cvss"`
+	Installed        string             `json:"installed"`
+	Target           string             `json:"target"`
+	Jump             analyze.Jump       `json:"jump"`
+	Directness       analyze.Directness `json:"directness"`
+	Via              []string           `json:"via"`
+	CallSiteCount    int                `json:"call_site_count"`
+	CallSitesQuality string             `json:"call_sites_quality"`
+	TestCount        int                `json:"test_count"`
+	TestMethod       string             `json:"test_method"`
+	// ChangelogAvailable is true when a changelog was read.
+	ChangelogAvailable bool `json:"changelog_available"`
+	// ChangelogVersionsUnread is true when the changelog was read but its
+	// version headings were not: breaking changes were not assessed.
+	ChangelogVersionsUnread bool         `json:"changelog_versions_unread"`
+	Breaking                bool         `json:"breaking"`
+	BreakingLines           []string     `json:"breaking_lines"`
+	Risk                    analyze.Risk `json:"risk"`
+	ManifestRelPath         string       `json:"manifest_rel_path"`
 	// Certainty is "high" when the call sites were matched precisely (psr4 or
-	// import) and a test covers them, "medium" when matched precisely or by
-	// name only, "low" otherwise (and without analysis).
-	Certainty string
+	// import) and a test using the package covers them (method "callsite"),
+	// "medium" when matched precisely or by name only, "low" otherwise
+	// (not searchable, no namespace, or without analysis).
+	Certainty string `json:"certainty"`
+	// FixLevel is the project's fix level (0 to 3): an automatic fix is only
+	// offered from level 2.
+	FixLevel int `json:"fix_level"`
 
 	// HasAnalysis is false when no analysis was stored for the finding.
-	HasAnalysis bool
+	HasAnalysis bool `json:"has_analysis"`
 	// Example is the first call site as "file:line" (relative path), or "".
-	Example string
+	Example string `json:"example"`
 	// Constraint is the project's constraint on a direct dependency.
-	Constraint string
+	Constraint string `json:"constraint"`
 	// ConstraintKnown tells whether ConstraintOK is meaningful.
-	ConstraintKnown, ConstraintOK bool
+	ConstraintKnown bool `json:"constraint_known"`
+	ConstraintOK    bool `json:"constraint_ok"`
 	// BreakingCount is len(BreakingLines), at least 1 when Breaking.
-	BreakingCount int
+	BreakingCount int `json:"breaking_count"`
 }
 
 // Explanation is the three sentences.
@@ -86,6 +103,17 @@ func relOnly(p string) string {
 	return p
 }
 
+// clean removes control characters from one line of untrusted text; a line
+// break becomes a space.
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, scan.SanitizeText(s))
+}
+
 func shorten(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) && !unicode.IsSpace(r) {
@@ -102,35 +130,38 @@ func shorten(s string) string {
 }
 
 // FactsFrom builds the facts of a finding. Without analysis only what the scan
-// knows is filled, and the upgrade is planned from the finding itself.
+// knows is filled, and the upgrade is planned from the finding itself. The
+// caller sets FixLevel from the project.
 func FactsFrom(fi scan.Finding, a analyze.Analysis, hasAnalysis bool) Facts {
 	f := Facts{
-		Package: fi.Package, Ecosystem: fi.Ecosystem, OSVID: fi.OSVID, Summary: shorten(fi.Summary),
-		SeverityLabel: fi.SeverityLabel, CVSS: fi.CVSS, Installed: fi.InstalledVersion,
-		ManifestRelPath: fi.ManifestRelPath, HasAnalysis: hasAnalysis, Directness: analyze.Unknown,
+		Package: clean(fi.Package), Ecosystem: fi.Ecosystem, OSVID: clean(fi.OSVID), Summary: shorten(fi.Summary),
+		SeverityLabel: fi.SeverityLabel, CVSS: fi.CVSS, Installed: clean(fi.InstalledVersion),
+		ManifestRelPath: clean(fi.ManifestRelPath), HasAnalysis: hasAnalysis, Directness: analyze.Unknown,
 		Certainty: "low",
 	}
 	if !hasAnalysis {
 		up := analyze.PlanUpgrade(fi.Ecosystem, fi.InstalledVersion, fi.FixedVersions, "")
-		f.Target, f.Jump = up.Target, up.Jump
+		f.Target, f.Jump = clean(up.Target), up.Jump
 		return f
 	}
-	f.Target, f.Jump = a.Upgrade.Target, a.Upgrade.Jump
+	f.Target, f.Jump = clean(a.Upgrade.Target), a.Upgrade.Jump
 	if a.Upgrade.ConstraintAllows != nil {
 		f.ConstraintKnown, f.ConstraintOK = true, *a.Upgrade.ConstraintAllows
 	}
-	f.Constraint = a.Path.Constraint
-	f.Directness, f.Via = a.Path.Directness, a.Path.Via
+	f.Constraint = clean(a.Path.Constraint)
+	f.Directness, f.Via = a.Path.Directness, scan.SanitizeAll(a.Path.Via)
 	f.CallSiteCount, f.CallSitesQuality = a.Calls.Count, a.Calls.Quality
 	if len(a.Calls.Sites) > 0 {
 		s := a.Calls.Sites[0]
-		f.Example = fmt.Sprintf("%s:%d", relOnly(s.File), s.Line)
+		f.Example = fmt.Sprintf("%s:%d", relOnly(clean(s.File)), s.Line)
 	}
 	f.TestCount, f.TestMethod = a.Coverage.Count, a.Coverage.Method
-	f.ChangelogAvailable, f.Breaking, f.BreakingLines = a.Changelog.Available, a.Changelog.Breaking, a.Changelog.BreakingLines
+	f.ChangelogAvailable, f.Breaking = a.Changelog.Available, a.Changelog.Breaking
+	f.ChangelogVersionsUnread = a.Changelog.VersionsUnread()
+	f.BreakingLines = scan.SanitizeAll(a.Changelog.BreakingLines)
 	f.Risk = a.Risk
 	switch q := f.CallSitesQuality; {
-	case (q == "psr4" || q == "import") && f.TestCount > 0:
+	case (q == "psr4" || q == "import") && f.TestMethod == "callsite" && f.TestCount > 0:
 		f.Certainty = "high"
 	case q == "psr4" || q == "import" || q == "name":
 		f.Certainty = "medium"

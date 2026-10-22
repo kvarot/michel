@@ -133,7 +133,10 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 				}
 				seen[id] = true
 				label, score := severityOf(pv, v)
-				aliases := append([]string{}, v.GetAliases()...)
+				// Package names, ids and paths are lookup keys and stay as read;
+				// they are sanitized where they are printed. Free text is
+				// sanitized here, at the source.
+				aliases := SanitizeAll(append([]string{}, v.GetAliases()...))
 				groups := append([]string{}, pv.DepGroups...)
 				findings = append(findings, Finding{
 					ID: id, ProjectID: projectID, ManifestRelPath: rel,
@@ -141,7 +144,7 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 					Aliases: aliases, SeverityLabel: label, CVSS: score,
 					InstalledVersion: pv.Package.Version,
 					FixedVersions:    FixedVersions(v, pv.Package.Ecosystem, pv.Package.Name),
-					DepGroups:        groups, Summary: v.GetSummary(),
+					DepGroups:        groups, Summary: SanitizeText(v.GetSummary()),
 				})
 				mr.Findings++
 			}

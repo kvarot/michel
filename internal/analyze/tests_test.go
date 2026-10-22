@@ -89,6 +89,10 @@ const useClient = `<?php
 use Acme\Vuln\Client;
 `
 
+// acmeAutoload is the composer.json of an installed acme/vuln: an installed
+// package without any autoload namespace is no longer searched by name.
+const acmeAutoload = `{"autoload":{"psr-4":{"Acme\\Vuln\\":"src/"}}}`
+
 func TestCoverageSurvivesSitesCap(t *testing.T) {
 	old := maxSites
 	maxSites = 2
@@ -98,7 +102,7 @@ func TestCoverageSurvivesSitesCap(t *testing.T) {
 		"src/A.php":                      useClient + useClient,
 		"src/B.php":                      useClient,
 		"tests/ZTest.php":                useClient,
-		"vendor/acme/vuln/composer.json": "{}",
+		"vendor/acme/vuln/composer.json": acmeAutoload,
 	})
 	cs, err := FindCallSites(root, "composer.lock", "composer", "acme/vuln", nil)
 	if err != nil {
@@ -124,7 +128,7 @@ func TestCoverageCallsitePrecedesReference(t *testing.T) {
 		"src/Http.php":                   useClient,
 		"tests/ATest.php":                useClient,
 		"tests/BTest.php":                "<?php\nnew Http();\n",
-		"vendor/acme/vuln/composer.json": "{}",
+		"vendor/acme/vuln/composer.json": acmeAutoload,
 	})
 	cs, _ := FindCallSites(root, "composer.lock", "composer", "acme/vuln", nil)
 	cov, err := FindCoveringTests(root, "composer.lock", cs, "composer", nil)
@@ -142,7 +146,7 @@ func TestCoverageDedupsReferences(t *testing.T) {
 		"src/Http.php":                   useClient,
 		"src/Client.php":                 useClient,
 		"tests/XTest.php":                "<?php\nnew Http(); new Client();\n",
-		"vendor/acme/vuln/composer.json": "{}",
+		"vendor/acme/vuln/composer.json": acmeAutoload,
 	})
 	cs, _ := FindCallSites(root, "composer.lock", "composer", "acme/vuln", nil)
 	cov, err := FindCoveringTests(root, "composer.lock", cs, "composer", nil)
@@ -179,7 +183,7 @@ func TestCoverageUnreadableTestFile(t *testing.T) {
 		"composer.lock":                  "{}",
 		"src/Http.php":                   useClient,
 		"tests/BigTest.php":              "<?php\n" + strings.Repeat("x", (1<<20)+10) + "\n",
-		"vendor/acme/vuln/composer.json": "{}",
+		"vendor/acme/vuln/composer.json": acmeAutoload,
 	})
 	cs, _ := FindCallSites(root, "composer.lock", "composer", "acme/vuln", nil)
 	cov, err := FindCoveringTests(root, "composer.lock", cs, "composer", nil)
@@ -201,7 +205,7 @@ func TestCoverageCountBeyondTestFilesCap(t *testing.T) {
 		"tests/ATest.php":                useClient,
 		"tests/BTest.php":                useClient,
 		"tests/CTest.php":                useClient,
-		"vendor/acme/vuln/composer.json": "{}",
+		"vendor/acme/vuln/composer.json": acmeAutoload,
 	})
 	cs, _ := FindCallSites(root, "composer.lock", "composer", "acme/vuln", nil)
 	cov, err := FindCoveringTests(root, "composer.lock", cs, "composer", nil)
@@ -218,7 +222,7 @@ func TestCoverageUnreadableSourceNotCounted(t *testing.T) {
 		"composer.lock":                  "{}",
 		"src/BigSrc.php":                 "<?php\n" + strings.Repeat("x", (1<<20)+10) + "\n",
 		"tests/ATest.php":                useClient,
-		"vendor/acme/vuln/composer.json": "{}",
+		"vendor/acme/vuln/composer.json": acmeAutoload,
 	})
 	cs, _ := FindCallSites(root, "composer.lock", "composer", "acme/vuln", nil)
 	if cs.Unreadable != 1 {

@@ -187,15 +187,18 @@ func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Fi
 	return out, nil
 }
 
+// MaxPrefixMatches caps FindByIDPrefix: a result of that size may hide more.
+const MaxPrefixMatches = 50
+
 // FindByIDPrefix returns every finding, in any project and any status, whose
-// id starts with prefix (at most 50). An empty prefix matches nothing.
+// id starts with prefix (at most MaxPrefixMatches). An empty prefix matches nothing.
 func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, error) {
 	if prefix == "" {
 		return []Finding{}, nil
 	}
 	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases,
 		severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary
-		FROM finding WHERE substr(id, 1, ?) = ? ORDER BY id LIMIT 50`, len(prefix), prefix)
+		FROM finding WHERE substr(id, 1, ?) = ? ORDER BY id LIMIT ?`, len(prefix), prefix, MaxPrefixMatches)
 	if err != nil {
 		return nil, fmt.Errorf("cannot look the finding up: %w", err)
 	}

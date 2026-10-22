@@ -63,8 +63,10 @@ func TestFindingDetailShowsExplanation(t *testing.T) {
 
 	_, out, _, err = run(t, dir, "finding", list[0].ID, "--json")
 	var doc struct {
-		Finding     struct{ ID string }
-		Analysis    *struct{ FindingID string }
+		Finding  struct{ ID string }
+		Analysis *struct {
+			FindingID string `json:"finding_id"`
+		}
 		Explanation struct{ What, Impact, Cost string }
 	}
 	if err != nil || json.Unmarshal([]byte(out), &doc) != nil || doc.Finding.ID != list[0].ID ||

@@ -23,11 +23,11 @@ const (
 type Upgrade struct {
 	// Target is the smallest fixed version strictly greater than the installed
 	// one, "" when there is none.
-	Target string
-	Jump   Jump
+	Target string `json:"target"`
+	Jump   Jump   `json:"jump"`
 	// ConstraintAllows is nil when the constraint is empty, unparsable, or
 	// there is no target.
-	ConstraintAllows *bool
+	ConstraintAllows *bool `json:"constraint_allows"`
 }
 
 // systemFor maps an OSV ecosystem name to its semver rules. Packagist uses the
@@ -92,13 +92,13 @@ func PlanUpgrade(ecosystem, installed string, fixed []string, constraint string)
 	}
 	up.Target = bestStr
 
-	// An unparsable installed version (e.g. dev-master) gives an unknown jump
-	// and leaves the constraint unevaluated.
+	// An unparsable installed version (e.g. dev-master) gives an unknown jump;
+	// the constraint only depends on the target, so it is still evaluated.
 	if instErr != nil {
 		up.Jump = JumpUnknown
-		return up
+	} else {
+		up.Jump = jumpBetween(inst, best)
 	}
-	up.Jump = jumpBetween(inst, best)
 	if allowed, ok := constraintAllows(sys, constraint, best); ok {
 		up.ConstraintAllows = &allowed
 	}

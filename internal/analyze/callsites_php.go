@@ -2,18 +2,38 @@ package analyze
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
 
+// vendorState tells what Michel found about the installed copy of a package.
+type vendorState int
+
+const (
+	// vendorMissing: no readable vendor/<pkg>/composer.json (not installed,
+	// refused link, unreadable or invalid file).
+	vendorMissing vendorState = iota
+	// vendorNoAutoload: installed, but declares no PSR-4 / PSR-0 namespace.
+	vendorNoAutoload
+	// vendorNamespaced: installed with at least one namespace.
+	vendorNamespaced
+)
+
 // vendorNamespaces reads the autoload.psr-4 / psr-0 namespaces of the
-// installed package, without the trailing backslash.
-func vendorNamespaces(manifestDir, pkg string) (nss, underscored []string) {
-	data, err := os.ReadFile(filepath.Join(manifestDir, "vendor", filepath.FromSlash(pkg), "composer.json"))
+// installed package, without the trailing backslash. Links and paths leaving
+// the manifest directory are refused, and composer.json is read up to 1 MiB.
+func vendorNamespaces(manifestDir, pkg string) (nss, underscored []string, state vendorState) {
+	dir, err := installedPackageDir(manifestDir, "vendor", pkg)
 	if err != nil {
-		return nil, nil
+		return nil, nil, vendorMissing
+	}
+	f, _, err := openRegular(manifestDir, dir, "composer.json")
+	if err != nil {
+		return nil, nil, vendorMissing
+	}
+	data, err := readLimited(f, maxComposerJSON)
+	if err != nil {
+		return nil, nil, vendorMissing
 	}
 	var c struct {
 		Autoload struct {
@@ -22,7 +42,7 @@ func vendorNamespaces(manifestDir, pkg string) (nss, underscored []string) {
 		} `json:"autoload"`
 	}
 	if json.Unmarshal(data, &c) != nil {
-		return nil, nil
+		return nil, nil, vendorMissing
 	}
 	seen := map[string]bool{}
 	var out []string
@@ -43,9 +63,12 @@ func vendorNamespaces(manifestDir, pkg string) (nss, underscored []string) {
 			}
 		}
 	}
+	if len(out) == 0 {
+		return nil, nil, vendorNoAutoload
+	}
 	sort.Strings(out)
 	sort.Strings(underscored)
-	return out, underscored
+	return out, underscored, vendorNamespaced
 }
 
 // probableNamespace derives `Acme\HttpClient` from "acme/http-client".
@@ -84,11 +107,33 @@ func boundaryBefore(s string, i int) bool {
 	return true
 }
 
+// codeContextBefore lists what may stand right before a one-word namespace for
+// the line to be PHP code using it (lowercase).
+var codeContextBefore = []string{"use ", "new ", "extends ", "implements ", `\`}
+
+// singleSegmentInCode tells whether the one-word namespace found at [i, end)
+// is used as code: followed by `\` or `::`, or preceded by `use `, `new `,
+// `extends `, `implements ` or `\`. A bare word (`Twig` in a comment or in
+// 'x.html.twig') is not a use.
+func singleSegmentInCode(lower string, i, end int) bool {
+	if end < len(lower) && (lower[end] == '\\' || strings.HasPrefix(lower[end:], "::")) {
+		return true
+	}
+	for _, c := range codeContextBefore {
+		if strings.HasSuffix(lower[:i], c) {
+			return true
+		}
+	}
+	return false
+}
+
 // lineHasNamespace reports whether the lowercased line references one of the
 // lowercased namespaces: a boundary before and no identifier character right
-// after (covers `use NS`, `new NS`, `\NS\` and `NS\`).
+// after (covers `use NS`, `new NS`, `\NS\` and `NS\`). A one-word namespace
+// (`Twig`, `Monolog`) also needs a code context, see singleSegmentInCode.
 func lineHasNamespace(lower string, nss []string) bool {
 	for _, ns := range nss {
+		single := !strings.Contains(ns, `\`) && !strings.HasSuffix(ns, "_")
 		from := 0
 		for {
 			i := strings.Index(lower[from:], ns)
@@ -100,8 +145,12 @@ func lineHasNamespace(lower string, nss []string) bool {
 			if !boundaryBefore(lower, i) {
 				continue
 			}
+			end := i + len(ns)
 			// A namespace ending in "_" (psr-0 style) is a prefix of the class name.
-			if end := i + len(ns); !strings.HasSuffix(ns, "_") && end < len(lower) && isIdentByte(lower[end]) {
+			if !strings.HasSuffix(ns, "_") && end < len(lower) && isIdentByte(lower[end]) {
+				continue
+			}
+			if single && !singleSegmentInCode(lower, i, end) {
 				continue
 			}
 			return true
@@ -110,8 +159,18 @@ func lineHasNamespace(lower string, nss []string) bool {
 	return false
 }
 
+// phpExtensions are the files searched for PHP namespaces. Templates (.twig)
+// are not PHP: a namespace word there is text, not a use.
+var phpExtensions = []string{".php", ".phtml"}
+
 func findPHP(projectRoot, manifestDir string, others []string, pkg string, exclude []string) (CallSites, error) {
-	files, err := userFiles(projectRoot, manifestDir, others, exclude, []string{".php", ".phtml", ".twig"})
+	nss, us, state := vendorNamespaces(manifestDir, pkg)
+	if state == vendorNoAutoload {
+		// Installed, but there is no namespace to look for: searching by a
+		// guessed name would only find noise.
+		return CallSites{Quality: "noautoload"}, nil
+	}
+	files, err := userFiles(projectRoot, manifestDir, others, exclude, phpExtensions)
 	if err != nil {
 		return CallSites{}, err
 	}
@@ -124,17 +183,17 @@ func findPHP(projectRoot, manifestDir string, others []string, pkg string, exclu
 			return lineHasNamespace(strings.ToLower(line), low)
 		})
 	}
-	if nss, us := vendorNamespaces(manifestDir, pkg); len(nss) > 0 {
+	if state == vendorNamespaced {
 		res, err := search(append(append([]string{}, nss...), us...))
 		res.Quality, res.Namespaces = "psr4", nss
 		return res, err
 	}
-	var nss []string
+	var guess []string
 	if ns := probableNamespace(pkg); ns != "" {
-		nss = []string{ns}
+		guess = []string{ns}
 	}
-	res, err := search(nss)
-	res.Namespaces = nss
+	res, err := search(guess)
+	res.Namespaces = guess
 	if res.Count > 0 {
 		res.Quality = "name"
 	} else {

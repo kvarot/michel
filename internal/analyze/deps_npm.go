@@ -90,9 +90,15 @@ func loadNpm(dir string) (*DepGraph, error) {
 	return g, nil
 }
 
+// addAll copies the root constraints; the first source that names a package
+// wins, so the order dependencies > devDependencies > optionalDependencies >
+// peerDependencies decides (a peer range never hides the installed range).
 func addAll(dst map[string]string, srcs ...map[string]string) {
 	for _, s := range srcs {
 		for k, v := range s {
+			if _, ok := dst[k]; ok {
+				continue
+			}
 			dst[k] = v
 		}
 	}

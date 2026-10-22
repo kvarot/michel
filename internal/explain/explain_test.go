@@ -15,7 +15,7 @@ func sampleFacts() Facts {
 		Directness: analyze.Direct, CallSiteCount: 2, CallSitesQuality: "psr4", TestCount: 1, TestMethod: "callsite",
 		ChangelogAvailable: true, Risk: analyze.Risk{Score: 10, Recommendation: analyze.RecAutoFix},
 		Certainty: "high", HasAnalysis: true, Example: "src/Foo.php:12", Constraint: "^1.2",
-		ConstraintKnown: true, ConstraintOK: true,
+		ConstraintKnown: true, ConstraintOK: true, FixLevel: 2,
 	}
 }
 
@@ -123,12 +123,15 @@ func TestSummaryTruncated(t *testing.T) {
 
 func TestCertainty(t *testing.T) {
 	for _, tc := range []struct {
-		q     string
-		tests int
-		want  string
-	}{{"psr4", 1, "high"}, {"import", 2, "high"}, {"psr4", 0, "medium"}, {"name", 3, "medium"}, {"low", 3, "low"}, {"", 0, "low"}} {
+		q      string
+		tests  int
+		method string
+		want   string
+	}{{"psr4", 1, "callsite", "high"}, {"import", 2, "callsite", "high"}, {"psr4", 2, "reference", "medium"},
+		{"psr4", 0, "none", "medium"}, {"name", 3, "callsite", "medium"}, {"low", 3, "callsite", "low"},
+		{"noautoload", 1, "callsite", "low"}, {"", 0, "", "low"}} {
 		a := analyze.Analysis{}
-		a.Calls.Quality, a.Coverage.Count = tc.q, tc.tests
+		a.Calls.Quality, a.Coverage.Count, a.Coverage.Method = tc.q, tc.tests, tc.method
 		if got := FactsFrom(scan.Finding{}, a, true).Certainty; got != tc.want {
 			t.Errorf("%s/%d: %s, want %s", tc.q, tc.tests, got, tc.want)
 		}

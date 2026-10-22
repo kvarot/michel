@@ -17,29 +17,33 @@ var maxSites = 200
 
 // CallSite is one line of the user's code that uses a package.
 type CallSite struct {
-	File string // relative to the project root, forward slashes
-	Line int
+	File string `json:"file"` // relative to the project root, forward slashes
+	Line int    `json:"line"`
 	// Snippet is the trimmed line (max 160 chars). Transient: not persisted.
-	Snippet string
-	IsTest  bool
+	Snippet string `json:"-"`
+	IsTest  bool   `json:"is_test"`
 }
 
 // CallSites is the result of a call-site search.
 type CallSites struct {
-	Sites      []CallSite // at most 200
-	Count      int        // total number of matching lines
-	Quality    string     // PHP: "psr4" | "name" | "low"; JS: "import"
-	Namespaces []string
+	Sites []CallSite `json:"sites"` // at most 200
+	Count int        `json:"count"` // total number of matching lines
+	// Quality is, for PHP, "psr4" (namespaces read from the installed
+	// package), "name" (guessed from the package name), "low" (not installed,
+	// nothing found by name) or "noautoload" (installed without namespace);
+	// for JS, "import".
+	Quality    string   `json:"quality"`
+	Namespaces []string `json:"namespaces"`
 	// Unreadable counts files that could not be opened or fully read (e.g. a
 	// line over 1 MiB), so "no usage found" differs from "could not read".
-	Unreadable int
+	Unreadable int `json:"unreadable"`
 	// UnreadablePaths lists those files (relative, forward slashes, sorted).
-	UnreadablePaths []string
+	UnreadablePaths []string `json:"unreadable_paths"`
 	// Computed from ALL hits, independent of the Sites cap.
-	TestFiles     []string // distinct test files with a hit, sorted, at most 50
-	TestFileCount int      // distinct test files with a hit, before the TestFiles cap
-	TestHitCount  int      // total hits in test files
-	SourceFiles   []string // distinct non-test files with a hit, sorted, at most 200
+	TestFiles     []string `json:"test_files"`      // distinct test files with a hit, sorted, at most 50
+	TestFileCount int      `json:"test_file_count"` // distinct test files with a hit, before the TestFiles cap
+	TestHitCount  int      `json:"test_hit_count"`  // total hits in test files
+	SourceFiles   []string `json:"source_files"`    // distinct non-test files with a hit, sorted, at most 200
 }
 
 // FindCallSites looks for the lines of the user's code, under the manifest's

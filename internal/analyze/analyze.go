@@ -2,9 +2,13 @@ package analyze
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,21 +20,59 @@ import (
 )
 
 // Analysis is every offline fact Michel computed about one finding.
+// Its JSON form (snake_case keys) is part of 'michel finding --json'.
 type Analysis struct {
-	FindingID       string
-	ComputedAt      time.Time
-	MichelVersion   string
-	Path            DepPath
-	HasRootManifest bool
-	Upgrade         Upgrade
-	// Calls has no Snippet once persisted.
-	Calls     CallSites
-	Coverage  Coverage
-	Changelog Changelog
-	Risk      Risk
+	FindingID string `json:"finding_id"`
+	// ProjectID is the project the finding belongs to.
+	ProjectID       string    `json:"project_id"`
+	ComputedAt      time.Time `json:"computed_at"`
+	MichelVersion   string    `json:"michel_version"`
+	Path            DepPath   `json:"path"`
+	HasRootManifest bool      `json:"has_root_manifest"`
+	Upgrade         Upgrade   `json:"upgrade"`
+	// Calls has no Snippet once persisted, and never in JSON.
+	Calls     CallSites `json:"calls"`
+	Coverage  Coverage  `json:"coverage"`
+	Changelog Changelog `json:"changelog"`
+	Risk      Risk      `json:"risk"`
+	// InputsHash fingerprints the settings the analysis depends on besides
+	// the finding (risk rule, core packages, exclusions); see InputsHash.
+	InputsHash string `json:"inputs_hash"`
 	// Notes explains degraded results (for example a missing lockfile). It is
 	// not persisted.
-	Notes []string
+	Notes []string `json:"notes,omitempty"`
+}
+
+// InputsHash is the SHA-256 (hex) of the canonical JSON of the settings an
+// analysis depends on, besides the finding and the files: the effective risk
+// rule (policy plus the project's overrides), the sorted core packages, the
+// exclusions and whether this package is a core package. A stored analysis
+// whose hash differs is no longer fresh.
+func InputsHash(cfg policy.RiskConfig, p project.Project, exclude []string, core bool) string {
+	eff := cfg.WithOverrides(p.RiskOverrides)
+	cores := append([]string{}, p.CorePackages...)
+	sort.Strings(cores)
+	ex := append([]string{}, exclude...)
+	sort.Strings(ex)
+	doc := struct {
+		Risk     map[string]int `json:"risk"`
+		Core     []string       `json:"core_packages"`
+		Excludes []string       `json:"excludes"`
+		IsCore   bool           `json:"is_core"`
+	}{riskMap(eff), cores, ex, core}
+	b, _ := json.Marshal(doc) // maps marshal with sorted keys: canonical
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// riskMap lists every value of the risk rule by its policy key.
+func riskMap(r policy.RiskConfig) map[string]int {
+	return map[string]int{
+		"major_jump": r.MajorJump, "breaking": r.Breaking, "direct": r.Direct,
+		"many_call_sites": r.ManyCallSites, "no_tests": r.NoTests, "core_package": r.CorePackage,
+		"many_call_sites_threshold": r.ManyCallSitesThreshold,
+		"auto_fix_below":            r.AutoFixBelow, "handoff_up_to": r.HandoffUpTo,
+	}
 }
 
 // isCore tells whether pkg is one of the project's core packages: ignoring
@@ -58,7 +100,11 @@ func Analyze(projectRoot string, p project.Project, f scan.Finding, cfg policy.R
 // AnalyzeWith is Analyze with an already loaded graph. loadErr is the error
 // of that load: it is not fatal, the path becomes "unknown" and a note says why.
 func AnalyzeWith(g *DepGraph, loadErr error, projectRoot string, p project.Project, f scan.Finding, cfg policy.RiskConfig, exclude []string) (Analysis, error) {
-	a := Analysis{FindingID: f.ID}
+	core := isCore(p, f.Ecosystem, f.Package)
+	a := Analysis{FindingID: f.ID, ProjectID: f.ProjectID, InputsHash: InputsHash(cfg, p, exclude, core)}
+	if a.ProjectID == "" {
+		a.ProjectID = p.ID
+	}
 	if loadErr != nil || g == nil {
 		a.Path = DepPath{Directness: Unknown}
 		msg := "no dependency graph"
@@ -84,8 +130,8 @@ func AnalyzeWith(g *DepGraph, loadErr error, projectRoot string, p project.Proje
 	a.Changelog = ReadChangelog(projectRoot, f.ManifestRelPath, f.Ecosystem, f.Package, f.InstalledVersion, a.Upgrade.Target)
 	a.Risk = ScoreRisk(cfg, p.RiskOverrides, RiskInput{
 		Jump: a.Upgrade.Jump, Breaking: a.Changelog.Breaking, Directness: a.Path.Directness,
-		CallSiteCount: a.Calls.Count, TestCount: a.Coverage.Count,
-		IsCore: isCore(p, f.Ecosystem, f.Package), HasFix: a.Upgrade.Target != "",
+		CallSiteCount: a.Calls.Count, TestCount: a.Coverage.Count, TestMethod: a.Coverage.Method,
+		IsCore: core, HasFix: a.Upgrade.Target != "",
 	})
 	return a, nil
 }
@@ -149,7 +195,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 			old, ok, gerr := repo.Get(ctx, f.ID)
 			if gerr != nil {
 				slog.Warn("stored analysis unreadable, recomputing", "finding", f.ID, "err", gerr)
-			} else if ok && fresh(old, f, deps.Version) {
+			} else if ok && fresh(old, f, deps.Version, InputsHash(deps.Risk, p, exclude, isCore(p, f.Ecosystem, f.Package))) {
 				res.Skipped++
 				continue
 			}
@@ -185,9 +231,11 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 	return res, nil
 }
 
-// fresh tells whether a stored analysis is still valid for the finding.
-func fresh(a Analysis, f scan.Finding, version string) bool {
-	if a.MichelVersion != version {
+// fresh tells whether a stored analysis is still valid for the finding: same
+// Michel version, same settings (inputsHash) and computed after the last scan
+// that saw the finding.
+func fresh(a Analysis, f scan.Finding, version, inputsHash string) bool {
+	if a.MichelVersion != version || a.InputsHash != inputsHash {
 		return false
 	}
 	seen, err := time.Parse(time.RFC3339, f.LastSeenAt)

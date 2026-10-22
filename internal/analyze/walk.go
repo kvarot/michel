@@ -15,6 +15,13 @@ var fixedExcludes = map[string]bool{
 	"dist": true, "build": true, ".cache": true,
 }
 
+// generatedDirs are framework caches, relative to the manifest directory
+// (forward slashes): compiled templates and proxies there repeat the user's
+// code and would count the same use several times.
+var generatedDirs = map[string]bool{
+	"var/cache": true, "storage/framework": true, "bootstrap/cache": true, ".phpunit.cache": true,
+}
+
 func isExcludedDir(name string, exclude []string) bool {
 	if fixedExcludes[name] {
 		return true
@@ -81,6 +88,9 @@ func userFiles(root, manifestDir string, otherManifestDirs []string, exclude []s
 				return nil
 			}
 			if isExcludedDir(d.Name(), exclude) || skip[p] {
+				return filepath.SkipDir
+			}
+			if rel, err := filepath.Rel(manifestDir, p); err == nil && generatedDirs[filepath.ToSlash(rel)] {
 				return filepath.SkipDir
 			}
 			return nil

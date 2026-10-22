@@ -86,7 +86,8 @@ func TestChangelogNoFileAndNoTarget(t *testing.T) {
 func TestChangelogNoVersionHeadings(t *testing.T) {
 	root := setupChangelog(t, "plain.md", "changelog.txt")
 	cl := ReadChangelog(root, "composer.lock", "Packagist", "acme/vuln", "1.0.0", "2.0.0")
-	if !cl.Available || cl.Note != "no version headings" || !strings.Contains(cl.Excerpt, "v1.5.0") || !cl.Breaking {
+	if !cl.Available || cl.Note != NoteNoVersionHeadings || !cl.VersionsUnread() ||
+		!strings.Contains(cl.Excerpt, "v1.5.0") || cl.Breaking || cl.BreakingLines != nil {
 		t.Fatalf("%+v", cl)
 	}
 }

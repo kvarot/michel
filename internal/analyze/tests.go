@@ -15,17 +15,20 @@ var maxTestFiles = 50
 
 // Coverage tells whether tests cover the files that use a vulnerable package.
 type Coverage struct {
-	TestFiles []string // relative, forward slashes, sorted, at most 50
-	Count     int      // total number of covering test files, before the cap
-	Method    string   // "callsite" | "reference" | "none"
+	TestFiles []string `json:"test_files"` // relative, forward slashes, sorted, at most 50
+	Count     int      `json:"count"`      // total number of covering test files, before the cap
+	// Method is "callsite" (a test uses the package itself), "reference" (a
+	// test only mentions the name of a file that uses it: weak evidence, it
+	// does not cancel the no_tests risk term) or "none".
+	Method string `json:"method"`
 	// Skipped lists the base names ignored by the reference rule because they
 	// are too short or too generic to be meaningful.
-	Skipped []string
+	Skipped []string `json:"skipped"`
 	// Unreadable counts distinct test files that could not be opened or fully
 	// read, in the call-site search or the reference scan. Unreadable source
 	// files are only in CallSites.Unreadable.
 	// Files over 2 MiB are dropped earlier by the shared walk, uncounted.
-	Unreadable int
+	Unreadable int `json:"unreadable"`
 }
 
 var noisyNames = map[string]bool{
@@ -35,7 +38,7 @@ var noisyNames = map[string]bool{
 func testExtensions(ecosystem string) []string {
 	switch strings.ToLower(ecosystem) {
 	case "composer", "packagist":
-		return []string{".php", ".phtml", ".twig"}
+		return phpExtensions
 	case "npm":
 		return []string{".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".mts", ".cts", ".vue", ".svelte"}
 	}

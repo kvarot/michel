@@ -81,8 +81,9 @@ func (r *Repo) Save(ctx context.Context, a Analysis) error {
 	_, err := r.s.DB().ExecContext(ctx, `INSERT INTO analysis (finding_id, computed_at, michel_version, directness, via,
 		root_constraint, has_root_manifest, target_version, jump, constraint_allows, call_sites, call_site_count,
 		call_sites_quality, namespaces, test_files, test_count, test_method, changelog_source, changelog_excerpt,
-		changelog_available, breaking, breaking_lines, risk_score, risk_terms, recommendation, warning)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		changelog_available, breaking, breaking_lines, risk_score, risk_terms, recommendation, warning,
+		inputs_hash, project_id, changelog_note)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(finding_id) DO UPDATE SET computed_at=excluded.computed_at, michel_version=excluded.michel_version,
 		directness=excluded.directness, via=excluded.via, root_constraint=excluded.root_constraint,
 		has_root_manifest=excluded.has_root_manifest, target_version=excluded.target_version, jump=excluded.jump,
@@ -91,13 +92,15 @@ func (r *Repo) Save(ctx context.Context, a Analysis) error {
 		test_count=excluded.test_count, test_method=excluded.test_method, changelog_source=excluded.changelog_source,
 		changelog_excerpt=excluded.changelog_excerpt, changelog_available=excluded.changelog_available,
 		breaking=excluded.breaking, breaking_lines=excluded.breaking_lines, risk_score=excluded.risk_score,
-		risk_terms=excluded.risk_terms, recommendation=excluded.recommendation, warning=excluded.warning`,
+		risk_terms=excluded.risk_terms, recommendation=excluded.recommendation, warning=excluded.warning,
+		inputs_hash=excluded.inputs_hash, project_id=excluded.project_id, changelog_note=excluded.changelog_note`,
 		a.FindingID, a.ComputedAt.UTC().Format(time.RFC3339), a.MichelVersion, string(a.Path.Directness),
 		js(nonNil(a.Path.Via)), a.Path.Constraint, b2i(a.HasRootManifest), a.Upgrade.Target, string(a.Upgrade.Jump), allows,
 		js(sites), a.Calls.Count, a.Calls.Quality, js(nonNil(a.Calls.Namespaces)), js(nonNil(a.Coverage.TestFiles)),
 		a.Coverage.Count, a.Coverage.Method, a.Changelog.Source, cutUTF8(a.Changelog.Excerpt, maxExcerptBytes),
 		b2i(a.Changelog.Available), b2i(a.Changelog.Breaking), js(nonNil(a.Changelog.BreakingLines)),
-		a.Risk.Score, js(terms), string(a.Risk.Recommendation), b2i(a.Risk.Warning))
+		a.Risk.Score, js(terms), string(a.Risk.Recommendation), b2i(a.Risk.Warning),
+		a.InputsHash, a.ProjectID, a.Changelog.Note)
 	if err != nil {
 		return fmt.Errorf("cannot save the analysis of finding %s: %w", a.FindingID, err)
 	}
@@ -112,11 +115,12 @@ func (r *Repo) Get(ctx context.Context, findingID string) (Analysis, bool, error
 	row := r.s.DB().QueryRowContext(ctx, `SELECT computed_at, michel_version, COALESCE(directness,''), via, root_constraint,
 		has_root_manifest, target_version, jump, constraint_allows, call_sites, call_site_count, call_sites_quality,
 		namespaces, test_files, test_count, test_method, changelog_source, changelog_excerpt, changelog_available,
-		breaking, breaking_lines, risk_score, risk_terms, recommendation, warning
+		breaking, breaking_lines, risk_score, risk_terms, recommendation, warning, inputs_hash, project_id, changelog_note
 		FROM analysis WHERE finding_id = ?`, findingID)
 	err := row.Scan(&computed, &a.MichelVersion, &dir, &via, &a.Path.Constraint, &hasRoot, &a.Upgrade.Target, &jump,
 		&allows, &sites, &a.Calls.Count, &a.Calls.Quality, &ns, &tests, &a.Coverage.Count, &a.Coverage.Method,
-		&a.Changelog.Source, &a.Changelog.Excerpt, &avail, &breaking, &bl, &a.Risk.Score, &terms, &rec, &warn)
+		&a.Changelog.Source, &a.Changelog.Excerpt, &avail, &breaking, &bl, &a.Risk.Score, &terms, &rec, &warn,
+		&a.InputsHash, &a.ProjectID, &a.Changelog.Note)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Analysis{}, false, nil
 	}

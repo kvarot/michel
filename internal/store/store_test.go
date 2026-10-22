@@ -16,7 +16,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 			t.Fatalf("open #%d: %v", i, err)
 		}
 		var n int
-		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 2 {
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 3 {
 			t.Fatalf("schema_migrations rows = %d, err %v", n, err)
 		}
 		var mode string
@@ -58,7 +58,7 @@ func TestMigrationAppliedByAnotherProcessMeanwhileIsSkipped(t *testing.T) {
 	}
 	defer s.Close()
 	var n int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 2 {
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 3 {
 		t.Fatalf("schema_migrations rows = %d err %v", n, err)
 	}
 }
@@ -146,7 +146,22 @@ func TestMigration0002UpgradesExistingDatabase(t *testing.T) {
 		t.Errorf("row = %q %q %q", name, core, over)
 	}
 	var versions string
-	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2" {
+	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2,3" {
 		t.Errorf("versions = %q err %v", versions, err)
+	}
+}
+
+func TestMigration0003AddsAnalysisInputs(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB().Exec(`SELECT inputs_hash, project_id, changelog_note FROM analysis LIMIT 1`); err != nil {
+		t.Errorf("analysis inputs columns: %v", err)
+	}
+	var n int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_analysis_project'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("idx_analysis_project: n=%d err=%v", n, err)
 	}
 }

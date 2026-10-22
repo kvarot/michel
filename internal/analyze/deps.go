@@ -30,12 +30,12 @@ type DepGraph struct {
 
 // DepPath describes how a package is reached from the root manifest.
 type DepPath struct {
-	Directness Directness
+	Directness Directness `json:"directness"`
 	// Via lists the direct dependency first, then intermediates; the target is
 	// excluded. Empty when direct or unknown.
-	Via []string
+	Via []string `json:"via"`
 	// Constraint is the root constraint when the package is direct.
-	Constraint string
+	Constraint string `json:"constraint"`
 }
 
 // LoadDepGraph reads the lockfile (required) and root manifest (optional) found
