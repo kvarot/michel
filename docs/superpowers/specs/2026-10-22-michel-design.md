@@ -246,7 +246,7 @@ Chaque étape livre quelque chose d'utilisable seul. Après chaque étape : test
 - Structure Vite / Vuetify 4 de la PWA, thème, mode sombre (souhaité, non bloquant).
 - Mécanique précise du toast Windows et du service utilisateur.
 - Schéma JSON des exports et du MCP, tant qu'ils sont documentés et versionnés.
-- Langue (décision Kévin, 2026-10-22) : code, identifiants, commits et messages CLI en **anglais** ; **documentation publique bilingue** : `README.md` (anglais) + `README.fr.md` (français), chaque fichier de `docs/` en anglais avec son pendant `*.fr.md`, liens croisés en tête de fichier ; design et ledger internes en français. Interface (PWA, CLI, digests) en anglais en v1, **FR/EN sélectionnable** en v1.1 (gabarits d'explication traduits, pas de traduction automatique).
+- Langue (décision Kévin, 2026-10-22) : code, identifiants, commits et messages CLI en **anglais** ; **documentation publique bilingue** : `README.md` (anglais) + `README.fr.md` (français), chaque fichier de `docs/` en anglais avec son pendant `*.fr.md`, liens croisés en tête de fichier ; design et ledger internes en français. **Application bilingue FR/EN dès la v1** (décision Kévin) : PWA, CLI, digests, briefs et gabarits d'explication passent par un catalogue de messages (`internal/i18n`, clés stables, fichiers `fr.json` / `en.json` embarqués), langue choisie à l'onboarding et modifiable (`--lang`, réglage `assistant.lang`, défaut = langue du système, repli anglais). Aucune traduction automatique : les deux langues sont écrites à la main et relues. Le catalogue arrive avec le plan « digest et PWA » ; les messages CLI du socle (plan 1), écrits en anglais, y sont migrés à ce moment-là.
 
 ## 6. Arbitrages pris après relecture builder (2026-10-22)
 
