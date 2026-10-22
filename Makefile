@@ -6,8 +6,6 @@ build:
 test:
 	go test ./...
 
-# All outbound HTTP must go through internal/egress.
+# All outbound HTTP must go through internal/egress (also run by go test ./...).
 lint:
-	@if grep -rnE --include='*.go' --exclude-dir=egress 'http\.DefaultClient|http\.Get\(|http\.Post\(' . ; then \
-		echo "lint: use internal/egress for HTTP calls"; exit 1; \
-	fi
+	go test ./internal/egress/ -run TestNoDirectHTTPOutsideEgress
