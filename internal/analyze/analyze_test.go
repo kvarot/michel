@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -227,5 +228,156 @@ func TestSaveStripsSnippets(t *testing.T) {
 	}
 	if _, ok, _ := repo.Get(ctx, "nope"); ok {
 		t.Error("unknown finding found")
+	}
+}
+
+func TestConstraintAllowsRoundTrip(t *testing.T) {
+	e := newEnv(t)
+	repo := NewRepo(e.st)
+	yes, no := true, false
+	for i, want := range []*bool{nil, &no, &yes} {
+		a := Analysis{FindingID: "f1", ComputedAt: *e.now, MichelVersion: "v1"}
+		a.Upgrade.ConstraintAllows = want
+		if err := repo.Save(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+		got, ok, err := repo.Get(context.Background(), "f1")
+		if err != nil || !ok {
+			t.Fatalf("case %d: %v %v", i, ok, err)
+		}
+		if (want == nil) != (got.Upgrade.ConstraintAllows == nil) || (want != nil && *want != *got.Upgrade.ConstraintAllows) {
+			t.Errorf("case %d: want %v got %v", i, want, got.Upgrade.ConstraintAllows)
+		}
+	}
+}
+
+func TestSaveGetPreservesFacts(t *testing.T) {
+	e := newEnv(t)
+	repo := NewRepo(e.st)
+	yes := true
+	in := Analysis{
+		FindingID: "f1", ComputedAt: *e.now, MichelVersion: "v1",
+		Path:            DepPath{Directness: Transitive, Via: []string{"a/b", "c/d"}, Constraint: "^1.0"},
+		HasRootManifest: true,
+		Upgrade:         Upgrade{Target: "2.0.0", Jump: JumpMajor, ConstraintAllows: &yes},
+		Calls:           CallSites{Sites: []CallSite{{File: "src/A.php", Line: 3, IsTest: true}}, Count: 7, Quality: "psr4", Namespaces: []string{`Acme\Vuln`}},
+		Coverage:        Coverage{TestFiles: []string{"tests/A.php"}, Count: 4, Method: "callsite"},
+		Changelog:       Changelog{Source: "vendor/x/CHANGELOG.md", Excerpt: "## 2.0.0", Available: true, Breaking: true, BreakingLines: []string{"BREAKING: x"}},
+		Risk:            Risk{Score: 55, Recommendation: RecHandoff, Warning: true, Terms: map[string]int{"major_jump": 30, "direct": 0}},
+	}
+	if err := repo.Save(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	out, ok, err := repo.Get(context.Background(), "f1")
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	for name, pair := range map[string][2]any{
+		"path": {in.Path, out.Path}, "upgrade": {in.Upgrade, out.Upgrade}, "calls": {in.Calls, out.Calls},
+		"coverage": {in.Coverage, out.Coverage}, "changelog": {in.Changelog, out.Changelog},
+		"risk": {in.Risk, out.Risk},
+	} {
+		if !reflect.DeepEqual(pair[0], pair[1]) {
+			t.Errorf("%s differs:\n in  %+v\n out %+v", name, pair[0], pair[1])
+		}
+	}
+	if !out.HasRootManifest || !out.ComputedAt.Equal(in.ComputedAt) || out.MichelVersion != "v1" {
+		t.Errorf("scalars: %+v", out)
+	}
+	// Damaged JSON is an error, not silent empty data.
+	if _, err := e.st.DB().Exec(`UPDATE analysis SET risk_terms='{oops' WHERE finding_id='f1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.Get(context.Background(), "f1"); err == nil {
+		t.Error("damaged JSON column must be an error")
+	}
+	// Run recomputes it instead of skipping.
+	r, err := Run(context.Background(), e.deps, e.p, []scan.Finding{e.f}, Options{})
+	if err != nil || r.Analyzed != 1 || r.Skipped != 0 {
+		t.Errorf("recompute: %+v %v", r, err)
+	}
+}
+
+func auditEvents(t *testing.T, e testEnv) map[string]map[string]any {
+	t.Helper()
+	rows, err := e.st.DB().Query(`SELECT action, result, evidence FROM audit_event WHERE action LIKE 'analyze.%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]any{}
+	for rows.Next() {
+		var a, res, ev string
+		if err := rows.Scan(&a, &res, &ev); err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]any{}
+		if err := json.Unmarshal([]byte(ev), &m); err != nil {
+			t.Fatal(err)
+		}
+		m["_result"] = res
+		out[a] = m
+	}
+	return out
+}
+
+func TestRunIsolatesAFailingFinding(t *testing.T) {
+	e := newEnv(t)
+	good1, good2, bad := e.f, e.f, e.f
+	good2.ID, good2.OSVID = "f2", "ACME-2"
+	bad.ID = "f3"
+	// A trigger makes the save of f3 fail, as a full disk or a locked row would.
+	if _, err := e.st.DB().Exec(`CREATE TRIGGER boom BEFORE INSERT ON analysis WHEN NEW.finding_id = 'f3' BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Run(context.Background(), e.deps, e.p, []scan.Finding{good1, bad, good2}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Analyzed != 2 || r.Failed != 1 || len(r.Errors) != 1 {
+		t.Fatalf("%+v", r)
+	}
+	ev := auditEvents(t, e)
+	fin := ev["analyze.finish"]
+	if fin == nil || fin["_result"] != "partial" {
+		t.Fatalf("finish: %v", fin)
+	}
+	for k, want := range map[string]float64{"analyzed": 2, "skipped": 0, "failed": 1} {
+		if fin[k] != want {
+			t.Errorf("evidence %s = %v, want %v", k, fin[k], want)
+		}
+	}
+	if _, ok := fin["duration_ms"]; !ok {
+		t.Error("evidence lacks duration_ms")
+	}
+}
+
+func TestRunLoadsOneGraphPerManifest(t *testing.T) {
+	e := newEnv(t)
+	loads := 0
+	orig := loadGraph
+	loadGraph = func(dir, eco string) (*DepGraph, error) { loads++; return orig(dir, eco) }
+	t.Cleanup(func() { loadGraph = orig })
+	f2, f3 := e.f, e.f
+	f2.ID, f3.ID = "f2", "f3"
+	f3.ManifestRelPath = "api/composer.lock"
+	if _, err := Run(context.Background(), e.deps, e.p, []scan.Finding{e.f, f2, f3}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if loads != 2 {
+		t.Errorf("LoadDepGraph called %d times, want 2 (one per manifest)", loads)
+	}
+}
+
+func TestRunCancelledRecordsFinish(t *testing.T) {
+	e := newEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Run(ctx, e.deps, e.p, []scan.Finding{e.f}, Options{}); err == nil {
+		t.Fatal("want a cancellation error")
+	}
+	fin := auditEvents(t, e)["analyze.finish"]
+	if fin == nil || fin["_result"] != "failed" || fin["reason"] != "cancelled" {
+		t.Errorf("finish: %v", fin)
 	}
 }

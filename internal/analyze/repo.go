@@ -124,7 +124,11 @@ func (r *Repo) Get(ctx context.Context, findingID string) (Analysis, bool, error
 		return Analysis{}, false, fmt.Errorf("cannot read the analysis of finding %s: %w", findingID, err)
 	}
 	a.FindingID = findingID
-	a.ComputedAt, _ = time.Parse(time.RFC3339, computed)
+	t, perr := time.Parse(time.RFC3339, computed)
+	if perr != nil {
+		return Analysis{}, false, fmt.Errorf("cannot read the analysis of finding %s: bad computed_at %q", findingID, computed)
+	}
+	a.ComputedAt = t
 	a.Path.Directness, a.Upgrade.Jump, a.Risk.Recommendation = Directness(dir), Jump(jump), Recommendation(rec)
 	a.HasRootManifest, a.Changelog.Available = hasRoot.Int64 != 0, avail.Int64 != 0
 	a.Changelog.Breaking, a.Risk.Warning = breaking.Int64 != 0, warn.Int64 != 0
@@ -133,14 +137,17 @@ func (r *Repo) Get(ctx context.Context, findingID string) (Analysis, bool, error
 		a.Upgrade.ConstraintAllows = &v
 	}
 	var st []storedSite
-	_ = json.Unmarshal([]byte(sites), &st)
+	for _, d := range []struct {
+		raw string
+		to  any
+	}{{sites, &st}, {via, &a.Path.Via}, {ns, &a.Calls.Namespaces}, {tests, &a.Coverage.TestFiles},
+		{bl, &a.Changelog.BreakingLines}, {terms, &a.Risk.Terms}} {
+		if err := json.Unmarshal([]byte(d.raw), d.to); err != nil {
+			return Analysis{}, false, fmt.Errorf("cannot read the analysis of finding %s: stored JSON is damaged: %w", findingID, err)
+		}
+	}
 	for _, s := range st {
 		a.Calls.Sites = append(a.Calls.Sites, CallSite{File: s.File, Line: s.Line, IsTest: s.IsTest})
 	}
-	_ = json.Unmarshal([]byte(via), &a.Path.Via)
-	_ = json.Unmarshal([]byte(ns), &a.Calls.Namespaces)
-	_ = json.Unmarshal([]byte(tests), &a.Coverage.TestFiles)
-	_ = json.Unmarshal([]byte(bl), &a.Changelog.BreakingLines)
-	_ = json.Unmarshal([]byte(terms), &a.Risk.Terms)
 	return a, true, nil
 }

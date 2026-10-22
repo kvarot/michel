@@ -3,6 +3,7 @@ package analyze
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -111,6 +112,9 @@ type RunResult struct {
 	Duration                  time.Duration
 }
 
+// loadGraph is swapped by tests to count graph loads.
+var loadGraph = LoadDepGraph
+
 type graphEntry struct {
 	g   *DepGraph
 	err error
@@ -125,7 +129,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 		if deps.Audit == nil {
 			return
 		}
-		if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "analyze", Action: action, Target: p.Name, Result: result, Evidence: ev}); err != nil {
+		if _, err := deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{Actor: "analyze", Action: action, Target: p.Name, Result: result, Evidence: ev}); err != nil {
 			res.Errors = append(res.Errors, fmt.Errorf("cannot write the audit log: %w", err))
 		}
 	}
@@ -136,10 +140,16 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 	graphs := map[string]graphEntry{}
 	for _, f := range findings {
 		if err := ctx.Err(); err != nil {
+			res.Duration = deps.Now().Sub(started)
+			record("analyze.finish", "failed", map[string]any{"analyzed": res.Analyzed, "skipped": res.Skipped,
+				"failed": res.Failed, "duration_ms": res.Duration.Milliseconds(), "reason": "cancelled"})
 			return res, err
 		}
 		if !opt.Force {
-			if old, ok, err := repo.Get(ctx, f.ID); err == nil && ok && fresh(old, f, deps.Version) {
+			old, ok, gerr := repo.Get(ctx, f.ID)
+			if gerr != nil {
+				slog.Warn("stored analysis unreadable, recomputing", "finding", f.ID, "err", gerr)
+			} else if ok && fresh(old, f, deps.Version) {
 				res.Skipped++
 				continue
 			}
@@ -147,7 +157,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 		key := f.Ecosystem + "\x00" + f.ManifestRelPath
 		ge, ok := graphs[key]
 		if !ok {
-			ge.g, ge.err = LoadDepGraph(manifestDir(p.Path, f.ManifestRelPath), f.Ecosystem)
+			ge.g, ge.err = loadGraph(manifestDir(p.Path, f.ManifestRelPath), f.Ecosystem)
 			graphs[key] = ge
 		}
 		a, err := AnalyzeWith(ge.g, ge.err, p.Path, p, f, deps.Risk, exclude)
