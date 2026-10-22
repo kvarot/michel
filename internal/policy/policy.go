@@ -34,6 +34,7 @@ type Policy struct {
 	Sovereignty SovereigntyConfig `yaml:"sovereignty"`
 	DB          DBConfig          `yaml:"db"`
 	Assistant   AssistantConfig   `yaml:"assistant"`
+	Risk        RiskConfig        `yaml:"risk"`
 }
 
 // SovereigntyConfig groups the sovereignty rules.
@@ -92,4 +93,58 @@ type DBConfig struct {
 // AssistantConfig controls the assistant persona.
 type AssistantConfig struct {
 	Name string `yaml:"name"`
+	// Lang is the language of generated text: "en" or "fr".
+	Lang string `yaml:"lang"`
+}
+
+// RiskConfig holds the public risk-score rule: the points each term adds,
+// and the thresholds that turn a score into a recommendation. The AI model
+// never changes these values.
+type RiskConfig struct {
+	MajorJump              int `yaml:"major_jump"`
+	Breaking               int `yaml:"breaking"`
+	Direct                 int `yaml:"direct"`
+	ManyCallSites          int `yaml:"many_call_sites"`
+	NoTests                int `yaml:"no_tests"`
+	CorePackage            int `yaml:"core_package"`
+	ManyCallSitesThreshold int `yaml:"many_call_sites_threshold"`
+	// AutoFixBelow: a score strictly below it is auto_fix.
+	AutoFixBelow int `yaml:"auto_fix_below"`
+	// HandoffUpTo: a score up to it (inclusive) is a plain handoff; above it
+	// the handoff carries a warning.
+	HandoffUpTo int `yaml:"handoff_up_to"`
+}
+
+// RiskKeys lists the field names (snake_case) a per-project override may set.
+var RiskKeys = []string{
+	"major_jump", "breaking", "direct", "many_call_sites", "no_tests", "core_package",
+	"many_call_sites_threshold", "auto_fix_below", "handoff_up_to",
+}
+
+// WithOverrides returns r with the known keys of m applied; unknown keys are
+// ignored (project.Repo rejects them earlier).
+func (r RiskConfig) WithOverrides(m map[string]int) RiskConfig {
+	for k, v := range m {
+		switch k {
+		case "major_jump":
+			r.MajorJump = v
+		case "breaking":
+			r.Breaking = v
+		case "direct":
+			r.Direct = v
+		case "many_call_sites":
+			r.ManyCallSites = v
+		case "no_tests":
+			r.NoTests = v
+		case "core_package":
+			r.CorePackage = v
+		case "many_call_sites_threshold":
+			r.ManyCallSitesThreshold = v
+		case "auto_fix_below":
+			r.AutoFixBelow = v
+		case "handoff_up_to":
+			r.HandoffUpTo = v
+		}
+	}
+	return r
 }

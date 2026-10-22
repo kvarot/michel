@@ -324,3 +324,76 @@ func TestProjectAddStorageFailureIsErrorNotDenied(t *testing.T) {
 		t.Errorf("reason = %q", r)
 	}
 }
+
+func TestProjectSetUpdatesAndAudits(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "shop", "--core-package", "Symfony/Http-Kernel", "--core-package", "x"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _, err := run(t, dir, "project", "set", "shop", "--core-package", "laravel/framework",
+		"--risk", "major_jump=10", "--risk", "no_tests=5", "--fix-level", "2", "--test-cmd", "TOKEN=abc make test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Updated project shop") {
+		t.Errorf("out = %q", out)
+	}
+	_, list, _, err := run(t, dir, "project", "list", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"core_packages":["laravel/framework"]`, `"major_jump":10`, `"fix_level":2`} {
+		if !strings.Contains(list, want) {
+			t.Errorf("list lacks %s: %s", want, list)
+		}
+	}
+	ev := auditRows(t, dir, "project.set")
+	if len(ev) != 1 || ev[0].result != "ok" || ev[0].target != "shop" {
+		t.Fatalf("events = %+v", ev)
+	}
+	b, _ := json.Marshal(ev[0].evidence)
+	if strings.Contains(string(b), "TOKEN") || ev[0].evidence["fields"] == nil {
+		t.Errorf("evidence = %s", b)
+	}
+}
+
+func TestProjectSetRejectsBadInput(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "shop"); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"set", "shop", "--risk", "bogus=1"},
+		{"set", "shop", "--risk", "major_jump"},
+		{"set", "shop", "--risk", "major_jump=abc"},
+		{"set", "shop", "--risk", "major_jump=500"},
+		{"set", "ghost", "--fix-level", "1"},
+		{"set", "shop"},
+	} {
+		_, _, _, err := run(t, dir, append([]string{"project"}, args...)...)
+		if err == nil || !strings.HasPrefix(err.Error(), "Cannot update project") {
+			t.Errorf("%v: err = %v", args, err)
+		}
+	}
+	if n := len(auditRows(t, dir, "project.set")); n != 6 {
+		t.Errorf("audit rows = %d", n)
+	}
+}
+
+func TestProjectSetRefusesInconsistentThresholds(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "shop"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := run(t, dir, "project", "set", "shop", "--risk", "auto_fix_below=70")
+	if err == nil || !strings.Contains(err.Error(), "auto_fix_below=70") || !strings.Contains(err.Error(), "handoff_up_to=60") {
+		t.Fatalf("err = %v", err)
+	}
+	ev := auditRows(t, dir, "project.set")
+	if len(ev) != 1 || ev[0].result != "denied" {
+		t.Fatalf("events = %+v", ev)
+	}
+	if _, _, _, err := run(t, dir, "project", "set", "shop", "--risk", "auto_fix_below=70", "--risk", "handoff_up_to=90"); err != nil {
+		t.Fatalf("consistent pair refused: %v", err)
+	}
+}

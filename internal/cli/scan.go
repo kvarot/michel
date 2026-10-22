@@ -19,7 +19,7 @@ import (
 
 func newScanCmd(deps *Deps) *cobra.Command {
 	var name string
-	var all bool
+	var all, noAnalyze bool
 	c := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan a project's lockfiles against the offline databases",
@@ -70,6 +70,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			asJSON, _ := cmd.Flags().GetBool("json")
 
 			results := []scan.Result{}
+			analysis := map[string]string{} // project name -> summary suffix
 			type failure struct {
 				Project string `json:"project"`
 				Error   string `json:"error"`
@@ -94,6 +95,20 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				if len(r.Errors) > 0 {
 					problems = true
 				}
+				analysis[p.Name] = ", analysis skipped"
+				if noAnalyze || (r.Status != scan.ScanOK && r.Status != scan.ScanPartial) {
+					continue
+				}
+				// Analysis problems are warnings: they never change the scan's exit code.
+				ar, aerr := analyzeProject(cmd, deps, p, false)
+				if aerr != nil {
+					fmt.Fprintf(deps.Stderr, "warning: %s: the analysis failed: %v. The scan itself is saved; run 'michel analyze --project %s' to retry.\n", p.Name, aerr, p.Name)
+					continue
+				}
+				for _, e := range ar.Errors {
+					fmt.Fprintf(deps.Stderr, "warning: %s: analysis: %v. Fix the cause, then run 'michel analyze --project %s --force'.\n", p.Name, e, p.Name)
+				}
+				analysis[p.Name] = fmt.Sprintf(", analyzed %s", plural(ar.Analyzed+ar.Skipped, "finding", "findings"))
 			}
 			if asJSON {
 				if err := json.NewEncoder(deps.Stdout).Encode(struct {
@@ -114,7 +129,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				for _, f := range failures {
 					fmt.Fprintf(deps.Stderr, "error: %s: %s\n", f.Project, f.Error)
 				}
-				printScan(deps, results)
+				printScan(deps, results, analysis)
 				switch {
 				case len(results) == 0:
 					fmt.Fprintln(deps.Stdout, "Michel could not scan any project. Read the errors above, fix them, then run the scan again.")
@@ -132,13 +147,14 @@ func newScanCmd(deps *Deps) *cobra.Command {
 	f := c.Flags()
 	f.StringVar(&name, "project", "", "name of the project to scan")
 	f.BoolVar(&all, "all", false, "scan every active project")
+	f.BoolVar(&noAnalyze, "no-analyze", false, "do not analyze the findings after the scan")
 	f.String("osv-db", "", "directory of the offline databases (default: from the policy)")
 	return c
 }
 
 // printScan prints the results table and one summary sentence per project.
 // It prints nothing when there is no result.
-func printScan(deps *Deps, results []scan.Result) {
+func printScan(deps *Deps, results []scan.Result, analysis map[string]string) {
 	if len(results) == 0 {
 		return
 	}
@@ -156,7 +172,7 @@ func printScan(deps *Deps, results []scan.Result) {
 	}
 	tw.Flush()
 	for _, r := range results {
-		fmt.Fprintln(deps.Stdout, summarySentence(r))
+		fmt.Fprintln(deps.Stdout, summarySentence(r, analysis[r.Project]))
 	}
 }
 
@@ -175,7 +191,7 @@ func noManifestsMessage(p project.Project) string {
 }
 
 // summarySentence is the plain-language end of a scan, with the next action.
-func summarySentence(r scan.Result) string {
+func summarySentence(r scan.Result, analysis string) string {
 	crit := r.BySeverity["critical"]
 	var s strings.Builder
 	if r.New == 0 {
@@ -196,6 +212,7 @@ func summarySentence(r scan.Result) string {
 	if r.Gone > 0 {
 		fmt.Fprintf(&s, "; %s", plural(r.Gone, "finding is gone", "findings are gone"))
 	}
+	s.WriteString(analysis)
 	switch {
 	case r.New > 0 && crit > 0:
 		fmt.Fprintf(&s, ". Next: michel findings --project %s --severity critical", r.Project)

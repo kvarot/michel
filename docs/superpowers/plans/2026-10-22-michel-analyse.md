@@ -216,14 +216,14 @@
 - [ ] **Step 2: Lancer** → FAIL. **Step 3: Implémenter.** **Step 4: Lancer** → PASS.
 - [ ] **Step 5: Commit** `feat(explain): plain-language what/impact/cost in English and French, michel finding detail`.
 
-### Task 9: Run réel sur the reference project, docs, ledger
+### Task 9: Run réel sur le projet de référence, docs, ledger
 
 **Files:**
 - Modify: `docs/operations/offline-installation.md` + `.fr.md` (sections `analyze`, `finding`, `--lang`, `project set`), `README.md` + `README.fr.md` (statut, une ligne sur l'analyse)
 - Create: `docs/superpowers/sdd/2026-10-22-michel-analyse/progress.md` (ledger committé)
 
 - [ ] **Step 1: Build** `go build -o bin/michel.exe ./cmd/michel`.
-- [ ] **Step 2: Lancer** `michel analyze --project demo --force` puis `michel finding <id d'une critique>` en `en` et `--lang fr`, `michel findings --project demo --severity critical --explain`. Noter durée, compteurs `analyzed/skipped/failed`, répartition des recommandations (`auto_fix`/`handoff`/`report_only`), part des findings avec `call_sites_quality == psr4|import`, part avec changelog disponible. **Aucun nom de paquet, version, chemin de fichier the reference project ni phrase d'explication citant un paquet dans le ledger committé** (agrégats seulement).
+- [ ] **Step 2: Lancer** `michel analyze --project demo --force` puis `michel finding <id d'une critique>` en `en` et `--lang fr`, `michel findings --project demo --severity critical --explain`. Noter durée, compteurs `analyzed/skipped/failed`, répartition des recommandations (`auto_fix`/`handoff`/`report_only`), part des findings avec `call_sites_quality == psr4|import`, part avec changelog disponible. **Aucun nom de paquet, version, chemin de fichier du projet de référence ni phrase d'explication citant un paquet dans le ledger committé** (agrégats seulement).
 - [ ] **Step 3: Vérifier** `michel audit list --last 30` : aucun `egress.attempt` ; `michel audit verify` OK.
 - [ ] **Step 4: Docs** bilingues + ledger. **Step 5: Commit** `docs: analysis, finding detail and language switch; plan 2 ledger`.
 

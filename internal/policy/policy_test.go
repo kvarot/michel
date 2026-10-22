@@ -136,3 +136,47 @@ func TestValidateAllowRuleHosts(t *testing.T) {
 		t.Errorf("valid hosts rejected: %v", err)
 	}
 }
+
+func TestRiskDefaults(t *testing.T) {
+	want := RiskConfig{MajorJump: 40, Breaking: 25, Direct: 10, ManyCallSites: 15, NoTests: 20, CorePackage: 20,
+		ManyCallSitesThreshold: 10, AutoFixBelow: 30, HandoffUpTo: 60}
+	if got := Defaults().Risk; got != want {
+		t.Fatalf("risk defaults = %+v, want %+v", got, want)
+	}
+}
+
+func TestRiskLoadsFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yaml")
+	if err := os.WriteFile(path, []byte("risk:\n  major_jump: 10\n  handoff_up_to: 70\nassistant:\n  lang: fr\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := Load(path, dir)
+	if err != nil || p.Risk.MajorJump != 10 || p.Risk.HandoffUpTo != 70 || p.Risk.Breaking != 25 || p.Assistant.Lang != "fr" {
+		t.Fatalf("p=%+v err=%v", p.Risk, err)
+	}
+}
+
+func TestValidateRejectsBadThresholds(t *testing.T) {
+	mustFail(t, func(p *Policy) { p.Risk.AutoFixBelow = 60 }, "risk.auto_fix_below")
+	mustFail(t, func(p *Policy) { p.Risk.HandoffUpTo = 101 }, "risk.handoff_up_to")
+	mustFail(t, func(p *Policy) { p.Risk.AutoFixBelow = -1 }, "risk.auto_fix_below")
+	mustFail(t, func(p *Policy) { p.Risk.MajorJump = 101 }, "risk.major_jump")
+	mustFail(t, func(p *Policy) { p.Risk.NoTests = -1 }, "risk.no_tests")
+	mustFail(t, func(p *Policy) { p.Risk.ManyCallSitesThreshold = 0 }, "risk.many_call_sites_threshold")
+}
+
+func TestAssistantLangDefaultEn(t *testing.T) {
+	if l := Defaults().Assistant.Lang; l != "en" {
+		t.Fatalf("lang = %q", l)
+	}
+}
+
+func TestValidateRejectsUnknownLang(t *testing.T) {
+	mustFail(t, func(p *Policy) { p.Assistant.Lang = "de" }, "assistant.lang")
+	p := Defaults()
+	p.Assistant.Lang = "fr"
+	if err := Validate(p); err != nil {
+		t.Errorf("fr rejected: %v", err)
+	}
+}

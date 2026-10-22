@@ -19,6 +19,10 @@ func Defaults() Policy {
 				HumanApprovalRequiredForMerge: true,
 			},
 		},
-		Assistant: AssistantConfig{Name: "Michel"},
+		Assistant: AssistantConfig{Name: "Michel", Lang: "en"},
+		Risk: RiskConfig{
+			MajorJump: 40, Breaking: 25, Direct: 10, ManyCallSites: 15, NoTests: 20, CorePackage: 20,
+			ManyCallSitesThreshold: 10, AutoFixBelow: 30, HandoffUpTo: 60,
+		},
 	}
 }

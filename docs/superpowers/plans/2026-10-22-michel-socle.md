@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Un binaire `michel` qui charge une politique `strict_local` validée, refuse toute sortie réseau non listée, journalise dans un audit chaîné, scanne hors ligne les lockfiles Composer et npm des projets enregistrés, et stocke des Findings stables par lockfile dans SQLite, avec un premier scan réel sur the reference project.
+**Goal:** Un binaire `michel` qui charge une politique `strict_local` validée, refuse toute sortie réseau non listée, journalise dans un audit chaîné, scanne hors ligne les lockfiles Composer et npm des projets enregistrés, et stocke des Findings stables par lockfile dans SQLite, avec un premier scan réel sur le projet de référence.
 
 **Architecture:** Un module Go, un binaire, paquets `internal/*` à responsabilité unique. `osvscanner.DoScan` (osv-scanner v2.7.0) fait le scan avec `CompareOffline` et un `http.Client` fourni par la passerelle egress ; Michel télécharge lui-même les bases OSV via cette passerelle. Tout effet observable (démarrage, scan, refus réseau, mise à jour de base) produit un événement d'audit chaîné par SHA-256.
 
@@ -227,18 +227,18 @@
 - [ ] **Step 5: Lancer** → PASS.
 - [ ] **Step 6: Commit** `feat(scan): offline osv-scalibr scan with stable per-manifest findings and status transitions`.
 
-### Task 8: Premier scan réel sur the reference project et documentation d'installation
+### Task 8: Premier scan réel sur le projet de référence et documentation d'installation
 
 **Files:**
 - Create: `docs/operations/offline-installation.md`, `docs/security/network-egress.md`
 - Modify: `README.md`
 
 - [ ] **Step 1: Construire** `go build -o bin/michel.exe ./cmd/michel` (Windows) ; `bin/michel version`.
-- [ ] **Step 2: Config de test** dans `%AppData%\michel\config.yaml` : défauts + `network.allow: [{host: osv-vulnerabilities.storage.googleapis.com, purpose: osv.db}]`, `db.osv_path: <osv-db-root>` (réutilise les zips déjà téléchargés ; vérifier via `michel db status` qu'ils sont vus, sinon `michel db update`).
-- [ ] **Step 3: Enregistrer the reference project** : `michel project add <path to the reference project> --name demo --classification health`.
-- [ ] **Step 4: Scanner** : `michel scan --project demo`. Attendu : ≥ 6 manifestes (sans ceux sous `vendor/`), un total de findings du même ordre que le rapport osv-scanner du 2026-10-22 (233 vulnérabilités sur 65 paquets, lockfiles vendor inclus ; l'écart doit s'expliquer par l'exclusion `vendor/`). Noter les chiffres réels dans le ledger. `michel audit verify` → 0. `michel audit list --last 20` ne montre **aucun** `egress.attempt`.
+- [ ] **Step 2: Config de test** dans `%AppData%\michel\config.yaml` : défauts + `network.allow: [{host: osv-vulnerabilities.storage.googleapis.com, purpose: osv.db}]`, `db.osv_path: <osv-db-root>` (réutilise des zips déjà téléchargés par osv-scanner ; vérifier via `michel db status` qu'ils sont vus, sinon `michel db update`).
+- [ ] **Step 3: Enregistrer le projet de référence** : `michel project add <path to the reference project> --name demo --classification sensitive`.
+- [ ] **Step 4: Scanner** : `michel scan --project demo`. Attendu : les manifestes hors `vendor/`, un total de findings du même ordre qu'un passage d'osv-scanner (l'écart doit s'expliquer par l'exclusion `vendor/`). Noter les chiffres réels dans le ledger. `michel audit verify` → 0. `michel audit list --last 20` ne montre **aucun** `egress.attempt`.
 - [ ] **Step 5: Écrire** `docs/operations/offline-installation.md` (build, config, `db update` depuis une machine connectée, copie du dossier OSV vers une machine isolée, `scan`) et `docs/security/network-egress.md` (liste exhaustive des destinations et purposes de ce plan : `osv.db` vers `osv-vulnerabilities.storage.googleapis.com` uniquement ; `osv.scan` jamais utilisé en pratique, présent pour que toute requête inattendue d'osv-scalibr soit refusée et journalisée ; ce qui est testé vs déclaré). README : section « Quick start ».
-- [ ] **Step 6: Commit** `docs: offline installation and network egress inventory for plan 1` ; ledger `docs/superpowers/sdd/2026-10-22-michel-socle/progress.md` avec les chiffres du scan the reference project.
+- [ ] **Step 6: Commit** `docs: offline installation and network egress inventory for plan 1` ; ledger `docs/superpowers/sdd/2026-10-22-michel-socle/progress.md` avec les chiffres du scan du projet de référence.
 
 ---
 

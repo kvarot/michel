@@ -1,0 +1,14 @@
+{{- if not .HasAnalysis -}}
+{{.Package}} {{.Installed}} has not been searched for in your code yet.
+{{- else if eq .CallSitesQuality "low" -}}
+{{.Package}} {{.Installed}} could not be searched for in your code (search not possible: dependency files are not installed locally).
+{{- else if eq .CallSitesQuality "noautoload" -}}
+{{.Package}} {{.Installed}} could not be searched for in your code (search not possible: the package has no namespace to look for).
+{{- else if gt .CallSiteCount 0 -}}
+{{.Package}} {{.Installed}} is used in {{.CallSiteCount}} {{plural .CallSiteCount "place" "places"}} in your code{{if .Example}}, for example {{.Example}}{{end}}.
+{{- else if eq .CallSitesQuality "name" -}}
+{{.Package}} {{.Installed}} was not found in your code (searched by name only).
+{{- else -}}
+{{.Package}} {{.Installed}} was not found in your code.
+{{- end -}}
+{{- if .Summary}} The advisory says: "{{.Summary}}"{{end -}}

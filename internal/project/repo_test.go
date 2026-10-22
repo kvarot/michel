@@ -245,3 +245,69 @@ func TestAddExplicitFixLevelZero(t *testing.T) {
 		t.Fatalf("p=%+v err=%v", p, err)
 	}
 }
+
+func TestCorePackagesRoundTrip(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	added, err := r.Add(ctx, Project{Name: "shop", Path: t.TempDir(), CorePackages: []string{"symfony/http-kernel", "react"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, "shop")
+	if err != nil || len(got.CorePackages) != 2 || got.CorePackages[0] != "symfony/http-kernel" || got.CorePackages[1] != "react" {
+		t.Fatalf("got %+v err %v (added %+v)", got.CorePackages, err, added.CorePackages)
+	}
+	list, _ := r.List(ctx)
+	if len(list) != 1 || len(list[0].CorePackages) != 2 {
+		t.Fatalf("list = %+v", list)
+	}
+	other, err := r.Add(ctx, Project{Name: "bare", Path: t.TempDir()})
+	if err != nil || other.CorePackages == nil || other.RiskOverrides == nil {
+		t.Fatalf("empty values must be non-nil: %+v err %v", other, err)
+	}
+}
+
+func TestRiskOverridesRoundTrip(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	if _, err := r.Add(ctx, Project{Name: "shop", Path: t.TempDir(), RiskOverrides: map[string]int{"major_jump": 10, "no_tests": 5}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, "shop")
+	if err != nil || got.RiskOverrides["major_jump"] != 10 || got.RiskOverrides["no_tests"] != 5 || len(got.RiskOverrides) != 2 {
+		t.Fatalf("got %+v err %v", got.RiskOverrides, err)
+	}
+}
+
+func TestRiskOverridesRejectUnknownKey(t *testing.T) {
+	r := newRepo(t)
+	_, err := r.Add(context.Background(), Project{Name: "shop", Path: t.TempDir(), RiskOverrides: map[string]int{"majorjump": 10}})
+	if !errors.Is(err, ErrInvalidRiskOverride) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUpdateChangesFields(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	p, err := r.Add(ctx, Project{Name: "shop", Path: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.CorePackages = []string{"a"}
+	p.RiskOverrides = map[string]int{"direct": 0}
+	p.FixLevel, p.TestCmd = 3, "go test"
+	p.Classification = policy.ClassPublic
+	if err := r.Update(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := r.Get(ctx, "shop")
+	if got.FixLevel != 3 || got.TestCmd != "go test" || got.Classification != policy.ClassPublic ||
+		len(got.CorePackages) != 1 || got.RiskOverrides["direct"] != 0 || len(got.RiskOverrides) != 1 {
+		t.Fatalf("got %+v", got)
+	}
+	p.FixLevel = 9
+	if err := r.Update(ctx, p); !errors.Is(err, ErrInvalidFixLevel) {
+		t.Fatalf("err = %v", err)
+	}
+}

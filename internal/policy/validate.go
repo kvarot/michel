@@ -37,6 +37,14 @@ func Validate(p Policy) error {
 	if s.Remediation.ProductionDeploymentAllowed {
 		return errors.New("remediation.production_deployment_allowed must be false: Michel never deploys to production")
 	}
+	switch p.Assistant.Lang {
+	case "en", "fr":
+	default:
+		return fmt.Errorf("assistant.lang %q is unknown (use \"en\" or \"fr\")", p.Assistant.Lang)
+	}
+	if err := ValidateRisk(p.Risk); err != nil {
+		return err
+	}
 	for i, r := range s.Network.Allow {
 		if strings.TrimSpace(r.Host) == "" || strings.TrimSpace(r.Purpose) == "" {
 			return fmt.Errorf("network.allow[%d] needs both a host and a purpose", i)
@@ -56,6 +64,32 @@ func checkHost(h string) error {
 	name := strings.TrimPrefix(h, "*.")
 	if name == "" || strings.Contains(name, "*") {
 		return fmt.Errorf("host %q is invalid: use an exact host or \"*.suffix\"", h)
+	}
+	return nil
+}
+
+// ValidateRisk checks term ranges, the call-site threshold and the
+// auto_fix_below < handoff_up_to invariant.
+func ValidateRisk(r RiskConfig) error {
+	for _, t := range []struct {
+		key string
+		v   int
+	}{
+		{"major_jump", r.MajorJump}, {"breaking", r.Breaking}, {"direct", r.Direct},
+		{"many_call_sites", r.ManyCallSites}, {"no_tests", r.NoTests}, {"core_package", r.CorePackage},
+	} {
+		if t.v < 0 || t.v > 100 {
+			return fmt.Errorf("risk.%s is %d: use a value between 0 and 100", t.key, t.v)
+		}
+	}
+	if r.ManyCallSitesThreshold < 1 {
+		return fmt.Errorf("risk.many_call_sites_threshold is %d: use 1 or more", r.ManyCallSitesThreshold)
+	}
+	if r.AutoFixBelow < 0 || r.AutoFixBelow >= r.HandoffUpTo {
+		return fmt.Errorf("risk.auto_fix_below is %d: use a value from 0 up to (not including) risk.handoff_up_to (%d)", r.AutoFixBelow, r.HandoffUpTo)
+	}
+	if r.HandoffUpTo > 100 {
+		return fmt.Errorf("risk.handoff_up_to is %d: use at most 100", r.HandoffUpTo)
 	}
 	return nil
 }

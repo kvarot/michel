@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/kvarot/michel/internal/audit"
@@ -15,7 +17,7 @@ import (
 
 func newProjectCmd(deps *Deps) *cobra.Command {
 	c := &cobra.Command{Use: "project", Short: "Register the projects Michel watches"}
-	c.AddCommand(newProjectAddCmd(deps), newProjectListCmd(deps), newProjectRemoveCmd(deps))
+	c.AddCommand(newProjectAddCmd(deps), newProjectListCmd(deps), newProjectRemoveCmd(deps), newProjectSetCmd(deps))
 	return c
 }
 
@@ -47,6 +49,7 @@ func addDenialMessage(path, name string, err error) string {
 
 func newProjectAddCmd(deps *Deps) *cobra.Command {
 	var name, class, testCmd, installCmd string
+	var corePkgs []string
 	var fixLevel int
 	c := &cobra.Command{
 		Use:   "add <path>",
@@ -63,6 +66,7 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 				Name: name, Path: path, Classification: policy.Classification(class),
 				FixLevel: fixLevel, FixLevelSet: cmd.Flags().Changed("fix-level"),
 				TestCmd: testCmd, InstallCmd: installCmd,
+				CorePackages: cleanList(corePkgs),
 			}
 			added, err := projectRepo(deps).Add(ctx, p)
 			if err != nil {
@@ -106,6 +110,7 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 	f.IntVar(&fixLevel, "fix-level", 1, "how far Michel may go to fix a finding, 0 to 3")
 	f.StringVar(&testCmd, "test-cmd", "", "command that runs the project's tests")
 	f.StringVar(&installCmd, "install-cmd", "", "command that installs the project's dependencies")
+	f.StringArrayVar(&corePkgs, "core-package", nil, "package whose upgrade is riskier for this project (repeatable)")
 	return c
 }
 
@@ -197,10 +202,126 @@ func newProjectRemoveCmd(deps *Deps) *cobra.Command {
 // a storage or system failure.
 func isValidationErr(err error) bool {
 	for _, s := range []error{project.ErrNotADirectory, project.ErrDuplicateName, project.ErrEmptyName,
-		project.ErrInvalidFixLevel, project.ErrInvalidClassification, project.ErrInvalidSourceType} {
+		project.ErrInvalidFixLevel, project.ErrInvalidClassification, project.ErrInvalidSourceType,
+		project.ErrInvalidRiskOverride} {
 		if errors.Is(err, s) {
 			return true
 		}
 	}
 	return false
+}
+
+// cleanList trims, drops empty entries and removes duplicates, keeping order.
+func cleanList(in []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func newProjectSetCmd(deps *Deps) *cobra.Command {
+	var corePkgs, risk []string
+	var class, testCmd, installCmd string
+	var fixLevel int
+	c := &cobra.Command{
+		Use:   "set <name>",
+		Short: "Change the settings of a registered project",
+		Long: "Set changes only the settings you pass. --core-package replaces the whole list of core packages " +
+			"(repeat it for several; pass --core-package '' to clear). --risk key=value replaces one risk-score value " +
+			"for this project (see docs/remediation-risk.md); other keys keep their previous override.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, name := cmd.Context(), args[0]
+			fail := func(result, msg string, ev map[string]any) error {
+				ev["reason"] = msg
+				if _, aerr := deps.Audit.Record(ctx, audit.Event{
+					Actor: "cli", Action: "project.set", Target: name, Result: result, Evidence: ev,
+				}); aerr != nil {
+					return fmt.Errorf("%s Also, Michel could not write the audit log: %w", msg, aerr)
+				}
+				return errors.New(msg)
+			}
+			fl := cmd.Flags()
+			var fields []string
+			for _, f := range []string{"core-package", "risk", "fix-level", "classification", "test-cmd", "install-cmd"} {
+				if fl.Changed(f) {
+					fields = append(fields, f)
+				}
+			}
+			ev := map[string]any{"fields": fields}
+			if len(fields) == 0 {
+				return fail("denied", "Cannot update project: nothing to change. Pass at least one of --core-package, --risk, "+
+					"--fix-level, --classification, --test-cmd, --install-cmd.", ev)
+			}
+			repo := projectRepo(deps)
+			p, err := repo.Get(ctx, name)
+			if err != nil {
+				if errors.Is(err, project.ErrNotFound) {
+					return fail("not_found", fmt.Sprintf("Cannot update project %s: no project has this name. "+
+						"Run 'michel project list' to see the registered names.", name), ev)
+				}
+				return fail("error", fmt.Sprintf("Cannot update project %s: %v. Nothing was changed.", name, err), ev)
+			}
+			if fl.Changed("core-package") {
+				p.CorePackages = cleanList(corePkgs)
+			}
+			for _, kv := range risk {
+				k, v, ok := strings.Cut(kv, "=")
+				n, convErr := strconv.Atoi(strings.TrimSpace(v))
+				if !ok || convErr != nil {
+					return fail("denied", fmt.Sprintf("Cannot update project %s: --risk %q must look like key=number, for example major_jump=10.", name, kv), ev)
+				}
+				p.RiskOverrides[strings.TrimSpace(k)] = n
+			}
+			if fl.Changed("fix-level") {
+				p.FixLevel = fixLevel
+			}
+			if fl.Changed("classification") {
+				p.Classification = policy.Classification(class)
+			}
+			if fl.Changed("test-cmd") {
+				p.TestCmd = testCmd
+			}
+			if fl.Changed("install-cmd") {
+				p.InstallCmd = installCmd
+			}
+			if merged := deps.Policy.Risk.WithOverrides(p.RiskOverrides); policy.ValidateRisk(merged) != nil {
+				return fail("denied", fmt.Sprintf("Cannot update project %s: these overrides give auto_fix_below=%d and handoff_up_to=%d. "+
+					"auto_fix_below must stay below handoff_up_to, which must be at most 100; terms must be 0 to 100. Nothing was changed.",
+					name, merged.AutoFixBelow, merged.HandoffUpTo), ev)
+			}
+			if err := repo.Update(ctx, p); err != nil {
+				if isValidationErr(err) {
+					return fail("denied", fmt.Sprintf("Cannot update project %s: %v. Nothing was changed.", name, err), ev)
+				}
+				return fail("error", fmt.Sprintf("Cannot update project %s: %v. Nothing was changed; check that the data folder is writable and try again.", name, err), ev)
+			}
+			if _, err := deps.Audit.Record(ctx, audit.Event{
+				Actor: "cli", Action: "project.set", Target: p.Name, Result: "ok", Evidence: ev,
+			}); err != nil {
+				return fmt.Errorf("Project %s was updated but Michel could not write the audit log: %w. Check that the data folder is writable", p.Name, err)
+			}
+			fmt.Fprintf(deps.Stdout, "Updated project %s: %s.\n", p.Name, strings.Join(fields, ", "))
+			if fl.Changed("core-package") || fl.Changed("risk") {
+				// The stored analyses no longer match these settings (their
+				// inputs hash differs): say when they are refreshed.
+				fmt.Fprintf(deps.Stdout, "Analysis will be recomputed on the next scan or `michel analyze --project %s`.\n", p.Name)
+			}
+			return nil
+		},
+	}
+	f := c.Flags()
+	f.StringArrayVar(&corePkgs, "core-package", nil, "package whose upgrade is riskier for this project (repeatable; replaces the list)")
+	f.StringArrayVar(&risk, "risk", nil, "risk-score override key=value (repeatable), see docs/remediation-risk.md")
+	f.IntVar(&fixLevel, "fix-level", 1, "how far Michel may go to fix a finding, 0 to 3")
+	f.StringVar(&class, "classification", "", "data classification: public, internal, confidential, sensitive, health")
+	f.StringVar(&testCmd, "test-cmd", "", "command that runs the project's tests")
+	f.StringVar(&installCmd, "install-cmd", "", "command that installs the project's dependencies")
+	return c
 }

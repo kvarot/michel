@@ -1,0 +1,1 @@
+{"name":"acme/root","require":{"php":">=8.1","acme/app":"^1.0"},"require-dev":{"acme/devtool":"^2.0"}}

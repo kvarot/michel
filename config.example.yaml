@@ -26,3 +26,15 @@ db:
   # osv_path: defaults to <data-dir>/osv
 assistant:
   name: Michel
+  lang: en                      # en | fr
+# Public risk score (see docs/remediation-risk.md). The AI model never changes these.
+risk:
+  major_jump: 40                # points when the fix needs a major version jump
+  breaking: 25                  # points when the changelog announces breaking changes
+  direct: 10                    # points when the package is a direct dependency
+  many_call_sites: 15           # points when call sites exceed the threshold below
+  no_tests: 20                  # points when no test touches the package
+  core_package: 20              # points when the project lists it as a core package
+  many_call_sites_threshold: 10
+  auto_fix_below: 30            # score < 30 -> auto_fix
+  handoff_up_to: 60             # 30..60 -> handoff, > 60 -> handoff with a warning

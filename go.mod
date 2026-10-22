@@ -3,6 +3,7 @@ module github.com/kvarot/michel
 go 1.27.3
 
 require (
+	deps.dev/util/semver v0.0.0-20260727054525-2946ae4a6141
 	github.com/google/osv-scanner/v2 v2.7.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/ossf/osv-schema/bindings/go v0.0.0-20260902031056-b388a18021a3
@@ -21,7 +22,6 @@ require (
 	deps.dev/util/maven v0.0.0-20260928000106-0e158e8db197 // indirect
 	deps.dev/util/pypi v0.0.0-20260727054525-2946ae4a6141 // indirect
 	deps.dev/util/resolve v0.0.0-20260727054525-2946ae4a6141 // indirect
-	deps.dev/util/semver v0.0.0-20260727054525-2946ae4a6141 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/CycloneDX/cyclonedx-go v0.12.0 // indirect
 	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5 // indirect
