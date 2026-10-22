@@ -58,7 +58,7 @@ michel db status
 ## Scanning
 
 ```
-michel project add /path/to/project --name myproject --classification health
+michel project add /path/to/project --name myproject --classification sensitive
 michel scan --project myproject
 michel findings --project myproject [--status new] [--severity critical]
 michel audit verify
@@ -97,7 +97,7 @@ michel project set myproject --core-package vendor/core --core-package other-lib
 michel project set myproject --risk major_jump=50 --risk many_call_sites_threshold=20
 ```
 
-`--core-package` replaces the whole list of packages whose upgrade is riskier for this project (`--core-package ''` clears it). `--risk key=value` overrides one value of the `risk.*` policy section for this project only; other overrides are kept. Run `michel analyze --project myproject --force` afterwards to apply them. The keys and thresholds are described in [remediation-risk.md](../remediation-risk.md) and listed in `config.example.yaml`.
+`--core-package` replaces the whole list of packages whose upgrade is riskier for this project (`--core-package ''` clears it). `--risk key=value` overrides one value of the `risk.*` policy section for this project only; other overrides are kept. Stored analyses keep a fingerprint of these settings, so they are recomputed on the next scan or `michel analyze --project myproject`; `--force` is not needed. The keys and thresholds are described in [remediation-risk.md](../remediation-risk.md) and listed in `config.example.yaml`.
 
 ## Scripting
 
@@ -108,9 +108,9 @@ michel project set myproject --risk major_jump=50 --risk many_call_sites_thresho
   "results": [
     {
       "scan_id": "...", "project": "myproject", "status": "ok",
-      "manifests": [{"rel_path": "composer.lock", "ecosystem": "Packagist", "lock_sha256": "...", "packages": 136, "findings": 21}],
-      "new": 0, "still": 215, "reappeared": 0, "gone": 0,
-      "by_severity": {"critical": 12, "high": 66, "medium": 116, "low": 21}
+      "manifests": [{"rel_path": "composer.lock", "ecosystem": "Packagist", "lock_sha256": "...", "packages": 120, "findings": 40}],
+      "new": 0, "still": 40, "reappeared": 0, "gone": 0,
+      "by_severity": {"critical": 4, "high": 10, "medium": 20, "low": 6}
     }
   ],
   "failures": [{"project": "...", "error": "..."}]
@@ -123,9 +123,26 @@ michel project set myproject --risk major_jump=50 --risk many_call_sites_thresho
 
 ```json
 {
-  "results": [{"project": "myproject", "analyzed": 215, "skipped": 0, "failed": 0, "duration_ms": 116401}],
+  "results": [{"project": "myproject", "analyzed": 42, "skipped": 3, "failed": 0, "duration_ms": 1234}],
   "failures": []
 }
 ```
 
-`michel finding <id> --json` prints `{"finding": {...}, "analysis": {...}, "explanation": {...}}`. `finding` is the stored finding (id, package, versions, severity, status...). `analysis` holds `Path` (`Directness`, `Via`, `Constraint`), `Upgrade` (`Target`, `Jump`, `ConstraintAllows`), `Calls` (`Sites`, `Count`, `Quality` = `psr4|import|name|low`), `Coverage` (`TestFiles`, `Count`, `Method`), `Changelog` (`Available`, `Breaking`, `Excerpt`) and `Risk` (`Score`, `Recommendation`, `Warning`, `Terms`). `explanation` holds the three sentences in the requested language.
+`michel finding <id> --json` prints `{"finding": {...}, "analysis": {...}, "explanation": {...}}`. `finding` is the stored finding (id, package, versions, severity, status...). `analysis` is `null` until the finding is analyzed; its keys are snake_case and stable:
+
+```json
+{
+  "finding_id": "...", "project_id": "...", "computed_at": "...", "michel_version": "...", "inputs_hash": "...",
+  "path": {"directness": "direct|transitive|unknown", "via": [], "constraint": "^1.2"},
+  "has_root_manifest": true,
+  "upgrade": {"target": "1.2.5", "jump": "patch|minor|major|unknown|none", "constraint_allows": true},
+  "calls": {"sites": [{"file": "src/Http/ApiClient.php", "line": 41, "is_test": false}], "count": 3,
+            "quality": "psr4|name|low|noautoload|import", "namespaces": [], "unreadable": 0,
+            "unreadable_paths": [], "test_files": [], "test_file_count": 0, "test_hit_count": 0, "source_files": []},
+  "coverage": {"test_files": [], "count": 0, "method": "callsite|reference|none", "skipped": [], "unreadable": 0},
+  "changelog": {"source": "...", "excerpt": "...", "available": true, "breaking": false, "breaking_lines": [], "note": ""},
+  "risk": {"score": 30, "recommendation": "auto_fix|handoff|report_only", "warning": false, "terms": {"no_tests": 20, "direct": 10}}
+}
+```
+
+Code lines themselves are never included. `explanation` holds the three sentences (`what`, `impact`, `cost`) in the requested language.

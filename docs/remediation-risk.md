@@ -13,13 +13,13 @@ Each term adds points when its condition is true. The points are summed and capp
 | Term | Points | Condition |
 | --- | --- | --- |
 | `major_jump` | +40 | The fix needs a major version jump. |
-| `breaking` | +25 | The changelog announces breaking changes. |
+| `breaking` | +25 | The changelog announces breaking changes. A changelog without readable version headings is not assessed: it adds 0, and the explanation says so. |
 | `direct` | +10 | The package is a direct dependency of the project. |
 | `many_call_sites` | +15 | The code calls the package in more places than `many_call_sites_threshold` (10, strictly more). |
-| `no_tests` | +20 | No test touches the package. |
+| `no_tests` | +20 | No test uses the package itself. Only a covering test that imports or calls the package (method `callsite`) cancels this term; a test that merely mentions the name of a file using the package (method `reference`) is weak evidence and does not. |
 | `core_package` | +20 | The package is listed as a core package of the project. |
 
-When the size of the jump cannot be determined (`unknown`), `major_jump` adds 0 and the analysis records `major_jump_unknown: 0`, so the gap is visible instead of silently counted as safe.
+When the size of the jump cannot be determined (`unknown`), `major_jump` adds 0 and the analysis records `major_jump_unknown: 0`, so the gap is visible instead of silently counted as safe. An unknown jump is also never an automatic fix: whatever the score, the recommendation is `handoff` (or `report_only` without a fixed version), and the analysis records `jump_unknown_handoff: 1`. This flag, like `thresholds_fallback`, is not points: the score is unchanged.
 
 ## Thresholds
 
@@ -61,4 +61,4 @@ michel project set my-shop --core-package symfony/http-kernel --core-package rea
 michel project set my-shop --risk major_jump=10 --risk no_tests=30
 ```
 
-`--core-package` replaces the whole list; `--risk` changes one value and keeps the other overrides. Unknown keys and values outside 0..100 are refused. Each change is recorded in the audit log as `project.set` (field names only, never command contents).
+`--core-package` replaces the whole list; `--risk` changes one value and keeps the other overrides. Stored analyses remember a fingerprint of these settings (and of the policy values): after a change they are recomputed on the next scan or `michel analyze --project my-shop`. Unknown keys and values outside 0..100 are refused. Each change is recorded in the audit log as `project.set` (field names only, never command contents).

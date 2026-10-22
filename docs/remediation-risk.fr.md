@@ -13,13 +13,13 @@ Chaque terme ajoute des points quand sa condition est vraie. Les points sont add
 | Terme | Points | Condition |
 | --- | --- | --- |
 | `major_jump` | +40 | Le correctif demande un saut de version majeure. |
-| `breaking` | +25 | Le changelog annonce des changements incompatibles. |
+| `breaking` | +25 | Le changelog annonce des changements incompatibles. Un changelog sans titres de version lisibles n'est pas évalué : il ajoute 0, et l'explication le dit. |
 | `direct` | +10 | Le paquet est une dépendance directe du projet. |
 | `many_call_sites` | +15 | Le code appelle le paquet à plus d'endroits que `many_call_sites_threshold` (10, strictement plus). |
-| `no_tests` | +20 | Aucun test ne touche le paquet. |
+| `no_tests` | +20 | Aucun test n'utilise le paquet lui-même. Seul un test couvrant qui importe ou appelle le paquet (méthode `callsite`) annule ce terme ; un test qui mentionne seulement le nom d'un fichier utilisant le paquet (méthode `reference`) est une preuve faible et ne l'annule pas. |
 | `core_package` | +20 | Le paquet figure parmi les paquets cœur du projet. |
 
-Quand la taille du saut est impossible à déterminer (`unknown`), `major_jump` ajoute 0 et l'analyse enregistre `major_jump_unknown: 0` : le manque est visible au lieu d'être compté comme sans risque.
+Quand la taille du saut est impossible à déterminer (`unknown`), `major_jump` ajoute 0 et l'analyse enregistre `major_jump_unknown: 0` : le manque est visible au lieu d'être compté comme sans risque. Un saut inconnu n'est jamais non plus une correction automatique : quel que soit le score, la recommandation est `handoff` (ou `report_only` sans version corrigée), et l'analyse enregistre `jump_unknown_handoff: 1`. Ce marqueur, comme `thresholds_fallback`, n'ajoute pas de points : le score ne change pas.
 
 ## Seuils
 
@@ -61,4 +61,4 @@ michel project set my-shop --core-package symfony/http-kernel --core-package rea
 michel project set my-shop --risk major_jump=10 --risk no_tests=30
 ```
 
-`--core-package` remplace toute la liste ; `--risk` change une valeur et conserve les autres surcharges. Les clés inconnues et les valeurs hors de 0..100 sont refusées. Chaque changement est consigné dans le journal d'audit sous `project.set` (noms des champs seulement, jamais le contenu des commandes).
+`--core-package` remplace toute la liste ; `--risk` change une valeur et conserve les autres surcharges. Les analyses stockées gardent une empreinte de ces réglages (et des valeurs de la politique) : après un changement, elles sont recalculées au scan suivant ou avec `michel analyze --project my-shop`. Les clés inconnues et les valeurs hors de 0..100 sont refusées. Chaque changement est consigné dans le journal d'audit sous `project.set` (noms des champs seulement, jamais le contenu des commandes).
