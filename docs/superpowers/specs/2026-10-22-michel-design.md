@@ -215,7 +215,7 @@ Le brief ne contient **jamais** de secret ni de fichier de configuration sensibl
 Gérer quelque chose de compliqué n'autorise pas une interface que l'utilisateur ne comprend pas. Règles valables pour la PWA, la CLI, les digests et les briefs :
 
 - **Chaque faille est expliquée en langage courant, sans IA** : trois phrases produites par des gabarits déterministes depuis les données OSV et l'analyse : *C'est quoi* (type de faille, paquet, où il est utilisé chez toi), *Ce qui pourrait arriver* (impact concret, formulé pour un non-spécialiste, avec le niveau de certitude), *Ce que ça coûte de corriger* (saut de version, breaking changes, tests qui couvrent, temps estimé par palier). Le détail technique (CVSS, vecteur, références) reste accessible d'un clic, jamais imposé.
-- **Michel parle** : le prénom porte la voix de l'outil (« Michel a trouvé 3 nouveautés cette nuit, 1 mérite ton attention »), ton direct, une idée par phrase, zéro jargon sans infobulle. Pas de mascotte envahissante : une voix, pas un personnage animé.
+- **Michel parle et tutoie** (décision Kévin, 2026-10-22 : tutoiement partout, produit et docs françaises) : le prénom porte la voix de l'outil (« Michel a trouvé 3 nouveautés cette nuit, 1 mérite ton attention »), ton direct, une idée par phrase, zéro jargon sans infobulle. Pas de mascotte envahissante : une voix, pas un personnage animé.
 - **Onboarding guidé** : premier lancement = assistant en quatre écrans (projets à suivre, canaux de notification, palier IA proposé selon la machine, résumé de ce qui sort ou non du poste). Chaque écran explique *pourquoi* on demande ça. Aucune question dont la réponse n'a pas d'effet.
 - **Ludique, léger** : compteur de jours sans critique par projet, « 0 critique » affiché comme un état à conserver, progression visible quand on corrige (« 12 → 9 failles, 2 critiques → 0 »), et un mot de Michel quand tout est propre. Pas de points, pas de classement, pas de culpabilisation : les failles reportées avec justification ne sont pas des échecs.
 - **Chaque action dit ce qu'elle va faire avant de le faire** et ce qu'elle a fait après, avec la preuve (commande exécutée, tests lancés, re-scan) à portée de clic. Une erreur dit toujours *quoi*, *pourquoi* et *quoi faire ensuite*.
@@ -235,6 +235,17 @@ Le scan de lockfiles voit le code ; un collecteur sur le serveur voit ce qui tou
 - **Minimisation** : inventaires (nom, version, empreinte), jamais de fichiers de configuration bruts ; secrets masqués à la source ; rapport signé par le collecteur (identité, version, heure, empreinte des entrées) ; audit chaîné sur l'agent **et** sur le central.
 - **Quand** : plan « cibles et agents » après digest, briefs et remédiation (la collecte n'a de valeur qu'avec la boucle de décision) ; mode SSH d'abord (zéro surface exposée), mode agent avec l'instance centrale. Question ouverte, à trancher alors : où tourne l'instance centrale (poste de l'utilisateur avec tunnel, ou petit serveur dédié, ce qui conditionne le mode serveur et PostgreSQL).
 
+### 4.12 bis Journaux des serveurs : erreurs, accès hostiles, URL anormales (décision Kévin, 2026-10-22)
+
+Prolonge § 4.12. Une fois l'agent déployé, l'application liste les cibles et, **à la demande et par dossier autorisé** (PHP, Apache/nginx, PostgreSQL…), analyse leurs journaux pour remonter : erreurs applicatives groupées (message, `fichier:ligne`, première/dernière occurrence, fréquence), accès identifiés comme hostiles (scanners, brute force, injections, chemins sensibles, user-agents d'outils), URL anormales (inconnues de l'application, encodages louches), échecs d'authentification et requêtes lentes PostgreSQL ; croisement avec les findings (« la faille X a reçu N tentatives »).
+
+- **Analyse sur le serveur, dans l'agent** ; seuls des agrégats et des extraits masqués remontent ; jamais de journal brut, jamais par défaut.
+- **Chemins déclarés à l'enrôlement**, refus de tout le reste ; chaque lecture = événement d'audit (cible, chemin, fenêtre, volume, empreinte du rapport). Fenêtre bornée (24 h ou N Mo), lecture en flux.
+- **Masquage à la source** : IP tronquées ou hachées avec sel par cible, jetons et paramètres sensibles remplacés, identifiants personnels jamais remontés ; détail sur demande explicite et journalisée. Rétention courte, séparée.
+- **Règles déterministes d'abord** (formats nginx/apache/PHP-FPM/PostgreSQL, signatures type OWASP CRS et fail2ban ; parseurs CrowdSec sous MIT réutilisables **sans** sa partie réseau communautaire), IA locale ensuite pour expliquer ou qualifier, sur extraits masqués.
+- Nouveaux types de `Finding` (`log_error`, `suspicious_access`, `odd_url`) dans le même digest, même voix de Michel.
+- **Quand** : plan 7, après le plan 6 dont il dépend (agent, `Target`, enrôlement, allowlist de chemins).
+
 ### 4.13 Ordre de réalisation (celui de la politique § 16, adapté)
 
 1. Squelette Go + politique YAML + refus par défaut + egress + audit minimal (fondations, testées).
@@ -248,6 +259,7 @@ Le scan de lockfiles voit le code ; un collecteur sur le serveur voit ce qui tou
 9. Suite de tests de la politique § 13, docs § 14, export CycloneDX/VEX.
 10. Mise à jour signée de Michel (§ 4.10), onboarding guidé et passe pédagogique complète (§ 4.11) ; les gabarits d'explication en langage courant arrivent dès l'étape 3 (analyse) et accompagnent chaque étape suivante.
 11. Cibles et agents (§ 4.12) : entité `Target`, collecteur `michel collect`, mode SSH puis mode agent mTLS, paquets OS et conteneurs.
+12. Journaux des serveurs (§ 4.12 bis) : erreurs, accès hostiles, URL anormales, analysés sur l'agent, agrégats masqués seulement.
 
 Chaque étape livre quelque chose d'utilisable seul. Après chaque étape : tests exécutés, résultats réels notés dans le ledger.
 
