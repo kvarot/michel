@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"bufio"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,6 +20,9 @@ type Coverage struct {
 	// Skipped lists the base names ignored by the reference rule because they
 	// are too short or too generic to be meaningful.
 	Skipped []string
+	// Unreadable counts test files that could not be opened or fully read.
+	// Files over 2 MiB are dropped earlier by the shared walk, uncounted.
+	Unreadable int
 }
 
 var noisyNames = map[string]bool{
@@ -42,16 +46,11 @@ func testExtensions(ecosystem string) []string {
 func FindCoveringTests(projectRoot, manifestRelPath string, sites CallSites, ecosystem string, exclude []string) (Coverage, error) {
 	cov := Coverage{Method: "none"}
 
-	var direct []string
 	seen := map[string]bool{}
 	var names []string
 	skipped := map[string]bool{}
-	for _, s := range sites.Sites {
-		if s.IsTest {
-			direct = append(direct, s.File)
-			continue
-		}
-		base := path.Base(s.File)
+	for _, file := range sites.SourceFiles {
+		base := path.Base(file)
 		base = strings.TrimSuffix(base, path.Ext(base))
 		if seen[base] {
 			continue
@@ -68,9 +67,9 @@ func FindCoveringTests(projectRoot, manifestRelPath string, sites CallSites, eco
 	}
 	sort.Strings(cov.Skipped)
 
-	if len(direct) > 0 {
-		c := capCoverage(direct)
-		c.Method, c.Skipped = "callsite", cov.Skipped
+	if sites.TestHitCount > 0 {
+		c := capCoverage(sites.TestFiles)
+		c.Method, c.Skipped, c.Unreadable = "callsite", cov.Skipped, cov.Unreadable
 		return c, nil
 	}
 	exts := testExtensions(ecosystem)
@@ -101,22 +100,18 @@ func FindCoveringTests(projectRoot, manifestRelPath string, sites CallSites, eco
 		if !isTestPath(rel) {
 			continue
 		}
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		for _, re := range res {
-			if re.Match(data) {
-				found = append(found, rel)
-				break
-			}
+		hit, ok := referencesAny(f, res)
+		if !ok {
+			cov.Unreadable++
+		} else if hit {
+			found = append(found, rel)
 		}
 	}
 	if len(found) == 0 {
 		return cov, nil
 	}
 	c := capCoverage(found)
-	c.Method, c.Skipped = "reference", cov.Skipped
+	c.Method, c.Skipped, c.Unreadable = "reference", cov.Skipped, cov.Unreadable
 	return c, nil
 }
 
@@ -137,4 +132,25 @@ func capCoverage(files []string) Coverage {
 		c.TestFiles = out[:maxTestFiles]
 	}
 	return c
+}
+
+// referencesAny reports whether any line of the file matches one of res; ok is
+// false when the file could not be opened or fully read.
+func referencesAny(f string, res []*regexp.Regexp) (hit, ok bool) {
+	fh, err := os.Open(f)
+	if err != nil {
+		return false, false
+	}
+	defer fh.Close()
+	sc := bufio.NewScanner(fh)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		for _, re := range res {
+			if re.MatchString(line) {
+				return true, true
+			}
+		}
+	}
+	return false, sc.Err() == nil
 }

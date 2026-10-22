@@ -31,6 +31,10 @@ type CallSites struct {
 	// Unreadable counts files that could not be opened or fully read (e.g. a
 	// line over 1 MiB), so "no usage found" differs from "could not read".
 	Unreadable int
+	// Computed from ALL hits, independent of the Sites cap.
+	TestFiles    []string // distinct test files with a hit, sorted, at most 50
+	TestHitCount int      // total hits in test files
+	SourceFiles  []string // distinct non-test files with a hit, sorted, at most 200
 }
 
 // FindCallSites looks for the lines of the user's code, under the manifest's
@@ -69,6 +73,7 @@ func scanFiles(projectRoot string, files []string, match func(line string) bool)
 	// Slash order, so the kept sites are the same on every OS.
 	sort.Slice(entries, func(i, j int) bool { return entries[i].rel < entries[j].rel })
 	for _, e := range entries {
+		hits := 0
 		f, rel := e.abs, e.rel
 		fh, err := os.Open(f)
 		if err != nil {
@@ -85,6 +90,7 @@ func scanFiles(projectRoot string, files []string, match func(line string) bool)
 				continue
 			}
 			res.Count++
+			hits++
 			if len(res.Sites) < maxSites {
 				res.Sites = append(res.Sites, CallSite{
 					File: rel, Line: n, Snippet: snippet(line), IsTest: isTestPath(rel),
@@ -95,6 +101,16 @@ func scanFiles(projectRoot string, files []string, match func(line string) bool)
 			res.Unreadable++
 		}
 		fh.Close()
+		if hits > 0 {
+			if isTestPath(rel) {
+				res.TestHitCount += hits
+				if len(res.TestFiles) < maxTestFiles {
+					res.TestFiles = append(res.TestFiles, rel)
+				}
+			} else if len(res.SourceFiles) < maxSites {
+				res.SourceFiles = append(res.SourceFiles, rel)
+			}
+		}
 	}
 	return res, nil
 }
