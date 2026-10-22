@@ -164,6 +164,8 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newAuditCmd(deps))
 	root.AddCommand(newProjectCmd(deps))
 	root.AddCommand(newDBCmd(deps))
+	root.AddCommand(newScanCmd(deps))
+	root.AddCommand(newFindingsCmd(deps))
 	return root
 }
 
