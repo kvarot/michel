@@ -6,13 +6,13 @@ func Defaults() Policy {
 	return Policy{
 		Sovereignty: SovereigntyConfig{
 			Mode:               ModeStrictLocal,
-			DataClassification: ClassInternal,
+			DataClassification: ClassSensitive,
 			AI:                 AIConfig{ProviderPolicy: "local_only"},
 			Network:            NetworkConfig{DefaultEgress: "deny"},
 			Audit: AuditConfig{
 				Enabled:                true,
-				IntegrityProtection:    "hash_chain",
-				PromptContentRetention: "none",
+				IntegrityProtection:    "required",
+				PromptContentRetention: "encrypted_configurable",
 			},
 			Remediation: RemediationConfig{
 				IsolatedExecutionRequired:     true,

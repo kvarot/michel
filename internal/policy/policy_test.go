@@ -23,6 +23,10 @@ func TestDefaultsAreStrictLocal(t *testing.T) {
 			t.Errorf("%s is true by default", name)
 		}
 	}
+	if s.DataClassification != ClassSensitive || s.Audit.IntegrityProtection != "required" ||
+		s.Audit.PromptContentRetention != "encrypted_configurable" || !s.Audit.Enabled {
+		t.Errorf("classification=%q audit=%+v", s.DataClassification, s.Audit)
+	}
 	if len(s.Network.Allow) != 0 || p.Assistant.Name != "Michel" {
 		t.Errorf("allow=%v name=%q", s.Network.Allow, p.Assistant.Name)
 	}

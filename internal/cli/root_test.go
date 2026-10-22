@@ -15,7 +15,7 @@ func TestRootVersion(t *testing.T) {
 	var out, errOut bytes.Buffer
 	deps := &Deps{Stdout: &out, Stderr: &errOut, Now: time.Now}
 	cmd := NewRootCmd(deps)
-	cmd.SetArgs([]string{"version"})
+	cmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "config.yaml"), "--data-dir", t.TempDir(), "version"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}

@@ -2,7 +2,7 @@
 # Delete this file and Michel behaves exactly the same.
 sovereignty:
   mode: strict_local            # strict_local | standard
-  data_classification: internal # public | internal | confidential | sensitive | health
+  data_classification: sensitive # public | internal | confidential | sensitive | health
   ai:
     provider_policy: local_only
     external_providers_enabled: false
@@ -15,8 +15,8 @@ sovereignty:
     allow: []                   # each rule needs a host and a purpose
   audit:
     enabled: true
-    integrity_protection: hash_chain
-    prompt_content_retention: none
+    integrity_protection: required
+    prompt_content_retention: encrypted_configurable
   remediation:
     isolated_execution_required: true
     production_deployment_allowed: false # must stay false
