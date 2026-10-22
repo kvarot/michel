@@ -131,7 +131,8 @@ type Repo struct{ s *store.Store }
 func NewRepo(s *store.Store) *Repo { return &Repo{s: s} }
 
 // ListFindings returns the findings of a project, most severe first. An empty
-// status means everything except "gone"; "all" means everything.
+// status means everything except "gone"; "all" means everything; "actionable"
+// means new or pending.
 func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Finding, error) {
 	q := `SELECT id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases, severity_label, cvss_score,
 		installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary
@@ -139,6 +140,8 @@ func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Fi
 	args := []any{projectID}
 	switch status {
 	case "all":
+	case "actionable":
+		q += ` AND status IN ('new', 'pending')`
 	case "":
 		q += ` AND status <> 'gone'`
 	default:
