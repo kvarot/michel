@@ -33,7 +33,7 @@ func addDenialMessage(path, name string, err error) string {
 			"Give the folder that contains the code (for example the one with composer.lock or package-lock.json).", path)
 	case errors.Is(err, project.ErrDuplicateName):
 		return fmt.Sprintf("Cannot add project: a project named %q already exists. Names must be unique. "+
-			"Choose another --name, or run 'michel project remove %s' first.", name, name)
+			"Choose another --name, or run 'michel project remove %s --purge' first (a removed project keeps its name until it is purged).", name, name)
 	case errors.Is(err, project.ErrEmptyName):
 		return "Cannot add project: the name is empty. Give it a short name with --name, for example --name my-shop."
 	case errors.Is(err, project.ErrInvalidFixLevel):
@@ -133,40 +133,64 @@ func newProjectListCmd(deps *Deps) *cobra.Command {
 }
 
 func newProjectRemoveCmd(deps *Deps) *cobra.Command {
-	return &cobra.Command{
+	var purge bool
+	c := &cobra.Command{
 		Use:   "remove <name>",
-		Short: "Forget a registered project (its folder is not touched)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Stop watching a project (its folder is not touched)",
+		Long: "Remove deactivates a project: it is no longer scanned by 'michel scan --all', and its scans and findings " +
+			"are kept as history. With --purge, the project and its whole history (scans and findings) are deleted for good.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, arg := cmd.Context(), args[0]
+			mode := "deactivate"
+			if purge {
+				mode = "purge"
+			}
 			repo := projectRepo(deps)
-			p, err := repo.Get(ctx, arg)
+			var p project.Project
+			var err error
+			if purge {
+				p, err = repo.Purge(ctx, arg)
+			} else {
+				p, err = repo.Remove(ctx, arg)
+			}
 			if err != nil {
-				if !errors.Is(err, project.ErrNotFound) {
-					return err
+				result, msg := "error", fmt.Sprintf("Cannot remove project %s: %v. Nothing was changed; check that the data folder is writable and try again.", arg, err)
+				if errors.Is(err, project.ErrNotFound) {
+					result, msg = "not_found", fmt.Sprintf("Cannot remove project %s: no project has this name. Run 'michel project list' to see the registered names.", arg)
 				}
 				if _, aerr := deps.Audit.Record(ctx, audit.Event{
-					Actor: "cli", Action: "project.remove", Target: arg, Result: "not_found",
+					Actor: "cli", Action: "project.remove", Target: arg, Result: result,
+					Evidence: map[string]any{"mode": mode, "reason": msg},
 				}); aerr != nil {
-					return fmt.Errorf("cannot write the audit log: %w", aerr)
+					return fmt.Errorf("%s Also, Michel could not write the audit log: %w", msg, aerr)
 				}
-				return fmt.Errorf("Cannot remove project %s: no project has this name. Run 'michel project list' to see the registered names.", arg)
-			}
-			if err := repo.Remove(ctx, p.ID); err != nil {
-				return err
+				return errors.New(msg)
 			}
 			if _, err := deps.Audit.Record(ctx, audit.Event{
 				Actor: "cli", Action: "project.remove", Target: p.Name, Result: "ok",
 				Evidence: map[string]any{
-					"path": p.Path, "classification": string(p.Classification), "fix_level": p.FixLevel,
+					"mode": mode, "path": p.Path, "classification": string(p.Classification), "fix_level": p.FixLevel,
 				},
 			}); err != nil {
-				return fmt.Errorf("Project %s was removed but Michel could not write the audit log: %w", p.Name, err)
+				return fmt.Errorf("Project %s was removed (%s) but Michel could not write the audit log: %w. Check that the data folder is writable", p.Name, mode, err)
 			}
-			fmt.Fprintf(deps.Stdout, "Removed project %s.\n", p.Name)
+			switch {
+			case purge:
+				fmt.Fprintf(deps.Stdout, "Purged project %s: its scans and findings were deleted and cannot be recovered. "+
+					"The audit log keeps the record of what happened. The folder %s was not touched.\n", p.Name, p.Path)
+			case !p.Active:
+				fmt.Fprintf(deps.Stdout, "Project %s was already inactive; its history is kept. "+
+					"Run 'michel project remove %s --purge' to delete it for good.\n", p.Name, p.Name)
+			default:
+				fmt.Fprintf(deps.Stdout, "Removed project %s: Michel no longer scans it, and its scans and findings are kept as history. "+
+					"Run 'michel project remove %s --purge' to delete that history too.\n", p.Name, p.Name)
+			}
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&purge, "purge", false, "also delete the project's scans and findings (history is lost)")
+	return c
 }
 
 // isValidationErr reports whether err is a refusal of the input, as opposed to

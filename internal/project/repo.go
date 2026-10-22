@@ -171,14 +171,46 @@ func (r *Repo) Get(ctx context.Context, nameOrID string) (Project, error) {
 	return Project{}, fmt.Errorf("%w: %s", ErrNotFound, nameOrID)
 }
 
-// Remove deletes the project row. Scans and findings are removed by a later task.
-func (r *Repo) Remove(ctx context.Context, nameOrID string) error {
+// Remove deactivates a project: it stays in the list with Active false and
+// keeps its scans and findings (history is never lost by a plain remove).
+// Removing an inactive project again is a no-op. It returns the project as
+// it was before the call.
+func (r *Repo) Remove(ctx context.Context, nameOrID string) (Project, error) {
 	p, err := r.Get(ctx, nameOrID)
 	if err != nil {
-		return err
+		return Project{}, err
 	}
-	if _, err := r.s.DB().ExecContext(ctx, `DELETE FROM project WHERE id = ?`, p.ID); err != nil {
-		return fmt.Errorf("cannot remove the project: %w", err)
+	if _, err := r.s.DB().ExecContext(ctx, `UPDATE project SET active = 0 WHERE id = ?`, p.ID); err != nil {
+		return p, fmt.Errorf("cannot deactivate the project: %w", err)
 	}
-	return nil
+	return p, nil
+}
+
+// Purge deletes a project and its whole history (findings, scan manifests,
+// scans, then the project row) in one transaction: either everything goes or
+// nothing does. It returns the project as it was before the call.
+func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
+	p, err := r.Get(ctx, nameOrID)
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return p, fmt.Errorf("cannot purge the project: %w", err)
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM finding WHERE project_id = ?`,
+		`DELETE FROM scan_manifest WHERE scan_id IN (SELECT id FROM scan WHERE project_id = ?)`,
+		`DELETE FROM scan WHERE project_id = ?`,
+		`DELETE FROM project WHERE id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, p.ID); err != nil {
+			return p, fmt.Errorf("cannot purge the project: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return p, fmt.Errorf("cannot purge the project: %w", err)
+	}
+	return p, nil
 }

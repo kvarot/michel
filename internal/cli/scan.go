@@ -52,6 +52,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					}
 					return err
 				}
+				if !p.Active {
+					return fmt.Errorf("Cannot scan %s: the project was removed, so Michel no longer scans it (its history is kept). "+
+						"Register the folder again under another name with 'michel project add', or purge it with 'michel project remove %s --purge' and add it back.", p.Name, p.Name)
+				}
 				targets = []project.Project{p}
 			}
 			root := dbRoot(cmd, deps)

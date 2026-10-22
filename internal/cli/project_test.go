@@ -183,16 +183,118 @@ func TestProjectRemove(t *testing.T) {
 	dir, proj := t.TempDir(), t.TempDir()
 	run(t, dir, "project", "add", proj, "--name", "shop")
 	_, out, _, err := run(t, dir, "project", "remove", "shop")
-	if err != nil || out != "Removed project shop.\n" {
+	if err != nil || !strings.HasPrefix(out, "Removed project shop: Michel no longer scans it") {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
-	_, _, _, err = run(t, dir, "project", "remove", "shop")
-	if err == nil || !strings.Contains(err.Error(), "Cannot remove project shop") {
+	// A second remove is a no-op on an inactive project (behavior changed
+	// with the soft delete: it used to be not_found).
+	_, out, _, err = run(t, dir, "project", "remove", "shop")
+	if err != nil || !strings.Contains(out, "already inactive") {
+		t.Errorf("second remove: out=%q err=%v", out, err)
+	}
+	_, _, _, err = run(t, dir, "project", "remove", "nope")
+	if err == nil || !strings.Contains(err.Error(), "Cannot remove project nope") {
 		t.Errorf("err = %v", err)
 	}
 	ev := auditRows(t, dir, "project.remove")
-	if len(ev) != 2 || ev[0].result != "ok" || ev[1].result != "not_found" || ev[1].target != "shop" {
+	if len(ev) != 3 || ev[0].result != "ok" || ev[0].evidence["mode"] != "deactivate" ||
+		ev[2].result != "not_found" || ev[2].target != "nope" {
 		t.Errorf("events = %+v", ev)
+	}
+}
+
+func scanCount(t *testing.T, dir, table string) int {
+	t.Helper()
+	s, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var n int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestProjectRemoveAfterScanKeepsHistory(t *testing.T) {
+	dir, db := t.TempDir(), buildTestOSVDB(t)
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "scan", "--project", "demo", "--osv-db", db); err != nil {
+		t.Fatal(err)
+	}
+	scans, manifests, findings := scanCount(t, dir, "scan"), scanCount(t, dir, "scan_manifest"), scanCount(t, dir, "finding")
+	if scans == 0 || manifests == 0 || findings == 0 {
+		t.Fatalf("scan left no history: %d %d %d", scans, manifests, findings)
+	}
+	if _, _, _, err := run(t, dir, "project", "remove", "demo"); err != nil {
+		t.Fatalf("remove after scan: %v", err)
+	}
+	ev := auditRows(t, dir, "project.remove")
+	if len(ev) != 1 || ev[0].result != "ok" || ev[0].evidence["mode"] != "deactivate" {
+		t.Errorf("events = %+v", ev)
+	}
+	if scanCount(t, dir, "scan") != scans || scanCount(t, dir, "scan_manifest") != manifests || scanCount(t, dir, "finding") != findings {
+		t.Error("soft remove deleted history")
+	}
+	_, out, _, err := run(t, dir, "--json", "project", "list")
+	var list []map[string]any
+	if err != nil || json.Unmarshal([]byte(out), &list) != nil || len(list) != 1 || list[0]["active"] != false {
+		t.Errorf("list: %v %s", err, out)
+	}
+	// scan --all skips the inactive project; scanning it by name is refused.
+	if _, _, _, err := run(t, dir, "scan", "--all", "--osv-db", db); err == nil || !strings.Contains(err.Error(), "no active project") {
+		t.Errorf("scan --all: %v", err)
+	}
+	if _, _, _, err := run(t, dir, "scan", "--project", "demo", "--osv-db", db); err == nil || !strings.Contains(err.Error(), "was removed") {
+		t.Errorf("scan --project: %v", err)
+	}
+	if scanCount(t, dir, "scan") != scans {
+		t.Error("an inactive project was scanned")
+	}
+
+	_, out, _, err = run(t, dir, "project", "remove", "demo", "--purge")
+	if err != nil || !strings.Contains(out, "cannot be recovered") {
+		t.Fatalf("purge: out=%q err=%v", out, err)
+	}
+	if scanCount(t, dir, "project") != 0 || scanCount(t, dir, "scan") != 0 || scanCount(t, dir, "scan_manifest") != 0 || scanCount(t, dir, "finding") != 0 {
+		t.Error("purge left rows behind")
+	}
+	ev = auditRows(t, dir, "project.remove")
+	if len(ev) != 2 || ev[1].result != "ok" || ev[1].evidence["mode"] != "purge" {
+		t.Errorf("events = %+v", ev)
+	}
+}
+
+func TestProjectRemoveFailureIsAuditedAsError(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "shop"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.DB().Exec(`CREATE TRIGGER fail_update BEFORE UPDATE ON project BEGIN SELECT RAISE(ABORT, 'disk on fire'); END;
+		CREATE TRIGGER fail_delete BEFORE DELETE ON project BEGIN SELECT RAISE(ABORT, 'disk on fire'); END;`)
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"project", "remove", "shop"}, {"project", "remove", "shop", "--purge"}} {
+		if _, _, _, err := run(t, dir, args...); err == nil || !strings.Contains(err.Error(), "disk on fire") {
+			t.Fatalf("%v: err = %v", args, err)
+		}
+	}
+	ev := auditRows(t, dir, "project.remove")
+	if len(ev) != 2 || ev[0].result != "error" || ev[0].evidence["mode"] != "deactivate" ||
+		ev[1].result != "error" || ev[1].evidence["mode"] != "purge" {
+		t.Fatalf("events = %+v", ev)
+	}
+	if countProjects(t, dir) != 1 {
+		t.Error("project lost after failed removals")
 	}
 }
 
