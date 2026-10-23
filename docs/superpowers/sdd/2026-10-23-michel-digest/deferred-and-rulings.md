@@ -74,3 +74,8 @@ Plan : décisions, digest quotidien, canaux de notification, secrets, page « Au
 - Jeton de la page : `--open` le met dans la ligne de commande du navigateur (visible des processus du même utilisateur) ; une course possible au tout premier lancement de deux `serve`.
 - `michel schedule` n'existe pas : la tâche planifiée est écrite à la main (doc `daily-digest`), sans vérification par Michel qu'elle tourne ; un matin où l'ordinateur était éteint n'est relancé que si l'option correspondante est cochée (le digest suivant couvre quand même toute la période).
 - Hygiène : le test par empreintes ne voit pas le sens ; ledgers et docs relus à la main (agrégats seulement, projet dit « le projet de référence »).
+
+## Run réel (contrôleur, 2026-10-23)
+- Run réel: minor (deferred): `decide --package` affiche une ligne d'audit par faille (59 ici) ; un résumé avec le nombre suffirait.
+- Run réel: minor (deferred): osv-scanner écrit trois avertissements `interpreting as regex/glob` par projet sur stderr (existant depuis le plan 1).
+- Run réel: minor (deferred): le digest dit « le dernier scan de 2 projets n'a pas pu se terminer » pour des dossiers sans lockfile ; une formulation « rien à scanner » serait plus juste.
