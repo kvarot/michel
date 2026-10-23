@@ -38,9 +38,9 @@ func Validate(p Policy) error {
 		return errors.New("remediation.production_deployment_allowed must be false: Michel never deploys to production")
 	}
 	switch p.Assistant.Lang {
-	case "en", "fr":
+	case "auto", "en", "fr":
 	default:
-		return fmt.Errorf("assistant.lang %q is unknown (use \"en\" or \"fr\")", p.Assistant.Lang)
+		return fmt.Errorf("assistant.lang %q is unknown (use \"auto\", \"en\" or \"fr\")", p.Assistant.Lang)
 	}
 	if err := ValidateRisk(p.Risk); err != nil {
 		return err

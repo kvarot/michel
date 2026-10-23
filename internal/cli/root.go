@@ -14,6 +14,7 @@ import (
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/buildinfo"
 	"github.com/kvarot/michel/internal/egress"
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/spf13/cobra"
@@ -46,9 +47,10 @@ type Deps struct {
 	// subcommand runs.
 	Policy       policy.Policy
 	PolicySource policy.Source
-	// Lang is the resolved language of generated text ("en" or "fr"): the
-	// --lang flag, else the policy's assistant.lang, else "en".
-	Lang string
+	// Lang is the resolved language of generated text: the --lang flag,
+	// else the policy's assistant.lang ("auto" defers), else the system's
+	// language, else English.
+	Lang i18n.Lang
 
 	// Store, Audit and Gateway are set by the root command for every command
 	// except help, completion and version.
@@ -118,19 +120,12 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 						"Fix the file or delete it to use the built-in strict_local defaults.", cfgPath, err)}
 			}
 			deps.Policy, deps.PolicySource = p, src
-			lang, _ := flags.GetString("lang")
-			lang = strings.ToLower(strings.TrimSpace(lang))
-			if lang == "" {
-				lang = p.Assistant.Lang
-			}
-			if lang == "" {
-				lang = "en"
-			}
-			if lang != "en" && lang != "fr" {
+			flag, _ := flags.GetString("lang")
+			if f := strings.ToLower(strings.TrimSpace(flag)); f != "" && !i18n.Lang(f).Valid() {
 				return &ExitError{Code: ExitCodePolicy, Err: fmt.Errorf(
-					"Unknown language %q. Use --lang en or --lang fr.", lang)}
+					"Unknown language %q. Use --lang en or --lang fr.", f)}
 			}
-			deps.Lang = lang
+			deps.Lang = i18n.Resolve(flag, p.Assistant.Lang, i18n.SystemLocale())
 			if src == policy.SourceFile {
 				fmt.Fprintf(deps.Stderr, "policy: file %s\n", cfgPath)
 			} else {
@@ -176,7 +171,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	flags.String("config", filepath.Join(dataDir, "config.yaml"), "path to the policy file")
 	flags.String("data-dir", dataDir, "directory where michel stores its data")
 	flags.Bool("json", false, "print results as JSON")
-	flags.String("lang", "", "language of the explanations: en or fr (default: assistant.lang of the policy)")
+	flags.String("lang", "", "language of the explanations: en or fr (default: assistant.lang of the policy, else the system language)")
 
 	root.AddCommand(newVersionCmd(deps))
 	root.AddCommand(newAuditCmd(deps))

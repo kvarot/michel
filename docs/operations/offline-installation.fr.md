@@ -88,7 +88,7 @@ michel findings --project monprojet --severity critical --explain
 
 ## Langue
 
-`--lang en|fr` (toute commande qui explique) l'emporte sur `assistant.lang` du fichier de politique, `en` par défaut. La langue ne change que la formulation : les faits, le score et les clés JSON sont identiques.
+`--lang en|fr` (toute commande qui explique) l'emporte sur `assistant.lang` du fichier de politique, `auto` par défaut : la langue du système, l'anglais si ce n'est pas le français. La langue ne change que la formulation : les faits, le score et les clés JSON sont identiques.
 
 ## Réglages par projet
 

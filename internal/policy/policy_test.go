@@ -166,9 +166,19 @@ func TestValidateRejectsBadThresholds(t *testing.T) {
 	mustFail(t, func(p *Policy) { p.Risk.ManyCallSitesThreshold = 0 }, "risk.many_call_sites_threshold")
 }
 
-func TestAssistantLangDefaultEn(t *testing.T) {
-	if l := Defaults().Assistant.Lang; l != "en" {
+func TestAssistantLangDefaultAuto(t *testing.T) {
+	if l := Defaults().Assistant.Lang; l != "auto" {
 		t.Fatalf("lang = %q", l)
+	}
+}
+
+func TestValidateAcceptsAutoLang(t *testing.T) {
+	for _, l := range []string{"auto", "en", "fr"} {
+		p := Defaults()
+		p.Assistant.Lang = l
+		if err := Validate(p); err != nil {
+			t.Errorf("%s rejected: %v", l, err)
+		}
 	}
 }
 

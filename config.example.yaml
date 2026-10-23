@@ -26,7 +26,7 @@ db:
   # osv_path: defaults to <data-dir>/osv
 assistant:
   name: Michel
-  lang: en                      # en | fr
+  lang: auto                    # auto | en | fr (auto = language of the system, English if not French)
 # Public risk score (see docs/remediation-risk.md). The AI model never changes these.
 risk:
   major_jump: 40                # points when the fix needs a major version jump

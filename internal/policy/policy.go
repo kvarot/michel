@@ -93,7 +93,8 @@ type DBConfig struct {
 // AssistantConfig controls the assistant persona.
 type AssistantConfig struct {
 	Name string `yaml:"name"`
-	// Lang is the language of generated text: "en" or "fr".
+	// Lang is the language of generated text: "en", "fr" or "auto" (the
+	// system's language, English if it is not French).
 	Lang string `yaml:"lang"`
 }
 

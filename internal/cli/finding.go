@@ -24,7 +24,7 @@ const (
 )
 
 func explainLang(deps *Deps) explain.Lang {
-	if deps.Lang == "fr" {
+	if deps.Lang == explain.FR {
 		return explain.FR
 	}
 	return explain.EN

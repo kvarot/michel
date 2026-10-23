@@ -88,7 +88,7 @@ michel findings --project myproject --severity critical --explain
 
 ## Language
 
-`--lang en|fr` (any command that explains) overrides `assistant.lang` of the policy file, which defaults to `en`. The language only changes the wording; the facts, the score and the JSON keys are the same.
+`--lang en|fr` (any command that explains) overrides `assistant.lang` of the policy file, which defaults to `auto`: the language of the system, English if it is not French. The language only changes the wording; the facts, the score and the JSON keys are the same.
 
 ## Per-project settings
 
