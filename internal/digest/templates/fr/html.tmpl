@@ -1,39 +1,39 @@
 {{define "sev"}}{{if eq . "critical"}}critique{{else if eq . "high"}}élevée{{else if eq . "medium"}}moyenne{{else if eq . "low"}}faible{{else}}inconnue{{end}}{{end}}
-{{- define "pkg"}}<li><span class="sev sev-{{.WorstSeverity}}">{{template "sev" .WorstSeverity}}</span> <strong>{{.Name}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{len .OSVIDs}} avis : {{join .OSVIDs ", "}}){{if .What}}<br><span class="what">{{.What}}</span>{{end}}</li>
+{{- define "pkg"}}<li><span class="sev sev-{{.WorstSeverity}}">{{template "sev" .WorstSeverity}}</span> <strong>{{.Name}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{len .OSVIDs}} avis de sécurité : {{join .OSVIDs ", "}}){{if .What}}<br><span class="what">{{.What}}</span>{{end}}</li>
 {{end}}
 {{- define "action"}}{{if eq . "fix"}}à corriger{{else if eq . "defer"}}reportée{{else if eq . "ignore"}}ignorée{{else}}décidée{{end}}{{end}}
 {{- define "body"}}<h1>{{.Title}}</h1>
 {{if .SinceLabel}}<p class="since">{{.SinceLabel}}</p>
 {{end}}{{if .OSVStale}}<p class="banner">{{stale}}</p>
-{{end}}{{if .FailedScans}}<p class="banner">Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas abouti.</p>
+{{end}}{{if .FailedScans}}<p class="banner">Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.</p>
 {{end}}
 {{- range .Projects}}<h2>{{.Name}}</h2>
-<p class="counters">ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevées {{index .Open "high"}}, moyennes {{index .Open "medium"}}, faibles {{index .Open "low"}}) · décidées : à corriger {{index .Decided "fix"}}, reportées {{index .Decided "defer"}}, ignorées {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if le .DaysWithoutCritical 1}}jour{{else}}jours{{end}} sans nouvelle critique{{if eq .CriticalOpen 0}} · <strong>0 critique ouverte</strong>{{end}}</p>
-{{if eq .LastScanStatus "failed"}}<p class="banner">Le dernier scan a échoué.</p>
-{{else if eq .LastScanStatus "interrupted"}}<p class="banner">Le dernier scan a été interrompu.</p>
+<p class="counters">failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevées {{index .Open "high"}}, moyennes {{index .Open "medium"}}, faibles {{index .Open "low"}}) · tes décisions : à corriger {{index .Decided "fix"}}, reportées {{index .Decided "defer"}}, ignorées {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if le .DaysWithoutCritical 1}}jour{{else}}jours{{end}} sans nouvelle faille critique{{if eq .CriticalOpen 0}} · <strong>0 faille critique ouverte, à garder comme ça</strong>{{end}}</p>
+{{if eq .LastScanStatus "failed"}}<p class="banner">Le dernier scan n'a pas pu se terminer.</p>
+{{else if eq .LastScanStatus "interrupted"}}<p class="banner">Le dernier scan s'est arrêté avant la fin.</p>
 {{end}}
-{{- if .New}}<h3>Nouvelles</h3>
+{{- if .New}}<h3>Nouvelles failles</h3>
 <ul>
 {{range .New}}{{template "pkg" .}}{{end}}</ul>
 {{end}}
-{{- if .Gone}}<h3>Disparues au dernier scan, sans preuve de correction</h3>
+{{- if .Gone}}<h3>Plus vues au dernier scan, rien ne prouve qu'elles sont corrigées</h3>
 <ul>
 {{range .Gone}}{{template "pkg" .}}{{end}}</ul>
 {{end}}
-{{- if .Superseded}}<h3>Décisions à revoir</h3>
+{{- if .Superseded}}<h3>Décisions à revoir, car quelque chose a changé</h3>
 <ul>
 {{range .Superseded}}<li><strong>{{.Package}}</strong> {{.OSVID}} : était {{template "action" .PreviousAction}}, {{reason .Reason}}</li>
 {{end}}</ul>
 {{end}}
-{{- if .Due}}<h3>Échéances</h3>
+{{- if .Due}}<h3>Reports qui arrivent à échéance</h3>
 <ul>
-{{range .Due}}<li><strong>{{.Package}}</strong> {{.OSVID}} : reportée au {{day .DueAt}}{{if .Overdue}} <span class="sev sev-high">(échue)</span>{{end}}</li>
+{{range .Due}}<li><strong>{{.Package}}</strong> {{.OSVID}} : reportée jusqu'au {{day .DueAt}}{{if .Overdue}} <span class="sev sev-high">(date dépassée)</span>{{end}}</li>
 {{end}}</ul>
 {{end}}
 {{- end}}
 {{- if .Word}}<p class="word">{{.Word}}</p>
 {{end}}
-{{- if .PageURL}}<p>Page : <a href="{{.PageURL}}">{{.PageURL}}</a></p>
+{{- if .PageURL}}<p>Détails : <a href="{{.PageURL}}">{{.PageURL}}</a></p>
 {{end}}
 {{- end -}}
 <!DOCTYPE html>
