@@ -41,7 +41,7 @@ Configuration: one `osv.db` allow rule, `assistant.lang: fr`, a `notify` section
 | API without token / with token / foreign Host | 401 / 200 / 421 |
 | `/today` and `/projects` responses | no absolute path, no project folder name |
 
-The `partial` project is the known plan 1 residual risk: 15 package-lock.json files that are valid JSON but yield no package to Michel's own check (npm workspaces with linked entries), reported as unreadable and kept.
+The `partial` project is the known plan 1 residual risk: some package-lock.json files are valid JSON but yield no package to Michel's own check, so they are reported as unreadable and their findings are kept.
 
 ## Audit
 
