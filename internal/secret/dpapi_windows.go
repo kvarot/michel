@@ -8,8 +8,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// entropy is mixed into every DPAPI blob, so another program running as the
-// same user cannot decrypt Michel's files by a plain CryptUnprotectData.
+// entropy is mixed into every DPAPI blob. It is a public constant, so it
+// does not protect against another program running as the same user (DPAPI
+// user scope is the protection); it only ties the blobs to Michel and stops
+// an accidental decryption by a tool that passes no entropy.
 var entropy = []byte("michel-secret-v1")
 
 // Protected reports whether values are encrypted at rest on this OS (true on Windows).

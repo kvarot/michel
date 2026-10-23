@@ -147,13 +147,19 @@ func isLoopback(host string) bool {
 // dialTimeout bounds the TCP connection set-up of DialContext.
 const dialTimeout = 15 * time.Second
 
-// DialContext opens a TCP connection to addr (host:port) for purpose, after
+// DialContext opens a TCP connection (network tcp, tcp4 or tcp6; anything
+// else is refused without an Attempt) to addr (host:port) for purpose, after
 // the same allowlist check and audit record as HTTP. It is the only way for
 // non-HTTP protocols (SMTP) to reach the network. It panics if purpose is
 // empty, like Client.
 func (g *Gateway) DialContext(ctx context.Context, purpose, network, addr string) (net.Conn, error) {
 	if purpose == "" {
 		panic("egress: DialContext requires a non-empty purpose")
+	}
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+	default:
+		return nil, fmt.Errorf("%w: purpose %s: network %q refused: only tcp, tcp4 and tcp6 may be dialed", ErrEgressDenied, purpose, network)
 	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {

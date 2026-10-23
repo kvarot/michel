@@ -377,3 +377,20 @@ func TestDialContextEmptyPurposePanics(t *testing.T) {
 	}()
 	egress.New(pol(), nil).DialContext(context.Background(), "", "tcp", "127.0.0.1:25")
 }
+
+func TestDialContextRefusesNonTCPNetwork(t *testing.T) {
+	g := egress.New(pol(policy.AllowRule{Host: "127.0.0.1", Purpose: "notify.email"}), nil)
+	for _, network := range []string{"udp", "udp4", "unix", "ip4:1", ""} {
+		conn, err := g.DialContext(context.Background(), "notify.email", network, "127.0.0.1:25")
+		if err == nil {
+			conn.Close()
+			t.Fatalf("network %q accepted", network)
+		}
+		if !errors.Is(err, egress.ErrEgressDenied) || !strings.Contains(err.Error(), "only tcp") {
+			t.Fatalf("network %q: err = %v", network, err)
+		}
+	}
+	if len(g.Attempts()) != 0 {
+		t.Fatalf("attempts = %+v", g.Attempts())
+	}
+}

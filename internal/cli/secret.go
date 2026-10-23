@@ -110,12 +110,12 @@ func newSecretSetCmd(deps *Deps) *cobra.Command {
 			if name == secret.ReservedAPIToken {
 				return deps.Errorf("cli.secret.reserved", name)
 			}
+			if !secret.ValidName(name) { // before touching the folder or asking for the value
+				return secretNameError(deps, name, secret.ErrInvalidName)
+			}
 			st, err := openSecrets(cmd, deps)
 			if err != nil {
 				return err
-			}
-			if !secret.ValidName(name) { // before asking for the value
-				return secretNameError(deps, name, secret.ErrInvalidName)
 			}
 			value, err := readSecretValue(deps, name)
 			if err != nil {
@@ -183,6 +183,9 @@ func newSecretDeleteCmd(deps *Deps) *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+			if !secret.ValidName(name) {
+				return secretNameError(deps, name, secret.ErrInvalidName)
+			}
 			st, err := openSecrets(cmd, deps)
 			if err != nil {
 				return err
