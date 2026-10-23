@@ -1,11 +1,14 @@
 package egress_test
 
 import (
+	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/policy"
@@ -272,4 +275,105 @@ func TestDeniedRequestUnchangedWhenAuditUnavailable(t *testing.T) {
 	if !errors.Is(err, egress.ErrEgressDenied) || !strings.Contains(err.Error(), "no rule for host") {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+func TestDialContextDeniedWithoutRule(t *testing.T) {
+	sink := &captureSink{}
+	g := egress.New(pol(), sink)
+	conn, err := g.DialContext(context.Background(), "notify.email", "tcp", "127.0.0.1:25")
+	if err == nil {
+		conn.Close()
+		t.Fatal("expected denial")
+	}
+	if !errors.Is(err, egress.ErrEgressDenied) || !strings.Contains(err.Error(), "host 127.0.0.1 purpose notify.email: no rule for host") {
+		t.Fatalf("err = %v", err)
+	}
+	a := g.Attempts()
+	if len(a) != 1 || a[0].Allowed || a[0].Host != "127.0.0.1" || a[0].Purpose != "notify.email" || a[0].Reason != "no rule for host" {
+		t.Fatalf("attempts = %+v", a)
+	}
+	if len(sink.got) != 1 {
+		t.Fatalf("sink got %+v", sink.got)
+	}
+}
+
+func TestDialContextBadAddressDenied(t *testing.T) {
+	g := egress.New(pol(policy.AllowRule{Host: "127.0.0.1", Purpose: "notify.email"}), nil)
+	if conn, err := g.DialContext(context.Background(), "notify.email", "tcp", "127.0.0.1"); err == nil {
+		conn.Close()
+		t.Fatal("address without port accepted")
+	}
+	if len(g.Attempts()) != 0 {
+		t.Fatalf("attempts = %+v", g.Attempts())
+	}
+}
+
+func listener(t *testing.T) (net.Listener, chan struct{}) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	got := make(chan struct{}, 1)
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		c.Close()
+		got <- struct{}{}
+	}()
+	return l, got
+}
+
+func TestDialContextAllowedReachesLoopbackListener(t *testing.T) {
+	l, got := listener(t)
+	sink := &captureSink{}
+	g := egress.New(pol(policy.AllowRule{Host: "127.0.0.1", Purpose: "notify.email"}), sink)
+	conn, err := g.DialContext(context.Background(), "notify.email", "tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("listener never received the connection")
+	}
+	if len(sink.got) != 1 || !sink.got[0].Allowed || sink.got[0].Host != "127.0.0.1" ||
+		sink.got[0].Reason != "allowed by rule 127.0.0.1/notify.email" {
+		t.Fatalf("sink = %+v", sink.got)
+	}
+}
+
+func TestDialContextFailsClosedWhenSinkFails(t *testing.T) {
+	l, got := listener(t)
+	sink := &failingSink{}
+	g := egress.New(pol(policy.AllowRule{Host: "127.0.0.1", Purpose: "notify.email"}), sink)
+	conn, err := g.DialContext(context.Background(), "notify.email", "tcp", l.Addr().String())
+	if err == nil {
+		conn.Close()
+		t.Fatal("expected the dial to be refused")
+	}
+	if !errors.Is(err, egress.ErrEgressDenied) || !strings.Contains(err.Error(), "audit unavailable: database is closed") {
+		t.Fatalf("err = %v", err)
+	}
+	select {
+	case <-got:
+		t.Fatal("connection reached the listener although the audit write failed")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if len(sink.got) != 1 {
+		t.Fatalf("sink = %+v", sink.got)
+	}
+}
+
+func TestDialContextEmptyPurposePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("no panic on empty purpose")
+		}
+	}()
+	egress.New(pol(), nil).DialContext(context.Background(), "", "tcp", "127.0.0.1:25")
 }

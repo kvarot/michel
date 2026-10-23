@@ -39,6 +39,9 @@ func (e *ExitError) Unwrap() error { return e.Err }
 
 // Deps holds the dependencies shared by all commands.
 type Deps struct {
+	// Stdin feeds commands that read a value (michel secret set). Nil means
+	// os.Stdin; a reader that is not an *os.File is never a terminal.
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 	Now    func() time.Time
@@ -181,6 +184,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newDecideCmd(deps))
 	root.AddCommand(newDecisionsCmd(deps))
 	root.AddCommand(newDigestCmd(deps))
+	root.AddCommand(newSecretCmd(deps))
 	return root
 }
 
