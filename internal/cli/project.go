@@ -246,9 +246,9 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			ctx, name := cmd.Context(), args[0]
 			// fail records the refusal with its English reason and returns it
 			// in the user's language.
-			fail := func(result, key string, ev map[string]any, args ...any) error {
-				ev["reason"] = i18n.T(i18n.EN, key, args...)
-				msg := deps.T(key, args...)
+			fail := func(result, key string, ev map[string]any, vals ...any) error {
+				ev["reason"] = i18n.T(i18n.EN, key, vals...)
+				msg := deps.T(key, vals...)
 				if _, aerr := deps.Audit.Record(ctx, audit.Event{
 					Actor: "cli", Action: "project.set", Target: name, Result: result, Evidence: ev,
 				}); aerr != nil {
