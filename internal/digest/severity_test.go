@@ -39,7 +39,7 @@ func TestSupersededAndDueCarrySeverity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"reason":"severity_changed","justification":"dev only","severity":"critical"`) ||
+	if !strings.Contains(string(b), `"reason":"severity_changed","severity":"critical"`) ||
 		!strings.Contains(string(b), `"overdue":false,"severity":"high"`) {
 		t.Errorf("json = %s", b)
 	}

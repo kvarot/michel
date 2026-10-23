@@ -88,7 +88,7 @@ func TestDigestSendContinuesAfterChannelFailure(t *testing.T) {
 	if err == nil || ExitCode(err) != 1 {
 		t.Fatalf("err = %v (code %d)", err, ExitCode(err))
 	}
-	if !strings.HasPrefix(out, "Michel found 3 new findings tonight") {
+	if !strings.HasPrefix(out, "Michel found 3 new findings since the last digest") {
 		t.Errorf("the digest was not printed:\n%s", out)
 	}
 	if h.count() != 1 {

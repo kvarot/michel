@@ -51,6 +51,7 @@
   "item.due": "Reportée jusqu'au {date}",
   "item.overdue": "La date du {date} est passée",
   "item.previous": "Tu avais choisi : {label}",
+  "item.decided": "décidée",
   "item.open": "Voir le détail",
   "item.hide": "Masquer le détail",
 

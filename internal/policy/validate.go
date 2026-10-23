@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/kvarot/michel/internal/secret"
 )
 
 // Validate checks that a policy is consistent. It returns the first problem found.
@@ -179,6 +181,9 @@ func checkEmail(c ChannelConfig) error {
 	if c.PasswordSecret != "" && !secretName.MatchString(c.PasswordSecret) {
 		return fmt.Errorf("password_secret %q is not a secret name: use 1 to 64 lowercase letters, digits or hyphens", c.PasswordSecret)
 	}
+	if c.PasswordSecret == secret.ReservedAPIToken {
+		return fmt.Errorf("password_secret %q is reserved for the local page's token: store the password under another name (michel secret set <name>)", c.PasswordSecret)
+	}
 	return nil
 }
 
@@ -215,6 +220,9 @@ func checkWebhook(c ChannelConfig) (string, error) {
 	}
 	if c.Secret != "" && !secretName.MatchString(c.Secret) {
 		return "", fmt.Errorf("secret %q is not a secret name: use 1 to 64 lowercase letters, digits or hyphens", c.Secret)
+	}
+	if c.Secret == secret.ReservedAPIToken {
+		return "", fmt.Errorf("secret %q is reserved for the local page's token: store the signing key under another name (michel secret set <name>)", c.Secret)
 	}
 	return host, nil
 }

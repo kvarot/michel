@@ -66,12 +66,12 @@ func TestDigestPrintsTextByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(out, "Michel found 3 new findings tonight, 2 need your attention\n") || !strings.Contains(out, "== demo ==") ||
+	if !strings.HasPrefix(out, "Michel found 3 new findings since the last digest, 2 need your attention\n") || !strings.Contains(out, "== demo ==") ||
 		!strings.Contains(out, "[critical] acme/vuln 1.0.0 → 1.0.1 (2 advisories: ACME-2026-0001, ACME-2026-0002)") {
 		t.Errorf("text:\n%s", out)
 	}
 	_, out, _, err = run(t, dir, "--lang", "fr", "digest")
-	if err != nil || !strings.HasPrefix(out, "Michel a trouvé 3 nouveautés cette nuit, 2 méritent ton attention\n") {
+	if err != nil || !strings.HasPrefix(out, "Michel a trouvé 3 nouveautés depuis le dernier résumé, 2 méritent ton attention\n") {
 		t.Errorf("fr: %v\n%s", err, out)
 	}
 	_, out, _, err = run(t, dir, "digest", "--json")
@@ -100,7 +100,7 @@ func TestDigestPrintsTextByDefault(t *testing.T) {
 func TestDigestSendRecordsRunAndAudit(t *testing.T) {
 	dir, _ := scannedDemo(t, false)
 	_, out, _, err := run(t, dir, "--lang", "en", "digest", "--send")
-	if err != nil || !strings.HasPrefix(out, "Michel found 3 new findings tonight") {
+	if err != nil || !strings.HasPrefix(out, "Michel found 3 new findings since the last digest") {
 		t.Fatalf("send: %v\n%s", err, out)
 	}
 	runs := digestRuns(t, dir)
@@ -122,7 +122,7 @@ func TestDigestSendRecordsRunAndAudit(t *testing.T) {
 	}
 	// The next digest starts where the last one ended.
 	_, out, _, err = run(t, dir, "--lang", "en", "digest", "--send")
-	if err != nil || !strings.HasPrefix(out, "Michel found nothing new tonight") {
+	if err != nil || !strings.HasPrefix(out, "Michel found nothing new since the last digest") {
 		t.Errorf("second send: %v\n%s", err, out)
 	}
 	runs = digestRuns(t, dir)

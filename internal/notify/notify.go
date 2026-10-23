@@ -201,8 +201,10 @@ func deliver(n Notifier, host, purpose string, size int, err error) Delivery {
 
 // Deliver sends d to every notifier (a scoped notifier gets d restricted to
 // its projects, and is skipped when none is left), never stops at the first
-// failure, and returns one delivery per notifier, in order.
+// failure, and returns one delivery per notifier, in order. Channels get the
+// channel-safe copy of d (digest.ForChannel: no call-site example).
 func Deliver(ctx context.Context, ns []Notifier, d digest.Digest) []Delivery {
+	d = digest.ForChannel(d)
 	out := make([]Delivery, 0, len(ns))
 	for _, n := range ns {
 		host, purpose := Target(n)

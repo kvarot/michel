@@ -54,6 +54,13 @@ type Package struct {
 	// What is the "what" sentence of the most severe finding, in the
 	// digest's language (new findings only).
 	What string `json:"what,omitempty"`
+	// WhatForChannel is What without the call-site example (a relative
+	// file:line): what the channels get (ForChannel). Never in JSON.
+	WhatForChannel string `json:"-"`
+	// Decided is the action of the decision in force on the line's most
+	// severe finding when every finding of the line is decided (new findings
+	// only), else "".
+	Decided string `json:"decided,omitempty"`
 }
 
 // Superseded is a decision taken out of force in the window. A decision the
@@ -64,7 +71,8 @@ type Superseded struct {
 	FindingID      string `json:"finding_id"`
 	PreviousAction string `json:"previous_action"`
 	Reason         string `json:"reason"`
-	Justification  string `json:"justification"`
+	// Justification is the user's text; it stays out of every rendering.
+	Justification string `json:"-"`
 	// Severity is the finding's severity label now (critical, high, medium,
 	// low or unknown).
 	Severity string `json:"severity"`
@@ -72,11 +80,12 @@ type Superseded struct {
 
 // Due is a deferral in force whose date is within DueHorizon.
 type Due struct {
-	Package       string `json:"package"`
-	OSVID         string `json:"osv_id"`
-	FindingID     string `json:"finding_id"`
-	DueAt         string `json:"due_at"`
-	Justification string `json:"justification"`
+	Package   string `json:"package"`
+	OSVID     string `json:"osv_id"`
+	FindingID string `json:"finding_id"`
+	DueAt     string `json:"due_at"`
+	// Justification is the user's text; it stays out of every rendering.
+	Justification string `json:"-"`
 	// Overdue is true when due_at <= now.
 	Overdue bool `json:"overdue"`
 	// Severity is the finding's severity label (critical, high, medium, low
@@ -104,8 +113,9 @@ type ProjectDigest struct {
 	CriticalOpen        int            `json:"critical_open"`
 	// LastScanStatus is ok, partial, failed, interrupted, running or never.
 	LastScanStatus string `json:"last_scan_status"`
-	// Attention counts the new critical or high findings, the superseded
-	// decisions and the due deferrals of the project.
+	// Attention counts the new critical or high findings not decided yet,
+	// the superseded decisions still to review and the due deferrals of the
+	// project.
 	Attention int `json:"attention"`
 }
 
@@ -274,6 +284,25 @@ func Filter(d Digest, names []string) Digest {
 	return out
 }
 
+// ForChannel returns d as the channels get it (email, webhook, toast): the
+// "what" sentences lose their call-site example, so a channel only receives
+// projects, counters, packages, versions, advisory ids, due dates and the
+// page link. d is not changed.
+func ForChannel(d Digest) Digest {
+	out := d
+	out.Projects = make([]ProjectDigest, len(d.Projects))
+	for i, p := range d.Projects {
+		if p.New != nil {
+			p.New = append([]Package(nil), p.New...)
+			for j := range p.New {
+				p.New[j].What = p.New[j].WhatForChannel
+			}
+		}
+		out.Projects[i] = p
+	}
+	return out
+}
+
 // computer holds what every project of one digest shares.
 type computer struct {
 	s          *store.Store
@@ -324,13 +353,14 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 			}
 			continue
 		}
+		dec, decided := current[f.ID]
 		if first.After(c.since) {
 			fresh = append(fresh, f)
-			if label == "critical" || label == "high" {
+			// A new finding the user already decided on needs no attention.
+			if (label == "critical" || label == "high") && !(decided && f.Status == scan.StatusDecided) {
 				attention++
 			}
 		}
-		dec, decided := current[f.ID]
 		if f.Status == scan.StatusDecided && decided {
 			pd.Decided[string(dec.Action)]++
 			if dec.Action == decide.Ignore {
@@ -346,10 +376,10 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 		}
 	}
 	pd.CriticalOpen = pd.Open["critical"]
-	if pd.New, err = c.packages(ctx, p, fresh, true); err != nil {
+	if pd.New, err = c.packages(ctx, p, fresh, current); err != nil {
 		return ProjectDigest{}, 0, 0, err
 	}
-	if pd.Gone, err = c.packages(ctx, p, gone, false); err != nil {
+	if pd.Gone, err = c.packages(ctx, p, gone, nil); err != nil {
 		return ProjectDigest{}, 0, 0, err
 	}
 	sort.SliceStable(pd.Due, func(i, j int) bool {
@@ -365,6 +395,11 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 	}
 	for _, dec := range superseded {
 		if !dec.SupersededAt.After(c.since) || dec.SupersededReason == decide.Redecided {
+			continue
+		}
+		// The user decided again after the old decision was taken out of
+		// force: nothing left to review.
+		if cur, ok := current[dec.FindingID]; ok && !cur.CreatedAt.Before(dec.SupersededAt) {
 			continue
 		}
 		f := byID[dec.FindingID]
@@ -437,8 +472,16 @@ func (c computer) scans(ctx context.Context, projectID string) (time.Time, strin
 
 // packages groups findings (most severe first, as ListFindings returns
 // them) by (ecosystem, package). The first finding of a group is its most
-// severe: it gives the versions and, when withWhat, the "what" sentence.
-func (c computer) packages(ctx context.Context, p project.Project, findings []scan.Finding, withWhat bool) ([]Package, error) {
+// severe: it gives the versions and, for new findings (current not nil), the
+// "what" sentence and the decision in force.
+func (c computer) packages(ctx context.Context, p project.Project, findings []scan.Finding, current map[string]decide.Decision) ([]Package, error) {
+	withWhat := current != nil
+	decidedAction := func(f scan.Finding) string {
+		if dec, ok := current[f.ID]; ok && f.Status == scan.StatusDecided {
+			return string(dec.Action)
+		}
+		return ""
+	}
 	type key struct{ eco, name string }
 	index := map[key]int{}
 	var out []Package
@@ -447,6 +490,9 @@ func (c computer) packages(ctx context.Context, p project.Project, findings []sc
 		if i, ok := index[k]; ok {
 			out[i].OSVIDs = append(out[i].OSVIDs, scan.SanitizeText(f.OSVID))
 			out[i].FindingIDs = append(out[i].FindingIDs, f.ID)
+			if decidedAction(f) == "" {
+				out[i].Decided = ""
+			}
 			continue
 		}
 		a, has, err := analyze.NewRepo(c.s).Get(ctx, f.ID)
@@ -471,6 +517,12 @@ func (c computer) packages(ctx context.Context, p project.Project, findings []sc
 				return nil, err
 			}
 			pkg.What = e.What
+			facts.Example = ""
+			if e, err = explain.Render(c.lang, facts); err != nil {
+				return nil, err
+			}
+			pkg.WhatForChannel = e.What
+			pkg.Decided = decidedAction(f)
 		}
 		index[k] = len(out)
 		out = append(out, pkg)

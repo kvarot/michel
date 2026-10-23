@@ -26,6 +26,7 @@ export function severityOf(s) {
  * to review or a deferral has its finding's severity; a digest without it
  * (older server) falls back to a new package of the same name, then "unknown". text is the "what" sentence for new packages,
  * the reason code for decisions to review and the due date for deferrals.
+ * decided is the action already taken on a new package ("" when not decided).
  * @returns {{project: string, items: {kind: string, package: string, severity: string, text: string, findingIds: string[]}[]}[]}
  */
 export function groupAttention(digest) {
@@ -43,6 +44,7 @@ export function groupAttention(digest) {
       items.push({
         kind: 'new', package: pkg.name, severity: severityOf(pkg.worst_severity), text: pkg.what || '',
         findingIds: pkg.finding_ids || [], osvIds: pkg.osv_ids || [], installed: pkg.installed || '', target: pkg.target || '',
+        decided: pkg.decided || '',
       })
     }
     for (const s of p.superseded || []) {

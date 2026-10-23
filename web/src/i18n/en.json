@@ -51,6 +51,7 @@
   "item.due": "Put off until {date}",
   "item.overdue": "The date of {date} has passed",
   "item.previous": "You had chosen: {label}",
+  "item.decided": "decided",
   "item.open": "Show details",
   "item.hide": "Hide details",
 

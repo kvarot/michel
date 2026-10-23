@@ -426,3 +426,18 @@ func TestMetaAndDigests(t *testing.T) {
 		}
 	}
 }
+
+// TestTodayKeepsTheLastDigestWindow: after the morning digest, the page
+// still lists what that digest reported (its window extended to now).
+func TestTodayKeepsTheLastDigestWindow(t *testing.T) {
+	f := newFixture(t, nil)
+	run := digest.Run{Since: now.Add(-25 * time.Hour), Until: now.Add(-time.Hour), Lang: i18n.EN, CreatedAt: now.Add(-time.Hour)}
+	if err := digest.NewRepo(f.st).Save(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	var d digest.Digest
+	f.get("/api/v1/today", &d)
+	if !d.Since.Equal(run.Since) || !d.Until.Equal(now) || d.NewTotal != 2 || len(d.Projects) != 1 || len(d.Projects[0].New) != 2 {
+		t.Errorf("since %v until %v new %d projects %+v", d.Since, d.Until, d.NewTotal, d.Projects)
+	}
+}

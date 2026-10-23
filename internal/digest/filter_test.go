@@ -13,14 +13,14 @@ func TestFilterRecomputesCounters(t *testing.T) {
 		{Name: "project-a", New: []Package{{Name: "vuln-pkg", FindingIDs: []string{"c"}}}, Attention: 0, LastScanStatus: scan.ScanFailed},
 	}, NewTotal: 3, AttentionTotal: 1, FailedScans: 1}
 	retitle(&d)
-	if d.Title != "Michel found 3 new findings tonight, 1 needs your attention" {
+	if d.Title != "Michel found 3 new findings since the last digest, 1 needs your attention" {
 		t.Fatalf("title = %q", d.Title)
 	}
 	f := Filter(d, []string{"project-a"})
 	if len(f.Projects) != 1 || f.Projects[0].Name != "project-a" || f.NewTotal != 1 || f.AttentionTotal != 0 || f.FailedScans != 1 {
 		t.Fatalf("filtered = %+v", f)
 	}
-	if f.Title != "Michel found 1 new finding tonight" {
+	if f.Title != "Michel found 1 new finding since the last digest" {
 		t.Errorf("title = %q", f.Title)
 	}
 	if len(d.Projects) != 2 || d.NewTotal != 3 {

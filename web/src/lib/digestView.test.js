@@ -55,6 +55,19 @@ describe('digestView', () => {
     expect(groups[0].items.map((i) => [i.kind, i.severity])).toEqual([['superseded', 'critical'], ['due', 'high'], ['new', 'medium']])
   })
 
+  test('groupAttention keeps the decision already taken on a new package', () => {
+    const groups = groupAttention({
+      projects: [{
+        name: 'demo',
+        new: [
+          { name: 'acme/lib', worst_severity: 'critical', finding_ids: ['f1'], osv_ids: ['A-1'], decided: 'fix' },
+          { name: 'vuln-pkg', worst_severity: 'high', finding_ids: ['f2'], osv_ids: ['A-2'] },
+        ],
+      }],
+    })
+    expect(groups[0].items.map((i) => [i.package, i.decided])).toEqual([['acme/lib', 'fix'], ['vuln-pkg', '']])
+  })
+
   test('formatDate per lang', () => {
     expect(formatDate('2026-11-22T00:00:00Z', 'fr')).toBe('22/11/2026')
     expect(formatDate('2026-11-22T00:00:00Z', 'en')).toBe('2026-11-22')

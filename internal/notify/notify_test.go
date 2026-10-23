@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -307,7 +308,7 @@ func TestWebhookSlackAndDiscordFormats(t *testing.T) {
 	}
 	hdr, body := h.last()
 	var slack map[string]string
-	if err := json.Unmarshal(body, &slack); err != nil || len(slack) != 1 || !strings.HasPrefix(slack["text"], "Michel found 2 new findings tonight") {
+	if err := json.Unmarshal(body, &slack); err != nil || len(slack) != 1 || !strings.HasPrefix(slack["text"], "Michel found 2 new findings since the last digest") {
 		t.Errorf("slack: %v\n%s", err, body)
 	}
 	if hdr.Get("X-Michel-Signature") != "" || hdr.Get("X-Michel-Timestamp") == "" {
@@ -559,7 +560,7 @@ func TestSendAllFiltersProjects(t *testing.T) {
 	}
 	g := only.got[0]
 	if len(g.Projects) != 1 || g.Projects[0].Name != "project-a" || g.NewTotal != 1 || g.AttentionTotal != 0 ||
-		g.Title != "Michel found 1 new finding tonight" {
+		g.Title != "Michel found 1 new finding since the last digest" {
 		t.Errorf("only = %+v", g)
 	}
 }
@@ -603,5 +604,35 @@ func TestBuildSkipsDisabledAndRefusesUnknownType(t *testing.T) {
 	}
 	if _, err := Build(policy.NotifyConfig{Channels: []policy.ChannelConfig{{Name: "x", Type: "sms"}}}, Deps{}); err == nil {
 		t.Error("unknown type accepted")
+	}
+}
+
+// TestDeliverDropsCallSites: channels get the "what" sentence without the
+// call-site example (a relative file:line).
+func TestDeliverDropsCallSites(t *testing.T) {
+	d := sample()
+	d.Projects[0].New[0].What = "acme/lib 1.0.0 is used in 1 place in your code, for example src/Billing/Invoice.php:42."
+	d.Projects[0].New[0].WhatForChannel = "acme/lib 1.0.0 is used in 1 place in your code."
+	a := &fake{name: "a"}
+	Deliver(context.Background(), []Notifier{a}, d)
+	if len(a.got) != 1 {
+		t.Fatalf("got %d digests", len(a.got))
+	}
+	text, err := digest.RenderText(a.got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	js, err := digest.RenderJSON(a.got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileLine := regexp.MustCompile(`[A-Za-z0-9_]\.[A-Za-z]+:\d+`)
+	for _, out := range []string{text, string(js)} {
+		if fileLine.MatchString(out) || !strings.Contains(out, "is used in 1 place in your code.") {
+			t.Errorf("channel payload:\n%s", out)
+		}
+	}
+	if d.Projects[0].New[0].What == a.got[0].Projects[0].New[0].What {
+		t.Error("Deliver kept the example")
 	}
 }

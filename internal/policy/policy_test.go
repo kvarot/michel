@@ -319,3 +319,16 @@ func TestExampleConfigStillLoads(t *testing.T) {
 		t.Errorf("uncommented example with rules: %v", err)
 	}
 }
+
+func TestValidateNotifyRefusesReservedSecretName(t *testing.T) {
+	email := ChannelConfig{Name: "mail-perso", Type: "email", Host: "smtp.example.org", Port: 587, From: "michel@example.org",
+		To: []string{"me@example.org"}, Username: "me", PasswordSecret: "api-token"}
+	hook := ChannelConfig{Name: "hook", Type: "webhook", URL: "https://hooks.example.org/michel", Secret: "api-token"}
+	rules := []AllowRule{{Host: "smtp.example.org", Purpose: PurposeEmail}, {Host: "hooks.example.org", Purpose: PurposeWebhook}}
+	for _, c := range []ChannelConfig{email, hook} {
+		err := ValidateNotify(NotifyConfig{Channels: []ChannelConfig{c}}, rules)
+		if err == nil || !strings.Contains(err.Error(), `"api-token"`) || !strings.Contains(err.Error(), "reserved") {
+			t.Errorf("%s: %v", c.Type, err)
+		}
+	}
+}

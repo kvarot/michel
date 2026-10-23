@@ -389,11 +389,11 @@ func TestDaysWithoutCritical(t *testing.T) {
 func TestTitleAndWordFrenchAndEnglish(t *testing.T) {
 	f := newFixture(t)
 	empty := f.compute(i18n.EN, Options{})
-	if empty.Title != "Michel found nothing new tonight" || empty.Word != "All quiet. Keep it that way." {
+	if empty.Title != "Michel found nothing new since the last digest" || empty.Word != "All quiet. Keep it that way." {
 		t.Errorf("en clean: %q / %q", empty.Title, empty.Word)
 	}
 	emptyFR := f.compute(i18n.FR, Options{Assistant: "Ada"})
-	if emptyFR.Title != "Ada n'a rien trouvé de nouveau cette nuit" || emptyFR.Word != "Tout est calme. Garde ça comme ça." {
+	if emptyFR.Title != "Ada n'a rien trouvé de nouveau depuis le dernier résumé" || emptyFR.Word != "Tout est calme. Garde ça comme ça." {
 		t.Errorf("fr clean: %q / %q", emptyFR.Title, emptyFR.Word)
 	}
 	recent := now.Add(-time.Hour)
@@ -401,16 +401,16 @@ func TestTitleAndWordFrenchAndEnglish(t *testing.T) {
 	f.seed(finding{pkg: "acme/b", osv: "ACME-2", severity: "low", firstSeen: recent})
 	f.seed(finding{pkg: "acme/b", osv: "ACME-3", severity: "medium", firstSeen: recent})
 	en, fr := f.compute(i18n.EN, Options{}), f.compute(i18n.FR, Options{})
-	if en.Title != "Michel found 3 new findings tonight, 1 needs your attention" || en.Word != "" || en.Assistant != "Michel" {
+	if en.Title != "Michel found 3 new findings since the last digest, 1 needs your attention" || en.Word != "" || en.Assistant != "Michel" {
 		t.Errorf("en: %q / %q / %q", en.Title, en.Word, en.Assistant)
 	}
-	if fr.Title != "Michel a trouvé 3 nouveautés cette nuit, 1 mérite ton attention" || fr.Word != "" {
+	if fr.Title != "Michel a trouvé 3 nouveautés depuis le dernier résumé, 1 mérite ton attention" || fr.Word != "" {
 		t.Errorf("fr: %q / %q", fr.Title, fr.Word)
 	}
 	c := f.seed(finding{pkg: "acme/c", osv: "ACME-4", severity: "critical", status: "decided", firstSeen: now.Add(-9 * 24 * time.Hour)})
 	f.decide(decision{finding: c, action: "defer", due: now.Add(time.Hour)})
 	en = f.compute(i18n.EN, Options{Since: now.Add(-time.Minute)})
-	if en.Title != "Michel found nothing new tonight, 1 needs your attention" || en.Word != "" {
+	if en.Title != "Michel found nothing new since the last digest, 1 needs your attention" || en.Word != "" {
 		t.Errorf("en due only: %q / %q", en.Title, en.Word)
 	}
 }

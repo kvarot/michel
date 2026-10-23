@@ -2,7 +2,10 @@
   <li class="m-row" :class="`m-row--${item.severity}`">
     <div class="m-row__line">
       <span class="m-row__name m-code">{{ item.package }}</span>
-      <span class="m-sev" :class="`m-sev--${item.severity}`">{{ $t(`severity.${item.severity}`) }}</span>
+      <span class="m-row__tags">
+        <span v-if="item.decided" class="m-row__decided m-small">{{ $t('item.decided') }}</span>
+        <span class="m-sev" :class="`m-sev--${item.severity}`">{{ $t(`severity.${item.severity}`) }}</span>
+      </span>
     </div>
     <p class="m-row__meta m-small m-muted">
       <span v-if="item.osvIds.length">{{ $t('item.advisories', { n: item.osvIds.length }) }}</span>
@@ -97,6 +100,13 @@ export default {
   gap: 0.25rem 0.75rem;
 }
 .m-row__name { font-size: 0.95rem; font-weight: 600; }
+.m-row__tags { display: inline-flex; align-items: baseline; gap: 0.5rem; }
+.m-row__decided {
+  padding: 0 0.45rem;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.25);
+  border-radius: 999px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
 .m-row__meta { display: flex; flex-wrap: wrap; gap: 0.1rem 0.9rem; margin: 0.2rem 0 0; }
 .m-row__what { margin: 0.45rem 0 0; line-height: 1.55; max-width: 62ch; }
 .m-voice.m-row__what { font-size: 1.05rem; }

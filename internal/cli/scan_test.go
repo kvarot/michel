@@ -181,7 +181,7 @@ func TestScanWarnsAboutProjectScannerConfig(t *testing.T) {
 		t.Fatalf("scan: %v", err)
 	}
 	want := "Warning: " + filepath.Join(proj, "web", "osv-scanner.toml") + " contains osv-scanner ignore rules; Michel does not apply them. " +
-		"Decide on findings with michel decide (plan 3) instead.\n"
+		"Decide on findings with michel decide instead.\n"
 	if !strings.Contains(errOut, want) {
 		t.Errorf("stderr lacks the warning:\n%s", errOut)
 	}

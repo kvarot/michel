@@ -94,8 +94,18 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := digest.Compute(r.Context(), s.deps.Store, s.deps.Now(), lang,
-		digest.Options{Assistant: s.deps.Policy.Assistant.Name, OSVRoot: s.deps.OSVRoot})
+	// The page shows the last digest's window extended to now: after the
+	// morning digest, what it reported stays on the page all day.
+	opt := digest.Options{Assistant: s.deps.Policy.Assistant.Name, OSVRoot: s.deps.OSVRoot}
+	last, ok, err := digest.NewRepo(s.deps.Store).Last(r.Context())
+	if err != nil {
+		s.internal(w, r)
+		return
+	}
+	if ok {
+		opt.Since = last.Since
+	}
+	d, err := digest.Compute(r.Context(), s.deps.Store, s.deps.Now(), lang, opt)
 	if err != nil {
 		s.internal(w, r)
 		return
