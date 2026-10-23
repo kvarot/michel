@@ -79,3 +79,10 @@ Plan : décisions, digest quotidien, canaux de notification, secrets, page « Au
 - Run réel: minor (deferred): `decide --package` affiche une ligne d'audit par faille (59 ici) ; un résumé avec le nombre suffirait.
 - Run réel: minor (deferred): osv-scanner écrit trois avertissements `interpreting as regex/glob` par projet sur stderr (existant depuis le plan 1).
 - Run réel: minor (deferred): le digest dit « le dernier scan de 2 projets n'a pas pu se terminer » pour des dossiers sans lockfile ; une formulation « rien à scanner » serait plus juste.
+
+## Revue finale (2026-10-23)
+- Revue finale : « prêt avec correctifs ». Corrigés dans d8f8196 : page « Aujourd'hui » vide après le digest du matin (fenêtre = celle du dernier digest prolongée jusqu'à maintenant) ; failles déjà re-décidées encore « à revoir » et comptées dans l'attention ; justification envoyée au webhook générique ; « (plan 3) » dans un message ; nom réservé `api-token` refusé comme secret de canal ; titre neutre (« depuis le dernier résumé ») ; exemple `fichier:ligne` retiré des messages envoyés par les canaux.
+- minor (deferred): chaîne de décisions supersédées dans une même fenêtre (A supersédée, B décidée puis supersédée) : A et B listées toutes les deux « à revoir ».
+- minor (deferred): `packages` suppose que la carte des décisions n'est jamais nil pour produire la phrase « quoi ».
+- minor (deferred): un dossier sans lockfile est signalé chaque matin comme scan échoué (à traiter tôt dans le plan suivant).
+- minor (deferred): POST de décision accepté pour un projet inactif (la page ne les montre pas).
