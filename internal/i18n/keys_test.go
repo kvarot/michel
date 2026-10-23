@@ -37,7 +37,7 @@ var (
 	// inExplain are the unqualified calls inside package explain.
 	inExplain = map[string]family{"Label": {"explain.label.", false, 1}, "Term": {"glossary.", false, 1}}
 	// depsMethods are the wrappers on the CLI dependencies (deps.T, d.N...).
-	depsMethods = map[string]family{"T": {"", false, 0}, "N": {"", true, 0}, "Errorf": {"", false, 0}}
+	depsMethods = map[string]family{"T": {"", false, 0}, "N": {"", true, 0}, "Errorf": {"", false, 0}, "Wrapf": {"", false, 0}}
 )
 
 type keyRef struct {
@@ -225,6 +225,7 @@ func f() {
 	_ = i18n.N(lang, "cli.files", 2)
 	_ = deps.T("cli.hello")
 	_ = d.Errorf("cli.oops", 1)
+	_ = deps.Wrapf("cli.wrapped", err)
 	_ = i18n.T(lang, dyn)
 	_ = t.Errorf("not.a.key")
 }`
@@ -237,7 +238,7 @@ func f() {
 	for _, r := range fileKeyRefs(fset, f, false) {
 		got = append(got, r.key)
 	}
-	want := "explain.label.what cli.files.one cli.files.other cli.hello cli.oops"
+	want := "explain.label.what cli.files.one cli.files.other cli.hello cli.oops cli.wrapped"
 	if strings.Join(got, " ") != want {
 		t.Errorf("got %q, want %q", strings.Join(got, " "), want)
 	}

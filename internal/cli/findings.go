@@ -39,18 +39,18 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if name == "" {
-				return errors.New("Michel needs a project. Pass --project <name>; 'michel project list' shows the names.")
+				return deps.Errorf("cli.findings.need_project")
 			}
 			if status != "" && !oneOf(status, validStatuses) {
-				return fmt.Errorf("Unknown status %q. Use one of %s.", status, strings.Join(validStatuses, ", "))
+				return deps.Errorf("cli.findings.unknown_status", status, strings.Join(validStatuses, ", "))
 			}
 			if severity != "" && !oneOf(severity, validSeverities) {
-				return fmt.Errorf("Unknown severity %q. Use one of %s.", severity, strings.Join(validSeverities, ", "))
+				return deps.Errorf("cli.findings.unknown_severity", severity, strings.Join(validSeverities, ", "))
 			}
 			p, err := projectRepo(deps).Get(ctx, name)
 			if err != nil {
 				if errors.Is(err, project.ErrNotFound) {
-					return fmt.Errorf("Cannot list findings for %s: no project has this name. Run 'michel project list' to see the registered names.", name)
+					return deps.Errorf("cli.findings.not_found", name)
 				}
 				return err
 			}
@@ -68,7 +68,7 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 				return json.NewEncoder(deps.Stdout).Encode(list)
 			}
 			if len(list) == 0 {
-				fmt.Fprintf(deps.Stdout, "No findings to show for %s. Run 'michel scan --project %s' to refresh them.\n", p.Name, p.Name)
+				fmt.Fprintln(deps.Stdout, deps.T("cli.findings.none", p.Name, p.Name))
 				return nil
 			}
 			var table bytes.Buffer

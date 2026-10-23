@@ -10,17 +10,17 @@ import (
 
 	"github.com/kvarot/michel/internal/analyze"
 	"github.com/kvarot/michel/internal/explain"
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/spf13/cobra"
 )
 
 const (
-	maxCallSitesShown   = 10
-	maxChangelogLines   = 20
-	maxAmbiguousShown   = 10
-	maxBreakingShown    = 5
-	findingNotFoundHelp = "Run 'michel findings --project <name>' to see the ids."
+	maxCallSitesShown = 10
+	maxChangelogLines = 20
+	maxAmbiguousShown = 10
+	maxBreakingShown  = 5
 )
 
 func explainLang(deps *Deps) explain.Lang {
@@ -39,7 +39,7 @@ func resolveFinding(ctx context.Context, deps *Deps, idOrPrefix string) (scan.Fi
 		return scan.Finding{}, project.Project{}, err
 	}
 	if len(list) == 0 {
-		return scan.Finding{}, project.Project{}, fmt.Errorf("No finding has the id %q. %s", idOrPrefix, findingNotFoundHelp)
+		return scan.Finding{}, project.Project{}, deps.Errorf("cli.finding.not_found", idOrPrefix)
 	}
 	pick := list
 	for _, f := range list {
@@ -58,31 +58,36 @@ func resolveFinding(ctx context.Context, deps *Deps, idOrPrefix string) (scan.Fi
 		names[p.ID], byID[p.ID] = p.Name, p
 	}
 	if len(pick) > 1 {
-		return scan.Finding{}, project.Project{}, errors.New(ambiguousPrefixMessage(idOrPrefix, pick, names))
+		return scan.Finding{}, project.Project{}, errors.New(ambiguousPrefixMessageIn(deps.Lang, idOrPrefix, pick, names))
 	}
 	return pick[0], byID[pick[0].ProjectID], nil
 }
 
-// ambiguousPrefixMessage lists the candidates of an id prefix. The lookup
-// stops at scan.MaxPrefixMatches, so a full result says "at least".
+// ambiguousPrefixMessage is ambiguousPrefixMessageIn in English.
 func ambiguousPrefixMessage(prefix string, pick []scan.Finding, names map[string]string) string {
+	return ambiguousPrefixMessageIn(i18n.EN, prefix, pick, names)
+}
+
+// ambiguousPrefixMessageIn lists the candidates of an id prefix in lang. The
+// lookup stops at scan.MaxPrefixMatches, so a full result says "at least".
+func ambiguousPrefixMessageIn(lang i18n.Lang, prefix string, pick []scan.Finding, names map[string]string) string {
 	var sb strings.Builder
 	capped := len(pick) >= scan.MaxPrefixMatches
-	count := fmt.Sprintf("%d findings", len(pick))
 	if capped {
-		count = fmt.Sprintf("at least %d findings", scan.MaxPrefixMatches)
+		sb.WriteString(i18n.T(lang, "cli.finding.ambiguous_capped", prefix, scan.MaxPrefixMatches))
+	} else {
+		sb.WriteString(i18n.T(lang, "cli.finding.ambiguous", prefix, len(pick)))
 	}
-	fmt.Fprintf(&sb, "The id prefix %q matches %s. Type more characters of the id. Candidates:", prefix, count)
 	for i, f := range pick {
 		if i == maxAmbiguousShown {
 			if capped {
-				fmt.Fprintf(&sb, "\n  ... and more")
+				sb.WriteString("\n  " + i18n.T(lang, "cli.finding.ambiguous_more_capped"))
 			} else {
-				fmt.Fprintf(&sb, "\n  ... and %d more", len(pick)-maxAmbiguousShown)
+				sb.WriteString("\n  " + i18n.T(lang, "cli.finding.ambiguous_more", len(pick)-maxAmbiguousShown))
 			}
 			break
 		}
-		fmt.Fprintf(&sb, "\n  %s  %s %s (%s) in project %s", f.ID, safe(f.Package), safe(f.InstalledVersion), safe(f.OSVID), names[f.ProjectID])
+		sb.WriteString("\n  " + i18n.T(lang, "cli.finding.ambiguous_candidate", f.ID, safe(f.Package), safe(f.InstalledVersion), safe(f.OSVID), names[f.ProjectID]))
 	}
 	return sb.String()
 }

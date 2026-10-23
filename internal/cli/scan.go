@@ -29,8 +29,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if (name == "") == !all {
-				return errors.New("Michel needs to know what to scan. Pass --project <name> for one project, " +
-					"or --all for every active project. 'michel project list' shows the names.")
+				return deps.Errorf("cli.scan.need_target")
 			}
 			repo := projectRepo(deps)
 			var targets []project.Project
@@ -45,19 +44,18 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					}
 				}
 				if len(targets) == 0 {
-					return errors.New("There is no active project to scan. Register one with 'michel project add <path> --name <name>'.")
+					return deps.Errorf("cli.scan.no_active")
 				}
 			} else {
 				p, err := repo.Get(ctx, name)
 				if err != nil {
 					if errors.Is(err, project.ErrNotFound) {
-						return fmt.Errorf("Cannot scan %s: no project has this name. Run 'michel project list' to see the registered names.", name)
+						return deps.Errorf("cli.scan.not_found", name)
 					}
 					return err
 				}
 				if !p.Active {
-					return fmt.Errorf("Cannot scan %s: the project was removed, so Michel no longer scans it (its history is kept). "+
-						"Register the folder again under another name with 'michel project add', or purge it with 'michel project remove %s --purge' and add it back.", p.Name, p.Name)
+					return deps.Errorf("cli.scan.removed", p.Name, p.Name)
 				}
 				targets = []project.Project{p}
 			}
@@ -85,7 +83,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					}
 					msg := err.Error()
 					if errors.Is(err, scan.ErrNoManifests) {
-						msg = noManifestsMessage(p)
+						msg = deps.T("cli.scan.no_manifests", p.Path, p.Name)
 					}
 					failures = append(failures, failure{Project: p.Name, Error: msg})
 					problems = true
@@ -95,20 +93,20 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				if len(r.Errors) > 0 {
 					problems = true
 				}
-				analysis[p.Name] = ", analysis skipped"
+				analysis[p.Name] = deps.T("cli.scan.summary.analysis_skipped")
 				if noAnalyze || (r.Status != scan.ScanOK && r.Status != scan.ScanPartial) {
 					continue
 				}
 				// Analysis problems are warnings: they never change the scan's exit code.
 				ar, aerr := analyzeProject(cmd, deps, p, false)
 				if aerr != nil {
-					fmt.Fprintf(deps.Stderr, "warning: %s: the analysis failed: %v. The scan itself is saved; run 'michel analyze --project %s' to retry.\n", p.Name, aerr, p.Name)
+					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_failed", p.Name, aerr, p.Name))
 					continue
 				}
 				for _, e := range ar.Errors {
-					fmt.Fprintf(deps.Stderr, "warning: %s: analysis: %v. Fix the cause, then run 'michel analyze --project %s --force'.\n", p.Name, e, p.Name)
+					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_error", p.Name, e, p.Name))
 				}
-				analysis[p.Name] = fmt.Sprintf(", analyzed %s", plural(ar.Analyzed+ar.Skipped, "finding", "findings"))
+				analysis[p.Name] = deps.N("cli.scan.summary.analyzed", ar.Analyzed+ar.Skipped)
 			}
 			if asJSON {
 				if err := json.NewEncoder(deps.Stdout).Encode(struct {
@@ -120,26 +118,25 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			} else {
 				for _, r := range results {
 					for _, w := range r.Warnings {
-						fmt.Fprintln(deps.Stderr, ignoredConfigWarning(targets, r.Project, w))
+						fmt.Fprintln(deps.Stderr, ignoredConfigWarning(deps, targets, r.Project, w))
 					}
 					for _, e := range r.Errors {
-						fmt.Fprintf(deps.Stderr, "warning: %s: %v. Fix or remove the file, then scan again; its earlier findings were kept.\n", r.Project, e)
+						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_manifest_error", r.Project, e))
 					}
 				}
 				for _, f := range failures {
-					fmt.Fprintf(deps.Stderr, "error: %s: %s\n", f.Project, f.Error)
+					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.error_line", f.Project, f.Error))
 				}
 				printScan(deps, results, analysis)
 				switch {
 				case len(results) == 0:
-					fmt.Fprintln(deps.Stdout, "Michel could not scan any project. Read the errors above, fix them, then run the scan again.")
+					fmt.Fprintln(deps.Stdout, deps.T("cli.scan.none_scanned"))
 				case len(failures) > 0:
-					fmt.Fprintf(deps.Stdout, "Michel could not scan %s; read the errors above, fix them, then run the scan again.\n",
-						plural(len(failures), "project", "projects"))
+					fmt.Fprintln(deps.Stdout, deps.N("cli.scan.some_failed", len(failures)))
 				}
 			}
 			if problems {
-				return &ExitError{Code: 1, Quiet: true, Err: errors.New("the scan did not complete cleanly")}
+				return &ExitError{Code: 1, Quiet: true, Err: deps.Errorf("cli.scan.not_clean")}
 			}
 			return nil
 		},
@@ -172,61 +169,43 @@ func printScan(deps *Deps, results []scan.Result, analysis map[string]string) {
 	}
 	tw.Flush()
 	for _, r := range results {
-		fmt.Fprintln(deps.Stdout, summarySentence(r, analysis[r.Project]))
+		fmt.Fprintln(deps.Stdout, summarySentence(deps, r, analysis[r.Project]))
 	}
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return fmt.Sprintf("%d %s", n, one)
-	}
-	return fmt.Sprintf("%d %s", n, many)
-}
-
-// noManifestsMessage explains a scan that found no lockfile: what, why, next.
-func noManifestsMessage(p project.Project) string {
-	return fmt.Sprintf("Michel found no composer.lock or package-lock.json under %s, so it scanned nothing and kept the earlier findings of %s. "+
-		"Michel only scans lockfiles; the folder may be empty or unmounted, or the lockfiles may sit under an excluded folder (node_modules, vendor, .git). "+
-		"Check the path with 'michel project list', or add the lockfile and scan again.", p.Path, p.Name)
 }
 
 // summarySentence is the plain-language end of a scan, with the next action.
-func summarySentence(r scan.Result, analysis string) string {
+func summarySentence(deps *Deps, r scan.Result, analysis string) string {
 	crit := r.BySeverity["critical"]
 	var s strings.Builder
 	if r.New == 0 {
-		fmt.Fprintf(&s, "Michel found no new findings in %s", r.Project)
+		s.WriteString(deps.T("cli.scan.summary.no_new", r.Project))
 	} else {
-		fmt.Fprintf(&s, "Michel found %s in %s", plural(r.New, "new finding", "new findings"), r.Project)
+		s.WriteString(deps.N("cli.scan.summary.new", r.New, r.Project))
 		if crit > 0 {
-			fmt.Fprintf(&s, ", %d critical", crit)
+			s.WriteString(deps.N("cli.scan.summary.critical", crit))
 		}
 	}
 	if r.Reappeared > 0 {
-		verb := "findings came back after being gone"
-		if r.Reappeared == 1 {
-			verb = "finding came back after being gone"
-		}
-		fmt.Fprintf(&s, "; %d %s", r.Reappeared, verb)
+		s.WriteString(deps.N("cli.scan.summary.reappeared", r.Reappeared))
 	}
 	if r.Gone > 0 {
-		fmt.Fprintf(&s, "; %s", plural(r.Gone, "finding is gone", "findings are gone"))
+		s.WriteString(deps.N("cli.scan.summary.gone", r.Gone))
 	}
 	s.WriteString(analysis)
 	switch {
 	case r.New > 0 && crit > 0:
-		fmt.Fprintf(&s, ". Next: michel findings --project %s --severity critical", r.Project)
+		s.WriteString(deps.T("cli.scan.summary.next_critical", r.Project))
 	case r.New > 0:
-		fmt.Fprintf(&s, ". Next: michel findings --project %s --status new", r.Project)
+		s.WriteString(deps.T("cli.scan.summary.next_new", r.Project))
 	default:
-		fmt.Fprintf(&s, ". Next: michel findings --project %s", r.Project)
+		s.WriteString(deps.T("cli.common.next_findings", r.Project))
 	}
 	return s.String()
 }
 
 // ignoredConfigWarning tells that an osv-scanner.toml in the project was not
 // applied. rel is relative to the project folder; the line shows the full path.
-func ignoredConfigWarning(projects []project.Project, name, rel string) string {
+func ignoredConfigWarning(deps *Deps, projects []project.Project, name, rel string) string {
 	path := rel
 	for _, p := range projects {
 		if p.Name == name {
@@ -234,8 +213,7 @@ func ignoredConfigWarning(projects []project.Project, name, rel string) string {
 			break
 		}
 	}
-	return fmt.Sprintf("Warning: %s contains osv-scanner ignore rules; Michel does not apply them. "+
-		"Decide on findings with michel decide (plan 3) instead.", path)
+	return deps.T("cli.scan.warn_ignored_config", path)
 }
 
 // scannerLogHandler passes osv-scanner warnings and errors to w and drops
