@@ -264,5 +264,9 @@ func (s *server) static(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if strings.HasSuffix(name, ".webmanifest") {
+		// Go's mime table does not know this extension.
+		w.Header().Set("Content-Type", "application/manifest+json")
+	}
 	http.ServeFileFS(w, r, s.deps.Web, name)
 }

@@ -46,7 +46,6 @@ export default {
   components: { FindingSheet },
   props: {
     item: { type: Object, required: true },
-    project: { type: String, required: true },
   },
   emits: ['decided'],
   data() {

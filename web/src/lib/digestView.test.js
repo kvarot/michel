@@ -43,6 +43,18 @@ describe('digestView', () => {
     expect(groupAttention(null)).toEqual([])
   })
 
+  test('groupAttention uses the severity of decisions to review and deferrals', () => {
+    const groups = groupAttention({
+      projects: [{
+        name: 'demo',
+        new: [{ name: 'acme/lib', worst_severity: 'medium', finding_ids: ['f1'], osv_ids: ['A-1'] }],
+        superseded: [{ package: 'acme/lib', osv_id: 'A-9', finding_id: 'f9', reason: 'severity_changed', severity: 'critical' }],
+        due: [{ package: 'vuln-pkg', osv_id: 'A-8', finding_id: 'f8', due_at: '2026-11-22T00:00:00Z', severity: 'high' }],
+      }],
+    })
+    expect(groups[0].items.map((i) => [i.kind, i.severity])).toEqual([['superseded', 'critical'], ['due', 'high'], ['new', 'medium']])
+  })
+
   test('formatDate per lang', () => {
     expect(formatDate('2026-11-22T00:00:00Z', 'fr')).toBe('22/11/2026')
     expect(formatDate('2026-11-22T00:00:00Z', 'en')).toBe('2026-11-22')

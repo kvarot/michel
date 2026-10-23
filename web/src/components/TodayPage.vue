@@ -2,7 +2,7 @@
   <div class="m-today">
     <section class="m-hero" aria-labelledby="today-title">
       <p class="m-hero__day m-muted">{{ $t('today.heading') }}</p>
-      <h1 id="today-title" class="m-headline">{{ headline }}</h1>
+      <h1 id="today-title" class="m-headline">{{ digest.title }}</h1>
       <p v-if="digest.word" class="m-word">{{ digest.word }}</p>
       <p v-if="digest.since_label" class="m-muted m-small m-hero__since">{{ digest.since_label }}</p>
     </section>
@@ -49,11 +49,6 @@ export default {
     },
     groups() {
       return groupAttention(this.digest)
-    },
-    /** headline is Michel's sentence, ended like a sentence. */
-    headline() {
-      const t = (this.digest.title || '').trim()
-      return t && !/[.!?…]$/.test(t) ? `${t}.` : t
     },
     osvFetchedAt() {
       const t = this.digest.osv_fetched_at || ''

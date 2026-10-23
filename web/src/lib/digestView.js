@@ -23,8 +23,8 @@ export function severityOf(s) {
  * groupAttention flattens each project's new packages, decisions to review
  * and due deferrals into one list, most severe first, keeping the projects in
  * the digest's order (a project with nothing gets an empty list). A decision
- * to review or a deferral takes the severity of a new package of the same
- * name, "unknown" otherwise. text is the "what" sentence for new packages,
+ * to review or a deferral has its finding's severity; a digest without it
+ * (older server) falls back to a new package of the same name, then "unknown". text is the "what" sentence for new packages,
  * the reason code for decisions to review and the due date for deferrals.
  * @returns {{project: string, items: {kind: string, package: string, severity: string, text: string, findingIds: string[]}[]}[]}
  */
@@ -47,13 +47,13 @@ export function groupAttention(digest) {
     }
     for (const s of p.superseded || []) {
       items.push({
-        kind: 'superseded', package: s.package, severity: severityByName[s.package] || 'unknown', text: s.reason || '',
+        kind: 'superseded', package: s.package, severity: s.severity ? severityOf(s.severity) : severityByName[s.package] || 'unknown', text: s.reason || '',
         findingIds: s.finding_id ? [s.finding_id] : [], osvIds: s.osv_id ? [s.osv_id] : [], previousAction: s.previous_action || '',
       })
     }
     for (const d of p.due || []) {
       items.push({
-        kind: 'due', package: d.package, severity: severityByName[d.package] || 'unknown', text: d.due_at || '',
+        kind: 'due', package: d.package, severity: d.severity ? severityOf(d.severity) : severityByName[d.package] || 'unknown', text: d.due_at || '',
         findingIds: d.finding_id ? [d.finding_id] : [], osvIds: d.osv_id ? [d.osv_id] : [], overdue: !!d.overdue,
       })
     }

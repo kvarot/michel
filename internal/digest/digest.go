@@ -65,6 +65,9 @@ type Superseded struct {
 	PreviousAction string `json:"previous_action"`
 	Reason         string `json:"reason"`
 	Justification  string `json:"justification"`
+	// Severity is the finding's severity label now (critical, high, medium,
+	// low or unknown).
+	Severity string `json:"severity"`
 }
 
 // Due is a deferral in force whose date is within DueHorizon.
@@ -76,6 +79,9 @@ type Due struct {
 	Justification string `json:"justification"`
 	// Overdue is true when due_at <= now.
 	Overdue bool `json:"overdue"`
+	// Severity is the finding's severity label (critical, high, medium, low
+	// or unknown).
+	Severity string `json:"severity"`
 }
 
 // ProjectDigest is the digest of one active project.
@@ -144,6 +150,9 @@ func rank(label string) int {
 	}
 	return len(severities) - 1
 }
+
+// severityLabel maps any stored label to one of severities.
+func severityLabel(label string) string { return severities[rank(label)] }
 
 func parseTime(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)
@@ -333,7 +342,7 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 		pd.Total++
 		if decided && dec.Action == decide.Defer && f.Status == scan.StatusDecided && !dec.DueAt.After(c.now.Add(DueHorizon)) {
 			pd.Due = append(pd.Due, Due{Package: scan.SanitizeText(f.Package), OSVID: scan.SanitizeText(f.OSVID), FindingID: f.ID,
-				DueAt: dec.DueAt.UTC().Format(time.RFC3339), Justification: dec.Justification, Overdue: !dec.DueAt.After(c.now)})
+				DueAt: dec.DueAt.UTC().Format(time.RFC3339), Justification: dec.Justification, Overdue: !dec.DueAt.After(c.now), Severity: label})
 		}
 	}
 	pd.CriticalOpen = pd.Open["critical"]
@@ -360,7 +369,8 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 		}
 		f := byID[dec.FindingID]
 		pd.Superseded = append(pd.Superseded, Superseded{Package: scan.SanitizeText(f.Package), OSVID: scan.SanitizeText(f.OSVID),
-			FindingID: dec.FindingID, PreviousAction: string(dec.Action), Reason: string(dec.SupersededReason), Justification: dec.Justification})
+			FindingID: dec.FindingID, PreviousAction: string(dec.Action), Reason: string(dec.SupersededReason), Justification: dec.Justification,
+			Severity: severityLabel(f.SeverityLabel)})
 	}
 	sort.SliceStable(pd.Superseded, func(i, j int) bool {
 		a, b := pd.Superseded[i], pd.Superseded[j]

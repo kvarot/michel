@@ -70,9 +70,12 @@ export default {
   },
   emits: ['lang', 'theme', 'token-forgotten', 'token-saved', 'close'],
   data() {
-    return { languages, pasted: '', hasToken: !!api.token }
+    return { languages, pasted: '' }
   },
   computed: {
+    hasToken() {
+      return !!api.token
+    },
     metaLang() {
       return this.meta?.lang === 'fr' ? 'fr' : 'en'
     },
@@ -81,12 +84,10 @@ export default {
     useToken() {
       api.setToken(this.pasted)
       this.pasted = ''
-      this.hasToken = !!api.token
       this.$emit('token-saved')
     },
     forget() {
       api.setToken('')
-      this.hasToken = false
       this.$emit('token-forgotten')
     },
   },

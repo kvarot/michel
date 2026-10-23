@@ -1,6 +1,7 @@
 // The page's only door to Michel: fetch on /api/v1 with the local token in
 // "Authorization: Bearer". A 401 fires the "unauthorized" event so the page
 // can ask for the token; a failed connection is an ApiError with offline set.
+import { reactive } from 'vue'
 import { keys, load, save } from './lib/storage.js'
 
 const base = '/api/v1'
@@ -45,12 +46,17 @@ async function request(method, path, body) {
   return data
 }
 
+// state is reactive so components showing whether a token is saved follow it.
+const state = reactive({ token: load(keys.token) })
+
 export const api = {
-  token: load(keys.token),
+  get token() {
+    return state.token
+  },
   /** setToken keeps t for the next requests and in this browser ("" forgets it). */
   setToken(t) {
-    this.token = String(t || '').trim()
-    save(keys.token, this.token)
+    state.token = String(t || '').trim()
+    save(keys.token, state.token)
   },
   get(path) {
     return request('GET', path)

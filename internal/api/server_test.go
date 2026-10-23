@@ -401,6 +401,9 @@ func TestServeWithoutDistServesPlaceholder(t *testing.T) {
 			t.Errorf("GET %s = %d %q", p, resp.StatusCode, body)
 		}
 	}
+	if resp, _ := g.do("GET", "/manifest.webmanifest", "", ""); resp.Header.Get("Content-Type") != "application/manifest+json" {
+		t.Errorf("manifest Content-Type = %q", resp.Header.Get("Content-Type"))
+	}
 	for _, p := range []string{"/assets/", "/icons/", "/index.html", "/assets/missing.js"} {
 		if resp, _ := g.do("GET", p, "", ""); resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s = %d", p, resp.StatusCode)

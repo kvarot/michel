@@ -29,7 +29,8 @@ async function refreshShell() {
   if (!(await caches.has(keep))) {
     const cache = await caches.open(keep)
     try {
-      await cache.addAll(manifest.files)
+      // cache: reload skips the HTTP cache, so the copy is the served one.
+      await cache.addAll(manifest.files.map((f) => new Request(f, { cache: 'reload' })))
     } catch (err) {
       await caches.delete(keep)
       throw err

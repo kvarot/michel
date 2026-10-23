@@ -124,7 +124,11 @@ export default {
       return []
     },
     will() {
-      if (this.action === 'defer') return this.$t('decision.will.defer', { date: formatDate(this.until, this.$ui.lang) })
+      if (this.action === 'defer') {
+        // An empty date means the server default: in 30 days.
+        const date = this.until.trim() ? formatDate(this.until, this.$ui.lang) : this.defaultDate
+        return this.$t('decision.will.defer', { date })
+      }
       return this.$t(`decision.will.${this.action}`)
     },
   },

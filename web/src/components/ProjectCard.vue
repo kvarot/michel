@@ -37,7 +37,6 @@
           v-for="item in s.items"
           :key="rowKey(item)"
           :item="item"
-          :project="project.name"
           @decided="$emit('decided')"
         />
       </ul>
