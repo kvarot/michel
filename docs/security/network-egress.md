@@ -10,6 +10,8 @@ All outbound HTTP goes through the egress gateway (`internal/egress`), which app
 |---|---|---|
 | `osv.db` | `osv-vulnerabilities.storage.googleapis.com` (only) | Explicit `michel db update`, and only if an allow rule exists. |
 | `osv.scan` | none | Never used in practice. It exists so that any unexpected request from the scanner library (osv-scalibr) during a scan is denied and logged. |
+| `notify.email` | the SMTP server of an email channel (`notify.channels[].host`) | `michel digest --send`, `michel scan --all --digest`, `michel notify test`. TCP through `Gateway.DialContext`, STARTTLS (587) or implicit TLS (465) only. The policy is refused at load when an enabled channel has no rule. |
+| `notify.webhook` | the host of a webhook channel's `url` | Same commands. HTTPS POST (plain http only on loopback), signed with HMAC-SHA256; redirects are not followed. |
 
 There is no other destination in plan 1: no telemetry, no error reporting, no update check, no AI provider.
 

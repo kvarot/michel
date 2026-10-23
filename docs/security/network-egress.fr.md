@@ -10,6 +10,8 @@ Tout le HTTP sortant passe par la passerelle d'egress (`internal/egress`), qui a
 |---|---|---|
 | `osv.db` | `osv-vulnerabilities.storage.googleapis.com` (uniquement) | `michel db update` explicite, et seulement si une règle d'autorisation existe. |
 | `osv.scan` | aucune | Jamais utilisé en pratique. Il existe pour que toute requête inattendue de la bibliothèque de scan (osv-scalibr) pendant un scan soit refusée et journalisée. |
+| `notify.email` | le serveur SMTP d'un canal e-mail (`notify.channels[].host`) | `michel digest --send`, `michel scan --all --digest`, `michel notify test`. TCP via `Gateway.DialContext`, uniquement en STARTTLS (587) ou TLS implicite (465). La politique est refusée au chargement quand un canal activé n'a pas de règle. |
+| `notify.webhook` | l'hôte de l'`url` d'un canal webhook | Mêmes commandes. POST HTTPS (http simple seulement en loopback), signé en HMAC-SHA256 ; les redirections ne sont pas suivies. |
 
 Il n'y a aucune autre destination dans le plan 1 : pas de télémétrie, pas de remontée d'erreurs, pas de vérification de mise à jour, pas de fournisseur d'IA.
 

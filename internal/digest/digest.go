@@ -214,17 +214,55 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 		d.OSVStale = !d.OSVFetchedAt.IsZero() && now.Sub(d.OSVFetchedAt) > StaleAfter
 	}
 
+	retitle(&d)
+	return d, nil
+}
+
+// retitle sets d's title and word from its counters.
+func retitle(d *Digest) {
+	lang := d.Lang
 	if d.NewTotal > 0 {
 		d.Title = i18n.N(lang, "digest.title.new", d.NewTotal, d.Assistant)
 	} else {
 		d.Title = i18n.T(lang, "digest.title.nothing_new", d.Assistant)
 	}
+	d.Word = ""
 	if d.AttentionTotal > 0 {
 		d.Title += i18n.N(lang, "digest.title.attention", d.AttentionTotal)
 	} else if d.NewTotal == 0 {
 		d.Word = i18n.T(lang, "digest.word.calm")
 	}
-	return d, nil
+}
+
+// Filter returns d restricted to the projects named in names, with its
+// counters (new, attention, failed scans), title and word recomputed. An
+// empty names keeps d as it is. d is not changed.
+func Filter(d Digest, names []string) Digest {
+	if len(names) == 0 {
+		return d
+	}
+	keep := map[string]bool{}
+	for _, n := range names {
+		keep[n] = true
+	}
+	out := d
+	out.Projects = []ProjectDigest{}
+	out.NewTotal, out.AttentionTotal, out.FailedScans = 0, 0, 0
+	for _, p := range d.Projects {
+		if !keep[p.Name] {
+			continue
+		}
+		out.Projects = append(out.Projects, p)
+		for _, pkg := range p.New {
+			out.NewTotal += len(pkg.FindingIDs)
+		}
+		out.AttentionTotal += p.Attention
+		if p.LastScanStatus == scan.ScanFailed || p.LastScanStatus == scan.ScanInterrupted {
+			out.FailedScans++
+		}
+	}
+	retitle(&out)
+	return out
 }
 
 // computer holds what every project of one digest shares.

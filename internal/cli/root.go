@@ -185,6 +185,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newDecisionsCmd(deps))
 	root.AddCommand(newDigestCmd(deps))
 	root.AddCommand(newSecretCmd(deps))
+	root.AddCommand(newNotifyCmd(deps))
 	return root
 }
 

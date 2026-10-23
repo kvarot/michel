@@ -145,7 +145,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				d, err := sendDigest(ctx, deps, opt)
+				d, deliveries, err := sendDigest(ctx, cmd, deps, opt)
 				if err != nil {
 					return err
 				}
@@ -154,6 +154,9 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					if err := printDigest(deps, d, false, false); err != nil {
 						return err
 					}
+				}
+				if reportChannels(deps, deliveries) > 0 {
+					problems = true
 				}
 			}
 			if problems {
