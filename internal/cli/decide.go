@@ -89,30 +89,18 @@ func validationError(deps *Deps, d decide.Decision, why string, err error) error
 // any) and the decision.set event id.
 func decideOne(ctx context.Context, deps *Deps, repo *decide.Repo, d decide.Decision, fi scan.Finding, p project.Project) (decide.Decision, *decide.Decision, string, error) {
 	pkg, osv := safe(fi.Package), safe(fi.OSVID)
-	prev, hadPrev, err := repo.Current(ctx, fi.ID)
-	if err != nil {
-		return decide.Decision{}, nil, "", deps.Wrapf("cli.decide.failed", err, pkg, osv)
-	}
 	d.FindingID = fi.ID
-	stored, err := repo.Set(ctx, d, deps.Now())
-	if errors.Is(err, decide.ErrFindingGone) {
+	stored, replaced, evID, err := decide.Apply(ctx, repo, deps.Audit, decideAuthor, d, fi.Package, fi.OSVID, deps.Now())
+	var auditErr *decide.AuditError
+	switch {
+	case err == nil:
+		return stored, replaced, evID, nil
+	case errors.As(err, &auditErr):
+		return stored, replaced, "", deps.Wrapf("cli.decide.audit_failed", auditErr.Err, pkg, osv)
+	case errors.Is(err, decide.ErrFindingGone):
 		return decide.Decision{}, nil, "", deps.Errorf("cli.decide.gone", pkg, osv, p.Name)
 	}
-	if err != nil {
-		return decide.Decision{}, nil, "", deps.Wrapf("cli.decide.failed", err, pkg, osv)
-	}
-	var replaced *decide.Decision
-	if hadPrev {
-		replaced = &prev
-		if _, err := decide.RecordSuperseded(ctx, deps.Audit, decideAuthor, prev, decide.Redecided); err != nil {
-			return stored, replaced, "", deps.Wrapf("cli.decide.audit_failed", err, pkg, osv)
-		}
-	}
-	ev, err := decide.RecordSet(ctx, deps.Audit, decideAuthor, stored, fi.Package, fi.OSVID)
-	if err != nil {
-		return stored, replaced, "", deps.Wrapf("cli.decide.audit_failed", err, pkg, osv)
-	}
-	return stored, replaced, ev.ID, nil
+	return decide.Decision{}, nil, "", deps.Wrapf("cli.decide.failed", err, pkg, osv)
 }
 
 // dueSentence says until when a defer holds, and whether the date is the default.
