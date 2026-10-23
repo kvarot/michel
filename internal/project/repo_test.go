@@ -344,3 +344,27 @@ func TestExcludeRoundTrip(t *testing.T) {
 		t.Errorf("cleared exclude = %#v err %v", again.Exclude, err)
 	}
 }
+
+func TestPurgeDeletesDecisions(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	p, _ := r.Add(ctx, Project{Name: "a", Path: t.TempDir()})
+	other, _ := r.Add(ctx, Project{Name: "b", Path: t.TempDir()})
+	seedHistory(t, r, p.ID, "s1")
+	seedHistory(t, r, other.ID, "s2")
+	for _, d := range [][]any{{"d1", "s1-f", p.ID}, {"d2", "s1-f", p.ID}, {"d3", "s2-f", other.ID}} {
+		if _, err := r.s.DB().Exec(`INSERT INTO decision (id, finding_id, project_id, action, author, created_at)
+			VALUES (?, ?, ?, 'fix', 'cli', '2026-10-22T12:00:00Z')`, d...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.Purge(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, r, "decision", "project_id = ?", p.ID); n != 0 {
+		t.Errorf("%d decisions of the purged project remain", n)
+	}
+	if n := countRows(t, r, "decision", "project_id = ?", other.ID); n != 1 {
+		t.Errorf("purge touched the decisions of another project: %d left", n)
+	}
+}

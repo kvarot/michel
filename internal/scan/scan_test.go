@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -568,5 +569,315 @@ func TestRunSkipsProjectExcludedFolders(t *testing.T) {
 	r := e.run(t)
 	if len(r.Manifests) != 1 || r.Manifests[0].RelPath != "composer.lock" || r.New != 2 {
 		t.Errorf("manifests %+v new %d", r.Manifests, r.New)
+	}
+}
+
+// buildOSVDBWith builds a test database like buildOSVDB in a fresh folder,
+// with the advisories named in replace (file name -> JSON) swapped in.
+func buildOSVDBWith(t *testing.T, replace map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, eco := range osvdb.Ecosystems {
+		files, err := filepath.Glob(filepath.Join("testdata", "advisories", eco, "*.json"))
+		if err != nil || len(files) == 0 {
+			t.Fatalf("no advisories for %s: %v", eco, err)
+		}
+		zp := osvdb.ZipPath(root, eco)
+		if err := os.MkdirAll(filepath.Dir(zp), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		out, err := os.Create(zp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zw := zip.NewWriter(out)
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r, ok := replace[filepath.Base(f)]; ok {
+				b = []byte(r)
+			}
+			w, err := zw.Create(filepath.Base(f))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.Write(b); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := out.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// changedAdvisories makes ACME-2026-0001 medium instead of critical and
+// gives ACME-2026-0002 a second fixed version.
+var changedAdvisories = map[string]string{
+	"ACME-2026-0001.json": `{"schema_version": "1.6.0", "id": "ACME-2026-0001", "modified": "2026-10-20T00:00:00Z",
+		"summary": "Remote code execution in acme/vuln",
+		"severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"}],
+		"affected": [{"package": {"ecosystem": "Packagist", "name": "acme/vuln"},
+			"ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "1.0.1"}]}]}]}`,
+	"ACME-2026-0002.json": `{"schema_version": "1.6.0", "id": "ACME-2026-0002", "modified": "2026-10-20T00:00:00Z",
+		"summary": "Information disclosure in acme/vuln",
+		"severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"}],
+		"affected": [{"package": {"ecosystem": "Packagist", "name": "acme/vuln"},
+			"ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "1.0.2"}, {"introduced": "2.0.0"}, {"fixed": "2.0.5"}]}]}]}`,
+}
+
+// decideFinding stores a decision in force on the finding with osvID, with
+// the snapshot of what is known now, and moves it to decided, as
+// decide.Repo.Set does (package decide imports scan, so its tests cannot be
+// used here). It returns the finding id.
+func (e env) decideFinding(t *testing.T, osvID, action, dueAt string) string {
+	t.Helper()
+	db := e.st.DB()
+	var id, sev, fixed string
+	if err := db.QueryRow(`SELECT id, severity_label, fixed_versions FROM finding WHERE osv_id = ?`, osvID).Scan(&id, &sev, &fixed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO decision (id, finding_id, project_id, action, due_at, author, created_at, seen_severity, seen_fixed_versions)
+		VALUES (?, ?, ?, ?, ?, 'cli', '2026-10-01T00:00:00Z', ?, ?)`, "d-"+osvID, id, e.proj.ID, action, dueAt, sev, fixed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE finding SET status = ?, status_changed_at = '2026-10-01T00:00:00Z' WHERE id = ?`, StatusDecided, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// decisionState returns the superseded_at and superseded_reason of the
+// decision stored by decideFinding.
+func (e env) decisionState(t *testing.T, osvID string) (at, reason string) {
+	t.Helper()
+	if err := e.st.DB().QueryRow(`SELECT superseded_at, superseded_reason FROM decision WHERE id = ?`, "d-"+osvID).Scan(&at, &reason); err != nil {
+		t.Fatal(err)
+	}
+	return
+}
+
+func (e env) findingChangedAt(t *testing.T, osvID string) string {
+	t.Helper()
+	var at string
+	if err := e.st.DB().QueryRow(`SELECT status_changed_at FROM finding WHERE osv_id = ?`, osvID).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+type supersededEvent struct {
+	actor, target string
+	evidence      map[string]any
+}
+
+func (e env) supersededEvents(t *testing.T) []supersededEvent {
+	t.Helper()
+	rows, err := e.st.DB().Query(`SELECT actor, target, evidence FROM audit_event WHERE action = 'decision.superseded' ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []supersededEvent
+	for rows.Next() {
+		var ev supersededEvent
+		var raw string
+		if err := rows.Scan(&ev.actor, &ev.target, &raw); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.Unmarshal([]byte(raw), &ev.evidence)
+		out = append(out, ev)
+	}
+	return out
+}
+
+func TestDecidedFindingStaysDecidedWhenUnchanged(t *testing.T) {
+	e := newEnv(t, "project-a")
+	e.run(t)
+	e.decideFinding(t, "ACME-2026-0001", "fix", "")
+	r := e.run(t)
+	if r.Superseded != 0 || r.Still != 3 {
+		t.Errorf("result = %+v", r)
+	}
+	if st := e.statuses(t); st["ACME-2026-0001"] != StatusDecided || st["ACME-2026-0002"] != StatusPending {
+		t.Errorf("statuses = %v", st)
+	}
+	if at := e.findingChangedAt(t, "ACME-2026-0001"); at != "2026-10-01T00:00:00Z" {
+		t.Errorf("status_changed_at moved to %s", at)
+	}
+	if at, reason := e.decisionState(t, "ACME-2026-0001"); at != "" || reason != "" {
+		t.Errorf("decision superseded: %s %s", at, reason)
+	}
+	actionable, err := e.repo.ListFindings(context.Background(), e.proj.ID, "actionable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range actionable {
+		if f.OSVID == "ACME-2026-0001" {
+			t.Error("a decided finding is listed as actionable")
+		}
+	}
+	if len(actionable) != 2 {
+		t.Errorf("actionable = %d findings", len(actionable))
+	}
+	if decided, _ := e.repo.ListFindings(context.Background(), e.proj.ID, StatusDecided); len(decided) != 1 {
+		t.Errorf("decided = %+v", decided)
+	}
+	if evs := e.supersededEvents(t); len(evs) != 0 {
+		t.Errorf("events = %+v", evs)
+	}
+}
+
+func TestDecisionSupersededOnSeverityOrFixChange(t *testing.T) {
+	e := newEnv(t, "project-a")
+	e.run(t)
+	sevID := e.decideFinding(t, "ACME-2026-0001", "ignore", "")
+	fixID := e.decideFinding(t, "ACME-2026-0002", "fix", "")
+	r, err := Run(context.Background(), e.deps, e.proj, Options{OSVRoot: buildOSVDBWith(t, changedAdvisories)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Superseded != 2 {
+		t.Errorf("superseded = %d", r.Superseded)
+	}
+	st := e.statuses(t)
+	if st["ACME-2026-0001"] != StatusPending || st["ACME-2026-0002"] != StatusPending {
+		t.Errorf("statuses = %v", st)
+	}
+	if at := e.findingChangedAt(t, "ACME-2026-0002"); at == "2026-10-01T00:00:00Z" {
+		t.Error("status_changed_at not updated")
+	}
+	if at, reason := e.decisionState(t, "ACME-2026-0001"); at == "" || reason != "severity_changed" {
+		t.Errorf("ACME-2026-0001 decision: %q %q", at, reason)
+	}
+	if at, reason := e.decisionState(t, "ACME-2026-0002"); at == "" || reason != "fixed_version_changed" {
+		t.Errorf("ACME-2026-0002 decision: %q %q", at, reason)
+	}
+	evs := e.supersededEvents(t)
+	want := map[string][2]string{sevID: {"severity_changed", "ignore"}, fixID: {"fixed_version_changed", "fix"}}
+	if len(evs) != 2 {
+		t.Fatalf("events = %+v", evs)
+	}
+	for _, ev := range evs {
+		w, ok := want[ev.target]
+		if !ok || ev.actor != "scan" || ev.evidence["finding_id"] != ev.target || ev.evidence["project_id"] != e.proj.ID ||
+			ev.evidence["reason"] != w[0] || ev.evidence["previous_action"] != w[1] {
+			t.Errorf("event = %+v", ev)
+		}
+	}
+}
+
+// goneThenBack decides ACME-2026-0001, makes it disappear, then brings it back
+// with the given database.
+func goneThenBack(t *testing.T, osvRootBack string) (env, Result) {
+	t.Helper()
+	e := newEnv(t, "project-a")
+	lock := filepath.Join(e.proj.Path, "composer.lock")
+	original, err := os.ReadFile(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.run(t)
+	e.decideFinding(t, "ACME-2026-0001", "fix", "")
+	fixed := []byte(`{"content-hash":"x","packages":[{"name":"acme/vuln","version":"1.0.2"},{"name":"acme/safe","version":"2.0.0"}],"packages-dev":[]}`)
+	if err := os.WriteFile(lock, fixed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.run(t); r.Gone != 2 || r.Superseded != 0 {
+		t.Fatalf("gone scan: %+v", r)
+	}
+	if st := e.statuses(t); st["ACME-2026-0001"] != StatusGone {
+		t.Fatalf("statuses after disappearance = %v", st)
+	}
+	if at, reason := e.decisionState(t, "ACME-2026-0001"); at != "" || reason != "" {
+		t.Fatalf("the decision of a gone finding was superseded: %s %s", at, reason)
+	}
+	if err := os.WriteFile(lock, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Run(context.Background(), e.deps, e.proj, Options{OSVRoot: osvRootBack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, r
+}
+
+func TestDecidedGoneThenBackUnchangedIsDecided(t *testing.T) {
+	e, r := goneThenBack(t, osvRoot)
+	if r.Reappeared != 2 || r.Superseded != 0 {
+		t.Errorf("result = %+v", r)
+	}
+	if st := e.statuses(t); st["ACME-2026-0001"] != StatusDecided || st["ACME-2026-0002"] != StatusPending {
+		t.Errorf("statuses = %v", st)
+	}
+	if at, reason := e.decisionState(t, "ACME-2026-0001"); at != "" || reason != "" {
+		t.Errorf("decision superseded: %s %s", at, reason)
+	}
+}
+
+func TestDecidedGoneThenBackChangedIsPending(t *testing.T) {
+	e, r := goneThenBack(t, buildOSVDBWith(t, changedAdvisories))
+	if r.Reappeared != 2 || r.Superseded != 1 {
+		t.Errorf("result = %+v", r)
+	}
+	if st := e.statuses(t); st["ACME-2026-0001"] != StatusPending {
+		t.Errorf("statuses = %v", st)
+	}
+	if at, reason := e.decisionState(t, "ACME-2026-0001"); at == "" || reason != "reappeared_changed" {
+		t.Errorf("decision: %q %q", at, reason)
+	}
+	if evs := e.supersededEvents(t); len(evs) != 1 || evs[0].evidence["reason"] != "reappeared_changed" || evs[0].evidence["previous_action"] != "fix" {
+		t.Errorf("events = %+v", evs)
+	}
+}
+
+func TestScanExpiresDueDefer(t *testing.T) {
+	e := newEnv(t, "project-a")
+	clock := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	e.deps.Now = func() time.Time { return clock }
+	e.run(t)
+	id := e.decideFinding(t, "ACME-2026-0001", "defer", clock.Add(time.Hour).Format(time.RFC3339))
+	clock = clock.Add(time.Hour) // due_at == now: reached
+	r := e.run(t)
+	if r.Superseded != 1 {
+		t.Errorf("result = %+v", r)
+	}
+	if st := e.statuses(t); st["ACME-2026-0001"] != StatusPending {
+		t.Errorf("statuses = %v", st)
+	}
+	if at := e.findingChangedAt(t, "ACME-2026-0001"); at != clock.Format(time.RFC3339) {
+		t.Errorf("status_changed_at = %s", at)
+	}
+	if at, reason := e.decisionState(t, "ACME-2026-0001"); at != clock.Format(time.RFC3339) || reason != "due_reached" {
+		t.Errorf("decision: %q %q", at, reason)
+	}
+	evs := e.supersededEvents(t)
+	if len(evs) != 1 || evs[0].actor != "scan" || evs[0].target != id || evs[0].evidence["reason"] != "due_reached" ||
+		evs[0].evidence["previous_action"] != "defer" || evs[0].evidence["project_id"] != e.proj.ID {
+		t.Errorf("events = %+v", evs)
+	}
+}
+
+func TestScanDoesNotExpireFutureDefer(t *testing.T) {
+	e := newEnv(t, "project-a")
+	clock := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	e.deps.Now = func() time.Time { return clock }
+	e.run(t)
+	e.decideFinding(t, "ACME-2026-0001", "defer", clock.Add(48*time.Hour).Format(time.RFC3339))
+	clock = clock.Add(47 * time.Hour)
+	if r := e.run(t); r.Superseded != 0 {
+		t.Errorf("result = %+v", r)
+	}
+	if st := e.statuses(t); st["ACME-2026-0001"] != StatusDecided {
+		t.Errorf("statuses = %v", st)
+	}
+	if at, reason := e.decisionState(t, "ACME-2026-0001"); at != "" || reason != "" {
+		t.Errorf("decision: %q %q", at, reason)
 	}
 }

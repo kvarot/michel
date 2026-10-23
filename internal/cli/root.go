@@ -178,6 +178,8 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newAnalyzeCmd(deps))
 	root.AddCommand(newFindingsCmd(deps))
 	root.AddCommand(newFindingCmd(deps))
+	root.AddCommand(newDecideCmd(deps))
+	root.AddCommand(newDecisionsCmd(deps))
 	return root
 }
 

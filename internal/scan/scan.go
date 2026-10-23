@@ -123,9 +123,12 @@ type Result struct {
 	Still      int              `json:"still"`
 	Reappeared int              `json:"reappeared"`
 	Gone       int              `json:"gone"`
-	BySeverity map[string]int   `json:"by_severity"`
-	Errors     []error          `json:"-"`
-	ErrorTexts []string         `json:"errors,omitempty"`
+	// Superseded counts the decisions this scan took out of force: the
+	// finding changed, came back changed, or its deferral date was reached.
+	Superseded int            `json:"superseded"`
+	BySeverity map[string]int `json:"by_severity"`
+	Errors     []error        `json:"-"`
+	ErrorTexts []string       `json:"errors,omitempty"`
 	// Warnings lists the osv-scanner.toml files met in the project
 	// (relative paths). Michel does not apply them.
 	Warnings []string `json:"warnings,omitempty"`
@@ -417,6 +420,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		status = ScanPartial
 	}
 	finished := deps.Now().UTC()
+	var superseded []Superseded
 	err = func() error {
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
@@ -426,7 +430,11 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		if err := insertManifests(ctx, tx, res.ScanID, manifests); err != nil {
 			return err
 		}
-		res.New, res.Still, res.Reappeared, res.Gone, err = applyScan(ctx, tx, p.ID, res.ScanID, finished, findings, unread)
+		current, err := currentDecisions(ctx, tx, p.ID)
+		if err != nil {
+			return err
+		}
+		res.New, res.Still, res.Reappeared, res.Gone, superseded, err = applyScan(ctx, tx, p.ID, res.ScanID, finished, findings, unread, current)
 		if err != nil {
 			return err
 		}
@@ -440,7 +448,15 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		return fail(fmt.Errorf("Michel cannot store the scan of %s: %w. Nothing was changed; check that the data folder is writable and run it again", p.Name, err))
 	}
 	res.Status = status
+	res.Superseded = len(superseded)
 
+	// The audit logger opens its own transaction: the supersessions are
+	// recorded once the scan is committed.
+	for _, s := range superseded {
+		record("decision.superseded", s.FindingID, "ok", map[string]any{
+			"finding_id": s.FindingID, "project_id": s.ProjectID, "reason": s.Reason, "previous_action": s.Previous,
+		})
+	}
 	for _, m := range manifests {
 		result := "ok"
 		ev := map[string]any{"ecosystem": m.Ecosystem, "packages": m.Packages, "findings": m.Findings, "lock_sha256": m.LockSHA256}
@@ -450,7 +466,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		record("scan.manifest", m.RelPath, result, ev)
 	}
 	record("scan.finish", p.Name, status, map[string]any{
-		"new": res.New, "still": res.Still, "reappeared": res.Reappeared, "gone": res.Gone, "by_severity": res.BySeverity,
+		"new": res.New, "still": res.Still, "reappeared": res.Reappeared, "gone": res.Gone, "superseded": res.Superseded, "by_severity": res.BySeverity,
 		"manifests": len(manifests), "duration_ms": finished.Sub(started).Milliseconds(),
 		"ignored_config_files": configs,
 	})

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -16,7 +17,87 @@ const (
 	StatusNew     = "new"
 	StatusPending = "pending"
 	StatusGone    = "gone"
+	// StatusDecided is a finding with a decision in force (package decide).
+	StatusDecided = "decided"
 )
+
+// Reasons why a decision stops being in force (decision.superseded_reason).
+// Package decide names them as decide.Reason values.
+const (
+	ReasonRedecided           = "redecided"
+	ReasonSeverityChanged     = "severity_changed"
+	ReasonFixedVersionChanged = "fixed_version_changed"
+	ReasonDueReached          = "due_reached"
+	ReasonReappearedChanged   = "reappeared_changed"
+)
+
+// Superseded is a decision a scan took out of force: the finding, its
+// project, the reason code and the action of that decision.
+type Superseded struct{ FindingID, ProjectID, Reason, Previous string }
+
+// SnapshotChanged compares what was known when a decision was taken
+// (severity, fixed versions) with what is known now. The severity is compared
+// exactly and wins when both differ; the fixed versions are compared as sets,
+// so their order does not count. reason is ReasonSeverityChanged,
+// ReasonFixedVersionChanged or "".
+func SnapshotChanged(seenSeverity string, seenFixed []string, severity string, fixed []string) (changed bool, reason string) {
+	if seenSeverity != severity {
+		return true, ReasonSeverityChanged
+	}
+	if !sameSet(seenFixed, fixed) {
+		return true, ReasonFixedVersionChanged
+	}
+	return false, ""
+}
+
+func sameSet(a, b []string) bool {
+	set := func(s []string) []string {
+		out := slices.Clone(s)
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	return slices.Equal(set(a), set(b))
+}
+
+// decisionView is what applyScan needs of the decision in force on a finding.
+type decisionView struct {
+	Action   string
+	Severity string
+	Fixed    []string
+	DueAt    string
+}
+
+// dueReached tells whether a defer decision has reached its date at now. A
+// date Michel cannot read counts as reached, so the finding is asked again.
+func (d decisionView) dueReached(now time.Time) bool {
+	if d.Action != "defer" || d.DueAt == "" {
+		return false
+	}
+	due, err := time.Parse(time.RFC3339, d.DueAt)
+	return err != nil || !due.After(now)
+}
+
+// currentDecisions reads, inside tx, the decisions in force of one project,
+// by finding id.
+func currentDecisions(ctx context.Context, tx *sql.Tx, projectID string) (map[string]decisionView, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT finding_id, action, seen_severity, seen_fixed_versions, due_at
+		FROM decision WHERE project_id = ? AND superseded_at = '' ORDER BY created_at, id`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the decisions: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]decisionView{}
+	for rows.Next() {
+		var id, fixed string
+		var d decisionView
+		if err := rows.Scan(&id, &d.Action, &d.Severity, &fixed, &d.DueAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(fixed), &d.Fixed)
+		out[id] = d // the newest wins, should there be several
+	}
+	return out, rows.Err()
+}
 
 func jsonList(s []string) string {
 	if s == nil {
@@ -34,16 +115,29 @@ func jsonList(s []string) string {
 //	present and gone             -> pending (counted as reappeared)
 //	absent and not gone          -> gone
 //
+// current holds the decisions in force of the project (currentDecisions).
+// A present finding with one is judged against its snapshot:
+//
+//	decided, defer whose date is reached     -> pending, decision superseded (due_reached)
+//	decided, severity or fixed versions moved -> pending, decision superseded (severity_changed, fixed_version_changed)
+//	decided, unchanged                       -> decided
+//	gone, decision in force, unchanged       -> decided (counted as reappeared)
+//	gone, decision in force, changed or due  -> pending, decision superseded (reappeared_changed, due_reached)
+//
+// A decided finding that disappears becomes gone and keeps its decision. The
+// superseded decisions are returned for the audit log, which the caller
+// writes after the commit.
+//
 // Every status change sets status_changed_at to now; a finding whose status
 // stays the same keeps it.
 //
 // Findings of manifests listed in unread are neither refreshed nor closed:
 // the scan could not read that file, so absence proves nothing.
-func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool) (newN, still, reappeared, gone int, err error) {
+func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool, current map[string]decisionView) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
 	ts := now.UTC().Format(time.RFC3339)
 	rows, err := tx.QueryContext(ctx, `SELECT id, manifest_rel_path, status FROM finding WHERE project_id = ?`, projectID)
 	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("cannot read the existing findings: %w", err)
+		return 0, 0, 0, 0, nil, fmt.Errorf("cannot read the existing findings: %w", err)
 	}
 	type known struct{ manifest, status string }
 	existing := map[string]known{}
@@ -52,13 +146,13 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 		var k known
 		if err := rows.Scan(&id, &k.manifest, &k.status); err != nil {
 			rows.Close()
-			return 0, 0, 0, 0, err
+			return 0, 0, 0, 0, nil, err
 		}
 		existing[id] = k
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, nil, err
 	}
 	rows.Close()
 
@@ -67,22 +161,28 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary, status_changed_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, nil, err
 	}
 	defer ins.Close()
 	upd, err := tx.PrepareContext(ctx, `UPDATE finding SET aliases=?, severity_label=?, cvss_score=?, installed_version=?,
 		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=?,
 		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id=?`)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, nil, err
 	}
 	defer upd.Close()
 	closeStmt, err := tx.PrepareContext(ctx, `UPDATE finding SET status=?,
 		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id=?`)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, 0, 0, nil, err
 	}
 	defer closeStmt.Close()
+	supersede, err := tx.PrepareContext(ctx, `UPDATE decision SET superseded_at=?, superseded_reason=?
+		WHERE finding_id=? AND project_id=? AND superseded_at=''`)
+	if err != nil {
+		return 0, 0, 0, 0, nil, err
+	}
+	defer supersede.Close()
 
 	present := make(map[string]bool, len(findings))
 	for _, f := range findings {
@@ -96,14 +196,34 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 			if _, err := ins.ExecContext(ctx, f.ID, projectID, f.ManifestRelPath, f.Ecosystem, f.Package, f.OSVID,
 				jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion, jsonList(f.FixedVersions), jsonList(f.DepGroups),
 				StatusNew, scanID, scanID, ts, ts, f.Summary, ts); err != nil {
-				return 0, 0, 0, 0, fmt.Errorf("cannot save finding %s: %w", f.OSVID, err)
+				return 0, 0, 0, 0, nil, fmt.Errorf("cannot save finding %s: %w", f.OSVID, err)
 			}
 			newN++
 			continue
 		}
+		status, reason := StatusPending, ""
+		if d, ok := current[f.ID]; ok && (k.status == StatusDecided || k.status == StatusGone) {
+			changed, why := SnapshotChanged(d.Severity, d.Fixed, f.SeverityLabel, f.FixedVersions)
+			switch {
+			case d.dueReached(now):
+				reason = ReasonDueReached
+			case changed && k.status == StatusGone:
+				reason = ReasonReappearedChanged
+			case changed:
+				reason = why
+			default:
+				status = StatusDecided
+			}
+			if reason != "" {
+				if _, err := supersede.ExecContext(ctx, ts, reason, f.ID, projectID); err != nil {
+					return 0, 0, 0, 0, nil, fmt.Errorf("cannot supersede the decision on %s: %w", f.OSVID, err)
+				}
+				superseded = append(superseded, Superseded{FindingID: f.ID, ProjectID: projectID, Reason: reason, Previous: d.Action})
+			}
+		}
 		if _, err := upd.ExecContext(ctx, jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion,
-			jsonList(f.FixedVersions), jsonList(f.DepGroups), StatusPending, scanID, ts, f.Summary, StatusPending, ts, f.ID); err != nil {
-			return 0, 0, 0, 0, fmt.Errorf("cannot update finding %s: %w", f.OSVID, err)
+			jsonList(f.FixedVersions), jsonList(f.DepGroups), status, scanID, ts, f.Summary, status, ts, f.ID); err != nil {
+			return 0, 0, 0, 0, nil, fmt.Errorf("cannot update finding %s: %w", f.OSVID, err)
 		}
 		if k.status == StatusGone {
 			reappeared++
@@ -122,11 +242,11 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 			continue
 		}
 		if _, err := closeStmt.ExecContext(ctx, StatusGone, StatusGone, ts, id); err != nil {
-			return 0, 0, 0, 0, fmt.Errorf("cannot close finding %s: %w", id, err)
+			return 0, 0, 0, 0, nil, fmt.Errorf("cannot close finding %s: %w", id, err)
 		}
 		gone++
 	}
-	return newN, still, reappeared, gone, nil
+	return newN, still, reappeared, gone, superseded, nil
 }
 
 // Repo reads findings from the store.

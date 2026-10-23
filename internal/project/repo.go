@@ -214,7 +214,7 @@ func (r *Repo) Remove(ctx context.Context, nameOrID string) (Project, error) {
 	return p, nil
 }
 
-// Purge deletes a project and its whole history (findings, scan manifests,
+// Purge deletes a project and its whole history (decisions, findings, scan manifests,
 // scans, then the project row) in one transaction: either everything goes or
 // nothing does. It returns the project as it was before the call.
 func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
@@ -228,6 +228,7 @@ func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
 	}
 	defer tx.Rollback()
 	for _, q := range []string{
+		`DELETE FROM decision WHERE project_id = ?`,
 		`DELETE FROM analysis WHERE finding_id IN (SELECT id FROM finding WHERE project_id = ?)`,
 		`DELETE FROM finding WHERE project_id = ?`,
 		`DELETE FROM scan_manifest WHERE scan_id IN (SELECT id FROM scan WHERE project_id = ?)`,
