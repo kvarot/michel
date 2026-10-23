@@ -301,3 +301,67 @@ func TestDecisionJSONHasSnakeCaseKeysAndEmptyTimes(t *testing.T) {
 		t.Errorf("seen_fixed_versions = %v", m["seen_fixed_versions"])
 	}
 }
+
+// A decision re-taken between ExpireDue's read and its update must stay in
+// force: only the deferral that was read, still in force and still due, is
+// taken out of force.
+func TestExpireDueSkipsRedecidedFinding(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.seedFinding(t, f.proj.ID, "f1", scan.StatusPending, "high")
+	stale, err := f.repo.Set(ctx, Decision{FindingID: "f1", Action: Defer, DueAt: now.Add(time.Hour), Author: "cli"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.repo.Set(ctx, Decision{FindingID: "f1", Action: Fix, Author: "cli"}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := now.Add(2 * time.Hour)
+	tx, err := f.st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, err := f.repo.expire(ctx, tx, []Decision{stale}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 0 {
+		t.Errorf("expired %+v", done)
+	}
+	if cur, ok, err := f.repo.Current(ctx, "f1"); err != nil || !ok || cur.ID != fresh.ID {
+		t.Errorf("Current = %+v %v %v", cur, ok, err)
+	}
+	if s, _ := f.findingStatus(t, "f1"); s != scan.StatusDecided {
+		t.Errorf("status = %s", s)
+	}
+	// A deferral pushed back after the read is not due any more.
+	f.seedFinding(t, f.proj.ID, "f2", scan.StatusPending, "high")
+	read, err := f.repo.Set(ctx, Decision{FindingID: "f2", Action: Defer, DueAt: now.Add(time.Hour), Author: "cli"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.DB().Exec(`UPDATE decision SET due_at = ? WHERE id = ?`, now.Add(72*time.Hour).Format(time.RFC3339), read.ID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err = f.st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, err = f.repo.expire(ctx, tx, []Decision{read}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 0 {
+		t.Errorf("expired a deferral no longer due: %+v", done)
+	}
+	if ids, err := f.repo.ExpireDue(ctx, at, nil); err != nil || len(ids) != 0 {
+		t.Errorf("ExpireDue = %v %v", ids, err)
+	}
+}

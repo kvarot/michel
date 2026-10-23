@@ -1,0 +1,53 @@
+{{define "sev"}}{{if eq . "critical"}}critique{{else if eq . "high"}}élevée{{else if eq . "medium"}}moyenne{{else if eq . "low"}}faible{{else}}inconnue{{end}}{{end}}
+{{- define "pkg"}}<li><span class="sev sev-{{.WorstSeverity}}">{{template "sev" .WorstSeverity}}</span> <strong>{{.Name}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{len .OSVIDs}} avis : {{join .OSVIDs ", "}}){{if .What}}<br><span class="what">{{.What}}</span>{{end}}</li>
+{{end}}
+{{- define "action"}}{{if eq . "fix"}}à corriger{{else if eq . "defer"}}reportée{{else if eq . "ignore"}}ignorée{{else}}décidée{{end}}{{end}}
+{{- define "body"}}<h1>{{.Title}}</h1>
+{{if .SinceLabel}}<p class="since">{{.SinceLabel}}</p>
+{{end}}{{if .OSVStale}}<p class="banner">{{stale}}</p>
+{{end}}{{if .FailedScans}}<p class="banner">Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas abouti.</p>
+{{end}}
+{{- range .Projects}}<h2>{{.Name}}</h2>
+<p class="counters">ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevées {{index .Open "high"}}, moyennes {{index .Open "medium"}}, faibles {{index .Open "low"}}) · décidées : à corriger {{index .Decided "fix"}}, reportées {{index .Decided "defer"}}, ignorées {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if le .DaysWithoutCritical 1}}jour{{else}}jours{{end}} sans nouvelle critique{{if eq .CriticalOpen 0}} · <strong>0 critique ouverte</strong>{{end}}</p>
+{{if eq .LastScanStatus "failed"}}<p class="banner">Le dernier scan a échoué.</p>
+{{else if eq .LastScanStatus "interrupted"}}<p class="banner">Le dernier scan a été interrompu.</p>
+{{end}}
+{{- if .New}}<h3>Nouvelles</h3>
+<ul>
+{{range .New}}{{template "pkg" .}}{{end}}</ul>
+{{end}}
+{{- if .Gone}}<h3>Disparues au dernier scan, sans preuve de correction</h3>
+<ul>
+{{range .Gone}}{{template "pkg" .}}{{end}}</ul>
+{{end}}
+{{- if .Superseded}}<h3>Décisions à revoir</h3>
+<ul>
+{{range .Superseded}}<li><strong>{{.Package}}</strong> {{.OSVID}} : était {{template "action" .PreviousAction}}, {{reason .Reason}}</li>
+{{end}}</ul>
+{{end}}
+{{- if .Due}}<h3>Échéances</h3>
+<ul>
+{{range .Due}}<li><strong>{{.Package}}</strong> {{.OSVID}} : reportée au {{day .DueAt}}{{if .Overdue}} <span class="sev sev-high">(échue)</span>{{end}}</li>
+{{end}}</ul>
+{{end}}
+{{- end}}
+{{- if .Word}}<p class="word">{{.Word}}</p>
+{{end}}
+{{- if .PageURL}}<p>Page : <a href="{{.PageURL}}">{{.PageURL}}</a></p>
+{{end}}
+{{- end -}}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>{{.Title}}</title>
+<style>
+body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1f2328;background:#ffffff;max-width:42em;margin:0 auto;padding:16px;line-height:1.5}
+h1{font-size:1.3em}h2{font-size:1.1em;margin-top:1.5em;border-bottom:1px solid #d0d7de}h3{font-size:1em;margin-bottom:.2em}
+ul{padding-left:1.2em}.what,.since,.counters{color:#57606a}.banner{background:#fff8c5;padding:.5em}.word{font-style:italic}
+.sev{font-weight:bold}.sev-critical{color:#a40e26}.sev-high{color:#bc4c00}.sev-medium{color:#7d4e00}
+</style>
+</head>
+<body>
+{{template "body" .}}</body>
+</html>

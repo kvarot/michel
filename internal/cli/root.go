@@ -180,6 +180,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newFindingCmd(deps))
 	root.AddCommand(newDecideCmd(deps))
 	root.AddCommand(newDecisionsCmd(deps))
+	root.AddCommand(newDigestCmd(deps))
 	return root
 }
 

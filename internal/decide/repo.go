@@ -50,8 +50,17 @@ func scanDecision(row scanner) (Decision, error) {
 	return d, nil
 }
 
+// querier is a *sql.DB or a *sql.Tx.
+type querier interface {
+	QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error)
+}
+
 func (r *Repo) query(ctx context.Context, q string, args ...any) ([]Decision, error) {
-	rows, err := r.s.DB().QueryContext(ctx, q, args...)
+	return queryWith(ctx, r.s.DB(), q, args...)
+}
+
+func queryWith(ctx context.Context, db querier, q string, args ...any) ([]Decision, error) {
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the decisions: %w", err)
 	}
@@ -194,9 +203,16 @@ func (r *Repo) List(ctx context.Context, projectID, filter string) ([]Decision, 
 
 // ExpireDue supersedes (due_reached) every current defer whose due_at <= now, in all projects, moves those findings to pending, writes one decision.superseded audit event each, and returns the finding ids. Called by digest --send only (scan does the same inside applyScan).
 // Only findings still decided are touched: a gone finding keeps its
-// decision, and the scan checks the date if it comes back.
+// decision, and the scan checks the date if it comes back. The read and the
+// updates share one transaction, and each update is guarded, so a decision
+// re-taken meanwhile stays in force.
 func (r *Repo) ExpireDue(ctx context.Context, now time.Time, log *audit.Logger) ([]string, error) {
-	list, err := r.query(ctx, `SELECT `+columns+` FROM decision WHERE action = ? AND superseded_at = ''
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot supersede the decisions: %w", err)
+	}
+	defer tx.Rollback()
+	list, err := queryWith(ctx, tx, `SELECT `+columns+` FROM decision WHERE action = ? AND superseded_at = ''
 		AND finding_id IN (SELECT id FROM finding WHERE status = ?) ORDER BY finding_id`, string(Defer), scan.StatusDecided)
 	if err != nil {
 		return nil, err
@@ -210,15 +226,9 @@ func (r *Repo) ExpireDue(ctx context.Context, now time.Time, log *audit.Logger) 
 	if len(due) == 0 {
 		return []string{}, nil
 	}
-	tx, err := r.s.DB().BeginTx(ctx, nil)
+	due, err = r.expire(ctx, tx, due, now)
 	if err != nil {
-		return nil, fmt.Errorf("cannot supersede the decisions: %w", err)
-	}
-	defer tx.Rollback()
-	for _, d := range due {
-		if err := r.Supersede(ctx, tx, d.FindingID, DueReached, now); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("cannot supersede the decisions: %w", err)
@@ -237,6 +247,32 @@ func (r *Repo) ExpireDue(ctx context.Context, now time.Time, log *audit.Logger) 
 		}
 	}
 	return ids, nil
+}
+
+// expire takes each decision of due out of force (due_reached) inside tx, but
+// only while it is still in force, still a deferral and still due at now, and
+// moves its finding to pending. It returns the decisions it took out of force.
+func (r *Repo) expire(ctx context.Context, tx *sql.Tx, due []Decision, now time.Time) ([]Decision, error) {
+	ts := timeText(now.UTC().Truncate(time.Second))
+	done := make([]Decision, 0, len(due))
+	for _, d := range due {
+		res, err := tx.ExecContext(ctx, `UPDATE decision SET superseded_at = ?, superseded_reason = ?
+			WHERE id = ? AND superseded_at = '' AND action = ? AND due_at <> '' AND due_at <= ?`,
+			ts, string(DueReached), d.ID, string(Defer), timeText(now))
+		if err != nil {
+			return nil, fmt.Errorf("cannot supersede the decision: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return nil, fmt.Errorf("cannot supersede the decision: %w", err)
+		} else if n == 0 {
+			continue
+		}
+		if err := setStatus(ctx, tx, d.FindingID, scan.StatusPending, ts); err != nil {
+			return nil, err
+		}
+		done = append(done, d)
+	}
+	return done, nil
 }
 
 // RecordSuperseded writes the decision.superseded audit event of d, taken

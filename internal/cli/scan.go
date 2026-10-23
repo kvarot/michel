@@ -19,7 +19,7 @@ import (
 
 func newScanCmd(deps *Deps) *cobra.Command {
 	var name string
-	var all, noAnalyze bool
+	var all, noAnalyze, digestToo bool
 	c := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan a project's lockfiles against the offline databases",
@@ -30,6 +30,9 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			ctx := cmd.Context()
 			if (name == "") == !all {
 				return deps.Errorf("cli.scan.need_target")
+			}
+			if digestToo && !all {
+				return deps.Errorf("cli.scan.digest_needs_all")
 			}
 			repo := projectRepo(deps)
 			var targets []project.Project
@@ -135,6 +138,24 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					fmt.Fprintln(deps.Stdout, deps.N("cli.scan.some_failed", len(failures)))
 				}
 			}
+			// The digest goes out even when a project could not be scanned:
+			// it reports the failed scans.
+			if digestToo {
+				opt, err := digestOptions(cmd, deps, "")
+				if err != nil {
+					return err
+				}
+				d, err := sendDigest(ctx, deps, opt)
+				if err != nil {
+					return err
+				}
+				if !asJSON {
+					fmt.Fprintln(deps.Stdout)
+					if err := printDigest(deps, d, false, false); err != nil {
+						return err
+					}
+				}
+			}
 			if problems {
 				return &ExitError{Code: 1, Quiet: true, Err: deps.Errorf("cli.scan.not_clean")}
 			}
@@ -145,6 +166,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 	f.StringVar(&name, "project", "", "name of the project to scan")
 	f.BoolVar(&all, "all", false, "scan every active project")
 	f.BoolVar(&noAnalyze, "no-analyze", false, "do not analyze the findings after the scan")
+	f.BoolVar(&digestToo, "digest", false, "with --all, send the digest after the scan (as 'michel digest --send')")
 	f.String("osv-db", "", "directory of the offline databases (default: from the policy)")
 	return c
 }

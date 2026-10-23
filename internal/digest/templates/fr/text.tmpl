@@ -1,0 +1,33 @@
+{{define "sev"}}{{if eq . "critical"}}critique{{else if eq . "high"}}élevée{{else if eq . "medium"}}moyenne{{else if eq . "low"}}faible{{else}}inconnue{{end}}{{end}}
+{{- define "pkg"}}  [{{template "sev" .WorstSeverity}}] {{.Name}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{len .OSVIDs}} avis : {{join .OSVIDs ", "}})
+{{if .What}}    {{.What}}
+{{end}}{{end}}
+{{- define "action"}}{{if eq . "fix"}}à corriger{{else if eq . "defer"}}reportée{{else if eq . "ignore"}}ignorée{{else}}décidée{{end}}{{end}}
+{{- .Title}}
+{{if .SinceLabel}}{{.SinceLabel}}
+{{end}}{{if .OSVStale}}{{stale}}
+{{end}}{{if .FailedScans}}Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas abouti.
+{{end}}
+{{- range .Projects}}
+== {{.Name}} ==
+ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevées {{index .Open "high"}}, moyennes {{index .Open "medium"}}, faibles {{index .Open "low"}}) · décidées : à corriger {{index .Decided "fix"}}, reportées {{index .Decided "defer"}}, ignorées {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if le .DaysWithoutCritical 1}}jour{{else}}jours{{end}} sans nouvelle critique{{if eq .CriticalOpen 0}} · 0 critique ouverte{{end}}
+{{if eq .LastScanStatus "failed"}}Le dernier scan a échoué.
+{{else if eq .LastScanStatus "interrupted"}}Le dernier scan a été interrompu.
+{{end}}
+{{- if .New}}Nouvelles :
+{{range .New}}{{template "pkg" .}}{{end}}{{end}}
+{{- if .Gone}}Disparues au dernier scan, sans preuve de correction :
+{{range .Gone}}{{template "pkg" .}}{{end}}{{end}}
+{{- if .Superseded}}Décisions à revoir :
+{{range .Superseded}}  {{.Package}} {{.OSVID}} : était {{template "action" .PreviousAction}}, {{reason .Reason}}
+{{end}}{{end}}
+{{- if .Due}}Échéances :
+{{range .Due}}  {{.Package}} {{.OSVID}} : reportée au {{day .DueAt}}{{if .Overdue}} (échue){{end}}
+{{end}}{{end}}
+{{- end}}
+{{- if .Word}}
+{{.Word}}
+{{end}}
+{{- if .PageURL}}
+Page : {{.PageURL}}
+{{end}}

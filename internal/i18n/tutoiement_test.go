@@ -38,7 +38,7 @@ func moduleRoot(t *testing.T) string {
 // The sovereignty policy is a legal document and is excluded on purpose.
 func frenchTexts(root string) ([]string, error) {
 	var files []string
-	for _, pattern := range []string{"internal/i18n/catalog/fr.json", "internal/i18n/templates/fr/*.tmpl", "web/src/i18n/fr.json", "README.fr.md"} {
+	for _, pattern := range []string{"internal/i18n/catalog/fr.json", "internal/i18n/templates/fr/*.tmpl", "internal/digest/templates/fr/*.tmpl", "web/src/i18n/fr.json", "README.fr.md"} {
 		m, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(pattern)))
 		if err != nil {
 			return nil, err
