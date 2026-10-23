@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,6 +64,21 @@ func TestFindingsEmptyInFrench(t *testing.T) {
 	wantAll(t, "findings", out, "Aucune faille à montrer pour demo", "michel scan --project demo")
 }
 
+func TestProjectAddDeniedInFrench(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "nope")
+	_, _, _, err := run(t, dir, "--lang", "fr", "project", "add", missing, "--name", "shop")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	wantAll(t, "error", err.Error(), "n'est pas un dossier", "composer.lock")
+	// The audit log keeps the English reason: stored text is never translated.
+	ev := auditRows(t, dir, "project.add")
+	if r, _ := ev[0].evidence["reason"].(string); len(ev) != 1 || !strings.Contains(r, "is not a directory") {
+		t.Errorf("stored reason = %v", ev[0].evidence)
+	}
+}
+
 func TestUsageErrorsInFrench(t *testing.T) {
 	_, _, _, err := run(t, t.TempDir(), "--lang", "fr", "scan")
 	if err == nil {
@@ -73,6 +89,17 @@ func TestUsageErrorsInFrench(t *testing.T) {
 	_, _, _, err = run(t, t.TempDir(), "--lang", "fr", "findings")
 	if err == nil || strings.Contains(err.Error(), "Michel needs") {
 		t.Errorf("findings error = %v", err)
+	}
+	// The language flag is read before the policy: a broken policy is
+	// reported in French too.
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte("sovereignty:\n  ai:\n    external_providers_enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = run(t, dir, "--lang", "fr", "noop")
+	if err == nil || ExitCode(err) != ExitCodePolicy || !strings.Contains(err.Error(), "Michel refuse de démarrer") {
+		t.Errorf("policy error = %v", err)
 	}
 }
 

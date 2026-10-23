@@ -101,35 +101,32 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 				return nil
 			}
 			flags := cmd.Flags()
+			// Until the policy is read, messages follow the --lang flag when
+			// it is valid, else the system language.
+			flag, _ := flags.GetString("lang")
+			deps.Lang = i18n.Resolve(flag, "", i18n.SystemLocale())
 			if baseErr != nil && !(flags.Changed("config") && flags.Changed("data-dir")) {
-				return fmt.Errorf("Michel cannot find your user configuration folder (%v). "+
-					"Pass --config and --data-dir to say where to read and store its files", baseErr)
+				return deps.Errorf("cli.root.no_config_dir", baseErr)
 			}
 			cfgPath, _ := flags.GetString("config")
 			dir, _ := flags.GetString("data-dir")
 			p, src, err := policy.Load(cfgPath, dir)
 			if err != nil {
 				// Load's error already names the file.
-				return &ExitError{Code: ExitCodePolicy, Err: fmt.Errorf(
-					"%w. Michel refuses to start without a readable policy. "+
-						"Fix the file or delete it to use the built-in strict_local defaults.", err)}
+				return &ExitError{Code: ExitCodePolicy, Err: deps.Wrapf("cli.root.policy_unreadable", err)}
 			}
 			if err := policy.Validate(p); err != nil {
-				return &ExitError{Code: ExitCodePolicy, Err: fmt.Errorf(
-					"Policy file %s is invalid: %w. Michel refuses to start with an inconsistent policy. "+
-						"Fix the file or delete it to use the built-in strict_local defaults.", cfgPath, err)}
+				return &ExitError{Code: ExitCodePolicy, Err: deps.Wrapf("cli.root.policy_invalid", err, cfgPath)}
 			}
 			deps.Policy, deps.PolicySource = p, src
-			flag, _ := flags.GetString("lang")
 			if f := strings.ToLower(strings.TrimSpace(flag)); f != "" && !i18n.Lang(f).Valid() {
-				return &ExitError{Code: ExitCodePolicy, Err: fmt.Errorf(
-					"Unknown language %q. Use --lang en or --lang fr.", f)}
+				return &ExitError{Code: ExitCodePolicy, Err: deps.Errorf("cli.root.unknown_lang", f)}
 			}
 			deps.Lang = i18n.Resolve(flag, p.Assistant.Lang, i18n.SystemLocale())
 			if src == policy.SourceFile {
-				fmt.Fprintf(deps.Stderr, "policy: file %s\n", cfgPath)
+				fmt.Fprintln(deps.Stderr, deps.T("cli.root.policy_file", cfgPath))
 			} else {
-				fmt.Fprintf(deps.Stderr, "policy: defaults (no file at %s)\n", cfgPath)
+				fmt.Fprintln(deps.Stderr, deps.T("cli.root.policy_defaults", cfgPath))
 			}
 			if cmd.Name() == "version" {
 				return nil // must work on an absent or read-only data folder
@@ -155,7 +152,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 				},
 			}); err != nil {
 				deps.Close()
-				return fmt.Errorf("Michel cannot write its audit log: %w. Check that %s is writable", err, dir)
+				return deps.Wrapf("cli.root.audit_write", err, dir)
 			}
 			deps.Gateway = egress.New(p, deps.Audit.EgressSink())
 			return nil
