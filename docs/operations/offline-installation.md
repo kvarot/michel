@@ -14,6 +14,8 @@ go build -o bin/michel.exe ./cmd/michel    # Windows
 bin/michel version
 ```
 
+The Today page (`michel serve`) is embedded in the binary. To rebuild it from `web/`, run `make web` (needs Node and npm; `make build` does it automatically when npm is present) before `go build`. Without it the binary still builds and `michel serve` shows a short text page.
+
 ## First run and config location
 
 Michel reads `config.yaml` and stores its data (SQLite store, OSV databases) in `<user config dir>/michel/`, where the user config dir is the Go `os.UserConfigDir()`:
@@ -88,7 +90,23 @@ michel findings --project myproject --severity critical --explain
 
 ## Language
 
-`--lang en|fr` (any command that explains) overrides `assistant.lang` of the policy file, which defaults to `en`. The language only changes the wording; the facts, the score and the JSON keys are the same.
+`--lang en|fr` (any command that prints text for you) overrides `assistant.lang` of the policy file, which defaults to `auto`: the language of the system, English if it is not French. The language only changes the wording; the facts, the score and the JSON keys are the same. Texts stored in the data folder (scan errors, channel errors, audit evidence) stay in English.
+
+## Decisions, digest, notifications and the Today page
+
+```
+michel decide <id-or-prefix> fix|defer|ignore [--why "..."] [--for 30d | --until YYYY-MM-DD]
+michel decide --project myproject --package vendor/lib defer
+michel decisions --project myproject [--status superseded]
+michel digest [--send] [--since YYYY-MM-DD] [--html | --json]
+michel scan --all --digest
+michel notify list
+michel notify test <channel>
+michel secret set|list|delete <name>
+michel serve [--listen 127.0.0.1:7331] [--open]
+```
+
+None of these needs the network, except `digest --send`, `scan --all --digest` and `notify test` on an email or webhook channel, which need an allow rule for that channel's host. Everything is described in [daily-digest.md](daily-digest.md), including how to schedule the daily run.
 
 ## Per-project settings
 
@@ -97,7 +115,7 @@ michel project set myproject --core-package vendor/core --core-package other-lib
 michel project set myproject --risk major_jump=50 --risk many_call_sites_threshold=20
 ```
 
-`--core-package` replaces the whole list of packages whose upgrade is riskier for this project (`--core-package ''` clears it). `--risk key=value` overrides one value of the `risk.*` policy section for this project only; other overrides are kept. Stored analyses keep a fingerprint of these settings, so they are recomputed on the next scan or `michel analyze --project myproject`; `--force` is not needed. The keys and thresholds are described in [remediation-risk.md](../remediation-risk.md) and listed in `config.example.yaml`.
+`--core-package` replaces the whole list of packages whose upgrade is riskier for this project (`--core-package ''` clears it). `--exclude <folder-name>` (repeatable) replaces the list of folder names that scans and analyses skip at any depth, on top of `vendor/` and `node_modules/` (`--exclude ''` clears it), for example `michel project set myproject --exclude fixtures --exclude legacy`. `--risk key=value` overrides one value of the `risk.*` policy section for this project only; other overrides are kept. Stored analyses keep a fingerprint of these settings, so they are recomputed on the next scan or `michel analyze --project myproject`; `--force` is not needed. The keys and thresholds are described in [remediation-risk.md](../remediation-risk.md) and listed in `config.example.yaml`.
 
 ## Scripting
 

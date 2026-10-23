@@ -1,0 +1,53 @@
+{{define "sev"}}{{.}}{{end}}
+{{- define "pkg"}}<li><span class="sev sev-{{.WorstSeverity}}">{{template "sev" .WorstSeverity}}</span> <strong>{{.Name}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{len .OSVIDs}} {{if eq (len .OSVIDs) 1}}advisory{{else}}advisories{{end}}: {{join .OSVIDs ", "}}){{if .What}}<br><span class="what">{{.What}}</span>{{end}}</li>
+{{end}}
+{{- define "action"}}{{if eq . "fix"}}to be fixed{{else if eq . "defer"}}deferred{{else if eq . "ignore"}}ignored{{else}}decided{{end}}{{end}}
+{{- define "body"}}<h1>{{.Title}}</h1>
+{{if .SinceLabel}}<p class="since">{{.SinceLabel}}</p>
+{{end}}{{if .OSVStale}}<p class="banner">{{stale}}</p>
+{{end}}{{if .FailedScans}}<p class="banner">The last scan of {{.FailedScans}} {{if eq .FailedScans 1}}project{{else}}projects{{end}} did not finish.</p>
+{{end}}
+{{- range .Projects}}<h2>{{.Name}}</h2>
+<p class="counters">open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "high"}}, medium {{index .Open "medium"}}, low {{index .Open "low"}}) · decided: fix {{index .Decided "fix"}}, defer {{index .Decided "defer"}}, ignore {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if eq .DaysWithoutCritical 1}}day{{else}}days{{end}} without a new critical{{if eq .CriticalOpen 0}} · <strong>0 critical open</strong>{{end}}</p>
+{{if eq .LastScanStatus "failed"}}<p class="banner">The last scan failed.</p>
+{{else if eq .LastScanStatus "interrupted"}}<p class="banner">The last scan was interrupted.</p>
+{{end}}
+{{- if .New}}<h3>New</h3>
+<ul>
+{{range .New}}{{template "pkg" .}}{{end}}</ul>
+{{end}}
+{{- if .Gone}}<h3>Gone at the last scan, without proof of a fix</h3>
+<ul>
+{{range .Gone}}{{template "pkg" .}}{{end}}</ul>
+{{end}}
+{{- if .Superseded}}<h3>Decisions to review</h3>
+<ul>
+{{range .Superseded}}<li><strong>{{.Package}}</strong> {{.OSVID}}: was {{template "action" .PreviousAction}}, {{reason .Reason}}</li>
+{{end}}</ul>
+{{end}}
+{{- if .Due}}<h3>Due dates</h3>
+<ul>
+{{range .Due}}<li><strong>{{.Package}}</strong> {{.OSVID}}: deferred until {{day .DueAt}}{{if .Overdue}} <span class="sev sev-high">(overdue)</span>{{end}}</li>
+{{end}}</ul>
+{{end}}
+{{- end}}
+{{- if .Word}}<p class="word">{{.Word}}</p>
+{{end}}
+{{- if .PageURL}}<p>Page: <a href="{{.PageURL}}">{{.PageURL}}</a></p>
+{{end}}
+{{- end -}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{.Title}}</title>
+<style>
+body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1f2328;background:#ffffff;max-width:42em;margin:0 auto;padding:16px;line-height:1.5}
+h1{font-size:1.3em}h2{font-size:1.1em;margin-top:1.5em;border-bottom:1px solid #d0d7de}h3{font-size:1em;margin-bottom:.2em}
+ul{padding-left:1.2em}.what,.since,.counters{color:#57606a}.banner{background:#fff8c5;padding:.5em}.word{font-style:italic}
+.sev{font-weight:bold}.sev-critical{color:#a40e26}.sev-high{color:#bc4c00}.sev-medium{color:#7d4e00}
+</style>
+</head>
+<body>
+{{template "body" .}}</body>
+</html>

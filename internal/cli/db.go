@@ -33,10 +33,6 @@ func dbRoot(cmd *cobra.Command, deps *Deps) string {
 	return deps.Policy.DB.OSVPath
 }
 
-const dbRuleMissing = "db update requires network.allow entry {host: " + osvdb.Host + ", purpose: " + osvPurpose + "}. " +
-	"Michel never downloads anything that is not listed in your policy. " +
-	"Add this entry under sovereignty.network.allow in config.yaml, then run 'michel db update' again."
-
 func newDBUpdateCmd(deps *Deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "update",
@@ -53,9 +49,9 @@ func newDBUpdateCmd(deps *Deps) *cobra.Command {
 			}
 			if ok, _ := deps.Gateway.Allowed(osvdb.Host, osvPurpose); !ok {
 				if err := record("denied", map[string]any{"ecosystems": ecos, "reason": "no network.allow entry for " + osvdb.Host}); err != nil {
-					return fmt.Errorf("%s Also, Michel could not write the audit log: %w", dbRuleMissing, err)
+					return deps.Wrapf("cli.common.audit_also", err, deps.T("cli.db.rule_missing", osvdb.Host, osvPurpose))
 				}
-				return &ExitError{Code: ExitCodePolicy, Err: errors.New(dbRuleMissing)}
+				return &ExitError{Code: ExitCodePolicy, Err: deps.Errorf("cli.db.rule_missing", osvdb.Host, osvPurpose)}
 			}
 			st, err := osvdb.Update(ctx, root, deps.Gateway.Client(osvPurpose), ecos, deps.Now)
 			sizes := map[string]int64{}
@@ -78,14 +74,12 @@ func newDBUpdateCmd(deps *Deps) *cobra.Command {
 				ev["completed"] = done
 				ev["failed"] = failed
 				ev["reason"] = err.Error()
-				msg := fmt.Sprintf("Database update failed for %s: %v. ", failed, err)
+				msg := deps.T("cli.db.update.failed", failed, err)
 				if len(done) > 0 {
-					msg += fmt.Sprintf("Already installed and kept: %s. ", strings.Join(done, ", "))
+					msg = deps.T("cli.db.update.failed_kept", failed, err, strings.Join(done, ", "))
 				}
-				msg += "The previous database for the failed ecosystem, if any, was kept. " +
-					"Check your network and the policy, then run 'michel db update' again."
 				if aerr := record(result, ev); aerr != nil {
-					return fmt.Errorf("%s Also, Michel could not write the audit log: %w", msg, aerr)
+					return deps.Wrapf("cli.common.audit_also", aerr, msg)
 				}
 				if denied {
 					return &ExitError{Code: ExitCodePolicy, Err: errors.New(msg)}
@@ -93,13 +87,13 @@ func newDBUpdateCmd(deps *Deps) *cobra.Command {
 				return errors.New(msg)
 			}
 			if err := record("ok", ev); err != nil {
-				return fmt.Errorf("The databases were updated but Michel could not write the audit log: %w. Check that the data folder is writable", err)
+				return deps.Wrapf("cli.db.update.audit_failed", err)
 			}
 			if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
 				return json.NewEncoder(deps.Stdout).Encode(st)
 			}
 			for _, s := range st {
-				fmt.Fprintf(deps.Stdout, "Updated %s: %d bytes\n", s.Ecosystem, s.SizeBytes)
+				fmt.Fprintln(deps.Stdout, deps.T("cli.db.update.done", s.Ecosystem, s.SizeBytes))
 			}
 			return nil
 		},

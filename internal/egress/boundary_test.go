@@ -14,16 +14,20 @@ import (
 )
 
 // forbiddenSelectors are the package-level identifiers that reach the network
-// without the egress allowlist. Only internal/egress may build HTTP clients.
+// without the egress allowlist. Only internal/egress may build HTTP clients
+// or dial raw connections (SMTP goes through Gateway.DialContext).
 var forbiddenSelectors = map[string]map[string]bool{
-	"net/http": {"DefaultClient": true, "DefaultTransport": true, "Get": true, "Post": true, "Head": true, "PostForm": true},
-	"net":      {"Dial": true, "DialTimeout": true},
+	"net/http":   {"DefaultClient": true, "DefaultTransport": true, "Get": true, "Post": true, "Head": true, "PostForm": true},
+	"net":        {"Dial": true, "DialTimeout": true, "DialTCP": true, "DialUDP": true, "DialIP": true, "DialUnix": true},
+	"crypto/tls": {"Dial": true, "DialWithDialer": true},
+	"net/smtp":   {"Dial": true},
 }
 
 // forbiddenLiterals are the types that must not be built outside egress.
 var forbiddenLiterals = map[string]map[string]bool{
-	"net/http": {"Client": true, "Transport": true},
-	"net":      {"Dialer": true},
+	"net/http":   {"Client": true, "Transport": true},
+	"net":        {"Dialer": true},
+	"crypto/tls": {"Dialer": true},
 }
 
 // moduleRoot finds the folder holding go.mod, walking up from the test's
@@ -159,6 +163,45 @@ func f() {
 	_ = net.Dialer{}
 	_ = h.NewRequest
 	_ = h.StatusOK
+}
+`
+	v, err := boundaryViolations(token.NewFileSet(), "x.go", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v) != 11 {
+		t.Fatalf("got %d violations, want 11:\n%s", len(v), strings.Join(v, "\n"))
+	}
+}
+
+// TestNoDirectDialOutsideEgress checks that the raw dialers used for
+// non-HTTP protocols (SMTP, TLS, UDP) are watched too: outside
+// internal/egress they must go through Gateway.DialContext. The module walk
+// of TestNoDirectHTTPOutsideEgress applies the same forbidden lists.
+func TestNoDirectDialOutsideEgress(t *testing.T) {
+	src := `package x
+
+import (
+	"crypto/tls"
+	"net"
+	mail "net/smtp"
+)
+
+func f() {
+	net.Dial("tcp", "x")
+	net.DialTimeout("tcp", "x", 0)
+	net.DialTCP("tcp", nil, nil)
+	net.DialUDP("udp", nil, nil)
+	net.DialIP("ip4:1", nil, nil)
+	net.DialUnix("unix", nil, nil)
+	_ = &tls.Dialer{}
+	_ = net.Dialer{}
+	tls.Dial("tcp", "x", nil)
+	tls.DialWithDialer(nil, "tcp", "x", nil)
+	mail.Dial("x")
+	_ = tls.Config{}
+	_ = net.SplitHostPort
+	_ = mail.PlainAuth
 }
 `
 	v, err := boundaryViolations(token.NewFileSet(), "x.go", src)

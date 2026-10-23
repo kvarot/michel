@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/kvarot/michel/internal/policy"
@@ -309,5 +310,61 @@ func TestUpdateChangesFields(t *testing.T) {
 	p.FixLevel = 9
 	if err := r.Update(ctx, p); !errors.Is(err, ErrInvalidFixLevel) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestExcludeRoundTrip(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	p, err := r.Add(ctx, Project{Name: "demo", Path: t.TempDir(), Exclude: []string{"b", "a", "a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Exclude, []string{"a", "b"}) || !reflect.DeepEqual(p.Exclude, []string{"a", "b"}) {
+		t.Errorf("exclude = %v (returned %v)", got.Exclude, p.Exclude)
+	}
+	for _, bad := range []string{"src/x", `src\x`, "..", "", "  "} {
+		got.Exclude = []string{"ok", bad}
+		if err := r.Update(ctx, got); !errors.Is(err, ErrInvalidExclude) {
+			t.Errorf("update with %q: err = %v", bad, err)
+		}
+		if _, err := r.Add(ctx, Project{Name: "other", Path: t.TempDir(), Exclude: []string{bad}}); !errors.Is(err, ErrInvalidExclude) {
+			t.Errorf("add with %q: err = %v", bad, err)
+		}
+	}
+	got.Exclude = nil
+	if err := r.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := r.Get(ctx, "demo"); err != nil || again.Exclude == nil || len(again.Exclude) != 0 {
+		t.Errorf("cleared exclude = %#v err %v", again.Exclude, err)
+	}
+}
+
+func TestPurgeDeletesDecisions(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	p, _ := r.Add(ctx, Project{Name: "a", Path: t.TempDir()})
+	other, _ := r.Add(ctx, Project{Name: "b", Path: t.TempDir()})
+	seedHistory(t, r, p.ID, "s1")
+	seedHistory(t, r, other.ID, "s2")
+	for _, d := range [][]any{{"d1", "s1-f", p.ID}, {"d2", "s1-f", p.ID}, {"d3", "s2-f", other.ID}} {
+		if _, err := r.s.DB().Exec(`INSERT INTO decision (id, finding_id, project_id, action, author, created_at)
+			VALUES (?, ?, ?, 'fix', 'cli', '2026-10-22T12:00:00Z')`, d...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.Purge(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, r, "decision", "project_id = ?", p.ID); n != 0 {
+		t.Errorf("%d decisions of the purged project remain", n)
+	}
+	if n := countRows(t, r, "decision", "project_id = ?", other.ID); n != 1 {
+		t.Errorf("purge touched the decisions of another project: %d left", n)
 	}
 }

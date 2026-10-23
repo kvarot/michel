@@ -29,6 +29,8 @@ var forbiddenDigests = map[string]bool{
 	"08a2829738b61a7dab623c64a475b5d5976c8079bc3b539c873e726dd2202ddb": true,
 	"2961d3065307038214244d221ece9feb1ebe7ad40b297a0009866dbc490138f4": true,
 	"64a19348509e818eb08a44258996e2704a5de4a34a8d678260f76c220b77ffc6": true,
+	"cff333b45a8a486b2da1da7bf919900e8c04ded1e4eaea17be581f2c20d433b2": true,
+	"89d297101bf0fec4d303ab4b7b1ed45b73789b1f5f1fd1497ecb57ec0fe2faf0": true,
 }
 
 // maxJoin is the longest run of adjacent tokens hashed as one candidate.

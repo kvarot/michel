@@ -1,10 +1,9 @@
 // Package explain turns the facts about a finding into three plain-language
 // sentences (what, impact, cost) in English or French. Both languages are
-// hand-written templates with the same structure.
+// hand-written templates with the same structure, kept in internal/i18n.
 package explain
 
 import (
-	"embed"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -15,22 +14,17 @@ import (
 	"unicode/utf8"
 
 	"github.com/kvarot/michel/internal/analyze"
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/scan"
 )
 
-//go:embed templates
-var templateFS embed.FS
-
 // Lang is a supported language.
-type Lang string
+type Lang = i18n.Lang
 
 const (
-	EN Lang = "en"
-	FR Lang = "fr"
+	EN = i18n.EN
+	FR = i18n.FR
 )
-
-// Valid tells whether l is a supported language.
-func (l Lang) Valid() bool { return l == EN || l == FR }
 
 // Facts is everything the templates may mention. Text that comes from
 // outside (advisories, package names, file names, changelogs) is stripped of
@@ -169,27 +163,7 @@ func FactsFrom(fi scan.Finding, a analyze.Analysis, hasAnalysis bool) Facts {
 	return f
 }
 
-func severityWords(lang Lang) map[string]string {
-	if lang == FR {
-		return map[string]string{
-			"critical": "peut permettre à un attaquant de prendre le contrôle",
-			"high":     "est grave",
-			"medium":   "est modérée",
-			"low":      "est mineure",
-			"unknown":  "n'a pas encore de note de gravité",
-		}
-	}
-	return map[string]string{
-		"critical": "could let an attacker take control",
-		"high":     "is serious",
-		"medium":   "is moderate",
-		"low":      "is minor",
-		"unknown":  "has no rating yet",
-	}
-}
-
 func funcs(lang Lang) template.FuncMap {
-	words := severityWords(lang)
 	return template.FuncMap{
 		"plural": func(n int, one, many string) string {
 			if n == 1 || (lang == FR && n == 0) {
@@ -199,27 +173,22 @@ func funcs(lang Lang) template.FuncMap {
 		},
 		"join": strings.Join,
 		"severityWord": func(label string) string {
-			if w, ok := words[label]; ok {
-				return w
+			if k := "explain.severity." + label; i18n.Has(k) {
+				return i18n.T(lang, k)
 			}
-			return words["unknown"]
+			return i18n.T(lang, "explain.severity.unknown")
 		},
 	}
 }
 
 func renderOne(lang Lang, name string, f Facts) (string, error) {
-	file := path.Join("templates", string(lang), name+".tmpl")
-	raw, err := templateFS.ReadFile(file)
+	t, err := i18n.Template(lang, name, funcs(lang))
 	if err != nil {
-		return "", fmt.Errorf("explanation template %s is missing: %w", file, err)
-	}
-	t, err := template.New(name).Funcs(funcs(lang)).Parse(string(raw))
-	if err != nil {
-		return "", fmt.Errorf("explanation template %s is invalid: %w", file, err)
+		return "", err
 	}
 	var sb strings.Builder
 	if err := t.Execute(&sb, f); err != nil {
-		return "", fmt.Errorf("explanation template %s failed: %w", file, err)
+		return "", fmt.Errorf("explanation template %s/%s failed: %w", lang, name, err)
 	}
 	return strings.TrimSpace(sb.String()), nil
 }

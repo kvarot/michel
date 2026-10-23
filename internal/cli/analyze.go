@@ -43,8 +43,7 @@ func newAnalyzeCmd(deps *Deps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if (name == "") == !all {
-				return errors.New("Michel needs to know what to analyze. Pass --project <name> for one project, " +
-					"or --all for every active project. 'michel project list' shows the names.")
+				return deps.Errorf("cli.analyze.need_target")
 			}
 			repo := projectRepo(deps)
 			var targets []project.Project
@@ -59,19 +58,18 @@ func newAnalyzeCmd(deps *Deps) *cobra.Command {
 					}
 				}
 				if len(targets) == 0 {
-					return errors.New("There is no active project to analyze. Register one with 'michel project add <path> --name <name>'.")
+					return deps.Errorf("cli.analyze.no_active")
 				}
 			} else {
 				p, err := repo.Get(ctx, name)
 				if err != nil {
 					if errors.Is(err, project.ErrNotFound) {
-						return fmt.Errorf("Cannot analyze %s: no project has this name. Run 'michel project list' to see the registered names.", name)
+						return deps.Errorf("cli.analyze.not_found", name)
 					}
 					return err
 				}
 				if !p.Active {
-					return fmt.Errorf("Cannot analyze %s: the project was removed, so Michel no longer analyzes it (its history is kept). "+
-						"Register the folder again with 'michel project add'.", p.Name)
+					return deps.Errorf("cli.analyze.removed", p.Name)
 				}
 				targets = []project.Project{p}
 			}
@@ -115,7 +113,7 @@ func newAnalyzeCmd(deps *Deps) *cobra.Command {
 				}
 			} else {
 				for _, f := range failures {
-					fmt.Fprintf(deps.Stderr, "error: %s: %s. Michel kept the other analyses; fix the cause, then run 'michel analyze --project %s --force'.\n", f.Project, f.Error, f.Project)
+					fmt.Fprintln(deps.Stderr, deps.T("cli.analyze.error_line", f.Project, f.Error, f.Project))
 				}
 				if len(results) > 0 {
 					tw := tabwriter.NewWriter(deps.Stdout, 0, 4, 2, ' ', 0)
@@ -127,14 +125,14 @@ func newAnalyzeCmd(deps *Deps) *cobra.Command {
 					tw.Flush()
 				}
 				for _, r := range results {
-					fmt.Fprintln(deps.Stdout, analyzeSentence(r.Project, r.Analyzed, r.Skipped, r.Failed))
+					fmt.Fprintln(deps.Stdout, analyzeSentence(deps, r.Project, r.Analyzed, r.Skipped, r.Failed))
 				}
 				if len(results) == 0 {
-					fmt.Fprintln(deps.Stdout, "Michel could not analyze any project. Read the errors above, fix them, then run the analysis again.")
+					fmt.Fprintln(deps.Stdout, deps.T("cli.analyze.none"))
 				}
 			}
 			if problems {
-				return &ExitError{Code: 1, Quiet: true, Err: errors.New("the analysis did not complete cleanly")}
+				return &ExitError{Code: 1, Quiet: true, Err: deps.Errorf("cli.analyze.not_clean")}
 			}
 			return nil
 		},
@@ -147,15 +145,15 @@ func newAnalyzeCmd(deps *Deps) *cobra.Command {
 }
 
 // analyzeSentence is the plain-language end of an analysis, with the next action.
-func analyzeSentence(project string, analyzed, skipped, failed int) string {
-	s := fmt.Sprintf("Michel analyzed %s in %s", plural(analyzed, "finding", "findings"), project)
+func analyzeSentence(deps *Deps, project string, analyzed, skipped, failed int) string {
+	s := deps.N("cli.analyze.summary", analyzed, project)
 	switch {
 	case skipped > 0 && failed > 0:
-		s += fmt.Sprintf(" (%d skipped, already fresh; %d failed)", skipped, failed)
+		s += deps.T("cli.analyze.summary.skipped_failed", skipped, failed)
 	case skipped > 0:
-		s += fmt.Sprintf(" (%d skipped, already fresh)", skipped)
+		s += deps.T("cli.analyze.summary.skipped", skipped)
 	case failed > 0:
-		s += fmt.Sprintf(" (%d failed)", failed)
+		s += deps.T("cli.analyze.summary.failed", failed)
 	}
-	return s + fmt.Sprintf(". Next: michel findings --project %s", project)
+	return s + deps.T("cli.common.next_findings", project)
 }

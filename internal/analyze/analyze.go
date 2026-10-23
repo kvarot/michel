@@ -38,8 +38,8 @@ type Analysis struct {
 	// InputsHash fingerprints the settings the analysis depends on besides
 	// the finding (risk rule, core packages, exclusions); see InputsHash.
 	InputsHash string `json:"inputs_hash"`
-	// Notes explains degraded results (for example a missing lockfile). It is
-	// not persisted.
+	// Notes explains degraded results (for example a missing lockfile), in
+	// English.
 	Notes []string `json:"notes,omitempty"`
 }
 
@@ -181,8 +181,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 	}
 	record("analyze.start", "ok", map[string]any{"project_id": p.ID, "findings": len(findings)})
 
-	// TODO(plan 3): use the project's own exclusion list once Project has one.
-	exclude := scan.DefaultExclude
+	exclude := scan.EffectiveExclude(p)
 	graphs := map[string]graphEntry{}
 	for _, f := range findings {
 		if err := ctx.Err(); err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/buildinfo"
 	"github.com/kvarot/michel/internal/egress"
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/spf13/cobra"
@@ -38,6 +39,9 @@ func (e *ExitError) Unwrap() error { return e.Err }
 
 // Deps holds the dependencies shared by all commands.
 type Deps struct {
+	// Stdin feeds commands that read a value (michel secret set). Nil means
+	// os.Stdin; a reader that is not an *os.File is never a terminal.
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 	Now    func() time.Time
@@ -46,9 +50,10 @@ type Deps struct {
 	// subcommand runs.
 	Policy       policy.Policy
 	PolicySource policy.Source
-	// Lang is the resolved language of generated text ("en" or "fr"): the
-	// --lang flag, else the policy's assistant.lang, else "en".
-	Lang string
+	// Lang is the resolved language of generated text: the --lang flag,
+	// else the policy's assistant.lang ("auto" defers), else the system's
+	// language, else English.
+	Lang i18n.Lang
 
 	// Store, Audit and Gateway are set by the root command for every command
 	// except help, completion and version.
@@ -99,42 +104,32 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 				return nil
 			}
 			flags := cmd.Flags()
+			// Until the policy is read, messages follow the --lang flag when
+			// it is valid, else the system language.
+			flag, _ := flags.GetString("lang")
+			deps.Lang = i18n.Resolve(flag, "", i18n.SystemLocale())
 			if baseErr != nil && !(flags.Changed("config") && flags.Changed("data-dir")) {
-				return fmt.Errorf("Michel cannot find your user configuration folder (%v). "+
-					"Pass --config and --data-dir to say where to read and store its files", baseErr)
+				return deps.Errorf("cli.root.no_config_dir", baseErr)
 			}
 			cfgPath, _ := flags.GetString("config")
 			dir, _ := flags.GetString("data-dir")
 			p, src, err := policy.Load(cfgPath, dir)
 			if err != nil {
 				// Load's error already names the file.
-				return &ExitError{Code: ExitCodePolicy, Err: fmt.Errorf(
-					"%w. Michel refuses to start without a readable policy. "+
-						"Fix the file or delete it to use the built-in strict_local defaults.", err)}
+				return &ExitError{Code: ExitCodePolicy, Err: deps.Wrapf("cli.root.policy_unreadable", err)}
 			}
 			if err := policy.Validate(p); err != nil {
-				return &ExitError{Code: ExitCodePolicy, Err: fmt.Errorf(
-					"Policy file %s is invalid: %w. Michel refuses to start with an inconsistent policy. "+
-						"Fix the file or delete it to use the built-in strict_local defaults.", cfgPath, err)}
+				return &ExitError{Code: ExitCodePolicy, Err: deps.Wrapf("cli.root.policy_invalid", err, cfgPath)}
 			}
 			deps.Policy, deps.PolicySource = p, src
-			lang, _ := flags.GetString("lang")
-			lang = strings.ToLower(strings.TrimSpace(lang))
-			if lang == "" {
-				lang = p.Assistant.Lang
+			if f := strings.ToLower(strings.TrimSpace(flag)); f != "" && !i18n.Lang(f).Valid() {
+				return &ExitError{Code: ExitCodePolicy, Err: deps.Errorf("cli.root.unknown_lang", f)}
 			}
-			if lang == "" {
-				lang = "en"
-			}
-			if lang != "en" && lang != "fr" {
-				return &ExitError{Code: ExitCodePolicy, Err: fmt.Errorf(
-					"Unknown language %q. Use --lang en or --lang fr.", lang)}
-			}
-			deps.Lang = lang
+			deps.Lang = i18n.Resolve(flag, p.Assistant.Lang, i18n.SystemLocale())
 			if src == policy.SourceFile {
-				fmt.Fprintf(deps.Stderr, "policy: file %s\n", cfgPath)
+				fmt.Fprintln(deps.Stderr, deps.T("cli.root.policy_file", cfgPath))
 			} else {
-				fmt.Fprintf(deps.Stderr, "policy: defaults (no file at %s)\n", cfgPath)
+				fmt.Fprintln(deps.Stderr, deps.T("cli.root.policy_defaults", cfgPath))
 			}
 			if cmd.Name() == "version" {
 				return nil // must work on an absent or read-only data folder
@@ -160,7 +155,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 				},
 			}); err != nil {
 				deps.Close()
-				return fmt.Errorf("Michel cannot write its audit log: %w. Check that %s is writable", err, dir)
+				return deps.Wrapf("cli.root.audit_write", err, dir)
 			}
 			deps.Gateway = egress.New(p, deps.Audit.EgressSink())
 			return nil
@@ -176,7 +171,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	flags.String("config", filepath.Join(dataDir, "config.yaml"), "path to the policy file")
 	flags.String("data-dir", dataDir, "directory where michel stores its data")
 	flags.Bool("json", false, "print results as JSON")
-	flags.String("lang", "", "language of the explanations: en or fr (default: assistant.lang of the policy)")
+	flags.String("lang", "", "language of the explanations: en or fr (default: assistant.lang of the policy, else the system language)")
 
 	root.AddCommand(newVersionCmd(deps))
 	root.AddCommand(newAuditCmd(deps))
@@ -186,6 +181,12 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newAnalyzeCmd(deps))
 	root.AddCommand(newFindingsCmd(deps))
 	root.AddCommand(newFindingCmd(deps))
+	root.AddCommand(newDecideCmd(deps))
+	root.AddCommand(newDecisionsCmd(deps))
+	root.AddCommand(newDigestCmd(deps))
+	root.AddCommand(newSecretCmd(deps))
+	root.AddCommand(newNotifyCmd(deps))
+	root.AddCommand(newServeCmd(deps))
 	return root
 }
 

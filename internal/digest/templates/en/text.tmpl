@@ -1,0 +1,33 @@
+{{define "sev"}}{{.}}{{end}}
+{{- define "pkg"}}  [{{template "sev" .WorstSeverity}}] {{.Name}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{len .OSVIDs}} {{if eq (len .OSVIDs) 1}}advisory{{else}}advisories{{end}}: {{join .OSVIDs ", "}})
+{{if .What}}    {{.What}}
+{{end}}{{end}}
+{{- define "action"}}{{if eq . "fix"}}to be fixed{{else if eq . "defer"}}deferred{{else if eq . "ignore"}}ignored{{else}}decided{{end}}{{end}}
+{{- .Title}}
+{{if .SinceLabel}}{{.SinceLabel}}
+{{end}}{{if .OSVStale}}{{stale}}
+{{end}}{{if .FailedScans}}The last scan of {{.FailedScans}} {{if eq .FailedScans 1}}project{{else}}projects{{end}} did not finish.
+{{end}}
+{{- range .Projects}}
+== {{.Name}} ==
+open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "high"}}, medium {{index .Open "medium"}}, low {{index .Open "low"}}) · decided: fix {{index .Decided "fix"}}, defer {{index .Decided "defer"}}, ignore {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if eq .DaysWithoutCritical 1}}day{{else}}days{{end}} without a new critical{{if eq .CriticalOpen 0}} · 0 critical open{{end}}
+{{if eq .LastScanStatus "failed"}}The last scan failed.
+{{else if eq .LastScanStatus "interrupted"}}The last scan was interrupted.
+{{end}}
+{{- if .New}}New:
+{{range .New}}{{template "pkg" .}}{{end}}{{end}}
+{{- if .Gone}}Gone at the last scan, without proof of a fix:
+{{range .Gone}}{{template "pkg" .}}{{end}}{{end}}
+{{- if .Superseded}}Decisions to review:
+{{range .Superseded}}  {{.Package}} {{.OSVID}}: was {{template "action" .PreviousAction}}, {{reason .Reason}}
+{{end}}{{end}}
+{{- if .Due}}Due dates:
+{{range .Due}}  {{.Package}} {{.OSVID}}: deferred until {{day .DueAt}}{{if .Overdue}} (overdue){{end}}
+{{end}}{{end}}
+{{- end}}
+{{- if .Word}}
+{{.Word}}
+{{end}}
+{{- if .PageURL}}
+Page: {{.PageURL}}
+{{end}}

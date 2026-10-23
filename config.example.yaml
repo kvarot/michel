@@ -26,7 +26,7 @@ db:
   # osv_path: defaults to <data-dir>/osv
 assistant:
   name: Michel
-  lang: en                      # en | fr
+  lang: auto                    # auto | en | fr (auto = language of the system, English if not French)
 # Public risk score (see docs/remediation-risk.md). The AI model never changes these.
 risk:
   major_jump: 40                # points when the fix needs a major version jump
@@ -38,3 +38,27 @@ risk:
   many_call_sites_threshold: 10
   auto_fix_below: 30            # score < 30 -> auto_fix
   handoff_up_to: 60             # 30..60 -> handoff, > 60 -> handoff with a warning
+# Where the digest is sent (michel digest --send). No channel by default.
+# An enabled email or webhook channel needs its own rule in sovereignty.network.allow,
+# for example {host: smtp.example.org, purpose: notify.email} or {host: hooks.example.org, purpose: notify.webhook}.
+# Passwords and signing keys are never written here: store them with 'michel secret set <name>'.
+notify:
+  page_url: http://127.0.0.1:7331/ # link to the "Today" page put in the digests; never carries the access token
+  # channels:
+  #   - name: mail-perso           # free identifier, unique
+  #     type: email
+  #     enabled: true
+  #     host: smtp.example.org
+  #     port: 587                  # 587 = STARTTLS, 465 = implicit TLS; nothing else
+  #     from: michel@example.org
+  #     to: [me@example.org]
+  #     username: me
+  #     password_secret: smtp-perso # name in the secret store, never the value
+  #     projects: []               # empty = every project; else a list of project names
+  #   - name: hook-n8n
+  #     type: webhook
+  #     url: https://hooks.example.org/michel
+  #     format: generic            # generic | slack | discord
+  #     secret: hook-n8n           # name of the HMAC signing key; required unless the url is on this machine
+  #   - name: bureau
+  #     type: toast                # a notification on this computer's desktop

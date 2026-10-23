@@ -35,6 +35,7 @@ type Policy struct {
 	DB          DBConfig          `yaml:"db"`
 	Assistant   AssistantConfig   `yaml:"assistant"`
 	Risk        RiskConfig        `yaml:"risk"`
+	Notify      NotifyConfig      `yaml:"notify"`
 }
 
 // SovereigntyConfig groups the sovereignty rules.
@@ -93,7 +94,8 @@ type DBConfig struct {
 // AssistantConfig controls the assistant persona.
 type AssistantConfig struct {
 	Name string `yaml:"name"`
-	// Lang is the language of generated text: "en" or "fr".
+	// Lang is the language of generated text: "en", "fr" or "auto" (the
+	// system's language, English if it is not French).
 	Lang string `yaml:"lang"`
 }
 
@@ -148,3 +150,64 @@ func (r RiskConfig) WithOverrides(m map[string]int) RiskConfig {
 	}
 	return r
 }
+
+// Purposes of the notification channels in network.allow rules.
+const (
+	PurposeEmail   = "notify.email"
+	PurposeWebhook = "notify.webhook"
+)
+
+// Channel types.
+const (
+	ChannelEmail   = "email"
+	ChannelWebhook = "webhook"
+	ChannelToast   = "toast"
+)
+
+// Webhook body formats.
+const (
+	FormatGeneric = "generic"
+	FormatSlack   = "slack"
+	FormatDiscord = "discord"
+)
+
+// DefaultPageURL is the link to the "Today" page put in the digests.
+const DefaultPageURL = "http://127.0.0.1:7331/"
+
+// NotifyConfig lists where the digest is sent.
+type NotifyConfig struct {
+	// PageURL is the link put in the digests; it never carries the access
+	// token.
+	PageURL  string          `yaml:"page_url"`
+	Channels []ChannelConfig `yaml:"channels"`
+}
+
+// ChannelConfig is one notification channel. Secrets are referred to by
+// their name in the secret store, never by value.
+type ChannelConfig struct {
+	Name string `yaml:"name"`
+	// Type is email, webhook or toast.
+	Type string `yaml:"type"`
+	// Enabled nil means true.
+	Enabled *bool `yaml:"enabled"`
+	// Projects restricts the channel to these project names; empty = all.
+	Projects []string `yaml:"projects"`
+
+	// Email.
+	Host           string   `yaml:"host"`
+	Port           int      `yaml:"port"`
+	From           string   `yaml:"from"`
+	To             []string `yaml:"to"`
+	Username       string   `yaml:"username"`
+	PasswordSecret string   `yaml:"password_secret"`
+
+	// Webhook.
+	URL string `yaml:"url"`
+	// Format is generic, slack or discord ("" = generic).
+	Format string `yaml:"format"`
+	// Secret names the secret holding the HMAC key.
+	Secret string `yaml:"secret"`
+}
+
+// IsEnabled reports whether the channel is enabled (Enabled nil = true).
+func (c ChannelConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }

@@ -102,10 +102,14 @@ func ensureOverrideConfig(dataDir string) (string, error) {
 	return path, nil
 }
 
+// afterScanHook is a test hook run right after the scanner returns.
+var afterScanHook func()
+
 // Options tunes a scan.
 type Options struct {
 	OSVRoot string
-	// Exclude lists folder names to skip. Nil means DefaultExclude.
+	// Exclude lists folder names to skip. Nil means EffectiveExclude of the
+	// project (the defaults plus the project's own list).
 	Exclude []string
 }
 
@@ -119,12 +123,18 @@ type Result struct {
 	Still      int              `json:"still"`
 	Reappeared int              `json:"reappeared"`
 	Gone       int              `json:"gone"`
-	BySeverity map[string]int   `json:"by_severity"`
-	Errors     []error          `json:"-"`
-	ErrorTexts []string         `json:"errors,omitempty"`
+	// Superseded counts the decisions this scan took out of force: the
+	// finding changed, came back changed, or its deferral date was reached.
+	Superseded int            `json:"superseded"`
+	BySeverity map[string]int `json:"by_severity"`
+	Errors     []error        `json:"-"`
+	ErrorTexts []string       `json:"errors,omitempty"`
 	// Warnings lists the osv-scanner.toml files met in the project
 	// (relative paths). Michel does not apply them.
 	Warnings []string `json:"warnings,omitempty"`
+	// Swept counts the stale scans of any project marked interrupted
+	// before this one started (see SweepStale).
+	Swept int `json:"swept,omitempty"`
 }
 
 // lockfile names Michel reads, with their OSV ecosystem.
@@ -229,9 +239,15 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 	}
 	exclude := opt.Exclude
 	if exclude == nil {
-		exclude = DefaultExclude
+		exclude = EffectiveExclude(p)
 	}
 	started := deps.Now().UTC()
+	db := deps.Store.DB()
+	swept, err := SweepStale(ctx, db, started, StaleScanAfter)
+	if err != nil {
+		return res, fmt.Errorf("Michel cannot scan %s: %w. Check that the data folder is writable", p.Name, err)
+	}
+	res.Swept = swept
 	res.ScanID = ulid.Make().String()
 	dbFetched := ""
 	if sts, err := osvdb.Statuses(opt.OSVRoot); err == nil {
@@ -241,7 +257,6 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 			}
 		}
 	}
-	db := deps.Store.DB()
 	if _, err := db.ExecContext(ctx, `INSERT INTO scan (id, project_id, started_at, osv_db_fetched_at, scanner_version, status)
 		VALUES (?,?,?,?,?,?)`, res.ScanID, p.ID, started.Format(time.RFC3339), dbFetched, deps.Version, "running"); err != nil {
 		return res, fmt.Errorf("Michel cannot record the scan: %w. Check that the data folder is writable", err)
@@ -252,6 +267,9 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "scan", Action: action, Target: target, Result: result, Evidence: ev}); err != nil {
 			res.Errors = append(res.Errors, fmt.Errorf("cannot write the audit log: %w", err))
 		}
+	}
+	if swept > 0 {
+		record("scan.sweep", p.Name, "ok", map[string]any{"swept": swept, "max_age": StaleScanAfter.String()})
 	}
 	record("scan.start", p.Name, "ok", map[string]any{"project_id": p.ID, "osv_db_root": opt.OSVRoot})
 
@@ -266,6 +284,19 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 	fail := func(err error) (Result, error) {
 		return failWith(err.Error(), err, map[string]any{})
 	}
+	// A panic must not leave the scan "running": record it as failed with
+	// its cause, then let it go on. A scan already stored keeps its status.
+	defer func() {
+		if r := recover(); r != nil {
+			stored := fmt.Sprintf("panic: %v", r)
+			upd, uerr := db.ExecContext(context.WithoutCancel(ctx), `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=? AND status='running'`,
+				ScanFailed, deps.Now().UTC().Format(time.RFC3339), stored, res.ScanID)
+			if n, _ := rowsAffected(upd, uerr); n > 0 || uerr != nil {
+				record("scan.finish", p.Name, ScanFailed, map[string]any{"error": stored, "reason": "panic"})
+			}
+			panic(r)
+		}
+	}()
 
 	found, configs, err := findLockfiles(p.Path, exclude)
 	if len(configs) > 0 {
@@ -314,6 +345,9 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 			TransitiveScanning: osvscanner.TransitiveScanningActions{Disabled: true},
 		},
 	})
+	if afterScanHook != nil {
+		afterScanHook()
+	}
 	if derr != nil && !errors.Is(derr, osvscanner.ErrVulnerabilitiesFound) && !errors.Is(derr, osvscanner.ErrNoPackagesFound) {
 		return fail(fmt.Errorf("the scanner failed on %s: %w. Nothing was changed; run the scan again", p.Name, derr))
 	}
@@ -386,6 +420,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		status = ScanPartial
 	}
 	finished := deps.Now().UTC()
+	var superseded []Superseded
 	err = func() error {
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
@@ -395,7 +430,11 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		if err := insertManifests(ctx, tx, res.ScanID, manifests); err != nil {
 			return err
 		}
-		res.New, res.Still, res.Reappeared, res.Gone, err = applyScan(ctx, tx, p.ID, res.ScanID, finished, findings, unread)
+		current, err := currentDecisions(ctx, tx, p.ID)
+		if err != nil {
+			return err
+		}
+		res.New, res.Still, res.Reappeared, res.Gone, superseded, err = applyScan(ctx, tx, p.ID, res.ScanID, finished, findings, unread, current)
 		if err != nil {
 			return err
 		}
@@ -409,7 +448,15 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		return fail(fmt.Errorf("Michel cannot store the scan of %s: %w. Nothing was changed; check that the data folder is writable and run it again", p.Name, err))
 	}
 	res.Status = status
+	res.Superseded = len(superseded)
 
+	// The audit logger opens its own transaction: the supersessions are
+	// recorded once the scan is committed.
+	for _, s := range superseded {
+		record("decision.superseded", s.FindingID, "ok", map[string]any{
+			"finding_id": s.FindingID, "project_id": s.ProjectID, "reason": s.Reason, "previous_action": s.Previous,
+		})
+	}
 	for _, m := range manifests {
 		result := "ok"
 		ev := map[string]any{"ecosystem": m.Ecosystem, "packages": m.Packages, "findings": m.Findings, "lock_sha256": m.LockSHA256}
@@ -419,11 +466,19 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		record("scan.manifest", m.RelPath, result, ev)
 	}
 	record("scan.finish", p.Name, status, map[string]any{
-		"new": res.New, "still": res.Still, "reappeared": res.Reappeared, "gone": res.Gone, "by_severity": res.BySeverity,
+		"new": res.New, "still": res.Still, "reappeared": res.Reappeared, "gone": res.Gone, "superseded": res.Superseded, "by_severity": res.BySeverity,
 		"manifests": len(manifests), "duration_ms": finished.Sub(started).Milliseconds(),
 		"ignored_config_files": configs,
 	})
 	return res, nil
+}
+
+// rowsAffected is the row count of an Exec result, 0 when it failed.
+func rowsAffected(r sql.Result, err error) (int64, error) {
+	if err != nil {
+		return 0, err
+	}
+	return r.RowsAffected()
 }
 
 func insertManifests(ctx context.Context, tx *sql.Tx, scanID string, ms []ManifestResult) error {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -38,28 +39,27 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 			}
 			tail := res.Reason == audit.ReasonTailTruncated
 			if tail {
-				msg := fmt.Sprintf("audit: BROKEN at tail: tail truncated (expected %d events, found %d)", res.Expected, res.Checked)
+				msg := deps.T("cli.audit.verify.broken_tail", res.Expected, res.Checked)
 				if !asJSON {
 					fmt.Fprintln(deps.Stdout, msg)
 				}
-				return &ExitError{Code: ExitCodeAuditBroken, Err: fmt.Errorf("%s", msg), Quiet: true}
+				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
 			}
 			if res.Broken != nil {
-				msg := fmt.Sprintf("audit: BROKEN at event %s: %s", res.Broken.ID, res.Reason)
+				msg := deps.T("cli.audit.verify.broken_event", res.Broken.ID, res.Reason)
 				if !asJSON {
 					fmt.Fprintln(deps.Stdout, msg)
 				}
-				return &ExitError{Code: ExitCodeAuditBroken, Err: fmt.Errorf("%s", msg), Quiet: true}
+				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
 			}
 			if !asJSON {
 				if res.Head != "" {
-					fmt.Fprintf(deps.Stdout, "audit: %d events verified, head %.12s\n", res.Checked, res.Head)
+					fmt.Fprintln(deps.Stdout, deps.N("cli.audit.verify.ok_head", res.Checked, res.Head))
 				} else {
-					fmt.Fprintf(deps.Stdout, "audit: %d events verified\n", res.Checked)
+					fmt.Fprintln(deps.Stdout, deps.N("cli.audit.verify.ok", res.Checked))
 				}
 				if res.Reason == audit.ReasonHeadAbsent {
-					fmt.Fprintf(deps.Stdout, "audit: head anchor absent (%s is missing), so the removal of the newest events cannot be checked. The next recorded event writes it again.\n",
-						audit.HeadFile(deps.Store.Path()))
+					fmt.Fprintln(deps.Stdout, deps.T("cli.audit.verify.head_absent", audit.HeadFile(deps.Store.Path())))
 				}
 			}
 			return nil
@@ -75,12 +75,12 @@ func newAuditListCmd(deps *Deps) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if last < 1 {
-				return fmt.Errorf("--last must be at least 1. Pass a positive number of events to show")
+				return deps.Errorf("cli.audit.list.bad_last")
 			}
 			rows, err := deps.Store.DB().QueryContext(cmd.Context(), `SELECT id, ts, actor, action, target, result
 				FROM (SELECT rowid AS rid, * FROM audit_event ORDER BY rowid DESC LIMIT ?) ORDER BY rid`, last)
 			if err != nil {
-				return fmt.Errorf("cannot read the audit log: %w", err)
+				return deps.Wrapf("cli.audit.list.read_failed", err)
 			}
 			defer rows.Close()
 			events := []audit.Event{}

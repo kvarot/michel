@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/explain"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
@@ -15,7 +16,7 @@ import (
 )
 
 var (
-	validStatuses   = []string{"new", "pending", "gone", "all"}
+	validStatuses   = []string{"new", "pending", "decided", "gone", "all"}
 	validSeverities = []string{"critical", "high", "medium", "low", "unknown"}
 )
 
@@ -26,6 +27,13 @@ func oneOf(v string, list []string) bool {
 		}
 	}
 	return false
+}
+
+// findingRow is one finding of 'michel findings --json' with the decision
+// in force on it (null when there is none).
+type findingRow struct {
+	scan.Finding
+	Decision *decide.Decision `json:"decision"`
 }
 
 func newFindingsCmd(deps *Deps) *cobra.Command {
@@ -39,18 +47,18 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if name == "" {
-				return errors.New("Michel needs a project. Pass --project <name>; 'michel project list' shows the names.")
+				return deps.Errorf("cli.findings.need_project")
 			}
 			if status != "" && !oneOf(status, validStatuses) {
-				return fmt.Errorf("Unknown status %q. Use one of %s.", status, strings.Join(validStatuses, ", "))
+				return deps.Errorf("cli.findings.unknown_status", status, strings.Join(validStatuses, ", "))
 			}
 			if severity != "" && !oneOf(severity, validSeverities) {
-				return fmt.Errorf("Unknown severity %q. Use one of %s.", severity, strings.Join(validSeverities, ", "))
+				return deps.Errorf("cli.findings.unknown_severity", severity, strings.Join(validSeverities, ", "))
 			}
 			p, err := projectRepo(deps).Get(ctx, name)
 			if err != nil {
 				if errors.Is(err, project.ErrNotFound) {
-					return fmt.Errorf("Cannot list findings for %s: no project has this name. Run 'michel project list' to see the registered names.", name)
+					return deps.Errorf("cli.findings.not_found", name)
 				}
 				return err
 			}
@@ -64,22 +72,35 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 					list = append(list, f)
 				}
 			}
+			decisions, err := decide.NewRepo(deps.Store).CurrentByProject(ctx, p.ID)
+			if err != nil {
+				return err
+			}
 			if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
-				return json.NewEncoder(deps.Stdout).Encode(list)
+				rows := make([]findingRow, 0, len(list))
+				for _, f := range list {
+					r := findingRow{Finding: f}
+					if d, ok := decisions[f.ID]; ok {
+						r.Decision = &d
+					}
+					rows = append(rows, r)
+				}
+				return json.NewEncoder(deps.Stdout).Encode(rows)
 			}
 			if len(list) == 0 {
-				fmt.Fprintf(deps.Stdout, "No findings to show for %s. Run 'michel scan --project %s' to refresh them.\n", p.Name, p.Name)
+				fmt.Fprintln(deps.Stdout, deps.T("cli.findings.none", p.Name, p.Name))
 				return nil
 			}
 			var table bytes.Buffer
 			tw := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "severity\tpackage\tinstalled\tfixed\tosv_id\tmanifest\tstatus")
+			fmt.Fprintln(tw, "severity\tpackage\tinstalled\tfixed\tosv_id\tmanifest\tstatus\tdecision")
 			for _, f := range list {
 				fixed := "-"
 				if len(f.FixedVersions) > 0 {
 					fixed = strings.Join(f.FixedVersions, ",")
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safe(f.SeverityLabel), safe(f.Package), safe(f.InstalledVersion), safe(fixed), safe(f.OSVID), safe(f.ManifestRelPath), f.Status)
+				d, ok := decisions[f.ID]
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safe(f.SeverityLabel), safe(f.Package), safe(f.InstalledVersion), safe(fixed), safe(f.OSVID), safe(f.ManifestRelPath), f.Status, decisionCell(d, ok))
 			}
 			if err := tw.Flush(); err != nil {
 				return err
@@ -106,7 +127,7 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 	}
 	f := c.Flags()
 	f.StringVar(&name, "project", "", "name of the project (required)")
-	f.StringVar(&status, "status", "", "only this status: new, pending, gone (no longer seen at the last scan, not proof of a fix) or all (default: everything except gone)")
+	f.StringVar(&status, "status", "", "only this status: new, pending, decided (a decision is in force, see 'michel decisions'), gone (no longer seen at the last scan, not proof of a fix) or all (default: everything except gone)")
 	f.BoolVar(&explainRows, "explain", false, "also print, for each finding, one plain sentence saying where your code uses the package")
 	f.StringVar(&severity, "severity", "", "only this severity: critical, high, medium, low or unknown")
 	return c

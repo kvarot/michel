@@ -14,6 +14,8 @@ go build -o bin/michel.exe ./cmd/michel    # Windows
 bin/michel version
 ```
 
+La page « Aujourd'hui » (`michel serve`) est intégrée au programme. Pour la reconstruire depuis `web/`, lance `make web` (nécessite Node et npm ; `make build` le fait tout seul quand npm est présent) avant `go build`. Sans cette étape, le programme se compile quand même et `michel serve` affiche une courte page de texte.
+
 ## Premier lancement et emplacement de la config
 
 Michel lit `config.yaml` et stocke ses données (base SQLite, bases OSV) dans `<dossier de config utilisateur>/michel/`, où le dossier de config utilisateur est celui de `os.UserConfigDir()` en Go :
@@ -88,7 +90,23 @@ michel findings --project monprojet --severity critical --explain
 
 ## Langue
 
-`--lang en|fr` (toute commande qui explique) l'emporte sur `assistant.lang` du fichier de politique, `en` par défaut. La langue ne change que la formulation : les faits, le score et les clés JSON sont identiques.
+`--lang en|fr` (toute commande qui t'affiche du texte) l'emporte sur `assistant.lang` du fichier de politique, `auto` par défaut : la langue du système, l'anglais si ce n'est pas le français. La langue ne change que la formulation : les faits, le score et les clés JSON sont identiques. Les textes gardés dans le dossier de données (erreurs de scan, erreurs de canaux, preuves du journal d'audit) restent en anglais.
+
+## Décisions, digest, notifications et page « Aujourd'hui »
+
+```
+michel decide <id-ou-préfixe> fix|defer|ignore [--why "..."] [--for 30d | --until AAAA-MM-JJ]
+michel decide --project monprojet --package vendor/lib defer
+michel decisions --project monprojet [--status superseded]
+michel digest [--send] [--since AAAA-MM-JJ] [--html | --json]
+michel scan --all --digest
+michel notify list
+michel notify test <canal>
+michel secret set|list|delete <nom>
+michel serve [--listen 127.0.0.1:7331] [--open]
+```
+
+Aucune de ces commandes n'a besoin du réseau, sauf `digest --send`, `scan --all --digest` et `notify test` sur un canal e-mail ou webhook : il leur faut alors une règle d'autorisation pour le serveur de ce canal. Tout est expliqué dans [daily-digest.fr.md](daily-digest.fr.md), y compris comment lancer le digest automatiquement chaque matin.
 
 ## Réglages par projet
 
@@ -97,7 +115,7 @@ michel project set monprojet --core-package vendor/core --core-package autre-lib
 michel project set monprojet --risk major_jump=50 --risk many_call_sites_threshold=20
 ```
 
-`--core-package` remplace toute la liste des paquets dont la mise à jour est plus risquée pour ce projet (`--core-package ''` la vide). `--risk clé=valeur` remplace une valeur de la section `risk.*` de la politique pour ce projet seulement ; les autres remplacements sont conservés. Les analyses stockées gardent une empreinte de ces réglages : elles sont donc recalculées au scan suivant ou avec `michel analyze --project monprojet`, sans `--force`. Les clés et seuils sont décrits dans [remediation-risk.fr.md](../remediation-risk.fr.md) et listés dans `config.example.yaml`.
+`--core-package` remplace toute la liste des paquets dont la mise à jour est plus risquée pour ce projet (`--core-package ''` la vide). `--exclude <nom-de-dossier>` (tu peux le répéter) remplace la liste des dossiers que les scans et les analyses ignorent, où qu'ils se trouvent dans le projet, en plus de `vendor/` et `node_modules/` (`--exclude ''` la vide), par exemple `michel project set monprojet --exclude fixtures --exclude legacy`. `--risk clé=valeur` remplace une valeur de la section `risk.*` de la politique pour ce projet seulement ; les autres remplacements sont conservés. Les analyses stockées gardent une empreinte de ces réglages : elles sont donc recalculées au scan suivant ou avec `michel analyze --project monprojet`, sans `--force`. Les clés et seuils sont décrits dans [remediation-risk.fr.md](../remediation-risk.fr.md) et listés dans `config.example.yaml`.
 
 ## Scripts
 

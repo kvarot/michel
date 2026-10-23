@@ -16,7 +16,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 			t.Fatalf("open #%d: %v", i, err)
 		}
 		var n int
-		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 3 {
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 4 {
 			t.Fatalf("schema_migrations rows = %d, err %v", n, err)
 		}
 		var mode string
@@ -58,7 +58,7 @@ func TestMigrationAppliedByAnotherProcessMeanwhileIsSkipped(t *testing.T) {
 	}
 	defer s.Close()
 	var n int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 3 {
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 4 {
 		t.Fatalf("schema_migrations rows = %d err %v", n, err)
 	}
 }
@@ -146,7 +146,7 @@ func TestMigration0002UpgradesExistingDatabase(t *testing.T) {
 		t.Errorf("row = %q %q %q", name, core, over)
 	}
 	var versions string
-	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2,3" {
+	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2,3,4" {
 		t.Errorf("versions = %q err %v", versions, err)
 	}
 }
@@ -163,5 +163,103 @@ func TestMigration0003AddsAnalysisInputs(t *testing.T) {
 	var n int
 	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_analysis_project'`).Scan(&n); err != nil || n != 1 {
 		t.Errorf("idx_analysis_project: n=%d err=%v", n, err)
+	}
+}
+
+func tableColumns(t *testing.T, db *sql.DB, table string) map[string]bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		have[name] = true
+	}
+	return have
+}
+
+func TestMigration0004Applies(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for table, cols := range map[string][]string{
+		"project": {"exclude"},
+		"finding": {"status_changed_at"},
+		"analysis": {"notes", "calls_unreadable", "calls_unreadable_paths", "calls_test_files", "calls_test_file_count",
+			"calls_test_hit_count", "calls_source_files", "coverage_skipped", "coverage_unreadable"},
+		"decision": {"id", "finding_id", "project_id", "action", "justification", "due_at", "author", "created_at",
+			"seen_severity", "seen_fixed_versions", "superseded_at", "superseded_reason"},
+		"digest_run": {"id", "since", "until", "lang", "projects", "summary", "channels", "created_at"},
+	} {
+		have := tableColumns(t, s.DB(), table)
+		for _, c := range cols {
+			if !have[c] {
+				t.Errorf("%s.%s missing", table, c)
+			}
+		}
+	}
+	for _, idx := range []string{"idx_decision_finding", "idx_decision_project", "idx_digest_run_created"} {
+		var n int
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s: n=%d err=%v", idx, n, err)
+		}
+	}
+	body, err := migrationFS.ReadFile("migrations/0004_decisions_digest.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(body))
+	for _, banned := range []string{"rowid", "autoincrement", "datetime("} {
+		if strings.Contains(lower, banned) {
+			t.Errorf("0004 is not portable: it contains %q", banned)
+		}
+	}
+}
+
+func TestMigration0004BackfillsStatusChangedAt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "michel.db")
+	db, err := sql.Open("sqlite", "file:///"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range []string{"0001_init.sql", "0002_analysis.sql", "0003_analysis_inputs.sql"} {
+		body, err := migrationFS.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(string(body)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations VALUES (?, '2026-01-01T00:00:00Z')`, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id, installed_version,
+		status, first_seen_scan, last_seen_scan, first_seen_at, last_seen_at)
+		VALUES ('f1','p1','composer.lock','Packagist','acme/lib','ACME-1','1.0.0','pending','s1','s2','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var changed string
+	if err := s.DB().QueryRow(`SELECT status_changed_at FROM finding WHERE id='f1'`).Scan(&changed); err != nil || changed != "2026-01-02T00:00:00Z" {
+		t.Errorf("status_changed_at = %q err %v", changed, err)
 	}
 }
