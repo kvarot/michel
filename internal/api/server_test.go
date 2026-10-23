@@ -373,7 +373,7 @@ func TestServeWithoutDistServesPlaceholder(t *testing.T) {
 	if _, body = f.do("GET", "/", "", "", "Accept-Language", "fr-FR,fr;q=0.9"); !strings.Contains(body, html.EscapeString(i18n.T(i18n.FR, "api.no_ui"))) {
 		t.Errorf("placeholder Accept-Language fr:\n%s", body)
 	}
-	for _, p := range []string{"/assets/app.js", "/sw.js", "/manifest.webmanifest", "/icons/192.png", "/nowhere"} {
+	for _, p := range []string{"/assets/app.js", "/sw.js", "/manifest.webmanifest", "/sw-manifest.json", "/icons/192.png", "/nowhere"} {
 		if resp, _ := f.do("GET", p, "", ""); resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s = %d", p, resp.StatusCode)
 		}
@@ -387,6 +387,7 @@ func TestServeWithoutDistServesPlaceholder(t *testing.T) {
 		"assets/app-1234.js":   {Data: []byte("console.log(1)")},
 		"sw.js":                {Data: []byte("self.addEventListener('fetch',()=>{})")},
 		"manifest.webmanifest": {Data: []byte(`{"name":"Michel"}`)},
+		"sw-manifest.json":     {Data: []byte(`{"files":["/"]}`)},
 		"icons/192.png":        {Data: []byte("png")},
 	})
 	resp, body = g.do("GET", "/?token="+testToken, "", "")
@@ -394,7 +395,7 @@ func TestServeWithoutDistServesPlaceholder(t *testing.T) {
 		t.Errorf("index = %d %s", resp.StatusCode, body)
 	}
 	for p, want := range map[string]string{"/assets/app-1234.js": "console.log", "/sw.js": "addEventListener",
-		"/manifest.webmanifest": `"Michel"`, "/icons/192.png": "png"} {
+		"/manifest.webmanifest": `"Michel"`, "/icons/192.png": "png", "/sw-manifest.json": `"files"`} {
 		resp, body := g.do("GET", p, "", "")
 		if resp.StatusCode != 200 || !strings.Contains(body, want) {
 			t.Errorf("GET %s = %d %q", p, resp.StatusCode, body)

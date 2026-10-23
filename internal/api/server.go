@@ -113,6 +113,7 @@ func (s *server) routes() {
 	m.HandleFunc("GET /icons/", s.static)
 	m.HandleFunc("GET /sw.js", s.static)
 	m.HandleFunc("GET /manifest.webmanifest", s.static)
+	m.HandleFunc("GET /sw-manifest.json", s.static)
 }
 
 // ServeHTTP applies the checks every request goes through, in order: the

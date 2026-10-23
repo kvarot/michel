@@ -1,0 +1,98 @@
+/*
+ * Michel's page: a calm morning read. One voice (Michel's sentences, set in
+ * a book serif), a quiet interface around it (the system sans), one column.
+ * No web font is downloaded: the CSP keeps the page to its own origin.
+ */
+:root {
+  --m-voice: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", Georgia, serif;
+  --m-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --m-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --m-column: 46rem;
+  --m-gutter: 16px;
+}
+
+html, body { background: rgb(var(--v-theme-background)); }
+body, .v-application { font-family: var(--m-ui); }
+.v-application { color: rgb(var(--v-theme-on-background)); }
+
+.m-column {
+  max-width: calc(var(--m-column) + 2 * var(--m-gutter));
+  margin: 0 auto;
+  padding: 0 var(--m-gutter);
+}
+
+/* Michel speaks: the headline, his word, the three sentences. */
+.m-voice { font-family: var(--m-voice); }
+.m-headline {
+  font-family: var(--m-voice);
+  font-weight: 600;
+  font-size: clamp(1.75rem, 1.2rem + 2.6vw, 2.6rem);
+  line-height: 1.18;
+  letter-spacing: -0.01em;
+  margin: 0;
+  max-width: 22ch;
+  text-wrap: balance;
+}
+.m-word {
+  font-family: var(--m-voice);
+  font-size: 1.2rem;
+  line-height: 1.5;
+  margin: 0.75rem 0 0;
+}
+.m-muted { color: rgba(var(--v-theme-on-background), 0.72); }
+.m-small { font-size: 0.875rem; line-height: 1.45; }
+.m-code {
+  font-family: var(--m-mono);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+/* A severity is always a color AND a word. */
+.m-sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: rgb(var(--m-sev));
+}
+.m-sev::before {
+  content: "";
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 2px;
+  background: currentColor;
+}
+.m-sev--critical { --m-sev: var(--v-theme-critical); }
+.m-sev--critical::before { transform: rotate(45deg); }
+.m-sev--high { --m-sev: var(--v-theme-high); }
+.m-sev--medium { --m-sev: var(--v-theme-medium); }
+.m-sev--low { --m-sev: var(--v-theme-low); }
+.m-sev--unknown { --m-sev: var(--v-theme-unknown); }
+.m-sev--unknown::before { background: transparent; border: 2px solid currentColor; }
+
+.m-term {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 2px; }
+
+.m-skip {
+  position: absolute;
+  left: -9999px;
+}
+.m-skip:focus {
+  left: var(--m-gutter);
+  top: 8px;
+  z-index: 10;
+  background: rgb(var(--v-theme-surface));
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
