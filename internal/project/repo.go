@@ -35,7 +35,7 @@ func NewRepo(s *store.Store) *Repo {
 	return &Repo{s: s, entropy: ulid.Monotonic(rand.Reader, 0)}
 }
 
-const cols = `id, name, source_type, path, classification, fix_level, test_cmd, install_cmd, active, created_at, core_packages, risk_overrides`
+const cols = `id, name, source_type, path, classification, fix_level, test_cmd, install_cmd, active, created_at, core_packages, risk_overrides, exclude`
 
 func validClassification(c policy.Classification) bool {
 	switch c {
@@ -120,9 +120,13 @@ func (r *Repo) insert(ctx context.Context, p Project) error {
 	if err != nil {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}
-	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO project (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+	exclude, err := json.Marshal(p.Exclude)
+	if err != nil {
+		return fmt.Errorf("cannot save the project: %w", err)
+	}
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO project (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.SourceType, p.Path, string(p.Classification), p.FixLevel,
-		p.TestCmd, p.InstallCmd, active, p.CreatedAt.UTC().Format(time.RFC3339), string(core), string(over))
+		p.TestCmd, p.InstallCmd, active, p.CreatedAt.UTC().Format(time.RFC3339), string(core), string(over), string(exclude))
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return fmt.Errorf("%w: %s", ErrDuplicateName, p.Name)
@@ -136,9 +140,9 @@ type scanner interface{ Scan(...any) error }
 
 func scan(s scanner) (Project, error) {
 	var p Project
-	var class, created, core, over string
+	var class, created, core, over, exclude string
 	var active int
-	if err := s.Scan(&p.ID, &p.Name, &p.SourceType, &p.Path, &class, &p.FixLevel, &p.TestCmd, &p.InstallCmd, &active, &created, &core, &over); err != nil {
+	if err := s.Scan(&p.ID, &p.Name, &p.SourceType, &p.Path, &class, &p.FixLevel, &p.TestCmd, &p.InstallCmd, &active, &created, &core, &over, &exclude); err != nil {
 		return Project{}, err
 	}
 	p.Classification = policy.Classification(class)
@@ -148,6 +152,10 @@ func scan(s scanner) (Project, error) {
 	}
 	if err := json.Unmarshal([]byte(over), &p.RiskOverrides); err != nil {
 		return Project{}, fmt.Errorf("project %s has unreadable risk overrides %q: %w", p.Name, over, err)
+	}
+	p.Exclude = []string{}
+	if err := json.Unmarshal([]byte(exclude), &p.Exclude); err != nil {
+		return Project{}, fmt.Errorf("project %s has an unreadable list of excluded folders %q: %w", p.Name, exclude, err)
 	}
 	_ = normalizeExtras(&p) // a stored JSON null becomes an empty value; unknown stored keys are left as they are
 	p.Active = active != 0
@@ -237,7 +245,7 @@ func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
 }
 
 // Update rewrites the editable fields of p (found by ID): classification,
-// fix level, commands, core packages and risk overrides. Values are validated
+// fix level, commands, core packages, risk overrides and excluded folders. Values are validated
 // like in Add.
 func (r *Repo) Update(ctx context.Context, p Project) error {
 	if !validClassification(p.Classification) {
@@ -257,9 +265,13 @@ func (r *Repo) Update(ctx context.Context, p Project) error {
 	if err != nil {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}
+	exclude, err := json.Marshal(p.Exclude)
+	if err != nil {
+		return fmt.Errorf("cannot save the project: %w", err)
+	}
 	res, err := r.s.DB().ExecContext(ctx, `UPDATE project SET classification = ?, fix_level = ?, test_cmd = ?, install_cmd = ?,
-		core_packages = ?, risk_overrides = ? WHERE id = ?`,
-		string(p.Classification), p.FixLevel, p.TestCmd, p.InstallCmd, string(core), string(over), p.ID)
+		core_packages = ?, risk_overrides = ?, exclude = ? WHERE id = ?`,
+		string(p.Classification), p.FixLevel, p.TestCmd, p.InstallCmd, string(core), string(over), string(exclude), p.ID)
 	if err != nil {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}

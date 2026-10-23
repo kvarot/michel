@@ -78,7 +78,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			failures := []failure{}
 			problems := false
 			for _, p := range targets {
-				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root})
+				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root, Exclude: scan.EffectiveExclude(p)})
 				if err != nil {
 					if errors.Is(err, osvdb.ErrDatabaseMissing) && !all {
 						return err

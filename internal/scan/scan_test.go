@@ -3,10 +3,13 @@ package scan
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -442,5 +445,128 @@ func TestOverrideConfigIsRestoredWhenEdited(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(path); string(b) != overrideContent {
 		t.Fatalf("content = %q", b)
+	}
+}
+
+// treeDigest is the SHA-256 of every path, size and modification time under
+// root: equal digests mean nothing was created, removed or written there.
+func treeDigest(t *testing.T, root string) string {
+	t.Helper()
+	h := sha256.New()
+	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, p)
+		fmt.Fprintf(h, "%s\x00%d\x00%d\x00%v\n", filepath.ToSlash(rel), info.Size(), info.ModTime().UnixNano(), info.Mode())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func TestScanNeverWritesUnderProject(t *testing.T) {
+	e := newEnv(t, "project-a")
+	before := treeDigest(t, e.proj.Path)
+	e.run(t)
+	e.run(t)
+	if after := treeDigest(t, e.proj.Path); after != before {
+		t.Error("the project folder changed during the scan")
+	}
+}
+
+func TestScanSetsStatusChangedAt(t *testing.T) {
+	e := newEnv(t, "project-a")
+	clock := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	e.deps.Now = func() time.Time { return clock }
+	changedAt := func(osvID string) (changed, lastSeen, status string) {
+		t.Helper()
+		if err := e.st.DB().QueryRow(`SELECT status_changed_at, last_seen_at, status FROM finding WHERE osv_id=?`, osvID).
+			Scan(&changed, &lastSeen, &status); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	at := func(c time.Time) string { return c.Format(time.RFC3339) }
+
+	t1 := clock
+	e.run(t) // new
+	if c, last, _ := changedAt("ACME-2026-0001"); c != last || c != at(t1) {
+		t.Fatalf("scan 1: status_changed_at %q last_seen_at %q", c, last)
+	}
+	clock = clock.Add(time.Hour)
+	t2 := clock
+	e.run(t) // new -> pending: a status change
+	if c, _, s := changedAt("ACME-2026-0001"); s != StatusPending || c != at(t2) {
+		t.Fatalf("scan 2: %s at %q", s, c)
+	}
+	clock = clock.Add(time.Hour)
+	e.run(t) // pending -> pending: no change
+	if c, last, _ := changedAt("ACME-2026-0001"); c != at(t2) || last == at(t2) {
+		t.Fatalf("scan 3 (no change): status_changed_at %q last_seen_at %q", c, last)
+	}
+	fixed := []byte(`{"content-hash":"x","packages":[{"name":"acme/vuln","version":"1.0.2"},{"name":"acme/safe","version":"2.0.0"}],"packages-dev":[]}`)
+	if err := os.WriteFile(filepath.Join(e.proj.Path, "composer.lock"), fixed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Hour)
+	t4 := clock
+	e.run(t) // the composer findings disappear
+	if c, _, s := changedAt("ACME-2026-0001"); s != StatusGone || c != at(t4) {
+		t.Errorf("scan 4 (gone): %s at %q, want %q", s, c, at(t4))
+	}
+	if c, _, s := changedAt("ACME-2026-0101"); s != StatusPending || c != at(t2) {
+		t.Errorf("scan 4 (still present): %s at %q, want %q", s, c, at(t2))
+	}
+}
+
+func TestScanPanicIsRecordedAsFailed(t *testing.T) {
+	e := newEnv(t, "project-a")
+	afterScanHook = func() { panic("boom") }
+	t.Cleanup(func() { afterScanHook = nil })
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_, _ = Run(context.Background(), e.deps, e.proj, Options{OSVRoot: osvRoot})
+	}()
+	if recovered != "boom" {
+		t.Fatalf("the panic was not passed on: %v", recovered)
+	}
+	var status, errText, finished string
+	if err := e.st.DB().QueryRow(`SELECT status, error, finished_at FROM scan`).Scan(&status, &errText, &finished); err != nil {
+		t.Fatal(err)
+	}
+	if status != ScanFailed || !strings.Contains(errText, "panic") || !strings.Contains(errText, "boom") || finished == "" {
+		t.Errorf("scan row = %q %q %q", status, errText, finished)
+	}
+	var result string
+	if err := e.st.DB().QueryRow(`SELECT result FROM audit_event WHERE action='scan.finish'`).Scan(&result); err != nil || result != ScanFailed {
+		t.Errorf("scan.finish result %q err %v", result, err)
+	}
+}
+
+func TestEffectiveExcludeMergesDefaults(t *testing.T) {
+	saved := append([]string{}, DefaultExclude...)
+	got := EffectiveExclude(project.Project{Exclude: []string{"vendor", "build"}})
+	want := []string{".git", "build", "node_modules", "vendor"}
+	if !slices.Equal(got, want) {
+		t.Errorf("EffectiveExclude = %v, want %v", got, want)
+	}
+	if !slices.Equal(DefaultExclude, saved) {
+		t.Errorf("DefaultExclude was changed: %v", DefaultExclude)
+	}
+	if got := EffectiveExclude(project.Project{}); !slices.Equal(got, []string{".git", "node_modules", "vendor"}) {
+		t.Errorf("without project exclusions: %v", got)
+	}
+}
+
+func TestRunSkipsProjectExcludedFolders(t *testing.T) {
+	e := newEnv(t, "project-a")
+	e.proj.Exclude = []string{"web"}
+	r := e.run(t)
+	if len(r.Manifests) != 1 || r.Manifests[0].RelPath != "composer.lock" || r.New != 2 {
+		t.Errorf("manifests %+v new %d", r.Manifests, r.New)
 	}
 }

@@ -381,3 +381,73 @@ func TestRunCancelledRecordsFinish(t *testing.T) {
 		t.Errorf("finish: %v", fin)
 	}
 }
+
+// assertNoZeroField fails for every zero field of v (recursively in structs),
+// so a field added later without persistence breaks the round-trip test.
+func assertNoZeroField(t *testing.T, v reflect.Value, path string) {
+	t.Helper()
+	if v.Kind() == reflect.Struct && v.Type() != reflect.TypeOf(time.Time{}) {
+		for i := 0; i < v.NumField(); i++ {
+			assertNoZeroField(t, v.Field(i), path+"."+v.Type().Field(i).Name)
+		}
+		return
+	}
+	if v.IsZero() {
+		t.Errorf("%s is zero: the round trip does not cover it", path)
+	}
+}
+
+func TestSaveGetRoundTripEveryField(t *testing.T) {
+	e := newEnv(t)
+	repo := NewRepo(e.st)
+	yes := true
+	in := Analysis{
+		FindingID: "f1", ProjectID: "p1", ComputedAt: *e.now, MichelVersion: "v1",
+		Path:            DepPath{Directness: Transitive, Via: []string{"acme/lib", "acme/mid"}, Constraint: "^1.0"},
+		HasRootManifest: true,
+		Upgrade:         Upgrade{Target: "2.0.0", Jump: JumpMajor, ConstraintAllows: &yes},
+		Calls: CallSites{
+			Sites: []CallSite{{File: "src/A.php", Line: 3, IsTest: true}}, Count: 7, Quality: "psr4",
+			Namespaces: []string{`Acme\Vuln`}, Unreadable: 2, UnreadablePaths: []string{"src/Big.php", "src/Locked.php"},
+			TestFiles: []string{"tests/ATest.php"}, TestFileCount: 3, TestHitCount: 5, SourceFiles: []string{"src/A.php", "src/B.php"},
+		},
+		Coverage: Coverage{TestFiles: []string{"tests/ATest.php"}, Count: 4, Method: "reference",
+			Skipped: []string{"index"}, Unreadable: 1},
+		Changelog: Changelog{Source: "vendor/acme/vuln/CHANGELOG.md", Excerpt: "## 2.0.0", Available: true, Breaking: true,
+			BreakingLines: []string{"BREAKING: x"}, Note: "no version headings"},
+		Risk:       Risk{Score: 55, Recommendation: RecHandoff, Warning: true, Terms: map[string]int{"major_jump": 30}},
+		InputsHash: "abc123",
+		Notes:      []string{"dependency graph unavailable: no lockfile"},
+	}
+	// Snippets are never stored: the only field left zero on purpose.
+	probe := in
+	probe.Calls.Sites = []CallSite{{File: "x", Line: 1, IsTest: true, Snippet: "x"}}
+	assertNoZeroField(t, reflect.ValueOf(probe), "Analysis")
+
+	if err := repo.Save(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	out, ok, err := repo.Get(context.Background(), "f1")
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("round trip differs:\n in  %+v\n out %+v", in, out)
+	}
+}
+
+func TestRunUsesProjectExclusions(t *testing.T) {
+	e := newEnv(t)
+	e.p.Exclude = []string{"build"}
+	if _, err := Run(context.Background(), e.deps, e.p, []scan.Finding{e.f}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := NewRepo(e.st).Get(context.Background(), e.f.ID)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	want := InputsHash(e.deps.Risk, e.p, scan.EffectiveExclude(e.p), isCore(e.p, e.f.Ecosystem, e.f.Package))
+	if got.InputsHash != want {
+		t.Errorf("inputs hash %s, want the one built from the project's exclusions %s", got.InputsHash, want)
+	}
+}

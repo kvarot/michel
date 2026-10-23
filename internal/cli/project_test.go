@@ -397,3 +397,43 @@ func TestProjectSetRefusesInconsistentThresholds(t *testing.T) {
 		t.Fatalf("consistent pair refused: %v", err)
 	}
 }
+
+func TestProjectSetExclude(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "demo", "--exclude", "tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, list, _, err := run(t, dir, "project", "list", "--json"); err != nil || !strings.Contains(list, `"exclude":["tmp"]`) {
+		t.Fatalf("after add: %v %s", err, list)
+	}
+	_, out, _, err := run(t, dir, "project", "set", "demo", "--exclude", "dist", "--exclude", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Analysis will be recomputed") {
+		t.Errorf("out = %q", out)
+	}
+	if _, list, _, err := run(t, dir, "project", "list", "--json"); err != nil || !strings.Contains(list, `"exclude":["build","dist"]`) {
+		t.Errorf("after set: %v %s", err, list)
+	}
+	ev := auditRows(t, dir, "project.set")
+	if len(ev) != 1 || ev[0].result != "ok" {
+		t.Fatalf("events = %+v", ev)
+	}
+	if b, _ := json.Marshal(ev[0].evidence); !strings.Contains(string(b), "exclude") {
+		t.Errorf("evidence = %s", b)
+	}
+	if _, _, _, err := run(t, dir, "project", "set", "demo", "--exclude", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, list, _, err := run(t, dir, "project", "list", "--json"); err != nil || !strings.Contains(list, `"exclude":[]`) {
+		t.Errorf("after clearing: %v %s", err, list)
+	}
+	_, _, _, err = run(t, dir, "project", "set", "demo", "--exclude", "src/generated")
+	if err == nil || !strings.HasPrefix(err.Error(), "Cannot update project") || !strings.Contains(err.Error(), "folder name") {
+		t.Errorf("path refused? err = %v", err)
+	}
+	if rows := auditRows(t, dir, "project.set"); len(rows) != 3 || rows[2].result != "denied" {
+		t.Errorf("events = %+v", rows)
+	}
+}

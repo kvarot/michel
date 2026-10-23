@@ -42,6 +42,8 @@ func addDenialMessage(path, name string, err error) string {
 		return "Cannot add project: the fix level must be 0, 1, 2 or 3. Pass --fix-level with one of these values (default 1)."
 	case errors.Is(err, project.ErrInvalidClassification):
 		return "Cannot add project: unknown classification. Use one of public, internal, confidential, sensitive, health."
+	case errors.Is(err, project.ErrInvalidExclude):
+		return fmt.Sprintf("Cannot add project: %v. --exclude skips every folder with that name, at any depth.", err)
 	default:
 		return fmt.Sprintf("Cannot add project: %v. Check the arguments and try again.", err)
 	}
@@ -49,7 +51,7 @@ func addDenialMessage(path, name string, err error) string {
 
 func newProjectAddCmd(deps *Deps) *cobra.Command {
 	var name, class, testCmd, installCmd string
-	var corePkgs []string
+	var corePkgs, exclude []string
 	var fixLevel int
 	c := &cobra.Command{
 		Use:   "add <path>",
@@ -66,7 +68,7 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 				Name: name, Path: path, Classification: policy.Classification(class),
 				FixLevel: fixLevel, FixLevelSet: cmd.Flags().Changed("fix-level"),
 				TestCmd: testCmd, InstallCmd: installCmd,
-				CorePackages: cleanList(corePkgs),
+				CorePackages: cleanList(corePkgs), Exclude: cleanList(exclude),
 			}
 			added, err := projectRepo(deps).Add(ctx, p)
 			if err != nil {
@@ -111,6 +113,7 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 	f.StringVar(&testCmd, "test-cmd", "", "command that runs the project's tests")
 	f.StringVar(&installCmd, "install-cmd", "", "command that installs the project's dependencies")
 	f.StringArrayVar(&corePkgs, "core-package", nil, "package whose upgrade is riskier for this project (repeatable)")
+	f.StringArrayVar(&exclude, "exclude", nil, "folder name that scans and analyses skip, at any depth, besides node_modules, vendor and .git (repeatable)")
 	return c
 }
 
@@ -203,7 +206,7 @@ func newProjectRemoveCmd(deps *Deps) *cobra.Command {
 func isValidationErr(err error) bool {
 	for _, s := range []error{project.ErrNotADirectory, project.ErrDuplicateName, project.ErrEmptyName,
 		project.ErrInvalidFixLevel, project.ErrInvalidClassification, project.ErrInvalidSourceType,
-		project.ErrInvalidRiskOverride} {
+		project.ErrInvalidRiskOverride, project.ErrInvalidExclude} {
 		if errors.Is(err, s) {
 			return true
 		}
@@ -226,14 +229,15 @@ func cleanList(in []string) []string {
 }
 
 func newProjectSetCmd(deps *Deps) *cobra.Command {
-	var corePkgs, risk []string
+	var corePkgs, risk, exclude []string
 	var class, testCmd, installCmd string
 	var fixLevel int
 	c := &cobra.Command{
 		Use:   "set <name>",
 		Short: "Change the settings of a registered project",
 		Long: "Set changes only the settings you pass. --core-package replaces the whole list of core packages " +
-			"(repeat it for several; pass --core-package '' to clear). --risk key=value replaces one risk-score value " +
+			"(repeat it for several; pass --core-package '' to clear). --exclude replaces the list of folder names skipped by scans and " +
+			"analyses the same way (--exclude '' clears it). --risk key=value replaces one risk-score value " +
 			"for this project (see docs/remediation-risk.md); other keys keep their previous override.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -249,14 +253,14 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			}
 			fl := cmd.Flags()
 			var fields []string
-			for _, f := range []string{"core-package", "risk", "fix-level", "classification", "test-cmd", "install-cmd"} {
+			for _, f := range []string{"core-package", "exclude", "risk", "fix-level", "classification", "test-cmd", "install-cmd"} {
 				if fl.Changed(f) {
 					fields = append(fields, f)
 				}
 			}
 			ev := map[string]any{"fields": fields}
 			if len(fields) == 0 {
-				return fail("denied", "Cannot update project: nothing to change. Pass at least one of --core-package, --risk, "+
+				return fail("denied", "Cannot update project: nothing to change. Pass at least one of --core-package, --exclude, --risk, "+
 					"--fix-level, --classification, --test-cmd, --install-cmd.", ev)
 			}
 			repo := projectRepo(deps)
@@ -270,6 +274,10 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			}
 			if fl.Changed("core-package") {
 				p.CorePackages = cleanList(corePkgs)
+			}
+			if fl.Changed("exclude") {
+				p.Exclude = cleanList(exclude)
+				ev["exclude"] = p.Exclude
 			}
 			for _, kv := range risk {
 				k, v, ok := strings.Cut(kv, "=")
@@ -308,7 +316,7 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 				return fmt.Errorf("Project %s was updated but Michel could not write the audit log: %w. Check that the data folder is writable", p.Name, err)
 			}
 			fmt.Fprintf(deps.Stdout, "Updated project %s: %s.\n", p.Name, strings.Join(fields, ", "))
-			if fl.Changed("core-package") || fl.Changed("risk") {
+			if fl.Changed("core-package") || fl.Changed("risk") || fl.Changed("exclude") {
 				// The stored analyses no longer match these settings (their
 				// inputs hash differs): say when they are refreshed.
 				fmt.Fprintf(deps.Stdout, "Analysis will be recomputed on the next scan or `michel analyze --project %s`.\n", p.Name)
@@ -318,6 +326,7 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 	}
 	f := c.Flags()
 	f.StringArrayVar(&corePkgs, "core-package", nil, "package whose upgrade is riskier for this project (repeatable; replaces the list)")
+	f.StringArrayVar(&exclude, "exclude", nil, "folder name that scans and analyses skip, at any depth (repeatable; replaces the list)")
 	f.StringArrayVar(&risk, "risk", nil, "risk-score override key=value (repeatable), see docs/remediation-risk.md")
 	f.IntVar(&fixLevel, "fix-level", 1, "how far Michel may go to fix a finding, 0 to 3")
 	f.StringVar(&class, "classification", "", "data classification: public, internal, confidential, sensitive, health")

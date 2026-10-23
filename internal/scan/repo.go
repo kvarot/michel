@@ -34,6 +34,9 @@ func jsonList(s []string) string {
 //	present and gone             -> pending (counted as reappeared)
 //	absent and not gone          -> gone
 //
+// Every status change sets status_changed_at to now; a finding whose status
+// stays the same keeps it.
+//
 // Findings of manifests listed in unread are neither refreshed nor closed:
 // the scan could not read that file, so absence proves nothing.
 func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool) (newN, still, reappeared, gone int, err error) {
@@ -61,19 +64,21 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 
 	ins, err := tx.PrepareContext(ctx, `INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id,
 		aliases, severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status,
-		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary, status_changed_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
 	defer ins.Close()
 	upd, err := tx.PrepareContext(ctx, `UPDATE finding SET aliases=?, severity_label=?, cvss_score=?, installed_version=?,
-		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=? WHERE id=?`)
+		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=?,
+		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id=?`)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
 	defer upd.Close()
-	closeStmt, err := tx.PrepareContext(ctx, `UPDATE finding SET status=? WHERE id=?`)
+	closeStmt, err := tx.PrepareContext(ctx, `UPDATE finding SET status=?,
+		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id=?`)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
@@ -90,14 +95,14 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 		if !ok {
 			if _, err := ins.ExecContext(ctx, f.ID, projectID, f.ManifestRelPath, f.Ecosystem, f.Package, f.OSVID,
 				jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion, jsonList(f.FixedVersions), jsonList(f.DepGroups),
-				StatusNew, scanID, scanID, ts, ts, f.Summary); err != nil {
+				StatusNew, scanID, scanID, ts, ts, f.Summary, ts); err != nil {
 				return 0, 0, 0, 0, fmt.Errorf("cannot save finding %s: %w", f.OSVID, err)
 			}
 			newN++
 			continue
 		}
 		if _, err := upd.ExecContext(ctx, jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion,
-			jsonList(f.FixedVersions), jsonList(f.DepGroups), StatusPending, scanID, ts, f.Summary, f.ID); err != nil {
+			jsonList(f.FixedVersions), jsonList(f.DepGroups), StatusPending, scanID, ts, f.Summary, StatusPending, ts, f.ID); err != nil {
 			return 0, 0, 0, 0, fmt.Errorf("cannot update finding %s: %w", f.OSVID, err)
 		}
 		if k.status == StatusGone {
@@ -116,7 +121,7 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 		if present[id] || k.status == StatusGone || unread[k.manifest] {
 			continue
 		}
-		if _, err := closeStmt.ExecContext(ctx, StatusGone, id); err != nil {
+		if _, err := closeStmt.ExecContext(ctx, StatusGone, StatusGone, ts, id); err != nil {
 			return 0, 0, 0, 0, fmt.Errorf("cannot close finding %s: %w", id, err)
 		}
 		gone++

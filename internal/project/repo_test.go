@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/kvarot/michel/internal/policy"
@@ -309,5 +310,37 @@ func TestUpdateChangesFields(t *testing.T) {
 	p.FixLevel = 9
 	if err := r.Update(ctx, p); !errors.Is(err, ErrInvalidFixLevel) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestExcludeRoundTrip(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	p, err := r.Add(ctx, Project{Name: "demo", Path: t.TempDir(), Exclude: []string{"b", "a", "a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Exclude, []string{"a", "b"}) || !reflect.DeepEqual(p.Exclude, []string{"a", "b"}) {
+		t.Errorf("exclude = %v (returned %v)", got.Exclude, p.Exclude)
+	}
+	for _, bad := range []string{"src/x", `src\x`, "..", "", "  "} {
+		got.Exclude = []string{"ok", bad}
+		if err := r.Update(ctx, got); !errors.Is(err, ErrInvalidExclude) {
+			t.Errorf("update with %q: err = %v", bad, err)
+		}
+		if _, err := r.Add(ctx, Project{Name: "other", Path: t.TempDir(), Exclude: []string{bad}}); !errors.Is(err, ErrInvalidExclude) {
+			t.Errorf("add with %q: err = %v", bad, err)
+		}
+	}
+	got.Exclude = nil
+	if err := r.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := r.Get(ctx, "demo"); err != nil || again.Exclude == nil || len(again.Exclude) != 0 {
+		t.Errorf("cleared exclude = %#v err %v", again.Exclude, err)
 	}
 }

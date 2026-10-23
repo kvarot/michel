@@ -4,6 +4,7 @@ package project
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,7 +31,10 @@ type Project struct {
 	// RiskOverrides replaces risk-score values for this project; keys are the
 	// policy.RiskKeys names.
 	RiskOverrides map[string]int `json:"risk_overrides"`
-	CreatedAt     time.Time      `json:"created_at"`
+	// Exclude lists folder names (not paths) that scans and analyses skip,
+	// on top of the defaults; sorted and unique.
+	Exclude   []string  `json:"exclude"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// FixLevelSet marks FixLevel as explicit, so that 0 (no automatic fix) is
 	// not replaced by the default of 1. It is not stored.
@@ -46,9 +50,11 @@ var (
 	ErrInvalidSourceType     = errors.New("unsupported source type")
 	ErrNotFound              = errors.New("project not found")
 	ErrInvalidRiskOverride   = errors.New("invalid risk override")
+	ErrInvalidExclude        = errors.New("invalid excluded folder")
 )
 
-// normalizeExtras validates RiskOverrides and makes both extras non-nil.
+// normalizeExtras validates RiskOverrides and Exclude, makes the extras
+// non-nil, and sorts and deduplicates Exclude.
 func normalizeExtras(p *Project) error {
 	if p.CorePackages == nil {
 		p.CorePackages = []string{}
@@ -56,6 +62,14 @@ func normalizeExtras(p *Project) error {
 	if p.RiskOverrides == nil {
 		p.RiskOverrides = map[string]int{}
 	}
+	for _, name := range p.Exclude {
+		if strings.TrimSpace(name) == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+			return fmt.Errorf("%w %q: give a folder name such as build or dist, not a path", ErrInvalidExclude, name)
+		}
+	}
+	p.Exclude = append([]string{}, p.Exclude...) // never nil, and never the caller's array
+	slices.Sort(p.Exclude)
+	p.Exclude = slices.Compact(p.Exclude)
 	for k, v := range p.RiskOverrides {
 		known := false
 		for _, rk := range policy.RiskKeys {
