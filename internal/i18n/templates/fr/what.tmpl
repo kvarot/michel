@@ -1,7 +1,7 @@
 {{- if not .HasAnalysis -}}
 Michel n'a pas encore cherché {{.Package}} {{.Installed}} dans ton code.
 {{- else if eq .CallSitesQuality "low" -}}
-Michel n'a pas pu chercher {{.Package}} {{.Installed}} dans ton code (recherche impossible : les fichiers de dépendances ne sont pas installés en local).
+Michel n'a pas pu chercher {{.Package}} {{.Installed}} dans ton code (recherche impossible : les paquets dont ton projet dépend ne sont pas installés sur cette machine).
 {{- else if eq .CallSitesQuality "noautoload" -}}
 Michel n'a pas pu chercher {{.Package}} {{.Installed}} dans ton code (recherche impossible : le paquet n'a pas d'espace de noms à chercher).
 {{- else if gt .CallSiteCount 0 -}}

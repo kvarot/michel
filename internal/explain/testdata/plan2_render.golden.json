@@ -269,7 +269,7 @@
       },
       "certainty_medium": {
         "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
-        "impact": "Cette faille est grave. Michel n'est pas sûr que ça te concerne.",
+        "impact": "Cette faille est grave. Michel ne sait pas si ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "constraint_blocks": {
@@ -295,7 +295,7 @@
       "handoff": {
         "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
-        "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. À faire par toi ou ton assistant de code, avec un descriptif précis. Ta contrainte l'autorise : une simple mise à jour suffit."
+        "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. À faire par toi ou ton assistant de code, avec une description précise de la tâche. Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "low": {
         "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
@@ -340,7 +340,7 @@
       "no_target": {
         "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
-        "cost": "Aucune version corrigée n'existe encore : rien à mettre à jour, on continue de surveiller."
+        "cost": "Aucune version corrigée n'existe encore : rien à mettre à jour, Michel continue de surveiller."
       },
       "odd_severity": {
         "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
@@ -353,7 +353,7 @@
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "quality_low": {
-        "what": "Michel n'a pas pu chercher acme/lib 1.2.0 dans ton code (recherche impossible : les fichiers de dépendances ne sont pas installés en local). L'avis dit : « Path traversal in acme/lib »",
+        "what": "Michel n'a pas pu chercher acme/lib 1.2.0 dans ton code (recherche impossible : les paquets dont ton projet dépend ne sont pas installés sur cette machine). L'avis dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
@@ -390,7 +390,7 @@
       "unknown_jump": {
         "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
-        "cost": "Michel n'a pas pu mesurer l'ampleur de la mise à jour (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. À faire par toi ou ton assistant de code, avec un descriptif précis. Ta contrainte l'autorise : une simple mise à jour suffit."
+        "cost": "Michel n'a pas pu mesurer l'ampleur de la mise à jour (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. À faire par toi ou ton assistant de code, avec une description précise de la tâche. Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "unrated": {
         "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
@@ -405,7 +405,7 @@
     },
     "labels": {
       "breaks": "changements incompatibles",
-      "calls": "Endroits où le paquet est utilisé",
+      "calls": "Où ton code utilise ce paquet",
       "changelog": "Journal des modifications",
       "constraint": "Contrainte",
       "cost": "Coût",
@@ -421,9 +421,9 @@
       "jump_none": "aucune",
       "jump_patch": "mise à jour corrective",
       "jump_unknown": "inconnue",
-      "method_callsite": "des tests utilisent le paquet",
+      "method_callsite": "des tests font appel au paquet",
       "method_none": "aucun",
-      "method_reference": "des tests mentionnent les fichiers",
+      "method_reference": "des tests citent les fichiers concernés",
       "more": "et %d de plus",
       "nobreak": "aucun changement incompatible repéré",
       "nochangelog": "indisponible hors ligne",
@@ -431,25 +431,25 @@
       "noversions": "versions illisibles, changements incompatibles non évalués",
       "path": "Chemin",
       "project": "projet",
-      "quality_import": "par import",
-      "quality_low": "recherche impossible",
-      "quality_name": "par nom seulement",
+      "quality_import": "d'après les lignes qui chargent le paquet",
+      "quality_low": "impossible de chercher dans ton code",
+      "quality_name": "d'après le nom seulement, donc moins fiable",
       "quality_noautoload": "aucun espace de noms à chercher",
       "quality_psr4": "par espace de noms",
       "rec_auto_fix": "correction automatique possible",
-      "rec_handoff": "à confier avec un descriptif",
-      "rec_report_only": "rapport seulement",
+      "rec_handoff": "à faire par toi ou ton assistant de code, avec une description de la tâche",
+      "rec_report_only": "information seulement, rien à mettre à jour",
       "recommendation": "recommandation",
       "risk": "Risque",
       "risk_breaking": "changement incompatible dans le journal",
       "risk_core_package": "paquet central",
       "risk_direct": "dépendance directe",
-      "risk_jump_unknown_handoff": "ampleur de la mise à jour inconnue, donc à confier",
+      "risk_jump_unknown_handoff": "on ne sait pas si la mise à jour est petite ou grosse, donc à confier",
       "risk_major_jump": "mise à jour majeure",
       "risk_many_call_sites": "utilisé à beaucoup d'endroits",
       "risk_no_tests": "aucun test qui couvre",
       "risk_none": "aucun facteur de risque",
-      "risk_thresholds_fallback": "seuils du projet incohérents, seuils de la politique utilisés",
+      "risk_thresholds_fallback": "les seuils de risque du projet se contredisent, Michel utilise ceux de la politique",
       "score": "note",
       "target": "cible",
       "term_breaking": "changement incompatible",
@@ -479,6 +479,6 @@
       "2 fichiers de test couvrent le code qui l'utilise"
     ],
     "risk_warning": "Attention : risque au-dessus de 60, à examiner avec soin.",
-    "risk_terms": "mise à jour majeure +40, aucun test qui couvre +20, dépendance directe +10, ampleur de la mise à jour inconnue, donc à confier"
+    "risk_terms": "mise à jour majeure +40, aucun test qui couvre +20, dépendance directe +10, on ne sait pas si la mise à jour est petite ou grosse, donc à confier"
   }
 }
