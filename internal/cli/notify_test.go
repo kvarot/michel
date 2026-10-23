@@ -252,3 +252,25 @@ func TestNotifyNeverLogsSecretValue(t *testing.T) {
 		}
 	}
 }
+
+func TestDigestSendWithoutSecretStoreStillSendsOthers(t *testing.T) {
+	dir, _ := scannedDemo(t, false)
+	h := newHookRecorder(t)
+	writeNotifyCfg(t, dir, h.URL, "")
+	// A file where the secrets folder should be: the store cannot be opened.
+	if err := os.WriteFile(filepath.Join(dir, "secrets"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, stderr, err := run(t, dir, "--lang", "en", "digest", "--send")
+	if err == nil || ExitCode(err) != 1 {
+		t.Fatalf("err = %v (code %d)", err, ExitCode(err))
+	}
+	if h.count() != 1 || !strings.Contains(stderr, "Sent on hook (webhook).") || !strings.Contains(stderr, "secret store cannot be opened") {
+		t.Errorf("hook requests %d, stderr:\n%s", h.count(), stderr)
+	}
+	runs := digestRuns(t, dir)
+	if len(runs) != 1 || !strings.Contains(runs[0].channels, `"name":"hook","type":"webhook","result":"ok"`) ||
+		!strings.Contains(runs[0].channels, `"result":"error","error":"cannot read secret smtp-perso: the secret store cannot be opened`) {
+		t.Fatalf("runs = %+v", runs)
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/kvarot/michel/internal/notify"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/secret"
 	"github.com/spf13/cobra"
 )
 
@@ -157,15 +158,34 @@ func sendChannels(ctx context.Context, cmd *cobra.Command, deps *Deps, d digest.
 			needSecrets = true
 		}
 	}
-	nd, err := notifyDeps(cmd, deps, needSecrets)
-	if err != nil {
-		return nil, err
+	nd, _ := notifyDeps(cmd, deps, false)
+	if needSecrets {
+		// A secret store that cannot be opened fails only the channels that
+		// read a secret; the others are still sent and the run still saved.
+		dir, _ := cmd.Flags().GetString("data-dir")
+		st, err := secret.Open(dir)
+		if err != nil {
+			st = unavailableSecrets{err: err}
+		}
+		nd.Secrets = st
 	}
 	ns, err := notify.Build(cfg, nd)
 	if err != nil {
 		return nil, deps.Wrapf("cli.notify.channels_invalid", err)
 	}
 	return notify.Deliver(ctx, ns, d), nil
+}
+
+// unavailableSecrets is the secret store when it cannot be opened: every
+// read fails with the reason, in English.
+type unavailableSecrets struct{ err error }
+
+func (u unavailableSecrets) Set(string, []byte) error   { return u.fail() }
+func (u unavailableSecrets) Get(string) ([]byte, error) { return nil, u.fail() }
+func (u unavailableSecrets) Delete(string) error        { return u.fail() }
+func (u unavailableSecrets) List() ([]string, error)    { return nil, u.fail() }
+func (u unavailableSecrets) fail() error {
+	return fmt.Errorf("the secret store cannot be opened: %w", u.err)
 }
 
 // reportChannels prints one line per channel on stderr and returns how many

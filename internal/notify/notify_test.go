@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/kvarot/michel/internal/digest"
@@ -378,26 +379,41 @@ func TestWebhookMissingSecret(t *testing.T) {
 
 // captureRunner records the subprocess it is asked to run.
 type captureRunner struct {
-	name string
-	args []string
-	err  error
+	name  string
+	args  []string
+	stdin []byte
+	err   error
 }
 
-func (c *captureRunner) Run(_ context.Context, name string, args []string, _ []byte) error {
-	c.name, c.args = name, args
+func (c *captureRunner) Run(_ context.Context, name string, args []string, stdin []byte) error {
+	c.name, c.args, c.stdin = name, args, stdin
 	return c.err
 }
 
-func TestToastWindowsScriptEscapesXML(t *testing.T) {
+// decodeScript decodes a -EncodedCommand argument (UTF-16LE, base64).
+func decodeScript(t *testing.T, arg string) string {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(arg)
+	if err != nil || len(raw)%2 != 0 {
+		t.Fatalf("encoded command: %v", err)
+	}
+	units := make([]uint16, len(raw)/2)
+	for i := range units {
+		units[i] = uint16(raw[2*i]) | uint16(raw[2*i+1])<<8
+	}
+	return string(utf16.Decode(units))
+}
+
+func TestToastWindowsScriptIsConstant(t *testing.T) {
 	r := &captureRunner{}
 	n, err := New(policy.ChannelConfig{Name: "bureau", Type: "toast"}, Deps{Runner: r, Lang: i18n.EN})
 	if err != nil {
 		t.Fatal(err)
 	}
 	n.(*toast).command = windowsCommand(`C:\Windows`)
-	d := sample()
-	d.Title = `<b>"Michel" & 'co'</b>`
-	if err := n.Send(context.Background(), d); err != nil {
+
+	// The reference: a plain title and project.
+	if err := n.Send(context.Background(), sample()); err != nil {
 		t.Fatal(err)
 	}
 	if r.name != `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` {
@@ -406,24 +422,61 @@ func TestToastWindowsScriptEscapesXML(t *testing.T) {
 	if len(r.args) != 4 || r.args[0] != "-NoProfile" || r.args[1] != "-NonInteractive" || r.args[2] != "-EncodedCommand" {
 		t.Fatalf("args = %q", r.args)
 	}
-	raw, err := base64.StdEncoding.DecodeString(r.args[3])
-	if err != nil || len(raw)%2 != 0 {
-		t.Fatalf("encoded command: %v", err)
-	}
-	units := make([]rune, 0, len(raw)/2)
-	for i := 0; i < len(raw); i += 2 {
-		units = append(units, rune(raw[i])|rune(raw[i+1])<<8)
-	}
-	script := string(units)
-	if !strings.Contains(script, "&lt;b&gt;") || strings.Contains(script, "<b>") || strings.Contains(script, `"Michel"`) || strings.Contains(script, "'co'") {
-		t.Errorf("title not escaped:\n%s", script)
-	}
-	for _, want := range []string{"Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime",
-		"Windows.Data.Xml.Dom.XmlDocument", `<binding template="ToastGeneric">`, "demo: 1 new, 1 to review",
+	reference := r.args[3]
+	script := decodeScript(t, reference)
+	for _, want := range []string{"[Console]::InputEncoding = [Text.Encoding]::UTF8", "[Console]::In.ReadToEnd() | ConvertFrom-Json",
+		"Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime",
+		"Windows.Data.Xml.Dom.XmlDocument", `<binding template="ToastGeneric">`, "CreateTextNode([string]$in.title)", "CreateTextNode([string]$in.body)",
 		`CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show($toast)`} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, "demo") || strings.Contains(script, "Michel found") {
+		t.Errorf("text inside the script:\n%s", script)
+	}
+
+	// Hostile texts: curly quotes PowerShell takes as single quotes,
+	// backticks, subexpressions, XML, line breaks, in the title and in a
+	// project name. The script never changes; stdin carries them verbatim.
+	for _, hostile := range []string{
+		"l’appli", "‘a’ ‚b‛", "x’; Write-Output INJECTED; ‘y", "`n`$x`", "$(Write-Output INJECTED)", "<b>&amp;</b> \"q\" 'q'",
+		"line1\nline2", "tab\there", "é ü 漢字 😀",
+	} {
+		d := sample()
+		d.Projects[0].Name = hostile
+		d.Title = "title " + hostile
+		if err := n.Send(context.Background(), d); err != nil {
+			t.Fatalf("%q: %v", hostile, err)
+		}
+		if len(r.args) != 4 || r.args[3] != reference {
+			t.Errorf("%q changed the script:\n%s", hostile, decodeScript(t, r.args[3]))
+		}
+		for _, b := range r.stdin {
+			if b >= 0x80 {
+				t.Errorf("%q: stdin is not ASCII: %s", hostile, r.stdin)
+				break
+			}
+		}
+		var in map[string]string
+		if err := json.Unmarshal(r.stdin, &in); err != nil || len(in) != 2 {
+			t.Fatalf("%q: stdin %s: %v", hostile, r.stdin, err)
+		}
+		_, body := digest.ToastLines(d)
+		if in["title"] != "title "+hostile || in["body"] != body || !strings.Contains(in["body"], hostile) {
+			t.Errorf("%q: stdin = %q", hostile, in)
+		}
+	}
+
+	// Other control characters, which XML refuses, become spaces.
+	d := sample()
+	d.Title = "a\x01b\x7fc"
+	if err := n.Send(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	var in map[string]string
+	if json.Unmarshal(r.stdin, &in) != nil || in["title"] != "a b c" {
+		t.Errorf("control characters: %q", in)
 	}
 }
 
@@ -434,7 +487,8 @@ func TestToastLinuxUsesNotifySend(t *testing.T) {
 	if err := n.Send(context.Background(), sample()); err != nil {
 		t.Fatal(err)
 	}
-	if r.name != "/usr/bin/notify-send" || len(r.args) != 2 || r.args[0] != "Michel" || !strings.Contains(r.args[1], "demo: 1 new, 1 to review") {
+	if r.name != "/usr/bin/notify-send" || len(r.args) != 3 || r.args[0] != "--" || r.args[1] != "Michel" ||
+		!strings.Contains(r.args[2], "demo: 1 new, 1 to review") || r.stdin != nil {
 		t.Errorf("run %q %q", r.name, r.args)
 	}
 	n.(*toast).command = linuxCommand(func(string) (string, error) { return "", errors.New("not found") })
@@ -444,11 +498,11 @@ func TestToastLinuxUsesNotifySend(t *testing.T) {
 
 	n.(*toast).command = darwinCommand
 	d := sample()
-	d.Title = `say "hi" \ bye`
+	d.Title = "say \"hi\" \\ bye\nnext"
 	if err := n.Send(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
-	if r.name != "osascript" || len(r.args) != 2 || r.args[0] != "-e" || !strings.Contains(r.args[1], `say \"hi\" \\ bye`) ||
+	if r.name != "/usr/bin/osascript" || len(r.args) != 2 || r.args[0] != "-e" || !strings.Contains(r.args[1], `say \"hi\" \\ bye next`) ||
 		!strings.HasSuffix(r.args[1], `with title "Michel"`) {
 		t.Errorf("osascript %q", r.args)
 	}
