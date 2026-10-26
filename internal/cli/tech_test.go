@@ -32,7 +32,7 @@ func TestTechAddListRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, out, _, err = run(t, dir, "tech", "list")
-	if err != nil || !strings.HasPrefix(out, "No technology declared") {
+	if err != nil || !strings.HasPrefix(out, "You declared no technology") {
 		t.Errorf("empty list = %q err %v", out, err)
 	}
 	_, out, _, err = run(t, dir, "tech", "list", "--json")

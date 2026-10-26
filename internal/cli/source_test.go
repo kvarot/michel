@@ -215,3 +215,39 @@ func TestSourceRemoveUserDeletesCatalogHides(t *testing.T) {
 		t.Error("removing an unknown entry succeeded")
 	}
 }
+
+func TestSourceResetPurgeNeedsYes(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, _, err := run(t, dir, "source", "add", "--kind", "feed", "--name", "Demo", "--url", "https://example.org/feed.xml"); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, err := runIn(t, dir, strings.NewReader("y\n"), "source", "reset", "--all", "--purge-user")
+	if err == nil || ExitCode(err) != ExitCodePolicy || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("err = %v (exit %d)", err, ExitCode(err))
+	}
+	if !strings.Contains(errOut, "feed.demo") {
+		t.Errorf("stderr does not list what would be deleted: %q", errOut)
+	}
+	if _, err := sourceEntry(t, dir, "feed.demo"); err != nil {
+		t.Errorf("user source deleted without confirmation: %v", err)
+	}
+	if ev := auditRows(t, dir, "source.reset"); len(ev) != 1 || ev[0].result != "denied" {
+		t.Errorf("source.reset events = %+v", ev)
+	}
+
+	// Without --purge-user nothing needs a confirmation.
+	if _, _, err := runIn(t, dir, strings.NewReader(""), "source", "reset", "--all"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sourceEntry(t, dir, "feed.demo"); err != nil {
+		t.Errorf("reset --all deleted a user source: %v", err)
+	}
+
+	out, _, err := runIn(t, dir, strings.NewReader(""), "source", "reset", "--all", "--purge-user", "--yes")
+	if err != nil || !strings.Contains(out, "sources are back") {
+		t.Fatalf("--yes: out %q err %v", out, err)
+	}
+	if _, err := sourceEntry(t, dir, "feed.demo"); !errors.Is(err, source.ErrNotFound) {
+		t.Errorf("user source kept by --purge-user --yes: %v", err)
+	}
+}

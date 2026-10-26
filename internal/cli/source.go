@@ -508,13 +508,14 @@ func newSourceRemoveCmd(deps *Deps) *cobra.Command {
 }
 
 func newSourceResetCmd(deps *Deps) *cobra.Command {
-	var all, purgeUser bool
+	var all, purgeUser, assumeYes bool
 	c := &cobra.Command{
-		Use:   "reset [<key> | --all [--purge-user]]",
+		Use:   "reset [<key> | --all [--purge-user [--yes]]]",
 		Short: "Put catalog sources back as the catalog has them",
 		Long: "Reset puts a catalog source (or, with --all, every catalog source) back to its catalog state: " +
 			"enabled by default or not, shown again, catalog technologies, your settings cleared. Your own sources are kept, " +
-			"unless --purge-user is given with --all. Network rules and installed skills stay as they are.",
+			"unless --purge-user is given with --all: Michel then lists them and asks y/N (--yes answers for scripts; " +
+			"without a terminal and without --yes, Michel refuses with exit code 3). Network rules and installed skills stay as they are.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -527,6 +528,11 @@ func newSourceResetCmd(deps *Deps) *cobra.Command {
 			key, target := "", "all"
 			if len(args) == 1 {
 				key, target = args[0], args[0]
+			}
+			if purgeUser && !assumeYes {
+				if err := confirmPurge(cmd, deps); err != nil {
+					return err
+				}
 			}
 			n, err := source.Reset(ctx, source.NewRepo(deps.Store), key, all, purgeUser)
 			if errors.Is(err, source.ErrUserEntry) {
@@ -544,6 +550,50 @@ func newSourceResetCmd(deps *Deps) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&all, "all", false, "reset every catalog source")
-	c.Flags().BoolVar(&purgeUser, "purge-user", false, "with --all, also delete the sources you added")
+	c.Flags().BoolVar(&purgeUser, "purge-user", false, "with --all, also delete the sources you added (asks for confirmation)")
+	c.Flags().BoolVar(&assumeYes, "yes", false, "with --purge-user, confirm without asking (for scripts)")
 	return c
+}
+
+// confirmPurge lists the user sources that --purge-user deletes and asks y/N
+// on a terminal. Without a terminal it refuses (exit code 3): --yes is the
+// only way to confirm from a script. It returns nil when the user agrees or
+// there is nothing to delete.
+func confirmPurge(cmd *cobra.Command, deps *Deps) error {
+	list, err := source.NewRepo(deps.Store).List(cmd.Context(), "", true)
+	if err != nil {
+		return sourceErr(deps, "all", err)
+	}
+	var keys []string
+	for _, e := range list {
+		if e.Origin == source.OriginUser {
+			keys = append(keys, e.Key)
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	fmt.Fprintln(deps.Stderr, deps.N("cli.source.reset.purge_list", len(keys), strings.Join(keys, ", ")))
+	refuse := func(reason string) error {
+		return recordSource(cmd, deps, "source.reset", "all", "denied", map[string]any{"key": "all", "purge_user": true, "reason": reason})
+	}
+	in, tty := stdinTerminal(deps)
+	if !tty {
+		if err := refuse("purge needs confirmation, no terminal and no --yes"); err != nil {
+			return err
+		}
+		return &ExitError{Code: ExitCodePolicy, Err: deps.Errorf("cli.source.reset.purge_needs_yes")}
+	}
+	fmt.Fprint(deps.Stderr, deps.T("cli.source.enable.prompt"))
+	answer, rerr := in.ReadString('\n')
+	if rerr != nil && answer == "" {
+		return deps.Wrapf("cli.source.enable.read_failed", rerr)
+	}
+	if !yes(answer) {
+		if err := refuse("purge refused"); err != nil {
+			return err
+		}
+		return &ExitError{Code: ExitCodePolicy, Err: deps.Errorf("cli.source.reset.purge_refused")}
+	}
+	return nil
 }
