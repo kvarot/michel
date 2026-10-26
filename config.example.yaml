@@ -12,6 +12,8 @@ sovereignty:
     default_egress: deny        # strict_local requires "deny"
     telemetry_enabled: false
     remote_error_reporting: false
+    # 'michel source enable <key>' adds the rule a source needs here, after your consent
+    # (keeping a copy of this file as config.yaml.bak); 'michel source disable <key> --forget' removes it.
     allow: []                   # each rule needs a host and a purpose
   audit:
     enabled: true

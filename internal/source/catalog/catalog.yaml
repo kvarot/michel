@@ -1,0 +1,924 @@
+# Embedded source catalog (docs/superpowers/specs/2026-10-26-michel-plan4-sources-design.md § 3.2).
+# Bump version, and CatalogVersion in catalog.go, whenever an entry's name, url, hosts,
+# purpose or config changes: Sync then rewrites those fields, never enabled, hidden,
+# tech or the user settings. Each note is the i18n key source.note.<key> (hyphens
+# become underscores). Only osv.packagist and osv.npm are enabled by default.
+version: 1
+entries:
+  - key: osv.packagist
+    kind: osv
+    name: "OSV Packagist"
+    url: "https://osv.dev/list?ecosystem=Packagist"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    enabled: true
+    config: {ecosystem: "Packagist"}
+    note: source.note.osv.packagist
+  - key: osv.npm
+    kind: osv
+    name: "OSV npm"
+    url: "https://osv.dev/list?ecosystem=npm"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    enabled: true
+    config: {ecosystem: "npm"}
+    note: source.note.osv.npm
+  - key: osv.pypi
+    kind: osv
+    name: "OSV PyPI"
+    url: "https://osv.dev/list?ecosystem=PyPI"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "PyPI"}
+    note: source.note.osv.pypi
+  - key: osv.go
+    kind: osv
+    name: "OSV Go"
+    url: "https://osv.dev/list?ecosystem=Go"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Go"}
+    note: source.note.osv.go
+  - key: osv.maven
+    kind: osv
+    name: "OSV Maven"
+    url: "https://osv.dev/list?ecosystem=Maven"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Maven"}
+    note: source.note.osv.maven
+  - key: osv.rubygems
+    kind: osv
+    name: "OSV RubyGems"
+    url: "https://osv.dev/list?ecosystem=RubyGems"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "RubyGems"}
+    note: source.note.osv.rubygems
+  - key: osv.nuget
+    kind: osv
+    name: "OSV NuGet"
+    url: "https://osv.dev/list?ecosystem=NuGet"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "NuGet"}
+    note: source.note.osv.nuget
+  - key: osv.crates-io
+    kind: osv
+    name: "OSV crates.io"
+    url: "https://osv.dev/list?ecosystem=crates.io"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "crates.io"}
+    note: source.note.osv.crates_io
+  - key: osv.pub
+    kind: osv
+    name: "OSV Pub"
+    url: "https://osv.dev/list?ecosystem=Pub"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Pub"}
+    note: source.note.osv.pub
+  - key: osv.hex
+    kind: osv
+    name: "OSV Hex"
+    url: "https://osv.dev/list?ecosystem=Hex"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Hex"}
+    note: source.note.osv.hex
+  - key: osv.swifturl
+    kind: osv
+    name: "OSV SwiftURL"
+    url: "https://osv.dev/list?ecosystem=SwiftURL"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "SwiftURL"}
+    note: source.note.osv.swifturl
+  - key: osv.android
+    kind: osv
+    name: "OSV Android"
+    url: "https://osv.dev/list?ecosystem=Android"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Android"}
+    note: source.note.osv.android
+  - key: osv.github-actions
+    kind: osv
+    name: "OSV GitHub Actions"
+    url: "https://osv.dev/list?ecosystem=GitHub%20Actions"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "GitHub Actions"}
+    note: source.note.osv.github_actions
+  - key: osv.debian
+    kind: osv
+    name: "OSV Debian"
+    url: "https://osv.dev/list?ecosystem=Debian"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Debian"}
+    note: source.note.osv.debian
+  - key: osv.ubuntu
+    kind: osv
+    name: "OSV Ubuntu"
+    url: "https://osv.dev/list?ecosystem=Ubuntu"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Ubuntu"}
+    note: source.note.osv.ubuntu
+  - key: osv.alpine
+    kind: osv
+    name: "OSV Alpine"
+    url: "https://osv.dev/list?ecosystem=Alpine"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Alpine"}
+    note: source.note.osv.alpine
+  - key: osv.rocky-linux
+    kind: osv
+    name: "OSV Rocky Linux"
+    url: "https://osv.dev/list?ecosystem=Rocky%20Linux"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Rocky Linux"}
+    note: source.note.osv.rocky_linux
+  - key: osv.almalinux
+    kind: osv
+    name: "OSV AlmaLinux"
+    url: "https://osv.dev/list?ecosystem=AlmaLinux"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "AlmaLinux"}
+    note: source.note.osv.almalinux
+  - key: osv.suse
+    kind: osv
+    name: "OSV SUSE"
+    url: "https://osv.dev/list?ecosystem=SUSE"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "SUSE"}
+    note: source.note.osv.suse
+  - key: osv.opensuse
+    kind: osv
+    name: "OSV openSUSE"
+    url: "https://osv.dev/list?ecosystem=openSUSE"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "openSUSE"}
+    note: source.note.osv.opensuse
+  - key: osv.red-hat
+    kind: osv
+    name: "OSV Red Hat"
+    url: "https://osv.dev/list?ecosystem=Red%20Hat"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Red Hat"}
+    note: source.note.osv.red_hat
+  - key: osv.chainguard
+    kind: osv
+    name: "OSV Chainguard"
+    url: "https://osv.dev/list?ecosystem=Chainguard"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Chainguard"}
+    note: source.note.osv.chainguard
+  - key: osv.wolfi
+    kind: osv
+    name: "OSV Wolfi"
+    url: "https://osv.dev/list?ecosystem=Wolfi"
+    hosts: ["osv-vulnerabilities.storage.googleapis.com"]
+    purpose: osv.db
+    config: {ecosystem: "Wolfi"}
+    note: source.note.osv.wolfi
+  - key: osv.malicious
+    kind: reference
+    name: "OpenSSF Malicious Packages"
+    url: "https://github.com/ossf/malicious-packages"
+    note: source.note.osv.malicious
+  - key: enrich.kev
+    kind: enrichment
+    name: "CISA KEV"
+    url: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"
+    hosts: ["www.cisa.gov"]
+    purpose: source.enrich
+    config: {format: "kev", on_demand: false}
+    note: source.note.enrich.kev
+  - key: enrich.epss
+    kind: enrichment
+    name: "FIRST EPSS"
+    url: "https://www.first.org/epss/"
+    hosts: ["epss.cyentia.com"]
+    purpose: source.enrich
+    config: {format: "epss", on_demand: false}
+    note: source.note.enrich.epss
+  - key: enrich.vulnrichment
+    kind: enrichment
+    name: "CISA Vulnrichment"
+    url: "https://github.com/cisagov/vulnrichment"
+    hosts: ["raw.githubusercontent.com"]
+    purpose: source.enrich
+    config: {format: "vulnrichment", on_demand: true}
+    note: source.note.enrich.vulnrichment
+  - key: enrich.nvd
+    kind: enrichment
+    name: "NVD (NIST)"
+    url: "https://nvd.nist.gov/"
+    hosts: ["services.nvd.nist.gov"]
+    purpose: source.enrich
+    config: {format: "nvd", on_demand: true, api_key_secret: "nvd-api-key"}
+    note: source.note.enrich.nvd
+  - key: enrich.circl
+    kind: enrichment
+    name: "CIRCL Vulnerability-Lookup"
+    url: "https://vulnerability.circl.lu/"
+    hosts: ["vulnerability.circl.lu"]
+    purpose: source.enrich
+    config: {format: "circl", on_demand: true}
+    note: source.note.enrich.circl
+  - key: feed.android
+    kind: feed
+    name: "Android Security Bulletins"
+    url: "https://source.android.com/docs/security/bulletin"
+    hosts: ["source.android.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["android"]
+    note: source.note.feed.android
+  - key: feed.apple
+    kind: feed
+    name: "Apple Security Releases"
+    url: "https://support.apple.com/en-us/100100"
+    hosts: ["support.apple.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["apple"]
+    note: source.note.feed.apple
+  - key: feed.cocoapods
+    kind: feed
+    name: "CocoaPods advisories"
+    url: "https://github.com/CocoaPods/CocoaPods/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "CocoaPods/CocoaPods"}
+    tech: ["cocoapods"]
+    note: source.note.feed.cocoapods
+  - key: feed.nginx
+    kind: feed
+    name: "nginx security advisories"
+    url: "https://nginx.org/en/security_advisories.html"
+    hosts: ["nginx.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["nginx"]
+    note: source.note.feed.nginx
+  - key: feed.apache-httpd
+    kind: feed
+    name: "Apache HTTP Server security"
+    url: "https://httpd.apache.org/security/vulnerabilities_24.html"
+    hosts: ["httpd.apache.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["apache"]
+    note: source.note.feed.apache_httpd
+  - key: feed.php
+    kind: feed
+    name: "PHP security"
+    url: "https://www.php.net/security"
+    hosts: ["www.php.net"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["php"]
+    note: source.note.feed.php
+  - key: feed.symfony
+    kind: feed
+    name: "Symfony security"
+    url: "https://symfony.com/blog/category/security"
+    hosts: ["symfony.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["symfony"]
+    note: source.note.feed.symfony
+  - key: feed.laravel
+    kind: feed
+    name: "Laravel advisories"
+    url: "https://github.com/laravel/framework/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "laravel/framework"}
+    tech: ["laravel"]
+    note: source.note.feed.laravel
+  - key: feed.nodejs
+    kind: feed
+    name: "Node.js vulnerability releases"
+    url: "https://nodejs.org/en/blog/vulnerability"
+    hosts: ["nodejs.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["node"]
+    note: source.note.feed.nodejs
+  - key: feed.react
+    kind: feed
+    name: "React advisories"
+    url: "https://github.com/facebook/react/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "facebook/react"}
+    tech: ["react"]
+    note: source.note.feed.react
+  - key: feed.nextjs
+    kind: feed
+    name: "Next.js advisories"
+    url: "https://github.com/vercel/next.js/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "vercel/next.js"}
+    tech: ["nextjs"]
+    note: source.note.feed.nextjs
+  - key: feed.angular
+    kind: feed
+    name: "Angular advisories"
+    url: "https://github.com/angular/angular/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "angular/angular"}
+    tech: ["angular"]
+    note: source.note.feed.angular
+  - key: feed.vue
+    kind: feed
+    name: "Vue.js advisories"
+    url: "https://github.com/vuejs/core/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "vuejs/core"}
+    tech: ["vue"]
+    note: source.note.feed.vue
+  - key: feed.wordpress
+    kind: feed
+    name: "WordPress security"
+    url: "https://wordpress.org/news/category/security/"
+    hosts: ["wordpress.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["wordpress"]
+    note: source.note.feed.wordpress
+  - key: feed.drupal
+    kind: feed
+    name: "Drupal security advisories"
+    url: "https://www.drupal.org/security"
+    hosts: ["www.drupal.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["drupal"]
+    note: source.note.feed.drupal
+  - key: feed.joomla
+    kind: feed
+    name: "Joomla Security Centre"
+    url: "https://developer.joomla.org/security-centre.html"
+    hosts: ["developer.joomla.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["joomla"]
+    note: source.note.feed.joomla
+  - key: feed.django
+    kind: feed
+    name: "Django weblog"
+    url: "https://www.djangoproject.com/weblog/"
+    hosts: ["www.djangoproject.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["django"]
+    note: source.note.feed.django
+  - key: feed.flask
+    kind: feed
+    name: "Flask advisories"
+    url: "https://github.com/pallets/flask/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "pallets/flask"}
+    tech: ["flask"]
+    note: source.note.feed.flask
+  - key: feed.rails
+    kind: feed
+    name: "Ruby on Rails security"
+    url: "https://rubyonrails.org/security"
+    hosts: ["rubyonrails.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["rails"]
+    note: source.note.feed.rails
+  - key: feed.aspnetcore
+    kind: feed
+    name: "ASP.NET Core advisories"
+    url: "https://github.com/dotnet/aspnetcore/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "dotnet/aspnetcore"}
+    tech: ["aspnetcore"]
+    note: source.note.feed.aspnetcore
+  - key: feed.debian
+    kind: feed
+    name: "Debian security"
+    url: "https://www.debian.org/security/"
+    hosts: ["www.debian.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["debian"]
+    note: source.note.feed.debian
+  - key: feed.msrc
+    kind: feed
+    name: "Microsoft Security Response Center"
+    url: "https://msrc.microsoft.com/update-guide"
+    hosts: ["msrc.microsoft.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["windows"]
+    note: source.note.feed.msrc
+  - key: feed.postgresql
+    kind: feed
+    name: "PostgreSQL security"
+    url: "https://www.postgresql.org/support/security/"
+    hosts: ["www.postgresql.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["postgresql"]
+    note: source.note.feed.postgresql
+  - key: feed.oracle
+    kind: feed
+    name: "Oracle security alerts"
+    url: "https://www.oracle.com/security-alerts/"
+    hosts: ["www.oracle.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["oracle", "mysql"]
+    note: source.note.feed.oracle
+  - key: feed.mariadb
+    kind: feed
+    name: "MariaDB security"
+    url: "https://mariadb.com/kb/en/security/"
+    hosts: ["mariadb.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["mariadb"]
+    note: source.note.feed.mariadb
+  - key: feed.redis
+    kind: feed
+    name: "Redis advisories"
+    url: "https://github.com/redis/redis/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "redis/redis"}
+    tech: ["redis"]
+    note: source.note.feed.redis
+  - key: feed.elastic
+    kind: feed
+    name: "Elastic security"
+    url: "https://www.elastic.co/community/security"
+    hosts: ["www.elastic.co"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["elasticsearch"]
+    note: source.note.feed.elastic
+  - key: feed.openssl
+    kind: feed
+    name: "OpenSSL vulnerabilities"
+    url: "https://openssl-library.org/news/vulnerabilities/"
+    hosts: ["openssl-library.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["openssl"]
+    note: source.note.feed.openssl
+  - key: feed.openssh
+    kind: feed
+    name: "OpenSSH security"
+    url: "https://www.openssh.com/security.html"
+    hosts: ["www.openssh.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["openssh"]
+    note: source.note.feed.openssh
+  - key: feed.openvpn
+    kind: feed
+    name: "OpenVPN security announcements"
+    url: "https://community.openvpn.net/openvpn/wiki/SecurityAnnouncements"
+    hosts: ["community.openvpn.net"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["openvpn"]
+    note: source.note.feed.openvpn
+  - key: feed.traefik
+    kind: feed
+    name: "Traefik advisories"
+    url: "https://github.com/traefik/traefik/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "traefik/traefik"}
+    tech: ["traefik"]
+    note: source.note.feed.traefik
+  - key: feed.envoy
+    kind: feed
+    name: "Envoy advisories"
+    url: "https://github.com/envoyproxy/envoy/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "envoyproxy/envoy"}
+    tech: ["envoy"]
+    note: source.note.feed.envoy
+  - key: feed.moby
+    kind: feed
+    name: "Docker / Moby advisories"
+    url: "https://github.com/moby/moby/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "moby/moby"}
+    tech: ["docker"]
+    note: source.note.feed.moby
+  - key: feed.containerd
+    kind: feed
+    name: "containerd advisories"
+    url: "https://github.com/containerd/containerd/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "containerd/containerd"}
+    tech: ["containerd"]
+    note: source.note.feed.containerd
+  - key: feed.runc
+    kind: feed
+    name: "runc advisories"
+    url: "https://github.com/opencontainers/runc/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "opencontainers/runc"}
+    tech: ["runc"]
+    note: source.note.feed.runc
+  - key: feed.kubernetes
+    kind: feed
+    name: "Kubernetes advisories"
+    url: "https://github.com/kubernetes/kubernetes/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "kubernetes/kubernetes"}
+    tech: ["kubernetes"]
+    note: source.note.feed.kubernetes
+  - key: feed.helm
+    kind: feed
+    name: "Helm advisories"
+    url: "https://github.com/helm/helm/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "helm/helm"}
+    tech: ["helm"]
+    note: source.note.feed.helm
+  - key: feed.istio
+    kind: feed
+    name: "Istio advisories"
+    url: "https://github.com/istio/istio/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "istio/istio"}
+    tech: ["istio"]
+    note: source.note.feed.istio
+  - key: feed.gitlab
+    kind: feed
+    name: "GitLab releases"
+    url: "https://about.gitlab.com/releases/categories/releases/"
+    hosts: ["about.gitlab.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["gitlab"]
+    note: source.note.feed.gitlab
+  - key: feed.jenkins
+    kind: feed
+    name: "Jenkins security"
+    url: "https://www.jenkins.io/security/"
+    hosts: ["www.jenkins.io"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["jenkins"]
+    note: source.note.feed.jenkins
+  - key: feed.atlassian
+    kind: feed
+    name: "Atlassian security advisories"
+    url: "https://www.atlassian.com/trust/security/advisories"
+    hosts: ["www.atlassian.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["atlassian"]
+    note: source.note.feed.atlassian
+  - key: feed.gitea
+    kind: feed
+    name: "Gitea advisories"
+    url: "https://github.com/go-gitea/gitea/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "go-gitea/gitea"}
+    tech: ["gitea"]
+    note: source.note.feed.gitea
+  - key: feed.terraform
+    kind: feed
+    name: "Terraform advisories"
+    url: "https://github.com/hashicorp/terraform/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "hashicorp/terraform"}
+    tech: ["terraform"]
+    note: source.note.feed.terraform
+  - key: feed.vault
+    kind: feed
+    name: "Vault advisories"
+    url: "https://github.com/hashicorp/vault/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "hashicorp/vault"}
+    tech: ["vault"]
+    note: source.note.feed.vault
+  - key: feed.consul
+    kind: feed
+    name: "Consul advisories"
+    url: "https://github.com/hashicorp/consul/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "hashicorp/consul"}
+    tech: ["consul"]
+    note: source.note.feed.consul
+  - key: feed.ansible
+    kind: feed
+    name: "Ansible advisories"
+    url: "https://github.com/ansible/ansible/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "ansible/ansible"}
+    tech: ["ansible"]
+    note: source.note.feed.ansible
+  - key: feed.trivy
+    kind: feed
+    name: "Trivy advisories"
+    url: "https://github.com/aquasecurity/trivy/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "aquasecurity/trivy"}
+    tech: ["trivy"]
+    note: source.note.feed.trivy
+  - key: feed.sentry
+    kind: feed
+    name: "Sentry advisories"
+    url: "https://github.com/getsentry/sentry/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "getsentry/sentry"}
+    tech: ["sentry"]
+    note: source.note.feed.sentry
+  - key: feed.grafana
+    kind: feed
+    name: "Grafana security"
+    url: "https://grafana.com/security/"
+    hosts: ["grafana.com"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["grafana"]
+    note: source.note.feed.grafana
+  - key: feed.prometheus
+    kind: feed
+    name: "Prometheus advisories"
+    url: "https://github.com/prometheus/prometheus/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "prometheus/prometheus"}
+    tech: ["prometheus"]
+    note: source.note.feed.prometheus
+  - key: feed.wazuh
+    kind: feed
+    name: "Wazuh advisories"
+    url: "https://github.com/wazuh/wazuh/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "wazuh/wazuh"}
+    tech: ["wazuh"]
+    note: source.note.feed.wazuh
+  - key: feed.opensearch
+    kind: feed
+    name: "OpenSearch security"
+    url: "https://opensearch.org/security.html"
+    hosts: ["opensearch.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["opensearch"]
+    note: source.note.feed.opensearch
+  - key: feed.keycloak
+    kind: feed
+    name: "Keycloak security"
+    url: "https://www.keycloak.org/security"
+    hosts: ["www.keycloak.org"]
+    purpose: source.feed
+    config: {format: "page"}
+    tech: ["keycloak"]
+    note: source.note.feed.keycloak
+  - key: feed.authentik
+    kind: feed
+    name: "authentik advisories"
+    url: "https://github.com/goauthentik/authentik/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "goauthentik/authentik"}
+    tech: ["authentik"]
+    note: source.note.feed.authentik
+  - key: feed.openbao
+    kind: feed
+    name: "OpenBao advisories"
+    url: "https://github.com/openbao/openbao/security/advisories"
+    hosts: ["api.github.com"]
+    purpose: source.feed
+    config: {format: "github_advisories", repo: "openbao/openbao"}
+    tech: ["openbao"]
+    note: source.note.feed.openbao
+  - key: plugin.trivy
+    kind: plugin
+    name: "Trivy"
+    url: "https://trivy.dev/"
+    config: {format: "sarif", tool: "trivy", run: true, repo: "aquasecurity/trivy"}
+    note: source.note.plugin.trivy
+  - key: plugin.semgrep
+    kind: plugin
+    name: "Semgrep"
+    url: "https://semgrep.dev/"
+    config: {format: "sarif", tool: "semgrep", run: true, repo: "semgrep/semgrep"}
+    note: source.note.plugin.semgrep
+  - key: plugin.codeql
+    kind: plugin
+    name: "CodeQL (SARIF report)"
+    url: "https://codeql.github.com/"
+    config: {format: "sarif", tool: "codeql", run: false, repo: "github/codeql"}
+    note: source.note.plugin.codeql
+  - key: plugin.zap
+    kind: plugin
+    name: "OWASP ZAP (SARIF report)"
+    url: "https://www.zaproxy.org/"
+    config: {format: "sarif", tool: "zap", run: false, repo: "zaproxy/zaproxy"}
+    note: source.note.plugin.zap
+  - key: skill.trailofbits-code-audit
+    kind: skill
+    name: "Trail of Bits Code Audit"
+    url: "https://github.com/trailofbits/skills"
+    hosts: ["api.github.com", "codeload.github.com"]
+    purpose: source.repo
+    config: {repo: "trailofbits/skills", pinned: "", license: "unknown", path: ""}
+    note: source.note.skill.trailofbits_code_audit
+  - key: skill.claude-code-owasp
+    kind: skill
+    name: "Claude Code OWASP"
+    url: "https://github.com/agamm/claude-code-owasp"
+    hosts: ["api.github.com", "codeload.github.com"]
+    purpose: source.repo
+    config: {repo: "agamm/claude-code-owasp", pinned: "", license: "unknown", path: ""}
+    note: source.note.skill.claude_code_owasp
+  - key: mcp.semgrep
+    kind: mcp
+    name: "Semgrep MCP"
+    url: "https://github.com/semgrep/semgrep"
+    hosts: ["api.github.com", "codeload.github.com"]
+    purpose: source.repo
+    config: {repo: "semgrep/semgrep", pinned: "", license: "unknown"}
+    note: source.note.mcp.semgrep
+  - key: mcp.safedep-vet
+    kind: mcp
+    name: "SafeDep vet"
+    url: "https://github.com/safedep/vet"
+    hosts: ["api.github.com", "codeload.github.com"]
+    purpose: source.repo
+    config: {repo: "safedep/vet", pinned: "", license: "unknown"}
+    note: source.note.mcp.safedep_vet
+  - key: mcp.cve-search
+    kind: mcp
+    name: "CVE-Search MCP"
+    url: "https://github.com/roadwy/cve-search_mcp"
+    hosts: ["api.github.com", "codeload.github.com"]
+    purpose: source.repo
+    config: {repo: "roadwy/cve-search_mcp", pinned: "", license: "unknown"}
+    note: source.note.mcp.cve_search
+  - key: mcp.wazuh
+    kind: mcp
+    name: "Wazuh MCP"
+    url: "https://github.com/gbrigandi/mcp-server-wazuh"
+    hosts: ["api.github.com", "codeload.github.com"]
+    purpose: source.repo
+    config: {repo: "gbrigandi/mcp-server-wazuh", pinned: "", license: "unknown"}
+    note: source.note.mcp.wazuh
+  - key: discover.github
+    kind: reference
+    name: "GitHub discovery"
+    url: "https://github.com/topics/mcp-security"
+    hosts: ["api.github.com"]
+    purpose: source.discover
+    config: {topics: ["mcp-security", "claude-skills"]}
+    note: source.note.discover.github
+  - key: ref.cve-org
+    kind: reference
+    name: "CVE.org"
+    url: "https://www.cve.org/"
+    note: source.note.ref.cve_org
+  - key: ref.android-security
+    kind: reference
+    name: "Android Security & Privacy"
+    url: "https://developer.android.com/privacy-and-security/risks"
+    note: source.note.ref.android_security
+  - key: ref.android-studio
+    kind: reference
+    name: "Android Studio"
+    url: "https://developer.android.com/studio"
+    note: source.note.ref.android_studio
+  - key: ref.apple-platform-security
+    kind: reference
+    name: "Apple Platform Security"
+    url: "https://developer.apple.com/security/"
+    note: source.note.ref.apple_platform_security
+  - key: ref.mongodb-security
+    kind: reference
+    name: "MongoDB security"
+    url: "https://www.mongodb.com/docs/manual/security/"
+    note: source.note.ref.mongodb_security
+  - key: ref.wireguard
+    kind: reference
+    name: "WireGuard"
+    url: "https://www.wireguard.com/"
+    note: source.note.ref.wireguard
+  - key: ref.haproxy
+    kind: reference
+    name: "HAProxy"
+    url: "https://www.haproxy.org/"
+    note: source.note.ref.haproxy
+  - key: ref.kubernetes-security
+    kind: reference
+    name: "Kubernetes security issues"
+    url: "https://kubernetes.io/docs/reference/issues-security/"
+    note: source.note.ref.kubernetes_security
+  - key: ref.openldap
+    kind: reference
+    name: "OpenLDAP"
+    url: "https://www.openldap.org/"
+    note: source.note.ref.openldap
+  - key: ref.openssf
+    kind: reference
+    name: "OpenSSF"
+    url: "https://openssf.org/"
+    note: source.note.ref.openssf
+  - key: ref.openssf-scorecard
+    kind: reference
+    name: "OpenSSF Scorecard"
+    url: "https://scorecard.dev/"
+    note: source.note.ref.openssf_scorecard
+  - key: ref.deps-dev
+    kind: reference
+    name: "deps.dev"
+    url: "https://deps.dev/"
+    note: source.note.ref.deps_dev
+  - key: ref.first-cvss
+    kind: reference
+    name: "FIRST CVSS"
+    url: "https://www.first.org/cvss/"
+    note: source.note.ref.first_cvss
+  - key: ref.dependency-track
+    kind: reference
+    name: "OWASP Dependency-Track"
+    url: "https://dependencytrack.org/"
+    note: source.note.ref.dependency_track
+  - key: ref.trailofbits-skills
+    kind: reference
+    name: "trailofbits/skills"
+    url: "https://github.com/trailofbits/skills"
+    note: source.note.ref.trailofbits_skills
+  - key: ref.awesome-agent-skills
+    kind: reference
+    name: "VoltAgent/awesome-agent-skills"
+    url: "https://github.com/VoltAgent/awesome-agent-skills"
+    note: source.note.ref.awesome_agent_skills
+  - key: ref.awesome-claude-skills
+    kind: reference
+    name: "travisvn/awesome-claude-skills"
+    url: "https://github.com/travisvn/awesome-claude-skills"
+    note: source.note.ref.awesome_claude_skills
+  - key: ref.awesome-cybersecurity-agentic-ai
+    kind: reference
+    name: "raphabot/awesome-cybersecurity-agentic-ai"
+    url: "https://github.com/raphabot/awesome-cybersecurity-agentic-ai"
+    note: source.note.ref.awesome_cybersecurity_agentic_ai
+  - key: ref.awesome-mcp-security
+    kind: reference
+    name: "AIM-Intelligence/awesome-mcp-security"
+    url: "https://github.com/AIM-Intelligence/awesome-mcp-security"
+    note: source.note.ref.awesome_mcp_security
+tech_rules:
+  - {ecosystem: "Packagist", tag: "php"}
+  - {ecosystem: "npm", tag: "node"}
+  - {ecosystem: "Packagist", prefix: "symfony/", tag: "symfony"}
+  - {ecosystem: "Packagist", package: "laravel/framework", tag: "laravel"}
+  - {ecosystem: "Packagist", package: "drupal/core", tag: "drupal"}
+  - {ecosystem: "Packagist", package: "roots/wordpress", tag: "wordpress"}
+  - {ecosystem: "Packagist", package: "johnpbloch/wordpress-core", tag: "wordpress"}
+  - {ecosystem: "Packagist", prefix: "magento/", tag: "magento"}
+  - {ecosystem: "npm", package: "vue", tag: "vue"}
+  - {ecosystem: "npm", package: "react", tag: "react"}
+  - {ecosystem: "npm", package: "next", tag: "nextjs"}
+  - {ecosystem: "npm", package: "@angular/core", tag: "angular"}
+  - {ecosystem: "npm", package: "express", tag: "express"}
+  - {ecosystem: "npm", package: "nuxt", tag: "nuxt"}
+  - {ecosystem: "npm", package: "svelte", tag: "svelte"}

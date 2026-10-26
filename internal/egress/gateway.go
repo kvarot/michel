@@ -39,11 +39,12 @@ func (nopSink) Record(Attempt) error { return nil }
 // Gateway decides and records outbound requests.
 type Gateway struct {
 	mode  policy.Mode
-	rules []policy.AllowRule
 	sink  Sink
 	inner *http.Transport
 
+	// mu guards rules (replaced by SetRules) and attempts.
 	mu       sync.Mutex
+	rules    []policy.AllowRule
 	attempts []Attempt
 }
 
@@ -82,6 +83,16 @@ func (g *Gateway) Client(purpose string) *http.Client {
 	}
 }
 
+// SetRules replaces the allowlist, so a rule written after the gateway was
+// built (michel source enable) takes effect without a restart. The mode is
+// unchanged.
+func (g *Gateway) SetRules(rules []policy.AllowRule) {
+	rules = append([]policy.AllowRule(nil), rules...)
+	g.mu.Lock()
+	g.rules = rules
+	g.mu.Unlock()
+}
+
 // Allowed reports whether host may be contacted for purpose, with the reason.
 // It does not record an Attempt.
 func (g *Gateway) Allowed(host, purpose string) (bool, string) {
@@ -89,8 +100,11 @@ func (g *Gateway) Allowed(host, purpose string) (bool, string) {
 	if isLoopback(host) && strings.HasPrefix(purpose, "local.") {
 		return true, "loopback allowed for local purpose"
 	}
+	g.mu.Lock()
+	rules := g.rules // SetRules never mutates a published slice
+	g.mu.Unlock()
 	hostSeen := false
-	for _, r := range g.rules {
+	for _, r := range rules {
 		if !hostMatches(strings.ToLower(r.Host), host) {
 			continue
 		}

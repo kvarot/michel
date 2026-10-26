@@ -16,7 +16,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 			t.Fatalf("open #%d: %v", i, err)
 		}
 		var n int
-		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 4 {
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 5 {
 			t.Fatalf("schema_migrations rows = %d, err %v", n, err)
 		}
 		var mode string
@@ -58,7 +58,7 @@ func TestMigrationAppliedByAnotherProcessMeanwhileIsSkipped(t *testing.T) {
 	}
 	defer s.Close()
 	var n int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 4 {
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 5 {
 		t.Fatalf("schema_migrations rows = %d err %v", n, err)
 	}
 }
@@ -146,7 +146,7 @@ func TestMigration0002UpgradesExistingDatabase(t *testing.T) {
 		t.Errorf("row = %q %q %q", name, core, over)
 	}
 	var versions string
-	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2,3,4" {
+	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2,3,4,5" {
 		t.Errorf("versions = %q err %v", versions, err)
 	}
 }
@@ -261,5 +261,52 @@ func TestMigration0004BackfillsStatusChangedAt(t *testing.T) {
 	var changed string
 	if err := s.DB().QueryRow(`SELECT status_changed_at FROM finding WHERE id='f1'`).Scan(&changed); err != nil || changed != "2026-01-02T00:00:00Z" {
 		t.Errorf("status_changed_at = %q err %v", changed, err)
+	}
+}
+
+func TestMigration0005Applies(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for table, cols := range map[string][]string{
+		"source": {"id", "key", "kind", "origin", "name", "url", "hosts", "purpose", "enabled", "hidden",
+			"config_catalog", "config_user", "tech", "catalog_version", "last_read_at", "last_read_result",
+			"last_read_error", "last_read_items", "last_read_etag", "status", "created_at", "updated_at"},
+		"tech":           {"tag", "created_at"},
+		"feed_item":      {"id", "source_id", "guid", "title", "url", "published_at", "summary", "tech", "seen_at", "read_at"},
+		"kev":            {"cve", "vendor", "product", "name", "date_added", "due_date", "ransomware", "notes_url"},
+		"epss":           {"cve", "score", "percentile", "model_date"},
+		"cve_enrichment": {"cve", "cvss_score", "cvss_vector", "cvss_source", "ssvc_exploitation", "ssvc_automatable", "ssvc_technical_impact", "cwe", "fetched_at", "source_key"},
+		"plugin_run":     {"id", "source_id", "project_id", "started_at", "finished_at", "tool_version", "report_path", "status", "error", "findings", "log"},
+		"discovery":      {"repo", "topic", "stars", "description", "html_url", "first_seen_at", "state"},
+		"finding": {"kind", "source_key", "rule_id", "location", "fingerprint", "kev", "kev_added", "epss",
+			"epss_percentile", "malicious", "cvss_enriched"},
+		"decision": {"seen_kev"},
+		"project":  {"tech", "tech_auto"},
+	} {
+		have := tableColumns(t, s.DB(), table)
+		for _, c := range cols {
+			if !have[c] {
+				t.Errorf("%s.%s missing", table, c)
+			}
+		}
+	}
+	for _, idx := range []string{"idx_source_kind", "idx_feed_item_source", "idx_plugin_run_project", "idx_finding_kind", "idx_finding_kev"} {
+		var n int
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s: n=%d err=%v", idx, n, err)
+		}
+	}
+	body, err := migrationFS.ReadFile("migrations/0005_sources.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(body))
+	for _, banned := range []string{"rowid", "autoincrement", "datetime("} {
+		if strings.Contains(lower, banned) {
+			t.Errorf("0005 is not portable: it contains %q", banned)
+		}
 	}
 }
