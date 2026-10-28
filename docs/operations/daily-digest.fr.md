@@ -191,7 +191,7 @@ michel serve --listen 127.0.0.1:8080
 michel scan --all --update --digest
 ```
 
-Elle lit d'abord chaque source activée (bases OSV, KEV, EPSS et les autres enrichissements ; une source qui attend encore ton accord n'est pas contactée), puis scanne tous les projets actifs, puis envoie le digest. Une source illisible n'arrête pas le scan : Michel se sert des données précédentes, le digest le dit et la commande se termine avec le code 1. Lance-la **avec ton propre compte utilisateur** : les secrets sont chiffrés pour ce compte (Windows) ou lisibles par lui seul, et la notification sur le bureau a besoin de ta session ouverte. Si l'ordinateur est éteint à cette heure-là, rien n'est perdu : le digest suivant couvre tout depuis le précédent.
+Elle lit d'abord chaque source activée (les bases de failles OSV, les listes KEV et EPSS qui disent quelles failles sont attaquées ou probablement attaquées, et les autres informations complémentaires ; une source qui attend encore ton accord n'est pas contactée), puis scanne tous les projets actifs, puis envoie le digest. Une source illisible n'arrête pas le scan : Michel se sert des données précédentes, le digest le dit et la commande se termine avec le code 1. Lance-la **avec ton propre compte utilisateur** : les secrets sont chiffrés pour ce compte (Windows) ou lisibles par lui seul, et la notification sur le bureau a besoin de ta session ouverte. Si l'ordinateur est éteint à cette heure-là, rien n'est perdu : le digest suivant couvre tout depuis le précédent.
 
 ### Windows (Planificateur de tâches)
 

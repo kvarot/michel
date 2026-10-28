@@ -152,7 +152,7 @@ func TestDecideByPackage(t *testing.T) {
 		t.Errorf("already decided: %v", err)
 	}
 	_, out, _, err = run(t, dir, "--lang", "fr", "decide", "--project", "demo", "--package", "acme/vuln", "defer", "--force", "--for", "10d")
-	if err != nil || !strings.HasPrefix(out, "2 failles de acme/vuln décidées (reportées jusqu'au ") || !strings.Contains(out, " dans demo ; audit : ") ||
+	if err != nil || !strings.HasPrefix(out, "2 failles de acme/vuln décidées (reportées jusqu'au ") || !strings.Contains(out, " dans demo. Journal d'audit : ") ||
 		strings.Count(out, "\n") != 1 {
 		t.Errorf("--force: %v %q", err, out)
 	}
