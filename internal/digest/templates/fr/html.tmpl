@@ -8,9 +8,9 @@
 {{end}}{{if .ShowEmpty}}<p class="since">{{empty}}</p>
 {{end}}{{if .FailedScans}}<p class="banner">Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.</p>
 {{end}}
-{{- if or .Exploited .ExploitedDecided}}<h2 class="exploited">Exploitées dans la nature, à corriger en premier</h2>
+{{- if or .Exploited .ExploitedDecided}}<h2 class="exploited">Failles que des pirates utilisent déjà, à corriger en premier</h2>
 <ul>
-{{range .Exploited}}<li><span class="sev sev-critical">{{if .Malicious}}paquet malveillant{{else}}KEV{{end}}</span> <strong>{{.Package}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · sur la liste KEV depuis le {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · ta décision : à corriger{{end}}</li>
+{{range .Exploited}}<li><span class="sev sev-critical">{{if .Malicious}}paquet malveillant{{else}}faille déjà attaquée{{end}}</span> <strong>{{.Package}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · sur la liste des failles attaquées de la CISA depuis le {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · ta décision : à corriger{{end}}</li>
 {{end}}{{if .ExploitedDecided}}<li>{{exploitedDecided}}</li>
 {{end}}</ul>
 {{end}}

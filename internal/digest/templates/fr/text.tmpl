@@ -10,8 +10,8 @@
 {{end}}{{if .FailedScans}}Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.
 {{end}}
 {{- if or .Exploited .ExploitedDecided}}
-Exploitées dans la nature, à corriger en premier :
-{{range .Exploited}}  [{{if .Malicious}}paquet malveillant{{else}}KEV{{end}}] {{.Package}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · sur la liste KEV depuis le {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · ta décision : à corriger{{end}}
+Failles que des pirates utilisent déjà, à corriger en premier :
+{{range .Exploited}}  [{{if .Malicious}}paquet malveillant{{else}}faille déjà attaquée{{end}}] {{.Package}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · sur la liste des failles attaquées de la CISA depuis le {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · ta décision : à corriger{{end}}
 {{end}}{{if .ExploitedDecided}}  {{exploitedDecided}}
 {{end}}{{end}}
 {{- range .Projects}}

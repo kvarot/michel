@@ -207,12 +207,12 @@ func TestImpactMentionsKEVAndEPSS(t *testing.T) {
 	}
 	has(t, "en impact", mustRender(t, EN, f).Impact, "exploited in the wild", "CISA KEV list since 2026-03-12",
 		"30 days: 12%", "95% of known flaws", "Michel is fairly sure it matters to you")
-	has(t, "fr impact", mustRender(t, FR, f).Impact, "exploitée dans la nature", "liste KEV de la CISA depuis le 12/03/2026",
-		"30 jours : 12 %", "95 % des failles connues")
+	has(t, "fr impact", mustRender(t, FR, f).Impact, "Des pirates l'utilisent déjà", "agence américaine de cybersécurité, depuis le 12/03/2026",
+		"30 prochains jours : 12 %", "plus que pour 95 % des failles connues")
 	// Below the 50th percentile, no figure is given.
 	f.KEV, f.EPSSPercentile = false, 0.49
 	for _, l := range []Lang{EN, FR} {
-		if im := mustRender(t, l, f).Impact; strings.Contains(im, "30") || strings.Contains(im, "KEV") {
+		if im := mustRender(t, l, f).Impact; strings.Contains(im, "30") || strings.Contains(im, "KEV") || strings.Contains(im, "CISA") {
 			t.Errorf("%s impact mentions KEV or EPSS: %s", l, im)
 		}
 	}

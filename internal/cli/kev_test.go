@@ -27,7 +27,7 @@ func TestFindingsMarkKEV(t *testing.T) {
 		t.Errorf("finding: %v\n%s", err, out)
 	}
 	_, out, _, err = run(t, dir, "finding", list[0].ID, "--lang", "fr")
-	if err != nil || !strings.Contains(out, "KEV : oui, exploitée dans la nature (liste KEV de la CISA depuis le 12/03/2026)") {
+	if err != nil || !strings.Contains(out, "faille déjà attaquée : oui, des pirates l'utilisent déjà (liste de la CISA, l'agence américaine de cybersécurité, depuis le 12/03/2026)") {
 		t.Errorf("finding fr: %v\n%s", err, out)
 	}
 	_, out, _, err = run(t, dir, "finding", list[0].ID, "--json")
