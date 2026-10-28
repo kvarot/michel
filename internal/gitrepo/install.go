@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -109,6 +110,9 @@ func Install(ctx context.Context, d Deps, e source.Entry, sha string) (string, e
 		if err != nil {
 			return "", err
 		}
+		if err := checkSameName(e, name); err != nil {
+			return "", err
+		}
 		if installedTo, err = copySkill(d, e.Key, sha, folder, name); err != nil {
 			return "", err
 		}
@@ -124,6 +128,29 @@ func Install(ctx context.Context, d Deps, e source.Entry, sha string) (string, e
 		}
 	}
 	return installedTo, nil
+}
+
+// checkSameName refuses (ErrSkillRenamed) a new version of an installed
+// skill whose folder name differs from the installed one: the user was shown
+// the installed folder, never the new one.
+func checkSameName(e source.Entry, name string) error {
+	dir := e.Config.Str("install_dir")
+	if e.Config.Str("installed_sha") == "" || dir == "" {
+		return nil
+	}
+	if old := filepath.Base(dir); old != name {
+		return fmt.Errorf("%w: from %q to %q", ErrSkillRenamed, old, name)
+	}
+	return nil
+}
+
+// sameDir compares two folders after cleaning, without case on Windows.
+func sameDir(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // copySkill copies folder to SkillsDir/name through a temporary folder in
@@ -165,17 +192,25 @@ func copySkill(d Deps, key, sha, folder, name string) (string, error) {
 		return "", fmt.Errorf("cannot write the marker: %w", err)
 	}
 	if _, err := os.Lstat(dst); err == nil {
-		// Ours (checked above): the previous version goes aside, then away.
-		old := dst + ".michel-old"
-		os.RemoveAll(old)
+		// Ours (checked above): the previous version goes aside into a
+		// fresh folder of unpredictable name, removed only after success.
+		aside, err := os.MkdirTemp(skills, ".michel-old-")
+		if err != nil {
+			return "", fmt.Errorf("cannot replace the installed skill: %w", err)
+		}
+		old := filepath.Join(aside, name)
 		if err := os.Rename(dst, old); err != nil {
+			os.Remove(aside)
 			return "", fmt.Errorf("cannot replace the installed skill: %w", err)
 		}
 		if err := os.Rename(tmp, dst); err != nil {
-			os.Rename(old, dst)
+			if rerr := os.Rename(old, dst); rerr != nil {
+				return "", fmt.Errorf("cannot install the skill (%v), and the previous version could not be put back: it is in %s", err, old)
+			}
+			os.Remove(aside)
 			return "", fmt.Errorf("cannot install the skill: %w", err)
 		}
-		os.RemoveAll(old)
+		os.RemoveAll(aside)
 	} else if err := os.Rename(tmp, dst); err != nil {
 		return "", fmt.Errorf("cannot install the skill: %w", err)
 	}
@@ -228,6 +263,10 @@ func Uninstall(ctx context.Context, d Deps, e source.Entry) error {
 	}
 	ev := map[string]any{"key": e.Key, "kind": string(e.Kind), "mode": "uninstalled"}
 	if dir := e.Config.Str("install_dir"); e.Kind == source.KindSkill && dir != "" {
+		skills, err := filepath.Abs(d.SkillsDir)
+		if d.SkillsDir == "" || err != nil || !sameDir(filepath.Dir(dir), skills) || !validSkillName(filepath.Base(dir)) {
+			return fmt.Errorf("%w: %s is not a folder of the skills folder", ErrForeignDir, dir)
+		}
 		if _, err := os.Lstat(dir); err == nil {
 			if !ownedBy(dir, e.Key) {
 				return fmt.Errorf("%w: %s", ErrForeignDir, dir)
@@ -283,6 +322,15 @@ func Upgrade(ctx context.Context, d Deps, e source.Entry, toSHA string) (Diff, e
 	newDir, _, err := tt.fetch(ctx, d, e.Key)
 	if err != nil {
 		return Diff{}, err
+	}
+	if e.Kind == source.KindSkill {
+		name, err := skillNameOf(newDir, tt)
+		if err != nil {
+			return Diff{}, err
+		}
+		if err := checkSameName(e, name); err != nil {
+			return Diff{}, err
+		}
 	}
 	oldFiles, err := hashes(oldDir)
 	if err != nil {

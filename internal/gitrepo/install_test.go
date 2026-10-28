@@ -276,3 +276,111 @@ func TestUpgradeDiffListsChanges(t *testing.T) {
 		t.Errorf("not pinned again: %+v", got.Config.User)
 	}
 }
+
+func TestUpgradeKeepsAnUnmarkedOldFolder(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	gh.archives[shaB] = buildTarGz(t, file("skills/demo/SKILL.md", demoSkill+"more\n"))
+	d := testDeps(t)
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	if _, err := Install(ctx, d, e, shaA); err != nil {
+		t.Fatal(err)
+	}
+	// A folder with the name the old code used for its aside copy.
+	mine := filepath.Join(d.SkillsDir, "demo.michel-old")
+	os.MkdirAll(mine, 0o755)
+	os.WriteFile(filepath.Join(mine, "SKILL.md"), []byte("mine"), 0o644)
+	e, _ = d.Repo.Get(ctx, e.Key)
+	if _, err := Install(ctx, d, e, shaB); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(mine, "SKILL.md")); err != nil || string(b) != "mine" {
+		t.Errorf("the unmarked folder was touched: %q %v", b, err)
+	}
+	list, _ := os.ReadDir(d.SkillsDir)
+	for _, f := range list {
+		if strings.HasPrefix(f.Name(), ".michel-") {
+			t.Errorf("leftover %s", f.Name())
+		}
+	}
+}
+
+func TestUpgradeRefusesARenamedSkill(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	gh.archives[shaB] = buildTarGz(t, file("skills/demo/SKILL.md", strings.Replace(demoSkill, "name: demo", "name: renamed", 1)))
+	d := testDeps(t)
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	if _, err := Install(ctx, d, e, shaA); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = d.Repo.Get(ctx, e.Key)
+	if _, err := Upgrade(ctx, d, e, shaB); !errors.Is(err, ErrSkillRenamed) {
+		t.Fatalf("upgrade: err = %v", err)
+	}
+	if _, err := Install(ctx, d, e, shaB); !errors.Is(err, ErrSkillRenamed) {
+		t.Fatalf("install: err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.SkillsDir, "renamed")); err == nil {
+		t.Error("the new folder was written")
+	}
+	if b, _ := os.ReadFile(filepath.Join(d.SkillsDir, "demo", "SKILL.md")); string(b) != demoSkill {
+		t.Error("the installed skill changed")
+	}
+	if got, _ := d.Repo.Get(ctx, e.Key); got.Config.Str("installed_sha") != shaA {
+		t.Errorf("config = %+v", got.Config.User)
+	}
+}
+
+func TestSkillNameRefusesReservedNames(t *testing.T) {
+	for _, n := range []string{"CON", "con", "Nul.txt", "aux.md", "PRN", "com1", "LPT9.x", "demo.", "demo..", "a b"} {
+		if validSkillName(n) {
+			t.Errorf("%q accepted", n)
+		}
+	}
+	for _, n := range []string{"demo", "console", "com10", "lpt0", "nul-check", "owasp-security", "a.b"} {
+		if !validSkillName(n) {
+			t.Errorf("%q refused", n)
+		}
+	}
+}
+
+func TestUninstallRevalidatesInstallDir(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	d := testDeps(t)
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	if _, err := Install(ctx, d, e, shaA); err != nil {
+		t.Fatal(err)
+	}
+	// A folder outside the skills folder, even carrying the right marker.
+	elsewhere := filepath.Join(t.TempDir(), "demo")
+	os.MkdirAll(elsewhere, 0o755)
+	os.WriteFile(filepath.Join(elsewhere, MarkerFile), []byte(`{"key":"`+e.Key+`","sha":"`+shaA+`"}`), 0o644)
+	e, _ = d.Repo.Get(ctx, e.Key)
+	user := e.Config.User
+	user["install_dir"] = elsewhere
+	if err := d.Repo.SetUserConfig(ctx, e.Key, user); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = d.Repo.Get(ctx, e.Key)
+	if err := Uninstall(ctx, d, e); !errors.Is(err, ErrForeignDir) {
+		t.Fatalf("outside: err = %v", err)
+	}
+	if _, err := os.Stat(elsewhere); err != nil {
+		t.Error("a folder outside the skills folder was removed")
+	}
+	// A reserved base name inside the skills folder is refused too.
+	user["install_dir"] = filepath.Join(d.SkillsDir, "NUL")
+	d.Repo.SetUserConfig(ctx, e.Key, user)
+	e, _ = d.Repo.Get(ctx, e.Key)
+	if err := Uninstall(ctx, d, e); !errors.Is(err, ErrForeignDir) {
+		t.Errorf("reserved name: err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.SkillsDir, "demo", "SKILL.md")); err != nil {
+		t.Error("the installed skill was removed")
+	}
+}

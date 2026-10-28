@@ -367,6 +367,7 @@
   "cli.source.upgrade.nothing": "Aucune nouvelle version de %s n'est connue. michel source update vérifie le dépôt chaque jour.",
   "cli.source.upgrade.removed.one": "%d fichier supprimé : %s",
   "cli.source.upgrade.removed.other": "%d fichiers supprimés : %s",
+  "cli.source.upgrade.renamed": "La nouvelle version de %s donne un autre nom au dossier du skill. Michel n'écrit pas dans un dossier qu'il ne t'a pas montré. Pour passer à cette version, lance michel source remove %s, puis michel source install %s.",
   "cli.source.upgrade.same_files": "Aucun fichier ne change.",
   "cli.source.upgrade.skill_md": "Changements dans SKILL.md, le fichier de consignes (- ligne retirée, + ligne ajoutée) :",
   "cli.source.upgrade.title": "Mise à jour de %s de la version %s à la version %s :",

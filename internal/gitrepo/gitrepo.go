@@ -58,6 +58,7 @@ var (
 	ErrForeignDir    = errors.New("the target folder exists and was not installed by Michel for this source")
 	ErrInsideProject = errors.New("the skills folder is inside a project Michel scans")
 	ErrBadName       = errors.New("the skill's name cannot be a folder name")
+	ErrSkillRenamed  = errors.New("the new version renames the skill's folder")
 	ErrBadRepo       = errors.New("the repository setting is not owner/name")
 	ErrBadSHA        = errors.New("the commit is not a full 40-character sha")
 	ErrBadPath       = errors.New("the path setting leaves the repository")
@@ -103,6 +104,28 @@ var (
 	// only, no separator, no drive or stream colon.
 	skillName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 )
+
+// validSkillName reports whether name can be a skill's folder on every
+// system: one plain segment, not dots only, not ending in a dot or a space,
+// and not a Windows reserved device name (CON, PRN, AUX, NUL, COM1-9,
+// LPT1-9, any case, with or without an extension).
+func validSkillName(name string) bool {
+	if !skillName.MatchString(name) || strings.Trim(name, ".") == "" || strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return false
+	}
+	base := strings.ToUpper(name)
+	if i := strings.IndexByte(base, '.'); i >= 0 {
+		base = base[:i]
+	}
+	switch base {
+	case "CON", "PRN", "AUX", "NUL":
+		return false
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9' {
+		return false
+	}
+	return true
+}
 
 // SplitRepo checks an owner/name setting and returns its parts.
 func SplitRepo(repo string) (owner, name string, err error) {

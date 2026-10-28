@@ -65,6 +65,8 @@ func installErr(deps *Deps, key string, err error) error {
 		return deps.Errorf("cli.source.install.foreign", key)
 	case errors.Is(err, gitrepo.ErrInsideProject):
 		return deps.Errorf("cli.source.install.inside_project")
+	case errors.Is(err, gitrepo.ErrSkillRenamed):
+		return deps.Errorf("cli.source.upgrade.renamed", key, key, key)
 	case errors.Is(err, gitrepo.ErrBadName):
 		return deps.Wrapf("cli.source.install.bad_name", err, key)
 	}

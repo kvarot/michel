@@ -132,7 +132,7 @@ func skillNameOf(folder string, t target) (string, error) {
 			name = t.sub[strings.LastIndex(t.sub, "/")+1:]
 		}
 	}
-	if !skillName.MatchString(name) || strings.Trim(name, ".") == "" {
+	if !validSkillName(name) {
 		return "", fmt.Errorf("%w: %q", ErrBadName, clip(scan.SanitizeText(name)))
 	}
 	return name, nil
