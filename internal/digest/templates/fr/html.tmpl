@@ -8,6 +8,12 @@
 {{end}}{{if .ShowEmpty}}<p class="since">{{empty}}</p>
 {{end}}{{if .FailedScans}}<p class="banner">Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.</p>
 {{end}}
+{{- if or .Exploited .ExploitedDecided}}<h2 class="exploited">Exploitées dans la nature, à corriger en premier</h2>
+<ul>
+{{range .Exploited}}<li><span class="sev sev-critical">{{if .Malicious}}paquet malveillant{{else}}KEV{{end}}</span> <strong>{{.Package}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · sur la liste KEV depuis le {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · ta décision : à corriger{{end}}</li>
+{{end}}{{if .ExploitedDecided}}<li>{{exploitedDecided}}</li>
+{{end}}</ul>
+{{end}}
 {{- range .Projects}}<h2>{{.Name}}</h2>
 <p class="counters">failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevées {{index .Open "high"}}, moyennes {{index .Open "medium"}}, faibles {{index .Open "low"}}) · tes décisions : à corriger {{index .Decided "fix"}}, reportées {{index .Decided "defer"}}, ignorées {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if le .DaysWithoutCritical 1}}jour{{else}}jours{{end}} sans nouvelle faille critique{{if eq .CriticalOpen 0}} · <strong>0 faille critique ouverte, à garder comme ça</strong>{{end}}</p>
 {{if eq .LastScanStatus "failed"}}<p class="banner">Le dernier scan n'a pas pu se terminer.</p>

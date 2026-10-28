@@ -1,3 +1,4 @@
+{{- if .Urgent}}À corriger en premier. {{end -}}
 {{- if eq .Target "" -}}
 Aucune version corrigée n'existe encore : rien à mettre à jour, Michel continue de surveiller.
 {{- else if eq .Jump "patch" -}}

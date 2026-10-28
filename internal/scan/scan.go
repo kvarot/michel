@@ -125,6 +125,11 @@ type Options struct {
 	// lockfile of another ecosystem is not scanned. Nil means every
 	// ecosystem of the lockfiles found.
 	Ecosystems []string
+	// Lookup gives the enrichment (KEV, EPSS, CVSS) of the CVEs of the
+	// findings. It is called once per scan, with the CVEs of the scanned
+	// findings only, right before they are stored. Nil means no enrichment:
+	// the findings already stored keep their enrichment columns.
+	Lookup LookupFunc
 }
 
 // Result is the outcome of a scan of one project.
@@ -532,6 +537,24 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 			res.ErrorTexts = append(res.ErrorTexts, manifests[i].Error)
 		}
 	}
+	enriched := opt.Lookup != nil
+	if enriched {
+		cves := []string{}
+		for _, f := range findings {
+			for _, c := range CVEsOf(f) {
+				if !slices.Contains(cves, c) {
+					cves = append(cves, c)
+				}
+			}
+		}
+		known, lerr := opt.Lookup(cves)
+		if lerr != nil {
+			return fail(fmt.Errorf("Michel cannot read the enrichment data (KEV, EPSS) for %s: %w. Nothing was changed; check that the data folder is readable and run the scan again", p.Name, lerr))
+		}
+		for i := range findings {
+			findings[i] = WithEnrichment(findings[i], CombineEnrichment(known, CVEsOf(findings[i])))
+		}
+	}
 	for _, f := range findings {
 		res.BySeverity[f.SeverityLabel]++
 	}
@@ -556,7 +579,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		if err != nil {
 			return err
 		}
-		res.New, res.Still, res.Reappeared, res.Gone, superseded, err = applyScan(ctx, tx, p.ID, res.ScanID, finished, findings, unread, current)
+		res.New, res.Still, res.Reappeared, res.Gone, superseded, err = applyScan(ctx, tx, p.ID, res.ScanID, finished, findings, unread, current, enriched)
 		if err != nil {
 			return err
 		}

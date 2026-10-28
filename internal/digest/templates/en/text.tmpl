@@ -9,6 +9,11 @@
 {{end}}{{if .ShowEmpty}}{{empty}}
 {{end}}{{if .FailedScans}}The last scan of {{.FailedScans}} {{if eq .FailedScans 1}}project{{else}}projects{{end}} did not finish.
 {{end}}
+{{- if or .Exploited .ExploitedDecided}}
+Exploited in the wild, fix these first:
+{{range .Exploited}}  [{{if .Malicious}}malicious package{{else}}KEV{{end}}] {{.Package}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · on the KEV list since {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · decided: fix{{end}}
+{{end}}{{if .ExploitedDecided}}  {{exploitedDecided}}
+{{end}}{{end}}
 {{- range .Projects}}
 == {{.Name}} ==
 open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "high"}}, medium {{index .Open "medium"}}, low {{index .Open "low"}}) · decided: fix {{index .Decided "fix"}}, defer {{index .Decided "defer"}}, ignore {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if eq .DaysWithoutCritical 1}}day{{else}}days{{end}} without a new critical{{if eq .CriticalOpen 0}} · 0 critical open{{end}}

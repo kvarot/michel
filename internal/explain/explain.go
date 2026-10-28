@@ -5,11 +5,13 @@ package explain
 
 import (
 	"fmt"
+	"math"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -77,6 +79,17 @@ type Facts struct {
 	// Malicious is true for an OSV MAL- advisory: the package itself was
 	// published to do harm.
 	Malicious bool `json:"malicious"`
+	// KEV is true when the flaw is on CISA's list of vulnerabilities
+	// exploited in the wild, since KEVAdded (YYYY-MM-DD). EPSS and
+	// EPSSPercentile are FIRST's exploitation score (0..1); the impact
+	// sentence quotes them from the 50th percentile only.
+	KEV            bool    `json:"kev"`
+	KEVAdded       string  `json:"kev_added"`
+	EPSS           float64 `json:"epss"`
+	EPSSPercentile float64 `json:"epss_percentile"`
+	// Urgent is true for a flaw exploited in the wild or a malicious
+	// package: the cost sentence says to fix it first.
+	Urgent bool `json:"urgent"`
 }
 
 // Explanation is the three sentences.
@@ -128,19 +141,32 @@ func shorten(s string) string {
 
 // FactsFrom builds the facts of a finding. Without analysis only what the scan
 // knows is filled, and the upgrade is planned from the finding itself. The
-// caller sets FixLevel from the project.
+// caller sets FixLevel from the project. The severity is the effective one
+// (scan.EffectiveSeverity). A flaw exploited in the wild (KEV) matters to
+// anyone who has the package: its certainty is "high".
 func FactsFrom(fi scan.Finding, a analyze.Analysis, hasAnalysis bool) Facts {
+	f := factsFrom(fi, a, hasAnalysis)
+	if f.KEV {
+		f.Certainty = "high"
+	}
+	return f
+}
+
+func factsFrom(fi scan.Finding, a analyze.Analysis, hasAnalysis bool) Facts {
+	severity, _ := scan.EffectiveSeverity(fi)
 	f := Facts{
 		Package: clean(fi.Package), Ecosystem: fi.Ecosystem, OSVID: clean(fi.OSVID), Summary: shorten(fi.Summary),
-		SeverityLabel: fi.SeverityLabel, CVSS: fi.CVSS, Installed: clean(fi.InstalledVersion),
+		SeverityLabel: severity, CVSS: fi.CVSS, Installed: clean(fi.InstalledVersion),
 		ManifestRelPath: clean(fi.ManifestRelPath), HasAnalysis: hasAnalysis, Directness: analyze.Unknown,
 		Certainty: "low", Malicious: fi.Malicious,
+		KEV: fi.KEV, KEVAdded: clean(fi.KEVAdded), EPSS: fi.EPSS, EPSSPercentile: fi.EPSSPercentile, Urgent: scan.Urgent(fi),
 	}
 	if !hasAnalysis {
 		up := analyze.PlanUpgrade(fi.Ecosystem, fi.InstalledVersion, fi.FixedVersions, "")
 		f.Target, f.Jump = clean(up.Target), up.Jump
 		return f
 	}
+	f.Urgent = f.Urgent || a.Risk.Urgency == analyze.UrgencyUrgent
 	f.Target, f.Jump = clean(a.Upgrade.Target), a.Upgrade.Jump
 	if a.Upgrade.ConstraintAllows != nil {
 		f.ConstraintKnown, f.ConstraintOK = true, *a.Upgrade.ConstraintAllows
@@ -175,6 +201,17 @@ func funcs(lang Lang) template.FuncMap {
 			return many
 		},
 		"join": strings.Join,
+		// pct writes a share (0..1) as a whole percentage.
+		"pct": func(x float64) int { return int(math.Round(x * 100)) },
+		// day writes a YYYY-MM-DD or RFC 3339 date in lang's layout.
+		"day": func(s string) string {
+			for _, layout := range []string{"2006-01-02", time.RFC3339} {
+				if t, err := time.Parse(layout, s); err == nil {
+					return t.UTC().Format(i18n.T(lang, "digest.date_layout"))
+				}
+			}
+			return s
+		},
 		"severityWord": func(label string) string {
 			if k := "explain.severity." + label; i18n.Has(k) {
 				return i18n.T(lang, k)

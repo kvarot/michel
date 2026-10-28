@@ -415,7 +415,7 @@ func TestSaveGetRoundTripEveryField(t *testing.T) {
 			Skipped: []string{"index"}, Unreadable: 1},
 		Changelog: Changelog{Source: "vendor/acme/vuln/CHANGELOG.md", Excerpt: "## 2.0.0", Available: true, Breaking: true,
 			BreakingLines: []string{"BREAKING: x"}, Note: "no version headings"},
-		Risk:       Risk{Score: 55, Recommendation: RecHandoff, Warning: true, Terms: map[string]int{"major_jump": 30}},
+		Risk:       Risk{Score: 55, Recommendation: RecHandoff, Warning: true, Terms: map[string]int{"major_jump": 30, "exploited": 1}, Urgency: UrgencyUrgent},
 		InputsHash: "abc123",
 		Notes:      []string{"dependency graph unavailable: no lockfile"},
 	}

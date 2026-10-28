@@ -197,3 +197,43 @@ func TestWhatSentenceForMaliciousPackage(t *testing.T) {
 		t.Errorf("a plain flaw is called malicious: %s", w)
 	}
 }
+
+func TestImpactMentionsKEVAndEPSS(t *testing.T) {
+	fi := scan.Finding{Package: "acme/lib", Ecosystem: "Packagist", OSVID: "GHSA-1", SeverityLabel: "low", InstalledVersion: "1.0.0",
+		KEV: true, KEVAdded: "2026-03-12", EPSS: 0.123, EPSSPercentile: 0.951}
+	f := FactsFrom(fi, analyze.Analysis{}, false)
+	if !f.KEV || f.KEVAdded != "2026-03-12" || f.EPSSPercentile != 0.951 || !f.Urgent || f.Certainty != "high" {
+		t.Fatalf("facts = %+v", f)
+	}
+	has(t, "en impact", mustRender(t, EN, f).Impact, "exploited in the wild", "CISA KEV list since 2026-03-12",
+		"30 days: 12%", "95% of known flaws", "Michel is fairly sure it matters to you")
+	has(t, "fr impact", mustRender(t, FR, f).Impact, "exploitée dans la nature", "liste KEV de la CISA depuis le 12/03/2026",
+		"30 jours : 12 %", "95 % des failles connues")
+	// Below the 50th percentile, no figure is given.
+	f.KEV, f.EPSSPercentile = false, 0.49
+	for _, l := range []Lang{EN, FR} {
+		if im := mustRender(t, l, f).Impact; strings.Contains(im, "30") || strings.Contains(im, "KEV") {
+			t.Errorf("%s impact mentions KEV or EPSS: %s", l, im)
+		}
+	}
+}
+
+func TestCostSaysFixFirstWhenUrgent(t *testing.T) {
+	f := sampleFacts()
+	f.Urgent = true
+	has(t, "en cost", mustRender(t, EN, f).Cost, "Fix this first.")
+	has(t, "fr cost", mustRender(t, FR, f).Cost, "À corriger en premier.")
+	f.Urgent = false
+	if c := mustRender(t, EN, f).Cost; strings.Contains(c, "first") {
+		t.Errorf("cost without urgency: %s", c)
+	}
+	// The urgency of a stored analysis counts too.
+	fi := scan.Finding{Package: "acme/lib", SeverityLabel: "low", InstalledVersion: "1.0.0", FixedVersions: []string{"1.0.1"}}
+	a := analyze.Analysis{Risk: analyze.Risk{Urgency: analyze.UrgencyUrgent, Terms: map[string]int{"exploited": 1}}}
+	if g := FactsFrom(fi, a, true); !g.Urgent {
+		t.Error("an urgent analysis does not make the facts urgent")
+	}
+	if g := FactsFrom(scan.Finding{Package: "vuln-pkg", OSVID: "MAL-1", Malicious: true}, analyze.Analysis{}, false); !g.Urgent {
+		t.Error("a malicious package is not urgent")
+	}
+}

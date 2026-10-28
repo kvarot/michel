@@ -68,7 +68,7 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 			}
 			list := all[:0]
 			for _, f := range all {
-				if severity == "" || f.SeverityLabel == severity {
+				if label, _ := scan.EffectiveSeverity(f); severity == "" || label == severity {
 					list = append(list, f)
 				}
 			}
@@ -100,7 +100,12 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 					fixed = strings.Join(f.FixedVersions, ",")
 				}
 				d, ok := decisions[f.ID]
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safe(f.SeverityLabel), safe(f.Package), safe(f.InstalledVersion), safe(fixed), safe(f.OSVID), safe(f.ManifestRelPath), f.Status, decisionCell(d, ok))
+				// [KEV]: exploited in the wild (CISA list), to fix first.
+				sev, _ := scan.EffectiveSeverity(f)
+				if f.KEV {
+					sev += " [KEV]"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safe(sev), safe(f.Package), safe(f.InstalledVersion), safe(fixed), safe(f.OSVID), safe(f.ManifestRelPath), f.Status, decisionCell(d, ok))
 			}
 			if err := tw.Flush(); err != nil {
 				return err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/kvarot/michel/internal/analyze"
 	"github.com/kvarot/michel/internal/explain"
@@ -158,7 +159,7 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 	H := func(k string) string { return L(k) + colon }
 	// Package names, versions, ids, paths and changelog text come from
 	// outside: facts are already sanitized, the rest goes through safe.
-	fmt.Fprintf(w, "%s %s — %s — %s — %s %s — %s\n\n", facts.Package, facts.Installed, safe(fi.SeverityLabel), facts.OSVID, L("project"), p.Name, facts.ManifestRelPath)
+	fmt.Fprintf(w, "%s %s — %s — %s — %s %s — %s\n\n", facts.Package, facts.Installed, safe(facts.SeverityLabel), facts.OSVID, L("project"), p.Name, facts.ManifestRelPath)
 	fmt.Fprintf(w, "%s %s\n%s %s\n%s %s\n\n", H("what"), ex.What, H("impact"), ex.Impact, H("cost"), ex.Cost)
 
 	fmt.Fprintf(w, "%s\n", L("facts"))
@@ -171,6 +172,14 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 		versions += fmt.Sprintf(", %s %s (%s)", L("target"), facts.Target, explain.Enum(lang, "jump", string(facts.Jump)))
 	}
 	fmt.Fprintf(w, "  %s %s\n", H("versions"), versions)
+	if fi.KEV {
+		// "kev: yes": exploited in the wild, on CISA's list.
+		since := L("kev_yes")
+		if facts.KEVAdded != "" {
+			since = fmt.Sprintf(L("kev_since"), kevDay(lang, facts.KEVAdded))
+		}
+		fmt.Fprintf(w, "  %s %s\n", H("kev"), since)
+	}
 	if !hasA {
 		fmt.Fprintf(w, "\n"+L("hint")+"\n", p.Name)
 		printGlossary(w, lang, facts)
@@ -252,4 +261,13 @@ func printGlossary(w io.Writer, lang explain.Lang, f explain.Facts) {
 		parts = append(parts, explain.Label(lang, "term_"+k)+" = "+explain.Term(lang, k))
 	}
 	fmt.Fprintf(w, "\n%s: %s\n", explain.Label(lang, "glossary"), strings.Join(parts, ", "))
+}
+
+// kevDay writes a YYYY-MM-DD day in lang's date layout.
+func kevDay(lang explain.Lang, day string) string {
+	t, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return safe(day)
+	}
+	return t.Format(i18n.T(lang, "digest.date_layout"))
 }

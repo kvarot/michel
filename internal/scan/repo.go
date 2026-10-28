@@ -29,6 +29,9 @@ const (
 	ReasonFixedVersionChanged = "fixed_version_changed"
 	ReasonDueReached          = "due_reached"
 	ReasonReappearedChanged   = "reappeared_changed"
+	// ReasonKEVChanged: the finding entered (or left) CISA's list of
+	// vulnerabilities exploited in the wild since the decision.
+	ReasonKEVChanged = "kev_changed"
 )
 
 // Superseded is a decision a scan took out of force: the finding, its
@@ -36,16 +39,19 @@ const (
 type Superseded struct{ FindingID, ProjectID, Reason, Previous string }
 
 // SnapshotChanged compares what was known when a decision was taken
-// (severity, fixed versions) with what is known now. The severity is compared
-// exactly and wins when both differ; the fixed versions are compared as sets,
-// so their order does not count. reason is ReasonSeverityChanged,
-// ReasonFixedVersionChanged or "".
-func SnapshotChanged(seenSeverity string, seenFixed []string, severity string, fixed []string) (changed bool, reason string) {
+// (severity, fixed versions, KEV) with what is known now. The severity is
+// compared exactly and wins; then the fixed versions, compared as sets so
+// their order does not count; the KEV mark comes last. reason is
+// ReasonSeverityChanged, ReasonFixedVersionChanged, ReasonKEVChanged or "".
+func SnapshotChanged(seenSeverity string, seenFixed []string, seenKEV bool, severity string, fixed []string, kev bool) (changed bool, reason string) {
 	if seenSeverity != severity {
 		return true, ReasonSeverityChanged
 	}
 	if !sameSet(seenFixed, fixed) {
 		return true, ReasonFixedVersionChanged
+	}
+	if seenKEV != kev {
+		return true, ReasonKEVChanged
 	}
 	return false, ""
 }
@@ -65,6 +71,7 @@ type decisionView struct {
 	Severity string
 	Fixed    []string
 	DueAt    string
+	KEV      bool
 }
 
 // dueReached tells whether a defer decision has reached its date at now. A
@@ -80,7 +87,7 @@ func (d decisionView) dueReached(now time.Time) bool {
 // currentDecisions reads, inside tx, the decisions in force of one project,
 // by finding id.
 func currentDecisions(ctx context.Context, tx *sql.Tx, projectID string) (map[string]decisionView, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT finding_id, action, seen_severity, seen_fixed_versions, due_at
+	rows, err := tx.QueryContext(ctx, `SELECT finding_id, action, seen_severity, seen_fixed_versions, due_at, seen_kev
 		FROM decision WHERE project_id = ? AND superseded_at = '' ORDER BY created_at, id`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the decisions: %w", err)
@@ -89,10 +96,12 @@ func currentDecisions(ctx context.Context, tx *sql.Tx, projectID string) (map[st
 	out := map[string]decisionView{}
 	for rows.Next() {
 		var id, fixed string
+		var kev int
 		var d decisionView
-		if err := rows.Scan(&id, &d.Action, &d.Severity, &fixed, &d.DueAt); err != nil {
+		if err := rows.Scan(&id, &d.Action, &d.Severity, &fixed, &d.DueAt, &kev); err != nil {
 			return nil, err
 		}
+		d.KEV = kev != 0
 		_ = json.Unmarshal([]byte(fixed), &d.Fixed)
 		out[id] = d // the newest wins, should there be several
 	}
@@ -148,21 +157,32 @@ func jsonList(s []string) string {
 //
 // Findings of manifests listed in unread are neither refreshed nor closed:
 // the scan could not read that file, so absence proves nothing.
-func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool, current map[string]decisionView) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
+//
+// enriched tells whether the findings carry their enrichment (KEV, EPSS,
+// enriched CVSS) from Options.Lookup. When false, a finding already stored
+// keeps the enrichment it has, and its KEV mark is judged from it.
+func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool, current map[string]decisionView, enriched bool) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
 	ts := now.UTC().Format(time.RFC3339)
-	rows, err := tx.QueryContext(ctx, `SELECT id, manifest_rel_path, status FROM finding WHERE project_id = ?`, projectID)
+	rows, err := tx.QueryContext(ctx, `SELECT id, manifest_rel_path, status, kev, kev_added, epss, epss_percentile, cvss_enriched
+		FROM finding WHERE project_id = ?`, projectID)
 	if err != nil {
 		return 0, 0, 0, 0, nil, fmt.Errorf("cannot read the existing findings: %w", err)
 	}
-	type known struct{ manifest, status string }
+	type known struct {
+		manifest, status string
+		enrichment       Enrichment
+	}
 	existing := map[string]known{}
 	for rows.Next() {
 		var id string
 		var k known
-		if err := rows.Scan(&id, &k.manifest, &k.status); err != nil {
+		var kev int
+		if err := rows.Scan(&id, &k.manifest, &k.status, &kev, &k.enrichment.KEVAdded, &k.enrichment.EPSS,
+			&k.enrichment.EPSSPercentile, &k.enrichment.CVSS); err != nil {
 			rows.Close()
 			return 0, 0, 0, 0, nil, err
 		}
+		k.enrichment.KEV = kev != 0
 		existing[id] = k
 	}
 	if err := rows.Err(); err != nil {
@@ -173,14 +193,16 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 
 	ins, err := tx.PrepareContext(ctx, `INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id,
 		aliases, severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status,
-		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary, status_changed_at, kind, malicious)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary, status_changed_at, kind, malicious,
+		kev, kev_added, epss, epss_percentile, cvss_enriched)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
 	}
 	defer ins.Close()
 	upd, err := tx.PrepareContext(ctx, `UPDATE finding SET aliases=?, severity_label=?, cvss_score=?, installed_version=?,
 		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=?, malicious=?,
+		kev=?, kev_added=?, epss=?, epss_percentile=?, cvss_enriched=?,
 		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id=?`)
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
@@ -207,10 +229,14 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 			cvss = f.CVSS
 		}
 		k, ok := existing[f.ID]
+		if ok && !enriched {
+			f = WithEnrichment(f, k.enrichment)
+		}
 		if !ok {
 			if _, err := ins.ExecContext(ctx, f.ID, projectID, f.ManifestRelPath, f.Ecosystem, f.Package, f.OSVID,
 				jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion, jsonList(f.FixedVersions), jsonList(f.DepGroups),
-				StatusNew, scanID, scanID, ts, ts, f.Summary, ts, kindOf(f), boolInt(f.Malicious)); err != nil {
+				StatusNew, scanID, scanID, ts, ts, f.Summary, ts, kindOf(f), boolInt(f.Malicious),
+				boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched); err != nil {
 				return 0, 0, 0, 0, nil, fmt.Errorf("cannot save finding %s: %w", f.OSVID, err)
 			}
 			newN++
@@ -218,7 +244,7 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 		}
 		status, reason := StatusPending, ""
 		if d, ok := current[f.ID]; ok && (k.status == StatusDecided || k.status == StatusGone) {
-			changed, why := SnapshotChanged(d.Severity, d.Fixed, f.SeverityLabel, f.FixedVersions)
+			changed, why := SnapshotChanged(d.Severity, d.Fixed, d.KEV, f.SeverityLabel, f.FixedVersions, f.KEV)
 			switch {
 			case d.dueReached(now):
 				reason = ReasonDueReached
@@ -237,7 +263,8 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 			}
 		}
 		if _, err := upd.ExecContext(ctx, jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion,
-			jsonList(f.FixedVersions), jsonList(f.DepGroups), status, scanID, ts, f.Summary, boolInt(f.Malicious), status, ts, f.ID); err != nil {
+			jsonList(f.FixedVersions), jsonList(f.DepGroups), status, scanID, ts, f.Summary, boolInt(f.Malicious),
+			boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, status, ts, f.ID); err != nil {
 			return 0, 0, 0, 0, nil, fmt.Errorf("cannot update finding %s: %w", f.OSVID, err)
 		}
 		if k.status == StatusGone {
@@ -270,13 +297,35 @@ type Repo struct{ s *store.Store }
 // NewRepo builds a Repo.
 func NewRepo(s *store.Store) *Repo { return &Repo{s: s} }
 
-// ListFindings returns the findings of a project, most severe first. An empty
-// status means everything except "gone"; "all" means everything; "actionable"
-// means new or pending.
+// findingColumns are the columns scanFinding reads, in order.
+const findingColumns = `id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases, severity_label, cvss_score,
+	installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary, kind, malicious,
+	kev, kev_added, epss, epss_percentile, cvss_enriched`
+
+// scanFinding reads one row of findingColumns.
+func scanFinding(rows *sql.Rows) (Finding, error) {
+	var f Finding
+	var cvss sql.NullFloat64
+	var aliases, fixed, groups string
+	var malicious, kev int
+	if err := rows.Scan(&f.ID, &f.ProjectID, &f.ManifestRelPath, &f.Ecosystem, &f.Package, &f.OSVID, &aliases,
+		&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary,
+		&f.Kind, &malicious, &kev, &f.KEVAdded, &f.EPSS, &f.EPSSPercentile, &f.CVSSEnriched); err != nil {
+		return Finding{}, err
+	}
+	f.CVSS, f.Malicious, f.KEV = cvss.Float64, malicious != 0, kev != 0
+	_ = json.Unmarshal([]byte(aliases), &f.Aliases)
+	_ = json.Unmarshal([]byte(fixed), &f.FixedVersions)
+	_ = json.Unmarshal([]byte(groups), &f.DepGroups)
+	return f, nil
+}
+
+// ListFindings returns the findings of a project, the urgent ones (exploited
+// in the wild or malicious, see Urgent) first, then the most severe first
+// (EffectiveSeverity). An empty status means everything except "gone"; "all"
+// means everything; "actionable" means new or pending.
 func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Finding, error) {
-	q := `SELECT id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases, severity_label, cvss_score,
-		installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary, kind, malicious
-		FROM finding WHERE project_id = ?`
+	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ?`
 	args := []any{projectID}
 	switch status {
 	case "all":
@@ -295,19 +344,10 @@ func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Fi
 	defer rows.Close()
 	out := []Finding{}
 	for rows.Next() {
-		var f Finding
-		var cvss sql.NullFloat64
-		var aliases, fixed, groups string
-		var malicious int
-		if err := rows.Scan(&f.ID, &f.ProjectID, &f.ManifestRelPath, &f.Ecosystem, &f.Package, &f.OSVID, &aliases,
-			&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary,
-			&f.Kind, &malicious); err != nil {
+		f, err := scanFinding(rows)
+		if err != nil {
 			return nil, err
 		}
-		f.CVSS, f.Malicious = cvss.Float64, malicious != 0
-		_ = json.Unmarshal([]byte(aliases), &f.Aliases)
-		_ = json.Unmarshal([]byte(fixed), &f.FixedVersions)
-		_ = json.Unmarshal([]byte(groups), &f.DepGroups)
 		out = append(out, f)
 	}
 	if err := rows.Err(); err != nil {
@@ -315,7 +355,12 @@ func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Fi
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
-		if ra, rb := severityRank(a.SeverityLabel), severityRank(b.SeverityLabel); ra != rb {
+		if ua, ub := Urgent(a), Urgent(b); ua != ub {
+			return ua
+		}
+		la, _ := EffectiveSeverity(a)
+		lb, _ := EffectiveSeverity(b)
+		if ra, rb := severityRank(la), severityRank(lb); ra != rb {
 			return ra < rb
 		}
 		if a.CVSS != b.CVSS {
@@ -338,28 +383,18 @@ func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, er
 	if prefix == "" {
 		return []Finding{}, nil
 	}
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases,
-		severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary,
-		kind, malicious FROM finding WHERE substr(id, 1, ?) = ? ORDER BY id LIMIT ?`, len(prefix), prefix, MaxPrefixMatches)
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+findingColumns+` FROM finding WHERE substr(id, 1, ?) = ? ORDER BY id LIMIT ?`,
+		len(prefix), prefix, MaxPrefixMatches)
 	if err != nil {
 		return nil, fmt.Errorf("cannot look the finding up: %w", err)
 	}
 	defer rows.Close()
 	out := []Finding{}
 	for rows.Next() {
-		var f Finding
-		var cvss sql.NullFloat64
-		var aliases, fixed, groups string
-		var malicious int
-		if err := rows.Scan(&f.ID, &f.ProjectID, &f.ManifestRelPath, &f.Ecosystem, &f.Package, &f.OSVID, &aliases,
-			&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary,
-			&f.Kind, &malicious); err != nil {
+		f, err := scanFinding(rows)
+		if err != nil {
 			return nil, err
 		}
-		f.CVSS, f.Malicious = cvss.Float64, malicious != 0
-		_ = json.Unmarshal([]byte(aliases), &f.Aliases)
-		_ = json.Unmarshal([]byte(fixed), &f.FixedVersions)
-		_ = json.Unmarshal([]byte(groups), &f.DepGroups)
 		out = append(out, f)
 	}
 	return out, rows.Err()

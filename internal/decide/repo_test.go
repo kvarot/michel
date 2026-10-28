@@ -286,12 +286,12 @@ func TestDecisionJSONHasSnakeCaseKeysAndEmptyTimes(t *testing.T) {
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
 	for _, k := range []string{"id", "finding_id", "project_id", "action", "justification", "due_at", "author", "created_at",
-		"seen_severity", "seen_fixed_versions", "superseded_at", "superseded_reason"} {
+		"seen_severity", "seen_fixed_versions", "seen_kev", "superseded_at", "superseded_reason"} {
 		if _, ok := m[k]; !ok {
 			t.Errorf("key %q missing in %s", k, b)
 		}
 	}
-	if len(m) != 12 {
+	if len(m) != 13 {
 		t.Errorf("unexpected keys in %s", b)
 	}
 	if m["due_at"] != "" || m["superseded_at"] != "" || m["created_at"] != "2026-10-23T09:30:00Z" {
@@ -363,5 +363,38 @@ func TestExpireDueSkipsRedecidedFinding(t *testing.T) {
 	}
 	if ids, err := f.repo.ExpireDue(ctx, at, nil); err != nil || len(ids) != 0 {
 		t.Errorf("ExpireDue = %v %v", ids, err)
+	}
+}
+
+func TestSetStoresSeenKEV(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.seedFinding(t, f.proj.ID, "f1", scan.StatusPending, "low", "1.0.1")
+	if _, err := f.st.DB().Exec(`UPDATE finding SET kev = 1, kev_added = '2026-03-12' WHERE id = 'f1'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.repo.Set(ctx, Decision{FindingID: "f1", Action: Defer, Author: "cli"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SeenKEV {
+		t.Errorf("returned decision does not remember the KEV mark: %+v", got)
+	}
+	var seen int
+	if err := f.st.DB().QueryRow(`SELECT seen_kev FROM decision WHERE id = ?`, got.ID).Scan(&seen); err != nil || seen != 1 {
+		t.Errorf("seen_kev = %d, %v", seen, err)
+	}
+	cur, ok, err := f.repo.Current(ctx, "f1")
+	if err != nil || !ok || !cur.SeenKEV {
+		t.Errorf("Current = %+v %v %v", cur, ok, err)
+	}
+	b, _ := json.Marshal(cur)
+	var doc map[string]any
+	_ = json.Unmarshal(b, &doc)
+	if doc["seen_kev"] != true {
+		t.Errorf("JSON = %s", b)
+	}
+	if changed, reason := Changed(cur, "low", []string{"1.0.1"}, false); !changed || reason != KEVChanged {
+		t.Errorf("Changed on KEV = %v %q", changed, reason)
 	}
 }

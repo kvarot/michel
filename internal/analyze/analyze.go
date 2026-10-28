@@ -132,6 +132,8 @@ func AnalyzeWith(g *DepGraph, loadErr error, projectRoot string, p project.Proje
 		Jump: a.Upgrade.Jump, Breaking: a.Changelog.Breaking, Directness: a.Path.Directness,
 		CallSiteCount: a.Calls.Count, TestCount: a.Coverage.Count, TestMethod: a.Coverage.Method,
 		IsCore: core, HasFix: a.Upgrade.Target != "",
+		// Exploited in the wild (KEV) or malicious: a flag and the urgency, no point.
+		Exploited: scan.Urgent(f),
 	})
 	return a, nil
 }
@@ -235,6 +237,11 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 // that saw the finding.
 func fresh(a Analysis, f scan.Finding, version, inputsHash string) bool {
 	if a.MichelVersion != version || a.InputsHash != inputsHash {
+		return false
+	}
+	// The KEV mark can change without a scan (enrichment): the stored
+	// urgency must follow it.
+	if (a.Risk.Terms["exploited"] != 0) != scan.Urgent(f) {
 		return false
 	}
 	seen, err := time.Parse(time.RFC3339, f.LastSeenAt)

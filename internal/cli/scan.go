@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/kvarot/michel/internal/buildinfo"
+	"github.com/kvarot/michel/internal/enrich"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
@@ -87,7 +88,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			failures := []failure{}
 			problems := false
 			for _, p := range targets {
-				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root, Exclude: scan.EffectiveExclude(p), Ecosystems: ecos})
+				// The enrichment (KEV, EPSS) is read from the store for the CVEs of
+				// each scan only.
+				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root, Exclude: scan.EffectiveExclude(p), Ecosystems: ecos,
+					Lookup: enrich.LookupFunc(deps.Store.DB())})
 				if err != nil {
 					if errors.Is(err, osvdb.ErrDatabaseMissing) && !all {
 						return err

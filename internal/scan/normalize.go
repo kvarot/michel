@@ -32,6 +32,16 @@ type Finding struct {
 	Kind string `json:"kind"`
 	// Malicious marks an OSV MAL- advisory: the package itself is malware.
 	Malicious bool `json:"malicious"`
+	// KEV is true when one of the finding's CVEs is on CISA's Known
+	// Exploited Vulnerabilities list, since KEVAdded (YYYY-MM-DD). EPSS and
+	// EPSSPercentile are FIRST's exploitation score; CVSSEnriched is a CVSS
+	// read from a CVE record (see EffectiveSeverity). All come from the
+	// enrichment sources, never from the OSV advisory.
+	KEV            bool    `json:"kev"`
+	KEVAdded       string  `json:"kev_added"`
+	EPSS           float64 `json:"epss"`
+	EPSSPercentile float64 `json:"epss_percentile"`
+	CVSSEnriched   float64 `json:"cvss_enriched"`
 
 	// Set when read back from the store.
 	Status      string `json:"status,omitempty"`

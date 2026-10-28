@@ -441,3 +441,33 @@ func TestTodayKeepsTheLastDigestWindow(t *testing.T) {
 		t.Errorf("since %v until %v new %d projects %+v", d.Since, d.Until, d.NewTotal, d.Projects)
 	}
 }
+
+func TestFindingViewCarriesKEVAndEPSS(t *testing.T) {
+	f := newFixture(t, nil)
+	id := f.seed("acme/lib", "GHSA-kev", "unknown", "pending", now.Add(-time.Hour))
+	if _, err := f.st.DB().Exec(`UPDATE finding SET kev = 1, kev_added = '2026-03-12', epss = 0.12, epss_percentile = 0.95,
+		cvss_enriched = 9.1 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	var v FindingView
+	body := f.get("/api/v1/findings/"+id, &v)
+	if !v.KEV || v.KEVAdded != "2026-03-12" || v.EPSS != 0.12 || v.EPSSPercentile != 0.95 || v.Malicious || v.Kind != "dependency" {
+		t.Errorf("view = %+v", v)
+	}
+	if v.Severity != "critical" || v.SeveritySource != "enrichment" {
+		t.Errorf("severity = %s from %s", v.Severity, v.SeveritySource)
+	}
+	for _, k := range []string{`"kev":true`, `"epss":0.12`, `"malicious":false`, `"kind":"dependency"`, `"severity_source":"enrichment"`} {
+		if !strings.Contains(body, k) {
+			t.Errorf("body lacks %s: %s", k, body)
+		}
+	}
+	mal := f.seed("vuln-pkg", "MAL-2026-1", "critical", "new", now.Add(-time.Hour))
+	if _, err := f.st.DB().Exec(`UPDATE finding SET malicious = 1 WHERE id = ?`, mal); err != nil {
+		t.Fatal(err)
+	}
+	f.get("/api/v1/findings/"+mal, &v)
+	if !v.Malicious || v.SeveritySource != "malicious" || v.KEV {
+		t.Errorf("malicious view = %+v", v)
+	}
+}

@@ -168,7 +168,7 @@ func (s *server) projectView(ctx context.Context, p project.Project) (ProjectVie
 				continue
 			}
 		}
-		v.Open[severityOf(f.SeverityLabel)]++
+		v.Open[severityOf(effective(f))]++
 	}
 	var at, status string
 	err = s.deps.Store.DB().QueryRowContext(ctx, `SELECT started_at, status FROM scan WHERE project_id = ?
@@ -234,7 +234,7 @@ func (s *server) projectFindings(w http.ResponseWriter, r *http.Request) {
 	analyses := analyze.NewRepo(s.deps.Store)
 	out := []FindingView{}
 	for _, f := range findings {
-		if severity != "" && severityOf(f.SeverityLabel) != severity {
+		if severity != "" && severityOf(effective(f)) != severity {
 			continue
 		}
 		a, has, err := analyses.Get(ctx, f.ID)
@@ -461,4 +461,10 @@ func (s *server) digests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, runs)
+}
+
+// effective is the effective severity label of f (scan.EffectiveSeverity).
+func effective(f scan.Finding) string {
+	l, _ := scan.EffectiveSeverity(f)
+	return l
 }

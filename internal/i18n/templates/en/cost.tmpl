@@ -1,3 +1,4 @@
+{{- if .Urgent}}Fix this first. {{end -}}
 {{- if eq .Target "" -}}
 No fixed version exists yet: nothing to update, keep watching.
 {{- else if eq .Jump "patch" -}}

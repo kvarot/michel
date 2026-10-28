@@ -36,12 +36,14 @@ func funcs(d Digest) map[string]any {
 			}
 			return n
 		},
-		"day": func(rfc3339 string) string {
-			t, err := time.Parse(time.RFC3339, rfc3339)
-			if err != nil {
-				return rfc3339
+		// day writes an RFC 3339 date or a YYYY-MM-DD day in lang's layout.
+		"day": func(s string) string {
+			for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+				if t, err := time.Parse(layout, s); err == nil {
+					return t.UTC().Format(dateLayout(lang))
+				}
 			}
-			return t.UTC().Format(dateLayout(lang))
+			return s
 		},
 		"reason": func(code string) string {
 			if k := "digest.reason." + code; i18n.Has(k) {
@@ -50,6 +52,9 @@ func funcs(d Digest) map[string]any {
 			return i18n.T(lang, "digest.reason.unknown")
 		},
 		"empty": func() string { return i18n.N(lang, "digest.empty_projects", d.EmptyProjects) },
+		"exploitedDecided": func() string {
+			return i18n.N(lang, "digest.exploited_decided", d.ExploitedDecided)
+		},
 		"stale": func() string {
 			days := int(d.Until.Sub(d.OSVFetchedAt) / (24 * time.Hour))
 			return i18n.T(lang, "digest.osv_stale", days)

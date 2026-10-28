@@ -9,6 +9,11 @@
 {{end}}{{if .ShowEmpty}}{{empty}}
 {{end}}{{if .FailedScans}}Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.
 {{end}}
+{{- if or .Exploited .ExploitedDecided}}
+Exploitées dans la nature, à corriger en premier :
+{{range .Exploited}}  [{{if .Malicious}}paquet malveillant{{else}}KEV{{end}}] {{.Package}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · sur la liste KEV depuis le {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · ta décision : à corriger{{end}}
+{{end}}{{if .ExploitedDecided}}  {{exploitedDecided}}
+{{end}}{{end}}
 {{- range .Projects}}
 == {{.Name}} ==
 failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevées {{index .Open "high"}}, moyennes {{index .Open "medium"}}, faibles {{index .Open "low"}}) · tes décisions : à corriger {{index .Decided "fix"}}, reportées {{index .Decided "defer"}}, ignorées {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if le .DaysWithoutCritical 1}}jour{{else}}jours{{end}} sans nouvelle faille critique{{if eq .CriticalOpen 0}} · 0 faille critique ouverte, à garder comme ça{{end}}

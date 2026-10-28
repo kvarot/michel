@@ -53,6 +53,19 @@ type FindingView struct {
 	Status           string   `json:"status"`
 	FirstSeenAt      string   `json:"first_seen_at"`
 	LastSeenAt       string   `json:"last_seen_at"`
+	// Severity is the effective severity (scan.EffectiveSeverity);
+	// SeveritySource says where it comes from: osv, enrichment (an
+	// advisory without severity, rated from a CVE record) or malicious.
+	SeveritySource string `json:"severity_source"`
+	// Kind is the sort of finding (dependency); Malicious marks a malicious
+	// package; KEV marks a flaw exploited in the wild (CISA list) since
+	// KEVAdded; EPSS and EPSSPercentile are FIRST's exploitation score.
+	Kind           string  `json:"kind"`
+	Malicious      bool    `json:"malicious"`
+	KEV            bool    `json:"kev"`
+	KEVAdded       string  `json:"kev_added"`
+	EPSS           float64 `json:"epss"`
+	EPSSPercentile float64 `json:"epss_percentile"`
 
 	Analysis    *analyze.Analysis   `json:"analysis"`
 	Explanation explain.Explanation `json:"explanation"`
@@ -112,10 +125,17 @@ func scrub(s string, p project.Project) string {
 
 // findingView builds the view of fi; ex, a and dec are optional.
 func findingView(fi scan.Finding, p project.Project, ex explain.Explanation, a *analyze.Analysis, dec *decide.Decision, glossary map[string]string) FindingView {
+	severity, source := scan.EffectiveSeverity(fi)
+	kind := fi.Kind
+	if kind == "" {
+		kind = scan.KindDependency
+	}
 	v := FindingView{
 		ID: fi.ID, Project: scan.SanitizeText(p.Name), ManifestRelPath: scan.SanitizeText(fi.ManifestRelPath), Ecosystem: fi.Ecosystem,
 		Package: scan.SanitizeText(fi.Package), OSVID: scan.SanitizeText(fi.OSVID), Aliases: sanitizeAll(fi.Aliases),
-		Severity: fi.SeverityLabel, CVSS: fi.CVSS, InstalledVersion: scan.SanitizeText(fi.InstalledVersion),
+		Severity: severity, SeveritySource: source, Kind: scan.SanitizeText(kind), Malicious: fi.Malicious,
+		KEV: fi.KEV, KEVAdded: scan.SanitizeText(fi.KEVAdded), EPSS: fi.EPSS, EPSSPercentile: fi.EPSSPercentile,
+		CVSS: fi.CVSS, InstalledVersion: scan.SanitizeText(fi.InstalledVersion),
 		FixedVersions: sanitizeAll(fi.FixedVersions), DepGroups: sanitizeAll(fi.DepGroups), Summary: scan.SanitizeText(fi.Summary),
 		Status: fi.Status, FirstSeenAt: fi.FirstSeenAt, LastSeenAt: fi.LastSeenAt,
 		Explanation: ex, Decision: dec, Glossary: glossary,

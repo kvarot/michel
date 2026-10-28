@@ -27,6 +27,11 @@ type RiskInput struct {
 	IsCore bool
 	// HasFix is false when no fixed version exists.
 	HasFix bool
+	// Exploited is true when the finding is exploited in the wild (CISA
+	// KEV) or the package is malicious. It adds no point: the score measures
+	// the risk of the fix, not its urgency. It sets the "exploited" flag and
+	// the urgency.
+	Exploited bool
 }
 
 // Risk is the public, deterministic risk score of upgrading one package.
@@ -37,9 +42,14 @@ type Risk struct {
 	Warning bool `json:"warning"`
 	// Terms maps each term to the points it added (0 when its condition is
 	// false). "major_jump_unknown" is present, at 0, when the jump is unknown.
-	// The flags "thresholds_fallback" and "jump_unknown_handoff" (value 1) are
+	// The flags "thresholds_fallback", "jump_unknown_handoff" and "exploited"
+	// (value 1 when set; "exploited" is always present, at 0 or 1) are
 	// not points; see IsRiskFlag.
 	Terms map[string]int `json:"terms"`
+	// Urgency is "urgent" when the finding is exploited in the wild or
+	// malicious (RiskInput.Exploited): fix it first, whatever the score.
+	// It is "" otherwise.
+	Urgency string `json:"urgency"`
 }
 
 // ScoreRisk applies the public rule described in docs/remediation-risk.md.
@@ -64,6 +74,7 @@ func ScoreRisk(cfg policy.RiskConfig, overrides map[string]int, in RiskInput) Ri
 	if in.Jump == JumpUnknown {
 		terms["major_jump_unknown"] = 0
 	}
+	terms["exploited"] = pts(in.Exploited, 1)
 	if fallback {
 		terms["thresholds_fallback"] = 1
 	}
@@ -84,6 +95,9 @@ func ScoreRisk(cfg policy.RiskConfig, overrides map[string]int, in RiskInput) Ri
 		score = 100
 	}
 	r := Risk{Score: score, Terms: terms, Warning: score > cfg.HandoffUpTo}
+	if in.Exploited {
+		r.Urgency = UrgencyUrgent
+	}
 	switch {
 	case !in.HasFix:
 		r.Recommendation = RecReportOnly
@@ -98,8 +112,11 @@ func ScoreRisk(cfg policy.RiskConfig, overrides map[string]int, in RiskInput) Ri
 // IsRiskFlag tells whether a Terms key is a flag (a fact about how the score
 // was computed) rather than points added to the score.
 func IsRiskFlag(key string) bool {
-	return key == "thresholds_fallback" || key == "jump_unknown_handoff"
+	return key == "thresholds_fallback" || key == "jump_unknown_handoff" || key == "exploited"
 }
+
+// UrgencyUrgent is Risk.Urgency of a finding exploited in the wild.
+const UrgencyUrgent = "urgent"
 
 // EffectiveRisk applies the project's overrides to the policy rule. When the
 // resulting thresholds are inconsistent, the policy thresholds are kept and

@@ -19,16 +19,16 @@ func TestScoreRiskTerms(t *testing.T) {
 	}{
 		{"everything, capped", RiskInput{Jump: JumpMajor, Breaking: true, Directness: Direct, CallSiteCount: 12, TestCount: 0, IsCore: true, HasFix: true},
 			100, "handoff", true,
-			map[string]int{"major_jump": 40, "breaking": 25, "direct": 10, "many_call_sites": 15, "no_tests": 20, "core_package": 20}},
+			map[string]int{"major_jump": 40, "breaking": 25, "direct": 10, "many_call_sites": 15, "no_tests": 20, "core_package": 20, "exploited": 0}},
 		{"patch, transitive, tested", RiskInput{Jump: JumpPatch, Directness: Transitive, CallSiteCount: 3, TestCount: 4, HasFix: true},
 			0, "auto_fix", false,
-			map[string]int{"major_jump": 0, "breaking": 0, "direct": 0, "many_call_sites": 0, "no_tests": 0, "core_package": 0}},
+			map[string]int{"major_jump": 0, "breaking": 0, "direct": 0, "many_call_sites": 0, "no_tests": 0, "core_package": 0, "exploited": 0}},
 		{"threshold is strict", RiskInput{Jump: JumpMinor, Directness: Direct, CallSiteCount: 10, TestCount: 1, HasFix: true},
 			10, "auto_fix", false,
-			map[string]int{"major_jump": 0, "breaking": 0, "direct": 10, "many_call_sites": 0, "no_tests": 0, "core_package": 0}},
+			map[string]int{"major_jump": 0, "breaking": 0, "direct": 10, "many_call_sites": 0, "no_tests": 0, "core_package": 0, "exploited": 0}},
 		{"minor direct untested", RiskInput{Jump: JumpMinor, Directness: Direct, CallSiteCount: 11, TestCount: 0, HasFix: true},
 			45, "handoff", false,
-			map[string]int{"major_jump": 0, "breaking": 0, "direct": 10, "many_call_sites": 15, "no_tests": 20, "core_package": 0}},
+			map[string]int{"major_jump": 0, "breaking": 0, "direct": 10, "many_call_sites": 15, "no_tests": 20, "core_package": 0, "exploited": 0}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,5 +118,24 @@ func TestScoreRiskInconsistentThresholdsFallBack(t *testing.T) {
 	}
 	if r := ScoreRisk(cfg(), nil, in); r.Terms["thresholds_fallback"] != 0 {
 		t.Errorf("fallback marker without cause: %v", r.Terms)
+	}
+}
+
+func TestExploitedIsFlagNotPoints(t *testing.T) {
+	in := RiskInput{Jump: JumpMinor, Directness: Direct, CallSiteCount: 11, TestCount: 0, HasFix: true}
+	plain := ScoreRisk(cfg(), nil, in)
+	in.Exploited = true
+	hot := ScoreRisk(cfg(), nil, in)
+	if hot.Score != plain.Score || hot.Recommendation != plain.Recommendation || hot.Warning != plain.Warning {
+		t.Errorf("exploited changed the score: %+v vs %+v", hot, plain)
+	}
+	if hot.Terms["exploited"] != 1 || hot.Urgency != "urgent" {
+		t.Errorf("exploited: terms %v, urgency %q", hot.Terms, hot.Urgency)
+	}
+	if v, ok := plain.Terms["exploited"]; !ok || v != 0 || plain.Urgency != "" {
+		t.Errorf("not exploited: terms %v, urgency %q", plain.Terms, plain.Urgency)
+	}
+	if !IsRiskFlag("exploited") {
+		t.Error("exploited is not a flag")
 	}
 }

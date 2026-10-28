@@ -8,6 +8,12 @@
 {{end}}{{if .ShowEmpty}}<p class="since">{{empty}}</p>
 {{end}}{{if .FailedScans}}<p class="banner">The last scan of {{.FailedScans}} {{if eq .FailedScans 1}}project{{else}}projects{{end}} did not finish.</p>
 {{end}}
+{{- if or .Exploited .ExploitedDecided}}<h2 class="exploited">Exploited in the wild, fix these first</h2>
+<ul>
+{{range .Exploited}}<li><span class="sev sev-critical">{{if .Malicious}}malicious package{{else}}KEV{{end}}</span> <strong>{{.Package}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · on the KEV list since {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · decided: fix{{end}}</li>
+{{end}}{{if .ExploitedDecided}}<li>{{exploitedDecided}}</li>
+{{end}}</ul>
+{{end}}
 {{- range .Projects}}<h2>{{.Name}}</h2>
 <p class="counters">open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "high"}}, medium {{index .Open "medium"}}, low {{index .Open "low"}}) · decided: fix {{index .Decided "fix"}}, defer {{index .Decided "defer"}}, ignore {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if eq .DaysWithoutCritical 1}}day{{else}}days{{end}} without a new critical{{if eq .CriticalOpen 0}} · <strong>0 critical open</strong>{{end}}</p>
 {{if eq .LastScanStatus "failed"}}<p class="banner">The last scan failed.</p>
