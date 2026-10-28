@@ -283,7 +283,7 @@
   "digest.osv_stale": "Attention : la base des failles date de %d jours, elle n'est peut-être plus à jour. Lance « michel db update » pour la rafraîchir.",
   "digest.reason.due_reached": "la date de report est arrivée",
   "digest.reason.fixed_version_changed": "la version qui corrige la faille a changé",
-  "digest.reason.kev_changed": "son statut « déjà attaquée » a changé",
+  "digest.reason.kev_changed": "ce qu'on sait de l'utilisation de cette faille par des pirates a changé",
   "digest.reason.reappeared_changed": "la faille est revenue, et elle n'est plus la même",
   "digest.reason.severity_changed": "la gravité a changé",
   "digest.reason.unknown": "la situation a changé",
