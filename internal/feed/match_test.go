@@ -121,3 +121,56 @@ func TestDeclaredAll(t *testing.T) {
 		t.Errorf("declared = %v err %v", got, err)
 	}
 }
+
+func TestRemovedSourceTakesItsItemsAndOrphansAreNotListed(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	gone := e.entry(t, "feed.gone", "http://127.0.0.1/", "rss", "nginx")
+	kept := e.entry(t, "feed.kept", "http://127.0.0.1/", "rss", "nginx")
+	r := NewRepo(e.st)
+	stamp := now.Format(time.RFC3339)
+	if _, err := r.Insert(ctx, []Item{
+		{SourceID: gone.ID, GUID: "a", Title: "nginx a", SeenAt: stamp},
+		{SourceID: kept.ID, GUID: "b", Title: "nginx b", SeenAt: stamp},
+		{SourceID: "no-such-source", GUID: "c", Title: "nginx orphan", SeenAt: stamp},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.repo.Delete(ctx, "feed.gone"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM feed_item WHERE source_id = ?`, gone.ID).Scan(&n); err != nil || n != 0 {
+		t.Errorf("items of the removed source = %d err %v", n, err)
+	}
+	all, err := r.List(ctx, time.Time{}, false)
+	if err != nil || len(all) != 1 || all[0].GUID != "b" {
+		t.Errorf("list = %+v err %v", all, err)
+	}
+	toRead, err := r.ListToRead(ctx, time.Time{}, false, []string{"nginx"})
+	if err != nil || len(toRead) != 1 || toRead[0].GUID != "b" {
+		t.Errorf("to read = %+v err %v", toRead, err)
+	}
+}
+
+func TestPurgeCoversEverySource(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	a := e.entry(t, "feed.a", "http://127.0.0.1/", "rss")
+	b := e.entry(t, "feed.b", "http://127.0.0.1/", "rss")
+	old := now.Add(-Retention - time.Hour).Format(time.RFC3339)
+	r := NewRepo(e.st)
+	if _, err := r.Insert(ctx, []Item{
+		{SourceID: a.ID, GUID: "old-a", Title: "t", SeenAt: old},
+		{SourceID: b.ID, GUID: "old-b", Title: "t", SeenAt: old},
+		{SourceID: b.ID, GUID: "new-b", Title: "t", SeenAt: now.Format(time.RFC3339)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := r.Purge(ctx, now); err != nil || n != 2 {
+		t.Errorf("purged %d err %v", n, err)
+	}
+	if e.count(t) != 1 {
+		t.Errorf("left = %d", e.count(t))
+	}
+}

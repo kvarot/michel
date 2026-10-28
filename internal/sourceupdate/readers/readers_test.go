@@ -14,6 +14,7 @@ import (
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/egress"
+	"github.com/kvarot/michel/internal/feed"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/source"
@@ -125,5 +126,40 @@ func TestFeedReaderReadsThenHonoursNotModified(t *testing.T) {
 	e, _ := d.Repo.Get(ctx, "feed.example")
 	if e.LastReadResult != "ok" || e.LastReadItems != 2 || e.LastReadETag != `"x"` {
 		t.Errorf("entry = %q %d %q", e.LastReadResult, e.LastReadItems, e.LastReadETag)
+	}
+}
+
+func TestUpdatePurgesOldItemsOfSourcesNotRead(t *testing.T) {
+	d := deps(t)
+	ctx := context.Background()
+	nginx, err := d.Repo.Get(ctx, "feed.nginx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-feed.Retention - time.Hour).UTC().Format(time.RFC3339)
+	recent := time.Now().UTC().Format(time.RFC3339)
+	if _, err := feed.NewRepo(d.Store).Insert(ctx, []feed.Item{
+		{SourceID: nginx.ID, GUID: "old", Title: "t", SeenAt: old},
+		{SourceID: nginx.ID, GUID: "recent", Title: "t", SeenAt: recent},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A run that reads no feed at all still purges.
+	if _, err := sourceupdate.Run(ctx, d, nil, source.KindReference); err != nil {
+		t.Fatal(err)
+	}
+	var guids []string
+	rows, err := d.Store.DB().Query(`SELECT guid FROM feed_item`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var g string
+		rows.Scan(&g)
+		guids = append(guids, g)
+	}
+	if !reflect.DeepEqual(guids, []string{"recent"}) {
+		t.Errorf("left = %q", guids)
 	}
 }

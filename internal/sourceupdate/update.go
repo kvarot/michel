@@ -24,6 +24,7 @@ import (
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/enrich"
+	"github.com/kvarot/michel/internal/feed"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/secret"
 	"github.com/kvarot/michel/internal/source"
@@ -306,6 +307,11 @@ func Run(ctx context.Context, deps Deps, keys []string, kind source.Kind) (Repor
 	allowed := func(host, purpose string) bool {
 		ok, _ := deps.Gateway.Allowed(host, purpose)
 		return ok
+	}
+	// The feed items past their retention go once per run, whichever
+	// sources this run reads: those of a source no longer read go too.
+	if _, err := feed.NewRepo(deps.Store).Purge(ctx, deps.Now()); err != nil {
+		return rep, err
 	}
 	enrichRead, applied := false, false
 	failed := false

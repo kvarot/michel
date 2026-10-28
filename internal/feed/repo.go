@@ -113,7 +113,7 @@ type listed struct {
 func (r *Repo) list(ctx context.Context, since time.Time, unreadOnly bool) ([]listed, error) {
 	q := `SELECT i.id, i.source_id, COALESCE(s.key, ''), COALESCE(s.name, ''), COALESCE(s.tech, '[]'), i.guid, i.title, i.url,
 		i.published_at, i.summary, i.tech, i.seen_at, i.read_at
-		FROM feed_item i LEFT JOIN source s ON s.id = i.source_id`
+		FROM feed_item i JOIN source s ON s.id = i.source_id`
 	var where []string
 	var args []any
 	if !since.IsZero() {
@@ -149,7 +149,7 @@ func (r *Repo) list(ctx context.Context, since time.Time, unreadOnly bool) ([]li
 	return out, rows.Err()
 }
 
-// List returns the items counted from since (zero: all), only the unread
+// List returns the items of the existing sources counted from since (zero: all), only the unread
 // ones with unreadOnly, newest first.
 func (r *Repo) List(ctx context.Context, since time.Time, unreadOnly bool) ([]Item, error) {
 	ls, err := r.list(ctx, since, unreadOnly)
@@ -186,6 +186,19 @@ func (r *Repo) ListToRead(ctx context.Context, since time.Time, unreadOnly bool,
 		}
 	}
 	return out, nil
+}
+
+// Purge deletes the items of every source first seen more than Retention
+// before now, and returns how many. It runs once per source update, so the
+// items of a source that is no longer read go too.
+func (r *Repo) Purge(ctx context.Context, now time.Time) (int, error) {
+	cutoff := now.UTC().Add(-Retention).Format(time.RFC3339)
+	res, err := r.s.DB().ExecContext(ctx, `DELETE FROM feed_item WHERE seen_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("cannot purge the old feed items: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // MarkRead marks the item id read at at; an item already read keeps its

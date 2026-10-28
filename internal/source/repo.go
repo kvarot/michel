@@ -284,7 +284,19 @@ func (r *Repo) Delete(ctx context.Context, key string) error {
 	if e.Origin != OriginUser {
 		return fmt.Errorf("%w: %s", ErrCatalogEntry, key)
 	}
-	if _, err := r.s.DB().ExecContext(ctx, `DELETE FROM source WHERE key = ?`, key); err != nil {
+	// The items a feed brought go with it, in the same transaction.
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot delete source %s: %w", key, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM feed_item WHERE source_id = ?`, e.ID); err != nil {
+		return fmt.Errorf("cannot delete the items of source %s: %w", key, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM source WHERE key = ?`, key); err != nil {
+		return fmt.Errorf("cannot delete source %s: %w", key, err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("cannot delete source %s: %w", key, err)
 	}
 	return nil
