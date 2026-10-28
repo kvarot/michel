@@ -247,3 +247,18 @@ func KeyFor(kind Kind, name string) string {
 func NoteKey(key string) string {
 	return "source.note." + strings.ReplaceAll(key, "-", "_")
 }
+
+// NewVersion reads the "new version available" mark of a repository status
+// (skill, mcp, plugin): status.new_version is either {"from": ..., "to": ...}
+// or the new version alone, From then being the pinned one. ok is false when
+// the entry carries no such mark.
+func (e Entry) NewVersion() (from, to string, ok bool) {
+	switch v := e.Status["new_version"].(type) {
+	case map[string]any:
+		from, _ = v["from"].(string)
+		to, _ = v["to"].(string)
+	case string:
+		from, to = e.Config.Str("pinned"), v
+	}
+	return from, to, to != ""
+}

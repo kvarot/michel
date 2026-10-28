@@ -16,18 +16,20 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/sourceupdate"
 	"github.com/spf13/cobra"
 )
 
 func newScanCmd(deps *Deps) *cobra.Command {
 	var name string
-	var all, noAnalyze, digestToo bool
+	var all, noAnalyze, digestToo, update bool
 	c := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan a project's lockfiles against the offline databases",
 		Long: "Scan reads composer.lock, package-lock.json, yarn.lock and pnpm-lock.yaml files under the project folder " +
 			"and compares them with the offline OSV databases of the enabled ecosystems ('michel source list --kind osv'). " +
-			"It never uses the network; run 'michel db update' to refresh the databases. A folder without any lockfile " +
+			"The scan itself never uses the network; run 'michel db update' to refresh the databases, or add --update to read every " +
+			"enabled source first (as 'michel source update'; a source that cannot be read does not stop the scan). A folder without any lockfile " +
 			"is reported as having nothing to scan: an error with --project, not with --all.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,6 +68,30 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				}
 				targets = []project.Project{p}
 			}
+			asJSON, _ := cmd.Flags().GetBool("json")
+			problems := false
+			// The sources are read before the scans, so they use fresh
+			// data; a failed read keeps the previous data and the scans go on.
+			var updated *sourceupdate.Report
+			if update {
+				rep, err := sourceUpdate(cmd, deps, nil, "")
+				if err != nil && !errors.Is(err, sourceupdate.ErrSomeFailed) {
+					return err
+				}
+				updated = &rep
+				if !asJSON {
+					printSourceUpdate(deps, rep)
+				}
+				if err != nil {
+					problems = true
+					if !asJSON {
+						fmt.Fprintln(deps.Stdout, deps.T("cli.scan.update_continues"))
+					}
+				}
+				if !asJSON {
+					fmt.Fprintln(deps.Stdout)
+				}
+			}
 			root := dbRoot(cmd, deps)
 			ecos, err := osvdb.Enabled(ctx, source.NewRepo(deps.Store), deps.allowed)
 			if err != nil {
@@ -76,7 +102,6 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				Version: buildinfo.Version, DataDir: dataDir,
 				// Scanner warnings (unknown config keys, unused ignores) reach the user.
 				LogHandler: scannerLogHandler(deps.Stderr)}
-			asJSON, _ := cmd.Flags().GetBool("json")
 
 			results := []scan.Result{}
 			analysis := map[string]string{} // project name -> summary suffix
@@ -86,7 +111,6 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				Error   string `json:"error"`
 			}
 			failures := []failure{}
-			problems := false
 			for _, p := range targets {
 				// The enrichment (KEV, EPSS) is read from the store for the CVEs of
 				// each scan only.
@@ -133,9 +157,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			}
 			if asJSON {
 				if err := json.NewEncoder(deps.Stdout).Encode(struct {
-					Results  []scan.Result `json:"results"`
-					Failures []failure     `json:"failures"`
-				}{results, failures}); err != nil {
+					Results  []scan.Result        `json:"results"`
+					Failures []failure            `json:"failures"`
+					Update   *sourceupdate.Report `json:"update,omitempty"`
+				}{results, failures, updated}); err != nil {
 					return err
 				}
 			} else {
@@ -198,6 +223,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 	f.BoolVar(&all, "all", false, "scan every active project")
 	f.BoolVar(&noAnalyze, "no-analyze", false, "do not analyze the findings after the scan")
 	f.BoolVar(&digestToo, "digest", false, "with --all, send the digest after the scan (as 'michel digest --send')")
+	f.BoolVar(&update, "update", false, "read every enabled source before scanning (as 'michel source update')")
 	f.String("osv-db", "", "directory of the offline databases (default: from the policy)")
 	return c
 }

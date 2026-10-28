@@ -8,7 +8,10 @@
 {{end}}{{if .OSVStale}}{{stale}}
 {{end}}{{if .ShowEmpty}}{{empty}}
 {{end}}{{if .FailedScans}}The last scan of {{.FailedScans}} {{if eq .FailedScans 1}}project{{else}}projects{{end}} did not finish.
-{{end}}
+{{end}}{{if not .Catalog.Silent}}{{catalogLine}}
+{{range .Catalog.NewVersions}}  {{.Name}}: {{.From}} → {{.To}}
+{{end}}{{if or .Catalog.Failed .Catalog.Unreachable}}{{previousData}}
+{{end}}{{end}}
 {{- if or .Exploited .ExploitedDecided}}
 Exploited in the wild, fix these first:
 {{range .Exploited}}  [{{if .Malicious}}malicious package{{else}}KEV{{end}}] {{.Package}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · on the KEV list since {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · decided: fix{{end}}

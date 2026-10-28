@@ -29,7 +29,7 @@ func newSourceCmd(deps *Deps) *cobra.Command {
 		Short: "Manage where Michel reads its data: OSV databases, enrichments, feeds, plugins, skills, MCP servers",
 	}
 	c.AddCommand(newSourceListCmd(deps), newSourceShowCmd(deps), newSourceEnableCmd(deps), newSourceDisableCmd(deps),
-		newSourceAddCmd(deps), newSourceRemoveCmd(deps), newSourceResetCmd(deps))
+		newSourceAddCmd(deps), newSourceRemoveCmd(deps), newSourceResetCmd(deps), newSourceUpdateCmd(deps))
 	return c
 }
 

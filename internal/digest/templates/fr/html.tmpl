@@ -7,7 +7,12 @@
 {{end}}{{if .OSVStale}}<p class="banner">{{stale}}</p>
 {{end}}{{if .ShowEmpty}}<p class="since">{{empty}}</p>
 {{end}}{{if .FailedScans}}<p class="banner">Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.</p>
-{{end}}
+{{end}}{{if not .Catalog.Silent}}<p class="since">{{catalogLine}}</p>
+{{if .Catalog.NewVersions}}<ul>
+{{range .Catalog.NewVersions}}<li><strong>{{.Name}}</strong> : {{.From}} → {{.To}}</li>
+{{end}}</ul>
+{{end}}{{if or .Catalog.Failed .Catalog.Unreachable}}<p class="banner">{{previousData}}</p>
+{{end}}{{end}}
 {{- if or .Exploited .ExploitedDecided}}<h2 class="exploited">Failles que des pirates utilisent déjà, à corriger en premier</h2>
 <ul>
 {{range .Exploited}}<li><span class="sev sev-critical">{{if .Malicious}}paquet malveillant{{else}}faille déjà attaquée{{end}}</span> <strong>{{.Package}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · sur la liste des failles attaquées de la CISA depuis le {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · ta décision : à corriger{{end}}</li>

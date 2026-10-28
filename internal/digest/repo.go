@@ -47,7 +47,8 @@ type ChannelResult struct {
 func RunOf(d Digest, now time.Time) Run {
 	r := Run{ID: ulid.Make().String(), Since: d.Since, Until: d.Until, Lang: d.Lang, Projects: []ProjectSummary{}, Channels: []ChannelResult{}, CreatedAt: now,
 		Summary: map[string]int{"new_total": d.NewTotal, "attention_total": d.AttentionTotal, "failed_scans": d.FailedScans,
-			"empty_projects": d.EmptyProjects, "show_empty": boolInt(d.ShowEmpty)}}
+			"empty_projects": d.EmptyProjects, "show_empty": boolInt(d.ShowEmpty),
+			"catalog_failed": len(d.Catalog.Failed) + len(d.Catalog.Unreachable)}}
 	for _, p := range d.Projects {
 		news := 0
 		for _, pkg := range p.New {

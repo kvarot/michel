@@ -135,7 +135,7 @@ func TestDecideDeferDefaultShowsDate(t *testing.T) {
 
 func TestDecideByPackage(t *testing.T) {
 	dir, _ := scannedDemo(t, false)
-	_, out, _, err := run(t, dir, "--lang", "en", "decide", "--project", "demo", "--package", "acme/vuln", "fix")
+	_, out, _, err := run(t, dir, "--lang", "en", "decide", "--project", "demo", "--package", "acme/vuln", "fix", "--verbose")
 	if err != nil || !strings.HasPrefix(out, "Decided fix for 2 findings of acme/vuln in demo.\n") ||
 		!strings.Contains(out, "ACME-2026-0001: audit event ") || !strings.Contains(out, "ACME-2026-0002: audit event ") {
 		t.Fatalf("by package: %v %q", err, out)
@@ -152,7 +152,8 @@ func TestDecideByPackage(t *testing.T) {
 		t.Errorf("already decided: %v", err)
 	}
 	_, out, _, err = run(t, dir, "--lang", "fr", "decide", "--project", "demo", "--package", "acme/vuln", "defer", "--force", "--for", "10d")
-	if err != nil || !strings.Contains(out, "2 failles de acme/vuln") || !strings.Contains(out, "Reportées au ") {
+	if err != nil || !strings.HasPrefix(out, "2 failles de acme/vuln décidées (reportées jusqu'au ") || !strings.Contains(out, " dans demo ; audit : ") ||
+		strings.Count(out, "\n") != 1 {
 		t.Errorf("--force: %v %q", err, out)
 	}
 	_, _, _, err = run(t, dir, "--lang", "en", "decide", "--project", "nope", "--package", "acme/vuln", "fix")
@@ -160,7 +161,7 @@ func TestDecideByPackage(t *testing.T) {
 		t.Errorf("unknown project: %v", err)
 	}
 	_, out, _, err = run(t, dir, "--lang", "en", "decide", "--project", "demo", "--package", "vuln-pkg", "fix")
-	if err != nil || !strings.HasPrefix(out, "Decided fix for 1 finding of vuln-pkg in demo.\n") {
+	if err != nil || !strings.HasPrefix(out, "1 finding of vuln-pkg decided (fix) in demo; audit: ") || strings.Contains(out, "→") {
 		t.Errorf("one finding: %v %q", err, out)
 	}
 }
@@ -360,5 +361,51 @@ func TestDecideNeverWritesUnderProject(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(path, "osv-scanner.toml")); !os.IsNotExist(err) {
 		t.Errorf("osv-scanner.toml was written: %v", err)
+	}
+}
+
+// addFindings copies the finding with osvID n times under new ids and
+// advisory ids, so a package carries many findings.
+func addFindings(t *testing.T, dir, osvID string, n int) {
+	t.Helper()
+	s, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	db := s.DB()
+	db.SetMaxOpenConns(1) // the temporary table lives on one connection
+	if _, err := db.Exec(`CREATE TEMP TABLE f AS SELECT * FROM finding WHERE osv_id = ?`, osvID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if _, err := db.Exec(`UPDATE f SET id = ?, osv_id = ?`, fmt.Sprintf("01TESTFINDING%013d", i), fmt.Sprintf("ACME-2026-9%03d", i)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO finding SELECT * FROM f`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestDecidePackagePrintsOneSummaryLine(t *testing.T) {
+	dir, _ := scannedDemo(t, false)
+	addFindings(t, dir, "ACME-2026-0001", 57) // acme/vuln: 2 + 57 findings
+	_, out, _, err := run(t, dir, "--lang", "en", "decide", "--project", "demo", "--package", "acme/vuln", "defer", "--until", "2099-11-25")
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if err != nil || len(lines) != 1 || !strings.Contains(lines[0], "59") || !strings.Contains(lines[0], "acme/vuln") ||
+		!strings.Contains(lines[0], "2099-11-25") || !strings.Contains(lines[0], "→") {
+		t.Fatalf("summary: %v %q", err, out)
+	}
+	_, out, _, err = run(t, dir, "--lang", "fr", "decide", "--project", "demo", "--package", "acme/vuln", "fix", "--force", "--verbose")
+	lines = strings.Split(strings.TrimRight(out, "\n"), "\n")
+	items := 0
+	for _, l := range lines {
+		if strings.Contains(l, "journal d'audit") {
+			items++
+		}
+	}
+	if err != nil || items != 59 {
+		t.Errorf("--verbose: %v, %d item lines\n%s", err, items, out)
 	}
 }

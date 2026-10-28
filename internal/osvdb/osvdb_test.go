@@ -305,3 +305,34 @@ func TestEnabledFollowsSourceEntries(t *testing.T) {
 	}
 	check("Packagist", "PyPI")
 }
+
+func TestUpdateSendsIfModifiedSinceAndKeepsOnNotModified(t *testing.T) {
+	body := makeZip(t)
+	var since []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		since = append(since, r.Header.Get("If-Modified-Since"))
+		if r.Header.Get("If-Modified-Since") != "" {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Write(body)
+	}))
+	defer srv.Close()
+	setBase(t, srv.URL)
+	root, client := t.TempDir(), gateway(t, srv.URL, true).Client("osv.db")
+	if _, n, err := UpdateEcosystem(context.Background(), root, client, "npm", fixed); err != nil || n != 1 {
+		t.Fatalf("first: %d %v", n, err)
+	}
+	later := func() time.Time { return fixed().Add(24 * time.Hour) }
+	st, _, err := UpdateEcosystem(context.Background(), root, client, "npm", later)
+	if !errors.Is(err, ErrNotModified) || !st.Present || !st.FetchedAt.Equal(later()) {
+		t.Fatalf("second: %+v %v", st, err)
+	}
+	if since[0] != "" || since[1] != "Thu, 22 Oct 2026 08:00:00 GMT" {
+		t.Errorf("If-Modified-Since = %q", since)
+	}
+	// Update (michel db update) counts an unchanged database as updated.
+	if sts, err := Update(context.Background(), root, client, []string{"npm"}, later); err != nil || len(sts) != 1 || !sts[0].Present {
+		t.Errorf("Update after 304: %+v %v", sts, err)
+	}
+}

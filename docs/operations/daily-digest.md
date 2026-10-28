@@ -28,7 +28,7 @@ michel findings --project demo --status decided
   - the fixed versions change,
   - the due date of a deferral is reached,
   - a finding that had disappeared comes back different.
-- `--project` with `--package` decides on every finding of that package in the project that waits for a decision. Add `--force` to also replace decisions already taken. A package often carries several advisories, so this is the quick way through a first scan with hundreds of findings.
+- `--project` with `--package` decides on every finding of that package in the project that waits for a decision. Add `--force` to also replace decisions already taken. A package often carries several advisories, so this is the quick way through a first scan with hundreds of findings. It prints one summary line (how many findings, the decision, the first and last audit events); `--verbose` prints one line per finding instead.
 - `--why` is optional for `fix` and `defer`, required for `ignore`, at most 1,000 characters. It is kept in the audit log: never put code or a secret in it.
 - A finding that is no longer seen (status `gone`) cannot be decided: if it comes back, Michel asks only if something changed.
 - Every decision is an audit event `decision.set`. A decision never touches the project folder.
@@ -42,6 +42,7 @@ michel digest --html > digest.html  # the email's HTML version
 michel digest --json                # versioned JSON {"michel_digest": 1, ...}
 michel digest --send                # send on every enabled channel, then record it
 michel scan --all --digest          # scan every active project, then digest --send
+michel scan --all --update --digest # read the enabled sources first (as michel source update)
 ```
 
 **Window.** A digest covers everything since the end of the last digest sent with `--send`, whatever the result of its channels. The first time, it covers the last 24 hours. There is no cap: after three weeks away, the digest says "Everything that changed since <date>" and lists it all. `--since YYYY-MM-DD` forces the start, for example to send again after a channel failed.
@@ -54,7 +55,7 @@ michel scan --all --digest          # scan every active project, then digest --s
 - **Decisions to review**: decisions Michel put aside, with the reason (severity changed, fixed version changed, date reached, came back changed);
 - **Due dates**: deferrals whose date falls within the next 3 days, marked overdue once passed.
 
-Findings are grouped by package: one line per package with the worst severity, the installed version, the target version and the advisory ids. Above the projects, a banner warns when the offline database is more than 7 days old, and when a project's last scan failed or was interrupted. When nothing is new and nothing is due, Michel says so in one sentence. The last line links to the Today page (`notify.page_url`, never with the access token).
+Findings are grouped by package: one line per package with the worst severity, the installed version, the target version and the advisory ids. Above the projects, a banner warns when the offline database is more than 7 days old, and when a project's last scan failed or was interrupted. After `michel source update` (or `scan --update`), a **catalog** line says how many sources are up to date and names those that could not be read, that wait for your consent or that have a new version ("Catalog: 6 sources up to date, feed.nginx unreachable."); it stays silent when everything is current. When nothing is new and nothing is due, Michel says so in one sentence. The last line links to the Today page (`notify.page_url`, never with the access token).
 
 **`--send`** first takes the deferrals whose date is reached out of force (they become decisions to review), sends the digest on every enabled channel, then records the run (audit `digest.run`, one `notify.send` per channel). A channel that fails does not stop the others; the command then exits with code 1. A run is recorded even with no channel configured: it is the "since last time" mark.
 
@@ -183,17 +184,17 @@ michel serve --listen 127.0.0.1:8080
 `michel schedule` does not exist yet. Meanwhile, create the scheduled task yourself. The line to run every morning is:
 
 ```
-michel scan --all --digest
+michel scan --all --update --digest
 ```
 
-It scans every active project, then sends the digest. Run it **as your own user account**: the secrets are encrypted for that account (Windows) or readable by it only, and the toast needs your open session. If the computer is off at that time, nothing is lost: the next digest covers everything since the last one.
+It first reads every enabled source (OSV databases, KEV, EPSS and the other enrichments; a source still waiting for your consent is not contacted), then scans every active project, then sends the digest. A source that cannot be read does not stop the scan: the previous data is used, the digest says so and the command exits with code 1. Run it **as your own user account**: the secrets are encrypted for that account (Windows) or readable by it only, and the toast needs your open session. If the computer is off at that time, nothing is lost: the next digest covers everything since the last one.
 
 ### Windows (Task Scheduler)
 
 In a terminal (no administrator rights needed), with the path to your `michel.exe`:
 
 ```
-schtasks /Create /TN "Michel daily digest" /SC DAILY /ST 06:30 /TR "\"C:\Tools\michel\michel.exe\" scan --all --digest"
+schtasks /Create /TN "Michel daily digest" /SC DAILY /ST 06:30 /TR "\"C:\Tools\michel\michel.exe\" scan --all --update --digest"
 schtasks /Run /TN "Michel daily digest"       # try it now
 schtasks /Query /TN "Michel daily digest" /V /FO LIST
 schtasks /Delete /TN "Michel daily digest"    # remove it
@@ -206,7 +207,7 @@ The task runs only while you are logged on, which is what the toast needs. To ru
 `crontab -e`, then:
 
 ```
-30 6 * * * $HOME/bin/michel scan --all --digest >> $HOME/.local/state/michel-digest.log 2>&1
+30 6 * * * $HOME/bin/michel scan --all --update --digest >> $HOME/.local/state/michel-digest.log 2>&1
 ```
 
 Create the log folder first (`mkdir -p ~/.local/state`). cron does not see your desktop session: on Linux the `toast` channel usually fails from cron; use email or a webhook there, or the systemd timer below.
@@ -221,7 +222,7 @@ Description=Michel daily scan and digest
 
 [Service]
 Type=oneshot
-ExecStart=%h/bin/michel scan --all --digest
+ExecStart=%h/bin/michel scan --all --update --digest
 ```
 
 `~/.config/systemd/user/michel-digest.timer`:

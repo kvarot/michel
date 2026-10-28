@@ -179,6 +179,8 @@ type Digest struct {
 	EmptyProjects int    `json:"empty_projects"`
 	ShowEmpty     bool   `json:"show_empty"`
 	PageURL       string `json:"page_url,omitempty"`
+	// Catalog is the state of the sources after the last source update.
+	Catalog Catalog `json:"catalog"`
 }
 
 // Options tunes Compute.
@@ -190,6 +192,10 @@ type Options struct {
 	Assistant string
 	// OSVRoot is the folder of the offline databases; "" skips freshness.
 	OSVRoot string
+	// Allowed tells whether the policy allows a host for a purpose, so the
+	// catalog line knows which sources wait for consent; nil falls back on
+	// the result of their last read.
+	Allowed func(host, purpose string) bool
 }
 
 // severities are the severity labels, most severe first.
@@ -289,6 +295,10 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 			}
 		}
 		d.OSVStale = !d.OSVFetchedAt.IsZero() && now.Sub(d.OSVFetchedAt) > StaleAfter
+	}
+
+	if d.Catalog, err = catalogOf(ctx, s, opt.Allowed); err != nil {
+		return Digest{}, err
 	}
 
 	d.ExploitedTotal = len(d.Exploited)
@@ -516,6 +526,10 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 	if err != nil {
 		return ProjectDigest{}, 0, 0, nil, err
 	}
+	// A decision superseded, then the next one superseded too: only the
+	// latest supersession of each finding is listed.
+	latest := map[string]decide.Decision{}
+	var order []string
 	for _, dec := range superseded {
 		if !dec.SupersededAt.After(c.since) || dec.SupersededReason == decide.Redecided {
 			continue
@@ -525,6 +539,16 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 		if cur, ok := current[dec.FindingID]; ok && !cur.CreatedAt.Before(dec.SupersededAt) {
 			continue
 		}
+		prev, seen := latest[dec.FindingID]
+		if !seen {
+			order = append(order, dec.FindingID)
+		}
+		if !seen || dec.SupersededAt.After(prev.SupersededAt) {
+			latest[dec.FindingID] = dec
+		}
+	}
+	for _, id := range order {
+		dec := latest[id]
 		f := byID[dec.FindingID]
 		pd.Superseded = append(pd.Superseded, Superseded{Package: scan.SanitizeText(f.Package), OSVID: scan.SanitizeText(f.OSVID),
 			FindingID: dec.FindingID, PreviousAction: string(dec.Action), Reason: string(dec.SupersededReason), Justification: dec.Justification,
