@@ -99,6 +99,8 @@ func printSourceUpdate(deps *Deps, rep sourceupdate.Report) {
 			lines[k] = deps.T("cli.source.update.rate_budget", k)
 		case sourceupdate.SkipRateLimited:
 			lines[k] = deps.N("cli.source.update.rate_limited", rep.Items[k], k)
+		case sourceupdate.SkipNoRepoConsent:
+			lines[k] = deps.T("cli.source.update.no_repo_consent", k)
 		case sourceupdate.SkipOff:
 			lines[k] = deps.T("cli.source.update.off", k)
 		default:

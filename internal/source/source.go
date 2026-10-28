@@ -146,7 +146,7 @@ var configKeys = map[Kind][]string{
 	KindFeed:       {"format", "repo"},
 	KindPlugin:     {"format", "tool", "run", "projects", "input", "repo"},
 	KindSkill:      {"repo", "path", "pinned", "installed_sha", "install_dir", "license"},
-	KindMCP:        {"repo", "pinned", "installed_sha", "launch", "license"},
+	KindMCP:        {"repo", "path", "pinned", "installed_sha", "launch", "license"},
 	KindReference:  {"topics"},
 }
 

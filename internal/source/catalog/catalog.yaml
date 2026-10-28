@@ -3,7 +3,7 @@
 # purpose or config changes: Sync then rewrites those fields, never enabled, hidden,
 # tech or the user settings. Each note is the i18n key source.note.<key> (hyphens
 # become underscores). Only osv.packagist and osv.npm are enabled by default.
-version: 2
+version: 3
 entries:
   - key: osv.packagist
     kind: osv
@@ -761,7 +761,7 @@ entries:
     url: "https://github.com/trailofbits/skills"
     hosts: ["api.github.com", "codeload.github.com"]
     purpose: source.repo
-    config: {repo: "trailofbits/skills", pinned: "", license: "unknown", path: ""}
+    config: {repo: "trailofbits/skills", path: "plugins/variant-analysis/skills/variant-analysis", pinned: "bf23bfb21f10a2a4b0406086d690dc8cb1b3ccf3", license: "CC-BY-SA-4.0"}
     note: source.note.skill.trailofbits_code_audit
   - key: skill.claude-code-owasp
     kind: skill
@@ -769,7 +769,7 @@ entries:
     url: "https://github.com/agamm/claude-code-owasp"
     hosts: ["api.github.com", "codeload.github.com"]
     purpose: source.repo
-    config: {repo: "agamm/claude-code-owasp", pinned: "", license: "unknown", path: ""}
+    config: {repo: "agamm/claude-code-owasp", path: ".claude/skills/owasp-security", pinned: "8ac7965caa212b4a850aff8d3df0081ab3fa9eed", license: "MIT"}
     note: source.note.skill.claude_code_owasp
   - key: mcp.semgrep
     kind: mcp
@@ -777,7 +777,7 @@ entries:
     url: "https://github.com/semgrep/semgrep"
     hosts: ["api.github.com", "codeload.github.com"]
     purpose: source.repo
-    config: {repo: "semgrep/semgrep", pinned: "", license: "unknown"}
+    config: {repo: "semgrep/semgrep", path: "cli/src/semgrep/mcp", pinned: "087e93b3a1fdf44f97bc92b5b9c2ba221cb2488b", license: "LGPL-2.1", launch: {command: "semgrep", args: ["mcp"]}}
     note: source.note.mcp.semgrep
   - key: mcp.safedep-vet
     kind: mcp
@@ -785,7 +785,7 @@ entries:
     url: "https://github.com/safedep/vet"
     hosts: ["api.github.com", "codeload.github.com"]
     purpose: source.repo
-    config: {repo: "safedep/vet", pinned: "", license: "unknown"}
+    config: {repo: "safedep/vet", pinned: "7be16ba9fd043441b8dd33f7e4b4abfb6a43040a", license: "Apache-2.0"}
     note: source.note.mcp.safedep_vet
   - key: mcp.cve-search
     kind: mcp
@@ -793,7 +793,7 @@ entries:
     url: "https://github.com/roadwy/cve-search_mcp"
     hosts: ["api.github.com", "codeload.github.com"]
     purpose: source.repo
-    config: {repo: "roadwy/cve-search_mcp", pinned: "", license: "unknown"}
+    config: {repo: "roadwy/cve-search_mcp", pinned: "af1b95327d56e7185b473713b8f749ed628bbfb3", license: "MIT"}
     note: source.note.mcp.cve_search
   - key: mcp.wazuh
     kind: mcp
@@ -801,7 +801,7 @@ entries:
     url: "https://github.com/gbrigandi/mcp-server-wazuh"
     hosts: ["api.github.com", "codeload.github.com"]
     purpose: source.repo
-    config: {repo: "gbrigandi/mcp-server-wazuh", pinned: "", license: "unknown"}
+    config: {repo: "gbrigandi/mcp-server-wazuh", pinned: "969f36fb833c5404055a668dc27b97f0ea3cc755", license: "MIT", launch: {command: "mcp-server-wazuh", args: []}}
     note: source.note.mcp.wazuh
   - key: discover.github
     kind: reference

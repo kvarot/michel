@@ -30,7 +30,7 @@ func newSourceCmd(deps *Deps) *cobra.Command {
 	}
 	c.AddCommand(newSourceListCmd(deps), newSourceShowCmd(deps), newSourceEnableCmd(deps), newSourceDisableCmd(deps),
 		newSourceAddCmd(deps), newSourceRemoveCmd(deps), newSourceResetCmd(deps), newSourceUpdateCmd(deps), newSourceItemsCmd(deps),
-		newSourceReadCmd(deps))
+		newSourceReadCmd(deps), newSourceInstallCmd(deps), newSourceUpgradeCmd(deps), newSourceDiscoverCmd(deps))
 	return c
 }
 
@@ -184,6 +184,7 @@ func newSourceShowCmd(deps *Deps) *cobra.Command {
 					fmt.Fprintln(out, deps.T("cli.source.show.last_error", e.LastReadError))
 				}
 			}
+			printRepoStatus(deps, e)
 			if note := source.NoteKey(e.Key); e.Origin == source.OriginCatalog && i18n.Has(note) {
 				fmt.Fprintln(out, deps.T("cli.source.show.note", deps.T(note)))
 			}
@@ -318,6 +319,19 @@ var (
 	commitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
+// cleanRepoPath checks a --path folder inside a repository and returns it
+// in slash form: relative, no "..", no backslash or drive.
+func cleanRepoPath(p string) (string, bool) {
+	if strings.ContainsAny(p, `\:`) || filepath.IsAbs(p) || strings.HasPrefix(p, "/") {
+		return "", false
+	}
+	clean := filepath.ToSlash(filepath.Clean(p))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false
+	}
+	return clean, true
+}
+
 // repoHosts are the hosts of a pinned repository: its state and its archive.
 var repoHosts = []string{"api.github.com", "codeload.github.com"}
 
@@ -418,8 +432,8 @@ func newSourceAddCmd(deps *Deps) *cobra.Command {
 				}
 				user["repo"], user["pinned"] = repo, pin
 				if path != "" {
-					clean := filepath.ToSlash(filepath.Clean(path))
-					if e.Kind != source.KindSkill || filepath.IsAbs(path) || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+					clean, ok := cleanRepoPath(path)
+					if !ok {
 						return deps.Errorf("cli.source.add.bad_path", path)
 					}
 					user["path"] = clean
@@ -471,10 +485,14 @@ func newSourceAddCmd(deps *Deps) *cobra.Command {
 }
 
 func newSourceRemoveCmd(deps *Deps) *cobra.Command {
-	return &cobra.Command{
+	var assumeYes bool
+	c := &cobra.Command{
 		Use:   "remove <key>",
 		Short: "Remove a source: yours is deleted, a catalog one is hidden (reset brings it back)",
-		Args:  cobra.ExactArgs(1),
+		Long: "Remove deletes a source of yours, or hides a catalog source (michel source reset brings it back). An installed " +
+			"skill is uninstalled first, after y/N: Michel removes its folder only when it carries Michel's marker for this " +
+			"source. --yes confirms without asking, for scripts.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, key := cmd.Context(), args[0]
 			r := source.NewRepo(deps.Store)
@@ -483,7 +501,9 @@ func newSourceRemoveCmd(deps *Deps) *cobra.Command {
 				return sourceErr(deps, key, err)
 			}
 			if e.Config.Str("installed_sha") != "" {
-				return sourceErr(deps, key, source.ErrInstalled)
+				if err := uninstallSkill(cmd, deps, e, assumeYes); err != nil {
+					return err
+				}
 			}
 			mode := "hidden"
 			if e.Origin == source.OriginUser {
@@ -506,6 +526,8 @@ func newSourceRemoveCmd(deps *Deps) *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&assumeYes, "yes", false, "confirm the uninstallation without asking (for scripts)")
+	return c
 }
 
 func newSourceResetCmd(deps *Deps) *cobra.Command {

@@ -46,6 +46,9 @@ const (
 	SkipNoReader = "no reader"
 	// SkipOff: the entry is disabled.
 	SkipOff = "off"
+	// SkipNoRepoConsent: a plugin's repository status needs a network rule
+	// for api.github.com (purpose source.repo) that no consent gave yet.
+	SkipNoRepoConsent = "no repo consent"
 )
 
 // Results stored on an entry (last_read_result) and in source.read events.

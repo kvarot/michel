@@ -17,7 +17,7 @@ import (
 // CatalogVersion is the version of the embedded catalog. Bump it whenever an
 // entry's name, url, hosts, purpose or catalog settings change, so Sync
 // rewrites them on existing databases.
-const CatalogVersion = 2
+const CatalogVersion = 3
 
 //go:embed catalog/catalog.yaml
 var catalogYAML []byte
