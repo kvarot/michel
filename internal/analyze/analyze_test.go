@@ -356,7 +356,7 @@ func TestRunLoadsOneGraphPerManifest(t *testing.T) {
 	e := newEnv(t)
 	loads := 0
 	orig := loadGraph
-	loadGraph = func(dir, eco string) (*DepGraph, error) { loads++; return orig(dir, eco) }
+	loadGraph = func(dir, eco, lock string) (*DepGraph, error) { loads++; return orig(dir, eco, lock) }
 	t.Cleanup(func() { loadGraph = orig })
 	f2, f3 := e.f, e.f
 	f2.ID, f3.ID = "f2", "f3"

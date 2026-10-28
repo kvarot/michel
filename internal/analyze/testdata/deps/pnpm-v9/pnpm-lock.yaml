@@ -1,0 +1,29 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      acme-direct:
+        specifier: ^1.0.0
+        version: 1.0.0
+
+packages:
+
+  acme-direct@1.0.0:
+    resolution: {integrity: sha512-AAAA}
+
+  vuln-pkg@1.0.0:
+    resolution: {integrity: sha512-BBBB}
+
+snapshots:
+
+  acme-direct@1.0.0:
+    dependencies:
+      vuln-pkg: 1.0.0
+
+  vuln-pkg@1.0.0: {}

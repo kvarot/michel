@@ -41,10 +41,10 @@ func statusOf(root, eco string) Status {
 	return s
 }
 
-// Statuses reports the state of every watched ecosystem under root.
-func Statuses(root string) ([]Status, error) {
-	out := make([]Status, 0, len(Ecosystems))
-	for _, eco := range Ecosystems {
+// Statuses reports the state of each of ecosystems under root.
+func Statuses(root string, ecosystems []string) ([]Status, error) {
+	out := make([]Status, 0, len(ecosystems))
+	for _, eco := range ecosystems {
 		out = append(out, statusOf(root, eco))
 	}
 	return out, nil

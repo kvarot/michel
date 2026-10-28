@@ -20,6 +20,7 @@ import (
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/source"
 )
 
 // decisionAuthor is the author and the audit actor of decisions taken on the page.
@@ -70,7 +71,13 @@ func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 		m.Assistant = digest.DefaultAssistant
 	}
 	if s.deps.OSVRoot != "" {
-		sts, err := osvdb.Statuses(s.deps.OSVRoot)
+		// Only the databases of the enabled ecosystems count.
+		ecos, err := osvdb.Enabled(r.Context(), source.NewRepo(s.deps.Store), nil)
+		if err != nil {
+			s.internal(w, r)
+			return
+		}
+		sts, err := osvdb.Statuses(s.deps.OSVRoot, ecos)
 		if err != nil {
 			s.internal(w, r)
 			return

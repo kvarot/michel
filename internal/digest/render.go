@@ -49,6 +49,7 @@ func funcs(d Digest) map[string]any {
 			}
 			return i18n.T(lang, "digest.reason.unknown")
 		},
+		"empty": func() string { return i18n.N(lang, "digest.empty_projects", d.EmptyProjects) },
 		"stale": func() string {
 			days := int(d.Until.Sub(d.OSVFetchedAt) / (24 * time.Hour))
 			return i18n.T(lang, "digest.osv_stale", days)

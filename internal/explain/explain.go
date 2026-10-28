@@ -74,6 +74,9 @@ type Facts struct {
 	ConstraintOK    bool `json:"constraint_ok"`
 	// BreakingCount is len(BreakingLines), at least 1 when Breaking.
 	BreakingCount int `json:"breaking_count"`
+	// Malicious is true for an OSV MAL- advisory: the package itself was
+	// published to do harm.
+	Malicious bool `json:"malicious"`
 }
 
 // Explanation is the three sentences.
@@ -131,7 +134,7 @@ func FactsFrom(fi scan.Finding, a analyze.Analysis, hasAnalysis bool) Facts {
 		Package: clean(fi.Package), Ecosystem: fi.Ecosystem, OSVID: clean(fi.OSVID), Summary: shorten(fi.Summary),
 		SeverityLabel: fi.SeverityLabel, CVSS: fi.CVSS, Installed: clean(fi.InstalledVersion),
 		ManifestRelPath: clean(fi.ManifestRelPath), HasAnalysis: hasAnalysis, Directness: analyze.Unknown,
-		Certainty: "low",
+		Certainty: "low", Malicious: fi.Malicious,
 	}
 	if !hasAnalysis {
 		up := analyze.PlanUpgrade(fi.Ecosystem, fi.InstalledVersion, fi.FixedVersions, "")

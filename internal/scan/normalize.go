@@ -28,12 +28,22 @@ type Finding struct {
 	FixedVersions    []string `json:"fixed_versions"`
 	DepGroups        []string `json:"dep_groups"`
 	Summary          string   `json:"summary"`
+	// Kind is the sort of finding: KindDependency for a vulnerable package.
+	Kind string `json:"kind"`
+	// Malicious marks an OSV MAL- advisory: the package itself is malware.
+	Malicious bool `json:"malicious"`
 
 	// Set when read back from the store.
 	Status      string `json:"status,omitempty"`
 	FirstSeenAt string `json:"first_seen_at,omitempty"`
 	LastSeenAt  string `json:"last_seen_at,omitempty"`
 }
+
+// KindDependency is the kind of a finding on a package of a lockfile.
+const KindDependency = "dependency"
+
+// IsMalicious tells whether an OSV id is a malicious-package advisory.
+func IsMalicious(osvID string) bool { return strings.HasPrefix(osvID, "MAL-") }
 
 // ManifestResult is the outcome for one lockfile.
 type ManifestResult struct {
@@ -133,6 +143,12 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 				}
 				seen[id] = true
 				label, score := severityOf(pv, v)
+				malicious := IsMalicious(v.GetId())
+				if malicious {
+					// A malicious package is never a minor matter, whatever
+					// the advisory scores (MAL- advisories usually have none).
+					label = "critical"
+				}
 				// Package names, ids and paths are lookup keys and stay as read;
 				// they are sanitized where they are printed. Free text is
 				// sanitized here, at the source.
@@ -145,6 +161,7 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 					InstalledVersion: pv.Package.Version,
 					FixedVersions:    FixedVersions(v, pv.Package.Ecosystem, pv.Package.Name),
 					DepGroups:        groups, Summary: SanitizeText(v.GetSummary()),
+					Kind: KindDependency, Malicious: malicious,
 				})
 				mr.Findings++
 			}

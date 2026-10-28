@@ -99,6 +99,21 @@ func currentDecisions(ctx context.Context, tx *sql.Tx, projectID string) (map[st
 	return out, rows.Err()
 }
 
+// kindOf is the stored kind of f, KindDependency when unset.
+func kindOf(f Finding) string {
+	if f.Kind == "" {
+		return KindDependency
+	}
+	return f.Kind
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func jsonList(s []string) string {
 	if s == nil {
 		s = []string{}
@@ -158,14 +173,14 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 
 	ins, err := tx.PrepareContext(ctx, `INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id,
 		aliases, severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status,
-		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary, status_changed_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary, status_changed_at, kind, malicious)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
 	}
 	defer ins.Close()
 	upd, err := tx.PrepareContext(ctx, `UPDATE finding SET aliases=?, severity_label=?, cvss_score=?, installed_version=?,
-		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=?,
+		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=?, malicious=?,
 		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id=?`)
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
@@ -195,7 +210,7 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 		if !ok {
 			if _, err := ins.ExecContext(ctx, f.ID, projectID, f.ManifestRelPath, f.Ecosystem, f.Package, f.OSVID,
 				jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion, jsonList(f.FixedVersions), jsonList(f.DepGroups),
-				StatusNew, scanID, scanID, ts, ts, f.Summary, ts); err != nil {
+				StatusNew, scanID, scanID, ts, ts, f.Summary, ts, kindOf(f), boolInt(f.Malicious)); err != nil {
 				return 0, 0, 0, 0, nil, fmt.Errorf("cannot save finding %s: %w", f.OSVID, err)
 			}
 			newN++
@@ -222,7 +237,7 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 			}
 		}
 		if _, err := upd.ExecContext(ctx, jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion,
-			jsonList(f.FixedVersions), jsonList(f.DepGroups), status, scanID, ts, f.Summary, status, ts, f.ID); err != nil {
+			jsonList(f.FixedVersions), jsonList(f.DepGroups), status, scanID, ts, f.Summary, boolInt(f.Malicious), status, ts, f.ID); err != nil {
 			return 0, 0, 0, 0, nil, fmt.Errorf("cannot update finding %s: %w", f.OSVID, err)
 		}
 		if k.status == StatusGone {
@@ -260,7 +275,7 @@ func NewRepo(s *store.Store) *Repo { return &Repo{s: s} }
 // means new or pending.
 func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Finding, error) {
 	q := `SELECT id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases, severity_label, cvss_score,
-		installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary
+		installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary, kind, malicious
 		FROM finding WHERE project_id = ?`
 	args := []any{projectID}
 	switch status {
@@ -283,11 +298,13 @@ func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Fi
 		var f Finding
 		var cvss sql.NullFloat64
 		var aliases, fixed, groups string
+		var malicious int
 		if err := rows.Scan(&f.ID, &f.ProjectID, &f.ManifestRelPath, &f.Ecosystem, &f.Package, &f.OSVID, &aliases,
-			&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary); err != nil {
+			&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary,
+			&f.Kind, &malicious); err != nil {
 			return nil, err
 		}
-		f.CVSS = cvss.Float64
+		f.CVSS, f.Malicious = cvss.Float64, malicious != 0
 		_ = json.Unmarshal([]byte(aliases), &f.Aliases)
 		_ = json.Unmarshal([]byte(fixed), &f.FixedVersions)
 		_ = json.Unmarshal([]byte(groups), &f.DepGroups)
@@ -322,8 +339,8 @@ func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, er
 		return []Finding{}, nil
 	}
 	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases,
-		severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary
-		FROM finding WHERE substr(id, 1, ?) = ? ORDER BY id LIMIT ?`, len(prefix), prefix, MaxPrefixMatches)
+		severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary,
+		kind, malicious FROM finding WHERE substr(id, 1, ?) = ? ORDER BY id LIMIT ?`, len(prefix), prefix, MaxPrefixMatches)
 	if err != nil {
 		return nil, fmt.Errorf("cannot look the finding up: %w", err)
 	}
@@ -333,11 +350,13 @@ func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, er
 		var f Finding
 		var cvss sql.NullFloat64
 		var aliases, fixed, groups string
+		var malicious int
 		if err := rows.Scan(&f.ID, &f.ProjectID, &f.ManifestRelPath, &f.Ecosystem, &f.Package, &f.OSVID, &aliases,
-			&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary); err != nil {
+			&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary,
+			&f.Kind, &malicious); err != nil {
 			return nil, err
 		}
-		f.CVSS = cvss.Float64
+		f.CVSS, f.Malicious = cvss.Float64, malicious != 0
 		_ = json.Unmarshal([]byte(aliases), &f.Aliases)
 		_ = json.Unmarshal([]byte(fixed), &f.FixedVersions)
 		_ = json.Unmarshal([]byte(groups), &f.DepGroups)

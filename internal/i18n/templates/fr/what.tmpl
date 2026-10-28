@@ -1,3 +1,4 @@
+{{- if .Malicious}}Attention : {{.Package}} {{.Installed}} est un paquet malveillant, publié exprès pour nuire à qui l'installe ; ce n'est pas une simple faille. {{end -}}
 {{- if not .HasAnalysis -}}
 Michel n'a pas encore cherché {{.Package}} {{.Installed}} dans ton code.
 {{- else if eq .CallSitesQuality "low" -}}

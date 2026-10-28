@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,7 +47,12 @@ const maxJoin = 4
 // It cannot judge meaning: sentences about the private project's makeup or
 // counts are reviewed by hand.
 func TestNoPrivateProjectTraces(t *testing.T) {
-	violations, err := scanTree(moduleRoot(t))
+	root := moduleRoot(t)
+	keep, err := gitVisible(root)
+	if err != nil {
+		t.Logf("not filtering ignored files (%v): every file is checked", err)
+	}
+	violations, err := scanTreeWith(root, forbiddenDigests, keep)
 	if err != nil {
 		t.Fatalf("walk: %v", err)
 	}
@@ -99,7 +105,7 @@ func TestHygieneMechanismCatchesAHashedToken(t *testing.T) {
 	}
 	write("caught.md", caught)
 	write("allowed.md", notCaught)
-	violations, err := scanTreeWith(root, digests)
+	violations, err := scanTreeWith(root, digests, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,17 +122,34 @@ func TestHygieneMechanismCatchesAHashedToken(t *testing.T) {
 		}
 	}
 	// The real list does not know the random token.
-	if v, _ := scanTreeWith(root, forbiddenDigests); len(v) != 0 {
+	if v, _ := scanTreeWith(root, forbiddenDigests, nil); len(v) != 0 {
 		t.Errorf("random token matched the real list: %v", v)
 	}
 }
 
-// scanTree checks root against the forbidden list.
-func scanTree(root string) ([]string, error) { return scanTreeWith(root, forbiddenDigests) }
+// gitVisible returns the files git would commit under root (tracked, or
+// untracked and not ignored), as slash-separated paths relative to root. A
+// file git ignores (an IDE's workspace, a local build) cannot land in the
+// repository, so it is not checked. Without git, or outside a repository, it
+// returns an error and a nil set: the caller then checks every file.
+func gitVisible(root string) (map[string]bool, error) {
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard").Output()
+	if err != nil {
+		return nil, err
+	}
+	keep := map[string]bool{}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			keep[p] = true
+		}
+	}
+	return keep, nil
+}
 
 // scanTreeWith walks root and reports every line holding a token whose digest
 // is in digests, as "path:line: forbidden token". The token is never printed.
-func scanTreeWith(root string, digests map[string]bool) ([]string, error) {
+// A non-nil keep limits the check to the files it holds (see gitVisible).
+func scanTreeWith(root string, digests map[string]bool, keep map[string]bool) ([]string, error) {
 	skipDirs := map[string]bool{".git": true, ".superpowers": true, "node_modules": true, "vendor": true, "bin": true, "dist": true}
 	skipFiles := map[string]bool{"go.mod": true, "go.sum": true}
 
@@ -145,13 +168,16 @@ func scanTreeWith(root string, digests map[string]bool) ([]string, error) {
 		if skipFiles[name] || isBinaryExt(name) {
 			return nil
 		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if keep != nil && !keep[rel] {
+			return nil
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 1024*1024), 1024*1024)
 		line := 0

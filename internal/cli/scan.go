@@ -14,6 +14,7 @@ import (
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/source"
 	"github.com/spf13/cobra"
 )
 
@@ -23,8 +24,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan a project's lockfiles against the offline databases",
-		Long: "Scan reads composer.lock and package-lock.json files under the project folder and compares them " +
-			"with the offline OSV databases. It never uses the network; run 'michel db update' to refresh the databases.",
+		Long: "Scan reads composer.lock, package-lock.json, yarn.lock and pnpm-lock.yaml files under the project folder " +
+			"and compares them with the offline OSV databases of the enabled ecosystems ('michel source list --kind osv'). " +
+			"It never uses the network; run 'michel db update' to refresh the databases. A folder without any lockfile " +
+			"is reported as having nothing to scan: an error with --project, not with --all.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -63,6 +66,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				targets = []project.Project{p}
 			}
 			root := dbRoot(cmd, deps)
+			ecos, err := osvdb.Enabled(ctx, source.NewRepo(deps.Store), deps.allowed)
+			if err != nil {
+				return err
+			}
 			dataDir, _ := cmd.Flags().GetString("data-dir")
 			sdeps := scan.Deps{Store: deps.Store, Audit: deps.Audit, Gateway: deps.Gateway, Now: deps.Now,
 				Version: buildinfo.Version, DataDir: dataDir,
@@ -72,6 +79,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 
 			results := []scan.Result{}
 			analysis := map[string]string{} // project name -> summary suffix
+			empties := map[string]string{}  // project name -> folder, for the scans with nothing to scan
 			type failure struct {
 				Project string `json:"project"`
 				Error   string `json:"error"`
@@ -79,20 +87,25 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			failures := []failure{}
 			problems := false
 			for _, p := range targets {
-				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root, Exclude: scan.EffectiveExclude(p)})
+				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root, Exclude: scan.EffectiveExclude(p), Ecosystems: ecos})
 				if err != nil {
 					if errors.Is(err, osvdb.ErrDatabaseMissing) && !all {
 						return err
 					}
-					msg := err.Error()
-					if errors.Is(err, scan.ErrNoManifests) {
-						msg = deps.T("cli.scan.no_manifests", p.Path, p.Name)
-					}
-					failures = append(failures, failure{Project: p.Name, Error: msg})
+					failures = append(failures, failure{Project: p.Name, Error: err.Error()})
 					problems = true
 					continue
 				}
 				results = append(results, r)
+				if r.Status == scan.ScanEmpty {
+					// Not a failure with --all: the project may have no
+					// dependencies yet. With --project the user aimed at it.
+					empties[p.Name] = p.Path
+					if !all {
+						problems = true
+					}
+					continue
+				}
 				if len(r.Errors) > 0 {
 					problems = true
 				}
@@ -130,7 +143,15 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				for _, f := range failures {
 					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.error_line", f.Project, f.Error))
 				}
-				printScan(deps, results, analysis)
+				scanned := []scan.Result{}
+				for _, r := range results {
+					if r.Status == scan.ScanEmpty {
+						fmt.Fprintln(deps.Stdout, deps.T("cli.scan.empty", r.Project, empties[r.Project]))
+						continue
+					}
+					scanned = append(scanned, r)
+				}
+				printScan(deps, scanned, analysis)
 				switch {
 				case len(results) == 0:
 					fmt.Fprintln(deps.Stdout, deps.T("cli.scan.none_scanned"))

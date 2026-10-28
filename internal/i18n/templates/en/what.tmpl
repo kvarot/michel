@@ -1,3 +1,4 @@
+{{- if .Malicious}}Warning: {{.Package}} {{.Installed}} is a malicious package, published on purpose to harm whoever installs it; it is not a mere flaw. {{end -}}
 {{- if not .HasAnalysis -}}
 {{.Package}} {{.Installed}} has not been searched for in your code yet.
 {{- else if eq .CallSitesQuality "low" -}}

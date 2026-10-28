@@ -5,6 +5,7 @@
 {{- define "body"}}<h1>{{.Title}}</h1>
 {{if .SinceLabel}}<p class="since">{{.SinceLabel}}</p>
 {{end}}{{if .OSVStale}}<p class="banner">{{stale}}</p>
+{{end}}{{if .ShowEmpty}}<p class="since">{{empty}}</p>
 {{end}}{{if .FailedScans}}<p class="banner">Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.</p>
 {{end}}
 {{- range .Projects}}<h2>{{.Name}}</h2>

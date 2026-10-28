@@ -414,3 +414,62 @@ func TestTitleAndWordFrenchAndEnglish(t *testing.T) {
 		t.Errorf("en due only: %q / %q", en.Title, en.Word)
 	}
 }
+
+func TestDigestCountsEmptyApartFromFailed(t *testing.T) {
+	f := newFixture(t)
+	empty := f.addProject("acme-empty", project.Project{})
+	broken := f.addProject("acme-broken", project.Project{})
+	f.scanRow(empty.ID, "empty", now.Add(-time.Hour))
+	f.scanRow(broken.ID, "failed", now.Add(-time.Hour))
+	ctx := context.Background()
+	compute := func(at time.Time) Digest {
+		t.Helper()
+		d, err := Compute(ctx, f.st, at, i18n.FR, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	d := compute(now)
+	if d.FailedScans != 1 || d.EmptyProjects != 1 || !d.ShowEmpty {
+		t.Fatalf("first digest: failed %d empty %d show %t", d.FailedScans, d.EmptyProjects, d.ShowEmpty)
+	}
+	if p := projectNamed(t, d, "acme-empty"); p.LastScanStatus != "empty" {
+		t.Errorf("status %q", p.LastScanStatus)
+	}
+	txt, err := RenderText(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := i18n.N(i18n.FR, "digest.empty_projects", 1); !strings.Contains(txt, want) {
+		t.Errorf("text lacks %q:\n%s", want, txt)
+	}
+	run := RunOf(d, now)
+	if run.Summary["empty_projects"] != 1 {
+		t.Errorf("summary %v", run.Summary)
+	}
+	if err := NewRepo(f.st).Save(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	// Same count within the week: no daily noise.
+	d = compute(now.Add(24 * time.Hour))
+	if d.EmptyProjects != 1 || d.ShowEmpty {
+		t.Fatalf("second digest: empty %d show %t", d.EmptyProjects, d.ShowEmpty)
+	}
+	if txt, _ := RenderText(d); strings.Contains(txt, i18n.N(i18n.FR, "digest.empty_projects", 1)) {
+		t.Errorf("sentence shown again:\n%s", txt)
+	}
+	if err := NewRepo(f.st).Save(ctx, RunOf(d, now.Add(24*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	// A week after it was last shown, it comes back once.
+	if d := compute(now.Add(8 * 24 * time.Hour)); !d.ShowEmpty {
+		t.Error("weekly reminder missing")
+	}
+	// A change of the count shows it at once.
+	other := f.addProject("acme-other", project.Project{})
+	f.scanRow(other.ID, "empty", now.Add(25*time.Hour))
+	if d := compute(now.Add(26 * time.Hour)); d.EmptyProjects != 2 || !d.ShowEmpty {
+		t.Errorf("count changed: empty %d show %t", d.EmptyProjects, d.ShowEmpty)
+	}
+}

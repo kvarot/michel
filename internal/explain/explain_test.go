@@ -184,3 +184,16 @@ func TestGlossaryBothLangs(t *testing.T) {
 		t.Error("unknown key must be empty")
 	}
 }
+
+func TestWhatSentenceForMaliciousPackage(t *testing.T) {
+	f := FactsFrom(scan.Finding{Package: "vuln-pkg", Ecosystem: "npm", OSVID: "MAL-2024-0001", SeverityLabel: "critical",
+		InstalledVersion: "1.0.0", Malicious: true}, analyze.Analysis{}, false)
+	if !f.Malicious {
+		t.Fatal("FactsFrom lost Malicious")
+	}
+	has(t, "fr what", mustRender(t, FR, f).What, "paquet malveillant", "vuln-pkg 1.0.0")
+	has(t, "en what", mustRender(t, EN, f).What, "malicious package", "vuln-pkg 1.0.0")
+	if w := mustRender(t, EN, sampleFacts()).What; strings.Contains(w, "malicious") {
+		t.Errorf("a plain flaw is called malicious: %s", w)
+	}
+}

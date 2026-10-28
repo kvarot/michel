@@ -93,7 +93,7 @@ func manifestDir(projectRoot, manifestRelPath string) string {
 // Analyze computes the analysis of one finding. It is pure: no database, no
 // audit. It loads the dependency graph itself; Run shares graphs instead.
 func Analyze(projectRoot string, p project.Project, f scan.Finding, cfg policy.RiskConfig, exclude []string) (Analysis, error) {
-	g, err := LoadDepGraph(manifestDir(projectRoot, f.ManifestRelPath), f.Ecosystem)
+	g, err := LoadDepGraph(manifestDir(projectRoot, f.ManifestRelPath), f.Ecosystem, filepath.Base(f.ManifestRelPath))
 	return AnalyzeWith(g, err, projectRoot, p, f, cfg, exclude)
 }
 
@@ -202,7 +202,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 		key := f.Ecosystem + "\x00" + f.ManifestRelPath
 		ge, ok := graphs[key]
 		if !ok {
-			ge.g, ge.err = loadGraph(manifestDir(p.Path, f.ManifestRelPath), f.Ecosystem)
+			ge.g, ge.err = loadGraph(manifestDir(p.Path, f.ManifestRelPath), f.Ecosystem, filepath.Base(f.ManifestRelPath))
 			graphs[key] = ge
 		}
 		a, err := AnalyzeWith(ge.g, ge.err, p.Path, p, f, deps.Risk, exclude)

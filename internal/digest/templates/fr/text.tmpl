@@ -6,6 +6,7 @@
 {{- .Title}}
 {{if .SinceLabel}}{{.SinceLabel}}
 {{end}}{{if .OSVStale}}{{stale}}
+{{end}}{{if .ShowEmpty}}{{empty}}
 {{end}}{{if .FailedScans}}Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.
 {{end}}
 {{- range .Projects}}

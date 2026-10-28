@@ -11,6 +11,7 @@ import (
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/osvdb"
+	"github.com/kvarot/michel/internal/source"
 	"github.com/spf13/cobra"
 )
 
@@ -36,11 +37,14 @@ func dbRoot(cmd *cobra.Command, deps *Deps) string {
 func newDBUpdateCmd(deps *Deps) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "update",
-		Short: "Download the offline OSV databases (Packagist and npm)",
+		Short: "Download the offline OSV databases of the enabled ecosystems",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, root := cmd.Context(), dbRoot(cmd, deps)
-			ecos := osvdb.Ecosystems
+			ecos, err := osvdb.Enabled(ctx, source.NewRepo(deps.Store), deps.allowed)
+			if err != nil {
+				return err
+			}
 			record := func(result string, ev map[string]any) error {
 				_, err := deps.Audit.Record(ctx, audit.Event{
 					Actor: "cli", Action: "osv.db.update", Target: root, Result: result, Evidence: ev,
@@ -108,7 +112,11 @@ func newDBStatusCmd(deps *Deps) *cobra.Command {
 		Short: "Show which offline databases are present and how old they are",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := osvdb.Statuses(dbRoot(cmd, deps))
+			ecos, err := osvdb.Enabled(cmd.Context(), source.NewRepo(deps.Store), deps.allowed)
+			if err != nil {
+				return err
+			}
+			st, err := osvdb.Statuses(dbRoot(cmd, deps), ecos)
 			if err != nil {
 				return err
 			}

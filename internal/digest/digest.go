@@ -21,6 +21,7 @@ import (
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
+	srcreg "github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/store"
 )
 
@@ -38,6 +39,10 @@ const LabelWindow = 36 * time.Hour
 
 // StaleAfter is the age beyond which the offline database is called stale.
 const StaleAfter = 7 * 24 * time.Hour
+
+// EmptyReminder is how often the sentence about the projects with nothing to
+// scan comes back when their number does not change.
+const EmptyReminder = 7 * 24 * time.Hour
 
 // DefaultAssistant is the assistant's name when the policy gives none.
 const DefaultAssistant = "Michel"
@@ -111,7 +116,8 @@ type ProjectDigest struct {
 	Total               int            `json:"total"`
 	DaysWithoutCritical int            `json:"days_without_critical"`
 	CriticalOpen        int            `json:"critical_open"`
-	// LastScanStatus is ok, partial, failed, interrupted, running or never.
+	// LastScanStatus is ok, partial, failed, interrupted, running, empty
+	// (no lockfile to scan) or never.
 	LastScanStatus string `json:"last_scan_status"`
 	// Attention counts the new critical or high findings not decided yet,
 	// the superseded decisions still to review and the due deferrals of the
@@ -135,7 +141,13 @@ type Digest struct {
 	OSVFetchedAt   time.Time       `json:"osv_fetched_at"`
 	OSVStale       bool            `json:"osv_stale"`
 	FailedScans    int             `json:"failed_scans"`
-	PageURL        string          `json:"page_url,omitempty"`
+	// EmptyProjects counts the projects whose last scan found no lockfile.
+	// They are not failures; ShowEmpty says whether the digest mentions
+	// them: when their number changed since the last run, or once every
+	// EmptyReminder.
+	EmptyProjects int    `json:"empty_projects"`
+	ShowEmpty     bool   `json:"show_empty"`
+	PageURL       string `json:"page_url,omitempty"`
 }
 
 // Options tunes Compute.
@@ -185,12 +197,14 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 	if d.Assistant == "" {
 		d.Assistant = DefaultAssistant
 	}
-	switch last, ok, err := NewRepo(s).Last(ctx); {
+	last, hasLast, err := NewRepo(s).Last(ctx)
+	if err != nil {
+		return Digest{}, err
+	}
+	switch {
 	case !opt.Since.IsZero():
 		d.Since = opt.Since.UTC()
-	case err != nil:
-		return Digest{}, err
-	case ok:
+	case hasLast:
 		d.Since = last.Until.UTC()
 	default:
 		d.Since = now.Add(-DefaultWindow)
@@ -215,13 +229,23 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 		d.Projects = append(d.Projects, pd)
 		d.NewTotal += newN
 		d.AttentionTotal += attention
-		if pd.LastScanStatus == scan.ScanFailed || pd.LastScanStatus == scan.ScanInterrupted {
+		switch pd.LastScanStatus {
+		case scan.ScanFailed, scan.ScanInterrupted:
 			d.FailedScans++
+		case scan.ScanEmpty:
+			d.EmptyProjects++
 		}
+	}
+	if d.ShowEmpty, err = showEmpty(ctx, s, now, d.EmptyProjects, last, hasLast); err != nil {
+		return Digest{}, err
 	}
 
 	if opt.OSVRoot != "" {
-		sts, err := osvdb.Statuses(opt.OSVRoot)
+		ecos, err := osvdb.Enabled(ctx, srcreg.NewRepo(s), nil)
+		if err != nil {
+			return Digest{}, err
+		}
+		sts, err := osvdb.Statuses(opt.OSVRoot, ecos)
 		if err != nil {
 			return Digest{}, err
 		}
@@ -235,6 +259,31 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 
 	retitle(&d)
 	return d, nil
+}
+
+// showEmpty tells whether the digest mentions the n projects with nothing
+// to scan: on the first digest, when n differs from the last run's, or when
+// no run of the last EmptyReminder mentioned them.
+func showEmpty(ctx context.Context, s *store.Store, now time.Time, n int, last Run, hasLast bool) (bool, error) {
+	if n == 0 {
+		return false, nil
+	}
+	if !hasLast || last.Summary["empty_projects"] != n {
+		return true, nil
+	}
+	runs, err := NewRepo(s).List(ctx, 100)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range runs {
+		if now.Sub(r.CreatedAt) > EmptyReminder {
+			break
+		}
+		if r.Summary["show_empty"] == 1 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // retitle sets d's title and word from its counters.
@@ -266,7 +315,7 @@ func Filter(d Digest, names []string) Digest {
 	}
 	out := d
 	out.Projects = []ProjectDigest{}
-	out.NewTotal, out.AttentionTotal, out.FailedScans = 0, 0, 0
+	out.NewTotal, out.AttentionTotal, out.FailedScans, out.EmptyProjects = 0, 0, 0, 0
 	for _, p := range d.Projects {
 		if !keep[p.Name] {
 			continue
@@ -276,10 +325,14 @@ func Filter(d Digest, names []string) Digest {
 			out.NewTotal += len(pkg.FindingIDs)
 		}
 		out.AttentionTotal += p.Attention
-		if p.LastScanStatus == scan.ScanFailed || p.LastScanStatus == scan.ScanInterrupted {
+		switch p.LastScanStatus {
+		case scan.ScanFailed, scan.ScanInterrupted:
 			out.FailedScans++
+		case scan.ScanEmpty:
+			out.EmptyProjects++
 		}
 	}
+	out.ShowEmpty = d.ShowEmpty && out.EmptyProjects > 0
 	retitle(&out)
 	return out
 }
