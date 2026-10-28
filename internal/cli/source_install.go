@@ -65,12 +65,20 @@ func installErr(deps *Deps, key string, err error) error {
 		return deps.Errorf("cli.source.install.foreign", key)
 	case errors.Is(err, gitrepo.ErrInsideProject):
 		return deps.Errorf("cli.source.install.inside_project")
-	case errors.Is(err, gitrepo.ErrSkillRenamed):
-		return deps.Errorf("cli.source.upgrade.renamed", key, key, key)
 	case errors.Is(err, gitrepo.ErrBadName):
 		return deps.Wrapf("cli.source.install.bad_name", err, key)
 	}
 	return deps.Wrapf("cli.source.install.failed", err, key)
+}
+
+// oldFolderKept prints the warning of a moved skill whose previous folder
+// stayed (the new installation is done) and returns the other errors.
+func oldFolderKept(deps *Deps, err error) error {
+	if !errors.Is(err, gitrepo.ErrOldFolderKept) {
+		return err
+	}
+	fmt.Fprintln(deps.Stderr, deps.T("cli.source.install.old_folder_kept", err))
+	return nil
 }
 
 // humanSize writes a byte count for people.
@@ -222,7 +230,7 @@ func newSourceInstallCmd(deps *Deps) *cobra.Command {
 			}
 			// The sha installed is the one shown.
 			to, err := gitrepo.Install(ctx, gd, e, p.SHA)
-			if err != nil {
+			if err = oldFolderKept(deps, err); err != nil {
 				return installErr(deps, key, err)
 			}
 			if e.Kind == source.KindSkill {
@@ -272,6 +280,9 @@ func newSourceUpgradeCmd(deps *Deps) *cobra.Command {
 			}
 			out := deps.Stderr
 			fmt.Fprintln(out, deps.T("cli.source.upgrade.title", key, diff.From, diff.To))
+			if diff.NewDir != "" && diff.OldDir != diff.NewDir {
+				fmt.Fprintln(out, deps.T("cli.source.upgrade.folder_changes", diff.OldDir, diff.NewDir))
+			}
 			list := func(files []string) string {
 				names := make([]string, 0, len(files))
 				for _, f := range files {
@@ -303,7 +314,7 @@ func newSourceUpgradeCmd(deps *Deps) *cobra.Command {
 				}
 			}
 			dir, err := gitrepo.Install(ctx, gd, e, diff.To)
-			if err != nil {
+			if err = oldFolderKept(deps, err); err != nil {
 				return installErr(deps, key, err)
 			}
 			if err := gd.Repo.SetStatus(ctx, key, dropNewVersion(e.Status)); err != nil {

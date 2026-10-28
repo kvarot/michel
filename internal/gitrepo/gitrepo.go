@@ -58,7 +58,7 @@ var (
 	ErrForeignDir    = errors.New("the target folder exists and was not installed by Michel for this source")
 	ErrInsideProject = errors.New("the skills folder is inside a project Michel scans")
 	ErrBadName       = errors.New("the skill's name cannot be a folder name")
-	ErrSkillRenamed  = errors.New("the new version renames the skill's folder")
+	ErrOldFolderKept = errors.New("the skill moved to its new folder, but the previous folder could not be removed")
 	ErrBadRepo       = errors.New("the repository setting is not owner/name")
 	ErrBadSHA        = errors.New("the commit is not a full 40-character sha")
 	ErrBadPath       = errors.New("the path setting leaves the repository")
@@ -209,8 +209,13 @@ type Preview struct {
 
 // Diff is what an upgrade changes, paths relative to the skill's folder.
 type Diff struct {
-	From        string   `json:"from"`
-	To          string   `json:"to"`
+	From string `json:"from"`
+	To   string `json:"to"`
+	// OldDir and NewDir are the installed skill folder and the one the new
+	// version goes to (they differ when its name changed; "" for an MCP
+	// server).
+	OldDir      string   `json:"old_dir"`
+	NewDir      string   `json:"new_dir"`
 	Added       []string `json:"added"`
 	Changed     []string `json:"changed"`
 	Removed     []string `json:"removed"`

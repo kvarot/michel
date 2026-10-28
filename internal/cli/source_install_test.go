@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/kvarot/michel/internal/gitrepo"
+	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/store"
 )
 
@@ -197,4 +199,52 @@ func openStore(t *testing.T, dir string) *store.Store {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func TestSourceUpgradeShowsAndAppliesARename(t *testing.T) {
+	dir, skills := setupSkill(t)
+	const newPin = "1234512345123451234512345123451234512345"
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	body := "---\nname: renamed\n---\n\n# Demo 2\n"
+	tw.WriteHeader(&tar.Header{Name: "skill-" + newPin + "/skills/demo/SKILL.md", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+	tw.Write([]byte(body))
+	tw.Close()
+	gz.Close()
+	old := demoSkillArchive(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/example/skill/tar.gz/" + demoPin:
+			w.Write(old)
+		case "/example/skill/tar.gz/" + newPin:
+			w.Write(b.Bytes())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	defer gitrepo.SetBaseURLsForTest(srv.URL, srv.URL)()
+	if _, out, _, err := run(t, dir, "source", "install", "skill.demo", "--yes"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	s := openStore(t, dir)
+	if err := source.NewRepo(s).SetStatus(context.Background(), "skill.demo", map[string]any{"new_version": map[string]any{"from": demoPin, "to": newPin}}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	_, out, errOut, err := run(t, dir, "--lang", "en", "source", "upgrade", "skill.demo", "--yes")
+	if err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, errOut)
+	}
+	want := "its folder moves from " + filepath.Join(skills, "demo") + " to " + filepath.Join(skills, "renamed")
+	if !strings.Contains(errOut, want) {
+		t.Errorf("preview lacks the move:\n%s", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(skills, "renamed", gitrepo.MarkerFile)); err != nil {
+		t.Errorf("new folder not marked: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skills, "demo")); !os.IsNotExist(err) {
+		t.Errorf("old folder still there: %v", err)
+	}
 }

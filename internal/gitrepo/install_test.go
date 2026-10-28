@@ -306,7 +306,58 @@ func TestUpgradeKeepsAnUnmarkedOldFolder(t *testing.T) {
 	}
 }
 
-func TestUpgradeRefusesARenamedSkill(t *testing.T) {
+func TestUpgradeMovesARenamedSkill(t *testing.T) {
+	gh := newFakeGitHub(t)
+	renamed := strings.Replace(demoSkill, "name: demo", "name: renamed", 1)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	gh.archives[shaB] = buildTarGz(t, file("skills/demo/SKILL.md", renamed))
+	d := testDeps(t)
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	if _, err := Install(ctx, d, e, shaA); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = d.Repo.Get(ctx, e.Key)
+	oldDir, newDir := filepath.Join(d.SkillsDir, "demo"), filepath.Join(d.SkillsDir, "renamed")
+
+	// A folder of the new name that Michel did not install: refused, nothing changed.
+	os.MkdirAll(newDir, 0o755)
+	os.WriteFile(filepath.Join(newDir, "SKILL.md"), []byte("mine"), 0o644)
+	diff, err := Upgrade(ctx, d, e, shaB)
+	if err != nil || diff.OldDir != oldDir || diff.NewDir != newDir {
+		t.Fatalf("diff = %+v err %v", diff, err)
+	}
+	if _, err := Install(ctx, d, e, shaB); !errors.Is(err, ErrForeignDir) {
+		t.Fatalf("foreign new folder: err = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(newDir, "SKILL.md")); string(b) != "mine" {
+		t.Error("the foreign folder was changed")
+	}
+	if b, _ := os.ReadFile(filepath.Join(oldDir, "SKILL.md")); string(b) != demoSkill {
+		t.Error("the installed skill changed")
+	}
+	if got, _ := d.Repo.Get(ctx, e.Key); got.Config.Str("installed_sha") != shaA || got.Config.Str("install_dir") != oldDir {
+		t.Errorf("config changed: %+v", got.Config.User)
+	}
+
+	// Free new name: the skill moves, the old folder goes.
+	os.RemoveAll(newDir)
+	to, err := Install(ctx, d, e, shaB)
+	if err != nil || to != newDir {
+		t.Fatalf("install: %q %v", to, err)
+	}
+	if m := readMarkerT(t, newDir); m["key"] != e.Key || m["sha"] != shaB {
+		t.Errorf("marker = %v", m)
+	}
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Errorf("old folder still there: %v", err)
+	}
+	if got, _ := d.Repo.Get(ctx, e.Key); got.Config.Str("install_dir") != newDir || got.Config.Str("installed_sha") != shaB {
+		t.Errorf("config = %+v", got.Config.User)
+	}
+}
+
+func TestUpgradeKeepsAnOldFolderWithoutMarker(t *testing.T) {
 	gh := newFakeGitHub(t)
 	gh.archives[shaA] = skillArchive(t, demoSkill)
 	gh.archives[shaB] = buildTarGz(t, file("skills/demo/SKILL.md", strings.Replace(demoSkill, "name: demo", "name: renamed", 1)))
@@ -317,19 +368,16 @@ func TestUpgradeRefusesARenamedSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	e, _ = d.Repo.Get(ctx, e.Key)
-	if _, err := Upgrade(ctx, d, e, shaB); !errors.Is(err, ErrSkillRenamed) {
-		t.Fatalf("upgrade: err = %v", err)
+	oldDir := filepath.Join(d.SkillsDir, "demo")
+	os.Remove(filepath.Join(oldDir, MarkerFile))
+	to, err := Install(ctx, d, e, shaB)
+	if !errors.Is(err, ErrOldFolderKept) || to != filepath.Join(d.SkillsDir, "renamed") {
+		t.Fatalf("install: %q %v", to, err)
 	}
-	if _, err := Install(ctx, d, e, shaB); !errors.Is(err, ErrSkillRenamed) {
-		t.Fatalf("install: err = %v", err)
+	if _, err := os.Stat(filepath.Join(oldDir, "SKILL.md")); err != nil {
+		t.Error("an unmarked folder was removed")
 	}
-	if _, err := os.Stat(filepath.Join(d.SkillsDir, "renamed")); err == nil {
-		t.Error("the new folder was written")
-	}
-	if b, _ := os.ReadFile(filepath.Join(d.SkillsDir, "demo", "SKILL.md")); string(b) != demoSkill {
-		t.Error("the installed skill changed")
-	}
-	if got, _ := d.Repo.Get(ctx, e.Key); got.Config.Str("installed_sha") != shaA {
+	if got, _ := d.Repo.Get(ctx, e.Key); got.Config.Str("install_dir") != to {
 		t.Errorf("config = %+v", got.Config.User)
 	}
 }
