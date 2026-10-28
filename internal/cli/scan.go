@@ -106,7 +106,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					}
 					continue
 				}
-				if len(r.Errors) > 0 {
+				// A lockfile left out because its ecosystem is disabled is the
+				// user's choice, not a problem: it keeps the scan partial in
+				// the store but neither warns nor changes the exit code.
+				if len(manifestProblems(r)) > 0 {
 					problems = true
 				}
 				analysis[p.Name] = deps.T("cli.scan.summary.analysis_skipped")
@@ -136,7 +139,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					for _, w := range r.Warnings {
 						fmt.Fprintln(deps.Stderr, ignoredConfigWarning(deps, targets, r.Project, w))
 					}
-					for _, e := range r.Errors {
+					for _, e := range manifestProblems(r) {
 						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_manifest_error", r.Project, e))
 					}
 				}
@@ -193,6 +196,18 @@ func newScanCmd(deps *Deps) *cobra.Command {
 	f.BoolVar(&digestToo, "digest", false, "with --all, send the digest after the scan (as 'michel digest --send')")
 	f.String("osv-db", "", "directory of the offline databases (default: from the policy)")
 	return c
+}
+
+// manifestProblems are the errors of r except the lockfiles left out because
+// their ecosystem is disabled.
+func manifestProblems(r scan.Result) []error {
+	var out []error
+	for _, e := range r.Errors {
+		if !errors.Is(e, scan.ErrEcosystemDisabled) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // printScan prints the results table and one summary sentence per project.

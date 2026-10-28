@@ -188,6 +188,26 @@ func TestScanAllEmptyProjectExitZero(t *testing.T) {
 	}
 }
 
+func TestScanAllDisabledEcosystemExitZero(t *testing.T) {
+	dir, db := t.TempDir(), buildTestOSVDB(t)
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "source", "disable", "osv.npm"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, errOut, err := run(t, dir, "scan", "--all", "--osv-db", db)
+	if err != nil {
+		t.Fatalf("scan --all: %v\n%s\n%s", err, out, errOut)
+	}
+	if strings.Contains(errOut, "ecosystem disabled") || !strings.Contains(out, "Michel found 2 new findings in demo") {
+		t.Errorf("stdout %q stderr %q", out, errOut)
+	}
+	if rows := auditRows(t, dir, "scan.finish"); len(rows) != 1 || rows[0].result != "partial" {
+		t.Errorf("scan.finish = %+v", rows)
+	}
+}
+
 func TestScanProjectEmptyExitOne(t *testing.T) {
 	dir, db := t.TempDir(), buildTestOSVDB(t)
 	empty := t.TempDir()

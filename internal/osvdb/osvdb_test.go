@@ -295,11 +295,11 @@ func TestEnabledFollowsSourceEntries(t *testing.T) {
 			t.Errorf("Enabled = %v, want %v", got, want)
 		}
 	}
-	check("npm", "Packagist") // in key order: osv.npm, osv.packagist
+	check("Packagist", "npm") // catalog order, as the fixed list was
 	if err := r.SetEnabled(ctx, "osv.pypi", true); err != nil {
 		t.Fatal(err)
 	}
-	check("npm", "Packagist", "PyPI")
+	check("Packagist", "npm", "PyPI")
 	if err := r.SetEnabled(ctx, "osv.npm", false); err != nil {
 		t.Fatal(err)
 	}
