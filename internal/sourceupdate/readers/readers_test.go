@@ -87,3 +87,43 @@ func TestEnrichReaderRefusesUnknownFormat(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestFeedReaderReadsThenHonoursNotModified(t *testing.T) {
+	rss := `<?xml version="1.0"?><rss version="2.0"><channel><item><guid>a</guid><title>nginx 1.27 security fix</title><link>https://example.org/a</link></item>` +
+		`<item><guid>b</guid><title>other</title></item></channel></rss>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"x"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"x"`)
+		w.Write([]byte(rss))
+	}))
+	defer srv.Close()
+	d := deps(t, policy.AllowRule{Host: "127.0.0.1", Purpose: policy.PurposeFeed})
+	ctx := context.Background()
+	if _, err := d.Repo.Upsert(ctx, source.Entry{Key: "feed.example", Kind: source.KindFeed, Origin: source.OriginUser, Name: "Example",
+		URL: srv.URL, Hosts: []string{"127.0.0.1"}, Purpose: policy.PurposeFeed, Enabled: true,
+		Config: source.Config{User: map[string]any{"format": "auto"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AddTech(ctx, d.Store, "nginx"); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := sourceupdate.Run(ctx, d, nil, source.KindFeed)
+	if err != nil || !reflect.DeepEqual(rep.Updated, []string{"feed.example"}) || rep.Items["feed.example"] != 2 {
+		t.Fatalf("first run: %v %+v", err, rep)
+	}
+	var tech string
+	if err := d.Store.DB().QueryRow(`SELECT tech FROM feed_item WHERE guid = 'a'`).Scan(&tech); err != nil || tech != `["nginx"]` {
+		t.Errorf("tech of a = %q err %v", tech, err)
+	}
+	rep, err = sourceupdate.Run(ctx, d, []string{"feed.example"}, "")
+	if err != nil || rep.SkipReasons["feed.example"] != sourceupdate.SkipNotModified {
+		t.Fatalf("second run: %v %+v", err, rep)
+	}
+	e, _ := d.Repo.Get(ctx, "feed.example")
+	if e.LastReadResult != "ok" || e.LastReadItems != 2 || e.LastReadETag != `"x"` {
+		t.Errorf("entry = %q %d %q", e.LastReadResult, e.LastReadItems, e.LastReadETag)
+	}
+}

@@ -594,6 +594,9 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 	}
 	res.Status = status
 	res.Superseded = len(superseded)
+	if err := updateTechAuto(ctx, deps, p, vr, manifests, accepted, status == ScanPartial); err != nil {
+		res.Errors = append(res.Errors, err)
+	}
 
 	// The audit logger opens its own transaction: the supersessions are
 	// recorded once the scan is committed.
@@ -636,6 +639,41 @@ func insertManifests(ctx context.Context, tx *sql.Tx, scanID string, ms []Manife
 		if _, err := st.ExecContext(ctx, scanID, m.RelPath, m.Ecosystem, m.LockSHA256, m.Packages, m.Error); err != nil {
 			return fmt.Errorf("cannot save manifest %s: %w", m.RelPath, err)
 		}
+	}
+	return nil
+}
+
+// updateTechAuto stores the technologies of the packages the scan read
+// (source.TechRules of the catalog) in project.tech_auto, in the database
+// only. A partial scan did not read every manifest: it adds tags, it never
+// removes one.
+func updateTechAuto(ctx context.Context, deps Deps, p project.Project, vr models.VulnerabilityResults, manifests []ManifestResult, accepted map[string]bool, partial bool) error {
+	_, rules, err := source.Catalog()
+	if err != nil {
+		return err
+	}
+	ecos := []string{}
+	for _, m := range manifests {
+		if m.Err == nil && m.Ecosystem != "" && accepted[m.RelPath] {
+			ecos = append(ecos, m.Ecosystem)
+		}
+	}
+	pkgs := map[string][]string{}
+	for _, r := range vr.Results {
+		rel, err := relPath(p.Path, r.Source.Path)
+		if err != nil || !accepted[rel] {
+			continue
+		}
+		for _, pv := range r.Packages {
+			pkgs[pv.Package.Ecosystem] = append(pkgs[pv.Package.Ecosystem], pv.Package.Name)
+		}
+	}
+	tags := source.TechAuto(rules, ecos, pkgs)
+	if partial {
+		tags = append(tags, p.TechAuto...)
+	}
+	if err := project.NewRepo(deps.Store).UpdateTechAuto(ctx, p.ID, tags); err != nil {
+		return fmt.Errorf("cannot save the technologies detected in %s: %w", p.Name, err)
 	}
 	return nil
 }

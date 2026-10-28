@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example releases</title>
+  <id>urn:example:releases</id>
+  <entry>
+    <id>urn:example:releases:2</id>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Security release <em>2.4.1</em></div></title>
+    <link rel="alternate" href="/releases/2.4.1"/>
+    <link rel="self" href="https://example.org/self/2"/>
+    <published>2026-10-27T08:00:00Z</published>
+    <updated>2026-10-27T09:00:00Z</updated>
+    <summary type="html">&lt;p&gt;Fixes &lt;code&gt;CVE-2026-0001&lt;/code&gt;.&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <title type="text">Plain &amp; simple</title>
+    <link href="https://example.org/releases/2.4.0"/>
+    <updated>2026-10-20T08:00:00+01:00</updated>
+    <content type="html">&lt;b&gt;bold&lt;/b&gt;</content>
+  </entry>
+</feed>

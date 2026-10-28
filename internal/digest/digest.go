@@ -181,6 +181,23 @@ type Digest struct {
 	PageURL       string `json:"page_url,omitempty"`
 	// Catalog is the state of the sources after the last source update.
 	Catalog Catalog `json:"catalog"`
+	// Reading lists the feed items to read: unread, published in the
+	// window, meeting a declared technology; the MaxReading most recent,
+	// grouped by source. It comes after the findings.
+	Reading []ReadingItem `json:"reading"`
+}
+
+// MaxReading is the longest "to read" list of a digest.
+const MaxReading = 10
+
+// ReadingItem is one feed item to read. Title is in the digest's language
+// for a watched page's change.
+type ReadingItem struct {
+	Source      string   `json:"source"`
+	Title       string   `json:"title"`
+	URL         string   `json:"url"`
+	PublishedAt string   `json:"published_at"`
+	Tech        []string `json:"tech"`
 }
 
 // Options tunes Compute.
@@ -231,7 +248,7 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 	}
 	now = now.UTC()
 	d := Digest{SchemaVersion: SchemaVersion, Lang: lang, Until: now, Assistant: opt.Assistant, PageURL: opt.PageURL, Projects: []ProjectDigest{},
-		Exploited: []Exploited{}}
+		Exploited: []Exploited{}, Reading: []ReadingItem{}}
 	if d.Assistant == "" {
 		d.Assistant = DefaultAssistant
 	}
@@ -298,6 +315,9 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 	}
 
 	if d.Catalog, err = catalogOf(ctx, s, opt.Allowed); err != nil {
+		return Digest{}, err
+	}
+	if d.Reading, err = readingOf(ctx, s, d.Since, lang); err != nil {
 		return Digest{}, err
 	}
 

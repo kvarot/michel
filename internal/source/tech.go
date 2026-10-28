@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/kvarot/michel/internal/project"
@@ -57,6 +58,31 @@ func DeclaredTech(ctx context.Context, s *store.Store, p project.Project) []stri
 	out := append(append([]string{}, p.Tech...), p.TechAuto...)
 	if global, err := ListTech(ctx, s); err == nil {
 		out = append(out, global...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// TechAuto turns what a scan read into technology tags with rules: a rule
+// without Package nor Prefix gives its tag when its ecosystem is in
+// ecosystems or has packages ("php" for Packagist, "node" for npm); else it
+// gives its tag when a package of its ecosystem is Package or starts with
+// Prefix. packages maps an OSV ecosystem to its package names. The tags are
+// sorted and unique, never nil.
+func TechAuto(rules []TechRule, ecosystems []string, packages map[string][]string) []string {
+	out := []string{}
+	for _, r := range rules {
+		pkgs := packages[r.Ecosystem]
+		switch {
+		case r.Package == "" && r.Prefix == "":
+			if slices.Contains(ecosystems, r.Ecosystem) || len(pkgs) > 0 {
+				out = append(out, r.Tag)
+			}
+		case slices.ContainsFunc(pkgs, func(p string) bool {
+			return (r.Package != "" && p == r.Package) || (r.Prefix != "" && strings.HasPrefix(p, r.Prefix))
+		}):
+			out = append(out, r.Tag)
+		}
 	}
 	slices.Sort(out)
 	return slices.Compact(out)

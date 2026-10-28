@@ -3,7 +3,7 @@
 # purpose or config changes: Sync then rewrites those fields, never enabled, hidden,
 # tech or the user settings. Each note is the i18n key source.note.<key> (hyphens
 # become underscores). Only osv.packagist and osv.npm are enabled by default.
-version: 1
+version: 2
 entries:
   - key: osv.packagist
     kind: osv
@@ -242,7 +242,7 @@ entries:
     url: "https://source.android.com/docs/security/bulletin"
     hosts: ["source.android.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["android"]
     note: source.note.feed.android
   - key: feed.apple
@@ -251,7 +251,7 @@ entries:
     url: "https://support.apple.com/en-us/100100"
     hosts: ["support.apple.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["apple"]
     note: source.note.feed.apple
   - key: feed.cocoapods
@@ -269,7 +269,7 @@ entries:
     url: "https://nginx.org/en/security_advisories.html"
     hosts: ["nginx.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["nginx"]
     note: source.note.feed.nginx
   - key: feed.apache-httpd
@@ -278,7 +278,7 @@ entries:
     url: "https://httpd.apache.org/security/vulnerabilities_24.html"
     hosts: ["httpd.apache.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["apache"]
     note: source.note.feed.apache_httpd
   - key: feed.php
@@ -287,7 +287,7 @@ entries:
     url: "https://www.php.net/security"
     hosts: ["www.php.net"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["php"]
     note: source.note.feed.php
   - key: feed.symfony
@@ -296,7 +296,7 @@ entries:
     url: "https://symfony.com/blog/category/security"
     hosts: ["symfony.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["symfony"]
     note: source.note.feed.symfony
   - key: feed.laravel
@@ -314,7 +314,7 @@ entries:
     url: "https://nodejs.org/en/blog/vulnerability"
     hosts: ["nodejs.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["node"]
     note: source.note.feed.nodejs
   - key: feed.react
@@ -359,7 +359,7 @@ entries:
     url: "https://wordpress.org/news/category/security/"
     hosts: ["wordpress.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["wordpress"]
     note: source.note.feed.wordpress
   - key: feed.drupal
@@ -368,7 +368,7 @@ entries:
     url: "https://www.drupal.org/security"
     hosts: ["www.drupal.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["drupal"]
     note: source.note.feed.drupal
   - key: feed.joomla
@@ -377,7 +377,7 @@ entries:
     url: "https://developer.joomla.org/security-centre.html"
     hosts: ["developer.joomla.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["joomla"]
     note: source.note.feed.joomla
   - key: feed.django
@@ -386,7 +386,7 @@ entries:
     url: "https://www.djangoproject.com/weblog/"
     hosts: ["www.djangoproject.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["django"]
     note: source.note.feed.django
   - key: feed.flask
@@ -404,7 +404,7 @@ entries:
     url: "https://rubyonrails.org/security"
     hosts: ["rubyonrails.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["rails"]
     note: source.note.feed.rails
   - key: feed.aspnetcore
@@ -422,7 +422,7 @@ entries:
     url: "https://www.debian.org/security/"
     hosts: ["www.debian.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["debian"]
     note: source.note.feed.debian
   - key: feed.msrc
@@ -431,7 +431,7 @@ entries:
     url: "https://msrc.microsoft.com/update-guide"
     hosts: ["msrc.microsoft.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["windows"]
     note: source.note.feed.msrc
   - key: feed.postgresql
@@ -440,7 +440,7 @@ entries:
     url: "https://www.postgresql.org/support/security/"
     hosts: ["www.postgresql.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["postgresql"]
     note: source.note.feed.postgresql
   - key: feed.oracle
@@ -449,7 +449,7 @@ entries:
     url: "https://www.oracle.com/security-alerts/"
     hosts: ["www.oracle.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["oracle", "mysql"]
     note: source.note.feed.oracle
   - key: feed.mariadb
@@ -458,7 +458,7 @@ entries:
     url: "https://mariadb.com/kb/en/security/"
     hosts: ["mariadb.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["mariadb"]
     note: source.note.feed.mariadb
   - key: feed.redis
@@ -476,7 +476,7 @@ entries:
     url: "https://www.elastic.co/community/security"
     hosts: ["www.elastic.co"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["elasticsearch"]
     note: source.note.feed.elastic
   - key: feed.openssl
@@ -485,7 +485,7 @@ entries:
     url: "https://openssl-library.org/news/vulnerabilities/"
     hosts: ["openssl-library.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["openssl"]
     note: source.note.feed.openssl
   - key: feed.openssh
@@ -494,7 +494,7 @@ entries:
     url: "https://www.openssh.com/security.html"
     hosts: ["www.openssh.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["openssh"]
     note: source.note.feed.openssh
   - key: feed.openvpn
@@ -503,7 +503,7 @@ entries:
     url: "https://community.openvpn.net/openvpn/wiki/SecurityAnnouncements"
     hosts: ["community.openvpn.net"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["openvpn"]
     note: source.note.feed.openvpn
   - key: feed.traefik
@@ -584,7 +584,7 @@ entries:
     url: "https://about.gitlab.com/releases/categories/releases/"
     hosts: ["about.gitlab.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["gitlab"]
     note: source.note.feed.gitlab
   - key: feed.jenkins
@@ -593,7 +593,7 @@ entries:
     url: "https://www.jenkins.io/security/"
     hosts: ["www.jenkins.io"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["jenkins"]
     note: source.note.feed.jenkins
   - key: feed.atlassian
@@ -602,7 +602,7 @@ entries:
     url: "https://www.atlassian.com/trust/security/advisories"
     hosts: ["www.atlassian.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["atlassian"]
     note: source.note.feed.atlassian
   - key: feed.gitea
@@ -674,7 +674,7 @@ entries:
     url: "https://grafana.com/security/"
     hosts: ["grafana.com"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["grafana"]
     note: source.note.feed.grafana
   - key: feed.prometheus
@@ -701,7 +701,7 @@ entries:
     url: "https://opensearch.org/security.html"
     hosts: ["opensearch.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["opensearch"]
     note: source.note.feed.opensearch
   - key: feed.keycloak
@@ -710,7 +710,7 @@ entries:
     url: "https://www.keycloak.org/security"
     hosts: ["www.keycloak.org"]
     purpose: source.feed
-    config: {format: "page"}
+    config: {format: "auto"}
     tech: ["keycloak"]
     note: source.note.feed.keycloak
   - key: feed.authentik

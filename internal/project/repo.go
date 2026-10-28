@@ -315,3 +315,25 @@ func (r *Repo) Update(ctx context.Context, p Project) error {
 	}
 	return nil
 }
+
+// UpdateTechAuto replaces the technologies Michel detected in the project's
+// manifests (written by the scan, never by the user). The tags are checked,
+// sorted and deduplicated.
+func (r *Repo) UpdateTechAuto(ctx context.Context, id string, tags []string) error {
+	auto, err := NormalizeTech(tags)
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(auto)
+	if err != nil {
+		return fmt.Errorf("cannot save the project: %w", err)
+	}
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE project SET tech_auto = ? WHERE id = ?`, string(b), id)
+	if err != nil {
+		return fmt.Errorf("cannot save the detected technologies: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	return nil
+}

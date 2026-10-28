@@ -884,3 +884,45 @@ func TestScanDoesNotExpireFutureDefer(t *testing.T) {
 		t.Errorf("decision: %q %q", at, reason)
 	}
 }
+
+func TestScanWritesTechAuto(t *testing.T) {
+	e := newEnv(t, "project-a")
+	lock := `{"_readme": ["fixture"], "content-hash": "0000000000000000000000000000000b", "packages": [
+    {"name": "acme/vuln", "version": "1.0.0"}, {"name": "symfony/console", "version": "7.1.0"}], "packages-dev": []}`
+	if err := os.WriteFile(filepath.Join(e.proj.Path, "composer.lock"), []byte(lock), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := treeDigest(t, e.proj.Path)
+	e.run(t)
+	if after := treeDigest(t, e.proj.Path); after != before {
+		t.Error("the project folder changed during the scan")
+	}
+	techAuto := func() []string {
+		t.Helper()
+		p, err := project.NewRepo(e.st).Get(context.Background(), e.proj.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.TechAuto
+	}
+	if got := techAuto(); !slices.Equal(got, []string{"node", "php", "symfony"}) {
+		t.Errorf("tech_auto = %v", got)
+	}
+	// symfony is gone from the lockfile: the next scan forgets it.
+	if err := os.WriteFile(filepath.Join(e.proj.Path, "composer.lock"), []byte(strings.Replace(lock, "symfony/console", "acme/safe", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.run(t)
+	if got := techAuto(); !slices.Equal(got, []string{"node", "php"}) {
+		t.Errorf("tech_auto after the change = %v", got)
+	}
+	// A folder with nothing to scan proves nothing: tech_auto is kept.
+	os.Remove(filepath.Join(e.proj.Path, "composer.lock"))
+	os.RemoveAll(filepath.Join(e.proj.Path, "web"))
+	if r := e.run(t); r.Status != ScanEmpty {
+		t.Fatalf("status = %s", r.Status)
+	}
+	if got := techAuto(); !slices.Equal(got, []string{"node", "php"}) {
+		t.Errorf("tech_auto after an empty scan = %v", got)
+	}
+}

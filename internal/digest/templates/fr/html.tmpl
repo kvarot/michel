@@ -43,6 +43,11 @@
 {{end}}</ul>
 {{end}}
 {{- end}}
+{{- if .Reading}}<h2>À lire, sur les technologies que tu utilises</h2>
+<ul>
+{{range .Reading}}<li><strong>{{.Source}}</strong> : {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}{{if .URL}}<br><span class="since">{{.URL}}</span>{{end}}</li>
+{{end}}</ul>
+{{end}}
 {{- if .Word}}<p class="word">{{.Word}}</p>
 {{end}}
 {{- if .PageURL}}<p>Détails : <a href="{{.PageURL}}">{{.PageURL}}</a></p>
