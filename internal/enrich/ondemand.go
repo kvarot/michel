@@ -90,7 +90,11 @@ func getJSON(ctx context.Context, client *http.Client, url string, headers map[s
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := client.Do(req)
+	// Never follow a redirect: the request may carry an API key. The caller's
+	// client is copied, not changed.
+	noRedirect := *client
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noRedirect.Do(req)
 	if err != nil {
 		var ue interface{ Unwrap() error }
 		if errors.As(err, &ue) && ue.Unwrap() != nil {
@@ -151,55 +155,69 @@ func contains(l []string, s string) bool {
 }
 
 // Candidates lists up to limit CVEs of the findings not gone whose severity
-// OSV leaves unknown and that have no cve_enrichment row yet, most recently
-// seen findings first.
-func Candidates(ctx context.Context, db *sql.DB, limit int) ([]string, error) {
-	type row struct{ osv, aliases string }
-	var rows []row
-	if err := each(ctx, db, `SELECT osv_id, aliases FROM finding WHERE status <> ? AND severity_label = 'unknown'
-		ORDER BY last_seen_at DESC, id`, []any{scan.StatusGone}, func(r *sql.Rows) error {
-		var x row
-		if err := r.Scan(&x.osv, &x.aliases); err != nil {
+// OSV leaves unknown, most recently seen findings first. A CVE already given
+// a CVSS score by any source is left out, and so is one sourceKey has
+// already missed (cve_enrichment_miss): the other sources are still asked.
+func Candidates(ctx context.Context, db *sql.DB, sourceKey string, limit int) ([]string, error) {
+	skip := map[string]bool{}
+	if err := each(ctx, db, `SELECT cve FROM cve_enrichment WHERE cvss_score > 0
+		UNION SELECT cve FROM cve_enrichment_miss WHERE source_key = ?`, []any{sourceKey}, func(r *sql.Rows) error {
+		var c string
+		if err := r.Scan(&c); err != nil {
 			return err
 		}
-		rows = append(rows, x)
+		skip[c] = true
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("cannot read the findings: %w", err)
+		return nil, fmt.Errorf("cannot read the enrichment data: %w", err)
 	}
 	out := []string{}
+	if limit <= 0 {
+		return out, nil
+	}
 	seen := map[string]bool{}
-	for _, x := range rows {
+	var full bool
+	err := each(ctx, db, `SELECT osv_id, aliases FROM finding WHERE status <> ? AND severity_label = 'unknown'
+		ORDER BY last_seen_at DESC, id`, []any{scan.StatusGone}, func(r *sql.Rows) error {
+		var osv, al string
+		if err := r.Scan(&osv, &al); err != nil {
+			return err
+		}
 		var aliases []string
-		_ = json.Unmarshal([]byte(x.aliases), &aliases)
-		for _, c := range scan.CVEsOf(scan.Finding{OSVID: x.osv, Aliases: aliases}) {
-			if len(out) >= limit {
-				return out, nil
-			}
-			if seen[c] || !cveID.MatchString(c) {
+		_ = json.Unmarshal([]byte(al), &aliases)
+		for _, c := range scan.CVEsOf(scan.Finding{OSVID: osv, Aliases: aliases}) {
+			if seen[c] || skip[c] || !cveID.MatchString(c) {
 				continue
 			}
 			seen[c] = true
-			var n int
-			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cve_enrichment WHERE cve = ?`, c).Scan(&n); err != nil {
-				return nil, fmt.Errorf("cannot read the enrichment data: %w", err)
-			}
-			if n == 0 {
-				out = append(out, c)
+			out = append(out, c)
+			if len(out) >= limit {
+				full = true
+				return errStop
 			}
 		}
+		return nil
+	})
+	if err != nil && !(full && errors.Is(err, errStop)) {
+		return nil, fmt.Errorf("cannot read the findings: %w", err)
 	}
 	return out, nil
 }
 
-// RunOnDemand asks src about up to limit candidate CVEs and stores each
-// answer in cve_enrichment (source_key = src.Key()). A CVE the source does
-// not know is stored without data, so it is not asked again; a failure
-// stores nothing and the CVE is retried next time. The run stops at the
-// first rate limit and returns ErrRateLimited with the counts so far.
+var errStop = errors.New("stop")
+
+// RunOnDemand asks src about up to limit candidate CVEs. An answer with a
+// CVSS score is stored in cve_enrichment (source_key = src.Key()). A CVE the
+// source does not know, or answers without a score, is noted in
+// cve_enrichment_miss for this source only, so it is not asked again while
+// the other sources still are. An answer without a score but with SSVC or
+// CWE data fills the CVE's row only when it has no score yet; a row with a
+// score is never overwritten by one without. A failure stores nothing and
+// is retried. The run stops at the first rate limit and returns
+// ErrRateLimited with the counts so far.
 func RunOnDemand(ctx context.Context, deps Deps, src OnDemand, limit int) (fetched, notFound, failed int, err error) {
 	db := deps.Store.DB()
-	cves, err := Candidates(ctx, db, limit)
+	cves, err := Candidates(ctx, db, src.Key(), limit)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -220,7 +238,7 @@ func RunOnDemand(ctx context.Context, deps Deps, src OnDemand, limit int) (fetch
 		case errors.Is(ferr, ErrRateLimited):
 			return fetched, notFound, failed, ErrRateLimited
 		case errors.Is(ferr, ErrNotFound):
-			if err := saveRecord(ctx, db, deps.Now(), CVERecord{CVE: cve}, name, src.Key()); err != nil {
+			if err := saveMiss(ctx, db, deps.Now(), cve, src.Key()); err != nil {
 				return fetched, notFound, failed, err
 			}
 			notFound++
@@ -231,6 +249,16 @@ func RunOnDemand(ctx context.Context, deps Deps, src OnDemand, limit int) (fetch
 			failed++
 		default:
 			rec.CVE = cve
+			rec = rec.clean()
+			if rec.CVSSScore == 0 {
+				if err := saveMiss(ctx, db, deps.Now(), cve, src.Key()); err != nil {
+					return fetched, notFound, failed, err
+				}
+				if rec.SSVCExploitation == "" && rec.SSVCAutomatable == "" && rec.SSVCTechnicalImpact == "" && len(rec.CWE) == 0 {
+					notFound++
+					continue
+				}
+			}
 			if err := saveRecord(ctx, db, deps.Now(), rec, name, src.Key()); err != nil {
 				return fetched, notFound, failed, err
 			}
@@ -240,9 +268,20 @@ func RunOnDemand(ctx context.Context, deps Deps, src OnDemand, limit int) (fetch
 	return fetched, notFound, failed, nil
 }
 
-// saveRecord writes one cve_enrichment row.
+func stamp(now time.Time) string { return now.UTC().Truncate(time.Second).Format(time.RFC3339) }
+
+func saveMiss(ctx context.Context, db *sql.DB, now time.Time, cve, key string) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO cve_enrichment_miss (cve, source_key, fetched_at) VALUES (?,?,?)
+		ON CONFLICT (cve, source_key) DO UPDATE SET fetched_at = excluded.fetched_at`, cve, key, stamp(now))
+	if err != nil {
+		return fmt.Errorf("cannot store the enrichment of %s: %w", cve, err)
+	}
+	return nil
+}
+
+// saveRecord writes one cve_enrichment row; an existing row with a score is
+// only replaced by a record that has one.
 func saveRecord(ctx context.Context, db *sql.DB, now time.Time, rec CVERecord, cvssSource, key string) error {
-	rec = rec.clean()
 	cwe, _ := json.Marshal(rec.CWE)
 	if rec.CVSSScore == 0 {
 		cvssSource = ""
@@ -252,9 +291,10 @@ func saveRecord(ctx context.Context, db *sql.DB, now time.Time, rec CVERecord, c
 		ON CONFLICT (cve) DO UPDATE SET cvss_score = excluded.cvss_score, cvss_vector = excluded.cvss_vector,
 		cvss_source = excluded.cvss_source, ssvc_exploitation = excluded.ssvc_exploitation,
 		ssvc_automatable = excluded.ssvc_automatable, ssvc_technical_impact = excluded.ssvc_technical_impact,
-		cwe = excluded.cwe, fetched_at = excluded.fetched_at, source_key = excluded.source_key`,
+		cwe = excluded.cwe, fetched_at = excluded.fetched_at, source_key = excluded.source_key
+		WHERE excluded.cvss_score > 0 OR cve_enrichment.cvss_score = 0`,
 		rec.CVE, rec.CVSSScore, rec.CVSSVector, cvssSource, rec.SSVCExploitation, rec.SSVCAutomatable,
-		rec.SSVCTechnicalImpact, string(cwe), now.UTC().Truncate(time.Second).Format(time.RFC3339), key)
+		rec.SSVCTechnicalImpact, string(cwe), stamp(now), key)
 	if err != nil {
 		return fmt.Errorf("cannot store the enrichment of %s: %w", rec.CVE, err)
 	}

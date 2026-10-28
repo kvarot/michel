@@ -156,17 +156,17 @@ func TestCandidatesOnlyUnknownSeverityWithoutRecord(t *testing.T) {
 	if _, err := f.st.DB().Exec(`UPDATE finding SET last_seen_at = '2026-10-20T00:00:00Z' WHERE id = 'f5'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.DB().Exec(`INSERT INTO cve_enrichment (cve, fetched_at, source_key) VALUES ('CVE-2024-0002', '2026-10-25T00:00:00Z', 'enrich.nvd')`); err != nil {
+	if _, err := f.st.DB().Exec(`INSERT INTO cve_enrichment (cve, cvss_score, fetched_at, source_key) VALUES ('CVE-2024-0002', 5.0, '2026-10-25T00:00:00Z', 'enrich.nvd')`); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Candidates(context.Background(), f.st.DB(), 10)
+	got, err := Candidates(context.Background(), f.st.DB(), "enrich.stub", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0] != "CVE-2024-0005" || got[1] != "CVE-2024-0001" {
 		t.Errorf("candidates = %v", got)
 	}
-	if got, _ := Candidates(context.Background(), f.st.DB(), 1); len(got) != 1 || got[0] != "CVE-2024-0005" {
+	if got, _ := Candidates(context.Background(), f.st.DB(), "enrich.stub", 1); len(got) != 1 || got[0] != "CVE-2024-0005" {
 		t.Errorf("limited = %v", got)
 	}
 }
@@ -229,10 +229,10 @@ func TestRunOnDemandStoresNotFoundAndCountsFailures(t *testing.T) {
 	if score != 9.5 || src != "stub" || strings.ContainsRune(vec, 0) {
 		t.Errorf("row = %v %q %q", score, src, vec)
 	}
-	if f.count(t, "cve_enrichment") != 2 { // found + not found; the failure is retried next time
-		t.Errorf("rows = %d", f.count(t, "cve_enrichment"))
+	if f.count(t, "cve_enrichment") != 1 || f.count(t, "cve_enrichment_miss") != 1 { // found; miss; the failure is retried
+		t.Errorf("rows = %d, misses = %d", f.count(t, "cve_enrichment"), f.count(t, "cve_enrichment_miss"))
 	}
-	if got, _ := Candidates(context.Background(), f.st.DB(), 10); len(got) != 1 || got[0] != "CVE-2024-0002" {
+	if got, _ := Candidates(context.Background(), f.st.DB(), "enrich.stub", 10); len(got) != 1 || got[0] != "CVE-2024-0002" { // 0001 missed for this source, 0003 has a score
 		t.Errorf("remaining candidates = %v", got)
 	}
 }
@@ -278,3 +278,89 @@ func TestApplyUsesEnrichedCVSSForUnknown(t *testing.T) {
 		t.Errorf("effective = %s %s", l, src)
 	}
 }
+
+func TestOnDemandSourcesFallBackOnEachOther(t *testing.T) {
+	f := newFixture(t)
+	f.seedFinding(t, "f1", scan.StatusNew, "unknown", "CVE-2024-0001")
+	ctx := context.Background()
+	first := &stub{reply: func(int, string) (CVERecord, error) { return CVERecord{}, ErrNotFound }}
+	first2 := &stubKey{stub: first, key: "enrich.vulnrichment"}
+	if _, nf, _, err := RunOnDemand(ctx, f.deps, first2, 10); err != nil || nf != 1 {
+		t.Fatal(nf, err)
+	}
+	// The same source is not asked twice about a miss.
+	if _, _, _, err := RunOnDemand(ctx, f.deps, first2, 10); err != nil || len(first.calls) != 1 {
+		t.Errorf("calls = %v err %v", first.calls, err)
+	}
+	// Another source still is, and its score is stored.
+	second := &stub{reply: func(_ int, c string) (CVERecord, error) { return CVERecord{CVE: c, CVSSScore: 7.7}, nil }}
+	if n, _, _, err := RunOnDemand(ctx, f.deps, &stubKey{stub: second, key: "enrich.nvd"}, 10); err != nil || n != 1 {
+		t.Fatal(n, err)
+	}
+	var score float64
+	var key string
+	if err := f.st.DB().QueryRow(`SELECT cvss_score, source_key FROM cve_enrichment WHERE cve = 'CVE-2024-0001'`).Scan(&score, &key); err != nil || score != 7.7 || key != "enrich.nvd" {
+		t.Errorf("row = %v %s %v", score, key, err)
+	}
+	// With a score, nobody is asked any more.
+	third := &stub{reply: func(int, string) (CVERecord, error) { return CVERecord{}, errors.New("must not be called") }}
+	if _, _, f2, err := RunOnDemand(ctx, f.deps, &stubKey{stub: third, key: "enrich.circl"}, 10); err != nil || f2 != 0 || len(third.calls) != 0 {
+		t.Errorf("calls = %v", third.calls)
+	}
+}
+
+func TestRunOnDemandNeverErasesAScoreWithoutOne(t *testing.T) {
+	f := newFixture(t)
+	f.seedFinding(t, "f1", scan.StatusNew, "unknown", "CVE-2024-0001")
+	ctx := context.Background()
+	// SSVC-only answer fills the empty row and counts as a miss for that source.
+	s := &stub{reply: func(_ int, c string) (CVERecord, error) { return CVERecord{CVE: c, SSVCExploitation: "none"}, nil }}
+	if _, _, _, err := RunOnDemand(ctx, f.deps, s, 10); err != nil {
+		t.Fatal(err)
+	}
+	if f.count(t, "cve_enrichment_miss") != 1 {
+		t.Error("a score-less answer is a miss")
+	}
+	if _, err := f.st.DB().Exec(`UPDATE cve_enrichment SET cvss_score = 6.0 WHERE cve = 'CVE-2024-0001'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveRecord(ctx, f.st.DB(), now, CVERecord{CVE: "CVE-2024-0001", SSVCExploitation: "poc"}, "x", "enrich.x"); err != nil {
+		t.Fatal(err)
+	}
+	var score float64
+	var ssvc string
+	_ = f.st.DB().QueryRow(`SELECT cvss_score, ssvc_exploitation FROM cve_enrichment WHERE cve = 'CVE-2024-0001'`).Scan(&score, &ssvc)
+	if score != 6.0 || ssvc != "none" {
+		t.Errorf("row = %v %q", score, ssvc)
+	}
+}
+
+func TestGetJSONDoesNotFollowRedirects(t *testing.T) {
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer target.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer srv.Close()
+	defer SetBaseURLsForTest("", srv.URL, "")()
+	client := srv.Client()
+	_, err := NVD("s3cret").Fetch(context.Background(), client, "CVE-2024-0001")
+	if err == nil || strings.Contains(err.Error(), "s3cret") || hits.Load() != 0 {
+		t.Errorf("err = %v, hits = %d", err, hits.Load())
+	}
+	if client.CheckRedirect != nil {
+		t.Error("the caller's client was modified")
+	}
+}
+
+// stubKey gives a stub another source key.
+type stubKey struct {
+	*stub
+	key string
+}
+
+func (s *stubKey) Key() string { return s.key }
