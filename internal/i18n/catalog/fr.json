@@ -318,7 +318,7 @@
   "cli.source.reset.purge_refused": "Rien n'a changé : tes sources sont gardées.",
   "cli.source.reset.usage": "Donne une clé de source, ou --all.",
   "cli.source.reset.user": "%s est une source que tu as ajoutée : « reset » ne marche que pour les sources du catalogue de Michel. Pour la retirer : michel source remove %s",
-  "cli.source.run.audit_failed": "%s sur %s : les failles sont enregistrées, mais Michel n'a pas pu écrire son journal d'audit : %v. Vérifie que le dossier de données est accessible en écriture.",
+  "cli.source.run.audit_failed": "%s sur %s : les failles sont enregistrées, mais Michel n'a pas pu écrire dans le journal d'audit : %v. Vérifie que tu as le droit d'écrire dans le dossier de données.",
   "cli.source.run.failed": "Michel n'a pas pu lancer %s sur %s : %v",
   "cli.source.run.need_project": "Indique le projet à vérifier : michel source run %s --project <nom>",
   "cli.source.run.new.one": "%[2]s a trouvé %[1]d nouvelle faille dans %[3]s",
