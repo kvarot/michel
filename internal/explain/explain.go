@@ -90,6 +90,14 @@ type Facts struct {
 	// Urgent is true for a flaw exploited in the wild or a malicious
 	// package: the cost sentence says to fix it first.
 	Urgent bool `json:"urgent"`
+	// Kind is the sort of finding (scan.KindDependency, or a plugin kind
+	// such as code or misconfig). For a plugin finding, Tool is the
+	// plugin (its source key without "plugin."), RuleID the rule or flaw it
+	// reports and Location the relative file (and line) it points at.
+	Kind     string `json:"kind"`
+	Tool     string `json:"tool"`
+	RuleID   string `json:"rule_id"`
+	Location string `json:"location"`
 }
 
 // Explanation is the three sentences.
@@ -160,6 +168,10 @@ func factsFrom(fi scan.Finding, a analyze.Analysis, hasAnalysis bool) Facts {
 		ManifestRelPath: clean(fi.ManifestRelPath), HasAnalysis: hasAnalysis, Directness: analyze.Unknown,
 		Certainty: "low", Malicious: fi.Malicious,
 		KEV: fi.KEV, KEVAdded: clean(fi.KEVAdded), EPSS: fi.EPSS, EPSSPercentile: fi.EPSSPercentile, Urgent: scan.Urgent(fi),
+		Kind: fi.Kind, Tool: clean(strings.TrimPrefix(fi.SourceKey, "plugin.")), RuleID: clean(fi.RuleID), Location: relOnly(clean(fi.Location)),
+	}
+	if f.Kind == "" {
+		f.Kind = scan.KindDependency
 	}
 	if !hasAnalysis {
 		up := analyze.PlanUpgrade(fi.Ecosystem, fi.InstalledVersion, fi.FixedVersions, "")
@@ -237,6 +249,9 @@ func renderOne(lang Lang, name string, f Facts) (string, error) {
 func Render(lang Lang, f Facts) (Explanation, error) {
 	if !lang.Valid() {
 		return Explanation{}, fmt.Errorf("language %q is not supported (use en or fr)", lang)
+	}
+	if f.Kind == "" {
+		f.Kind = scan.KindDependency
 	}
 	if f.Breaking {
 		f.BreakingCount = max(len(f.BreakingLines), 1)

@@ -30,7 +30,7 @@ func newSourceCmd(deps *Deps) *cobra.Command {
 	}
 	c.AddCommand(newSourceListCmd(deps), newSourceShowCmd(deps), newSourceEnableCmd(deps), newSourceDisableCmd(deps),
 		newSourceAddCmd(deps), newSourceRemoveCmd(deps), newSourceResetCmd(deps), newSourceUpdateCmd(deps), newSourceItemsCmd(deps),
-		newSourceReadCmd(deps), newSourceInstallCmd(deps), newSourceUpgradeCmd(deps), newSourceDiscoverCmd(deps))
+		newSourceReadCmd(deps), newSourceInstallCmd(deps), newSourceUpgradeCmd(deps), newSourceDiscoverCmd(deps), newSourceRunCmd(deps))
 	return c
 }
 

@@ -42,6 +42,13 @@ type Finding struct {
 	EPSS           float64 `json:"epss"`
 	EPSSPercentile float64 `json:"epss_percentile"`
 	CVSSEnriched   float64 `json:"cvss_enriched"`
+	// SourceKey is the plugin source that reported the finding ("" for an
+	// OSV finding); RuleID, Location (a path relative to the project, with
+	// ":line" when known) and Fingerprint come from the tool's report.
+	SourceKey   string `json:"source_key"`
+	RuleID      string `json:"rule_id"`
+	Location    string `json:"location"`
+	Fingerprint string `json:"fingerprint"`
 
 	// Set when read back from the store.
 	Status      string `json:"status,omitempty"`
@@ -180,4 +187,14 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 	}
 	sort.SliceStable(manifests, func(i, j int) bool { return manifests[i].RelPath < manifests[j].RelPath })
 	return findings, manifests
+}
+
+// Ref names f for a listing: package, advisory id and manifest for a
+// dependency finding; for a plugin finding, the tool (its source key without
+// "plugin."), the rule and the location.
+func Ref(f Finding) (what, id, where string) {
+	if f.Kind == "" || f.Kind == KindDependency {
+		return f.Package, f.OSVID, f.ManifestRelPath
+	}
+	return strings.TrimPrefix(f.SourceKey, "plugin."), f.RuleID, f.Location
 }

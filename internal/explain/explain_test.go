@@ -237,3 +237,52 @@ func TestCostSaysFixFirstWhenUrgent(t *testing.T) {
 		t.Error("a malicious package is not urgent")
 	}
 }
+
+func TestWhatForCodeFinding(t *testing.T) {
+	fi := scan.Finding{ID: "f1", Kind: "code", SourceKey: "plugin.semgrep", RuleID: "php.lang.security.exec-use",
+		Location: "src/a.php:12", SeverityLabel: "high", Summary: "Executing non-constant commands.", Aliases: []string{}}
+	f := FactsFrom(fi, analyze.Analysis{}, false)
+	if f.Kind != "code" || f.Tool != "semgrep" || f.RuleID != "php.lang.security.exec-use" || f.Location != "src/a.php:12" {
+		t.Fatalf("facts = %+v", f)
+	}
+	en := mustRender(t, EN, f)
+	if en.What != `semgrep flags the rule php.lang.security.exec-use in src/a.php:12. The report says: "Executing non-constant commands."` {
+		t.Errorf("EN what = %q", en.What)
+	}
+	if en.Cost != "Fixing it means changing your code, not a dependency." {
+		t.Errorf("EN cost = %q", en.Cost)
+	}
+	if en.Impact != "This flaw is serious." {
+		t.Errorf("EN impact = %q", en.Impact)
+	}
+	fr := mustRender(t, FR, f)
+	if fr.What != "semgrep signale la règle php.lang.security.exec-use dans src/a.php:12. Le rapport dit : « Executing non-constant commands. »" {
+		t.Errorf("FR what = %q", fr.What)
+	}
+	if fr.Cost != "Corriger = modifier ton code, pas une dépendance." {
+		t.Errorf("FR cost = %q", fr.Cost)
+	}
+	// Without its location (what the channels get), the sentence still reads.
+	f.Location = ""
+	if e := mustRender(t, EN, f); !strings.HasPrefix(e.What, "semgrep flags the rule php.lang.security.exec-use. ") {
+		t.Errorf("EN what without location = %q", e.What)
+	}
+	// A dependency finding keeps its sentences.
+	dep := mustRender(t, EN, sampleFacts())
+	if !strings.Contains(dep.What, "acme/lib 1.2.0 is used in 2 places") || strings.Contains(dep.Cost, "your code, not a dependency") {
+		t.Errorf("dependency sentences changed: %+v", dep)
+	}
+}
+
+func TestWhatForTrivyVulnerability(t *testing.T) {
+	fi := scan.Finding{ID: "f2", Kind: "vulnerability", SourceKey: "plugin.trivy", RuleID: "CVE-2026-0002",
+		Location: "package-lock.json", SeverityLabel: "high"}
+	e := mustRender(t, EN, FactsFrom(fi, analyze.Analysis{}, false))
+	if e.What != "trivy flags the flaw CVE-2026-0002 in package-lock.json." || e.Cost != "Fixing it means updating the package the report names." {
+		t.Errorf("EN = %+v", e)
+	}
+	fr := mustRender(t, FR, FactsFrom(fi, analyze.Analysis{}, false))
+	if fr.What != "trivy signale la faille CVE-2026-0002 dans package-lock.json." || fr.Cost != "Corriger = mettre à jour le paquet que le rapport désigne." {
+		t.Errorf("FR = %+v", fr)
+	}
+}

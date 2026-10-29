@@ -1,3 +1,7 @@
+{{- if ne .Kind "dependency" -}}
+{{- if .Urgent}}Fix this first. {{end -}}
+{{if eq .Kind "vulnerability"}}Fixing it means updating the package the report names.{{else}}Fixing it means changing your code, not a dependency.{{end}}
+{{- else -}}
 {{- if .Urgent}}Fix this first. {{end -}}
 {{- if eq .Target "" -}}
 No fixed version exists yet: nothing to update, keep watching.
@@ -15,3 +19,5 @@ Michel could not tell how big the update is ({{.Installed}} → {{.Target}}).
 {{- end -}}
 {{- if eq .Target ""}}{{else if and (eq .Risk.Recommendation "auto_fix") (ne .Jump "unknown")}}{{if ge .FixLevel 2}} Michel can try this fix for you (level 2: automatic fix, to be approved).{{else}} Michel could fix this automatically at level 2; this project is at level {{.FixLevel}}, so it stays a proposal.{{end}}{{else if or (eq .Risk.Recommendation "handoff") (eq .Risk.Recommendation "auto_fix")}} Best handed to you or your coding assistant with a brief.{{else if eq .Risk.Recommendation "report_only"}} Nothing to update for now.{{end -}}
 {{- if and (ne .Target "") .ConstraintKnown}} {{if .ConstraintOK}}Constraint allows it: a plain update is enough.{{else}}Your constraint ({{.Constraint}}) blocks it: the constraint must change.{{end}}{{end -}}
+
+{{- end -}}

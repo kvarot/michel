@@ -159,7 +159,11 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 	H := func(k string) string { return L(k) + colon }
 	// Package names, versions, ids, paths and changelog text come from
 	// outside: facts are already sanitized, the rest goes through safe.
-	fmt.Fprintf(w, "%s %s — %s — %s — %s %s — %s\n\n", facts.Package, facts.Installed, safe(facts.SeverityLabel), facts.OSVID, L("project"), p.Name, facts.ManifestRelPath)
+	if facts.Kind != scan.KindDependency {
+		fmt.Fprintf(w, "%s — %s — %s — %s %s — %s\n\n", facts.Tool, safe(facts.SeverityLabel), facts.RuleID, L("project"), p.Name, facts.Location)
+	} else {
+		fmt.Fprintf(w, "%s %s — %s — %s — %s %s — %s\n\n", facts.Package, facts.Installed, safe(facts.SeverityLabel), facts.OSVID, L("project"), p.Name, facts.ManifestRelPath)
+	}
 	fmt.Fprintf(w, "%s %s\n%s %s\n%s %s\n\n", H("what"), ex.What, H("impact"), ex.Impact, H("cost"), ex.Cost)
 
 	fmt.Fprintf(w, "%s\n", L("facts"))

@@ -524,7 +524,8 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 		pd.Open[label]++
 		pd.Total++
 		if decided && dec.Action == decide.Defer && f.Status == scan.StatusDecided && !dec.DueAt.After(c.now.Add(DueHorizon)) {
-			pd.Due = append(pd.Due, Due{Package: scan.SanitizeText(f.Package), OSVID: scan.SanitizeText(f.OSVID), FindingID: f.ID,
+			name, id, _ := scan.Ref(f)
+			pd.Due = append(pd.Due, Due{Package: scan.SanitizeText(name), OSVID: scan.SanitizeText(id), FindingID: f.ID,
 				DueAt: dec.DueAt.UTC().Format(time.RFC3339), Justification: dec.Justification, Overdue: !dec.DueAt.After(c.now), Severity: label})
 		}
 	}
@@ -570,7 +571,8 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 	for _, id := range order {
 		dec := latest[id]
 		f := byID[dec.FindingID]
-		pd.Superseded = append(pd.Superseded, Superseded{Package: scan.SanitizeText(f.Package), OSVID: scan.SanitizeText(f.OSVID),
+		name, id, _ := scan.Ref(f)
+		pd.Superseded = append(pd.Superseded, Superseded{Package: scan.SanitizeText(name), OSVID: scan.SanitizeText(id),
 			FindingID: dec.FindingID, PreviousAction: string(dec.Action), Reason: string(dec.SupersededReason), Justification: dec.Justification,
 			Severity: severityLabel(effective(f))})
 	}
@@ -685,9 +687,11 @@ func (c computer) packages(ctx context.Context, p project.Project, findings []sc
 	index := map[key]int{}
 	var out []Package
 	for _, f := range findings {
-		k := key{f.Ecosystem, f.Package}
+		// A plugin finding groups by tool: its rule stands for the advisory.
+		name, id, _ := scan.Ref(f)
+		k := key{f.Ecosystem + f.SourceKey, name}
 		if i, ok := index[k]; ok {
-			out[i].OSVIDs = append(out[i].OSVIDs, scan.SanitizeText(f.OSVID))
+			out[i].OSVIDs = append(out[i].OSVIDs, scan.SanitizeText(id))
 			out[i].FindingIDs = append(out[i].FindingIDs, f.ID)
 			if decidedAction(f) == "" {
 				out[i].Decided = ""
@@ -706,8 +710,8 @@ func (c computer) packages(ctx context.Context, p project.Project, findings []sc
 		if rank(label) == len(severities)-1 {
 			label = "unknown"
 		}
-		pkg := Package{Name: scan.SanitizeText(f.Package), Ecosystem: f.Ecosystem, Installed: scan.SanitizeText(f.InstalledVersion),
-			Target: scan.SanitizeText(target), WorstSeverity: label, OSVIDs: []string{scan.SanitizeText(f.OSVID)}, FindingIDs: []string{f.ID}}
+		pkg := Package{Name: scan.SanitizeText(name), Ecosystem: f.Ecosystem, Installed: scan.SanitizeText(f.InstalledVersion),
+			Target: scan.SanitizeText(target), WorstSeverity: label, OSVIDs: []string{scan.SanitizeText(id)}, FindingIDs: []string{f.ID}}
 		if withWhat {
 			facts := explain.FactsFrom(f, a, has)
 			facts.FixLevel = p.FixLevel
@@ -716,7 +720,7 @@ func (c computer) packages(ctx context.Context, p project.Project, findings []sc
 				return nil, err
 			}
 			pkg.What = e.What
-			facts.Example = ""
+			facts.Example, facts.Location = "", ""
 			if e, err = explain.Render(c.lang, facts); err != nil {
 				return nil, err
 			}

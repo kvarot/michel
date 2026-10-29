@@ -105,7 +105,9 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 				if f.KEV {
 					sev += " [KEV]"
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safe(sev), safe(f.Package), safe(f.InstalledVersion), safe(fixed), safe(f.OSVID), safe(f.ManifestRelPath), f.Status, decisionCell(d, ok))
+				// A plugin finding shows its tool, rule and location instead.
+				what, id, where := scan.Ref(f)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", safe(sev), safe(what), safe(f.InstalledVersion), safe(fixed), safe(id), safe(where), f.Status, decisionCell(d, ok))
 			}
 			if err := tw.Flush(); err != nil {
 				return err

@@ -60,7 +60,13 @@ type FindingView struct {
 	// Kind is the sort of finding (dependency); Malicious marks a malicious
 	// package; KEV marks a flaw exploited in the wild (CISA list) since
 	// KEVAdded; EPSS and EPSSPercentile are FIRST's exploitation score.
-	Kind           string  `json:"kind"`
+	Kind string `json:"kind"`
+	// RuleID and Location are set for a plugin finding (Kind code,
+	// misconfig...): the rule or flaw the tool reports and the relative file
+	// (and line) it points at; SourceKey is the plugin.
+	RuleID         string  `json:"rule_id"`
+	Location       string  `json:"location"`
+	SourceKey      string  `json:"source_key"`
 	Malicious      bool    `json:"malicious"`
 	KEV            bool    `json:"kev"`
 	KEVAdded       string  `json:"kev_added"`
@@ -134,6 +140,7 @@ func findingView(fi scan.Finding, p project.Project, ex explain.Explanation, a *
 		ID: fi.ID, Project: scan.SanitizeText(p.Name), ManifestRelPath: scan.SanitizeText(fi.ManifestRelPath), Ecosystem: fi.Ecosystem,
 		Package: scan.SanitizeText(fi.Package), OSVID: scan.SanitizeText(fi.OSVID), Aliases: sanitizeAll(fi.Aliases),
 		Severity: severity, SeveritySource: source, Kind: scan.SanitizeText(kind), Malicious: fi.Malicious,
+		RuleID: scan.SanitizeText(fi.RuleID), Location: scan.SanitizeText(fi.Location), SourceKey: fi.SourceKey,
 		KEV: fi.KEV, KEVAdded: scan.SanitizeText(fi.KEVAdded), EPSS: fi.EPSS, EPSSPercentile: fi.EPSSPercentile,
 		CVSS: fi.CVSS, InstalledVersion: scan.SanitizeText(fi.InstalledVersion),
 		FixedVersions: sanitizeAll(fi.FixedVersions), DepGroups: sanitizeAll(fi.DepGroups), Summary: scan.SanitizeText(fi.Summary),
