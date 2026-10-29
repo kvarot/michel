@@ -30,7 +30,7 @@
   "api.need_json": "Le contenu de la demande doit être du JSON (Content-Type: application/json).",
   "api.no_ui": "L'interface de Michel n'est pas incluse dans cette copie du programme. Lance « make web », puis relance michel serve. L'API sous /api/v1 marche sans elle.",
   "api.not_found": "Cette adresse de l'API n'existe pas.",
-  "api.plugin_run_not_found": "Aucun passage de plugin n'a cet identifiant.",
+  "api.plugin_run_not_found": "Aucun lancement de plugin n'a cet identifiant.",
   "api.project_not_found": "Aucun projet actif ne porte ce nom.",
   "api.source.add.bad_input": "Donne le chemin complet du rapport sur cet ordinateur.",
   "api.source.add.exists": "Une source a déjà la clé %s. Choisis un autre nom.",
