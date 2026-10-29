@@ -32,7 +32,7 @@ func readingOf(ctx context.Context, s *store.Store, since time.Time, lang i18n.L
 		if date == "" {
 			date = it.SeenAt
 		}
-		out = append(out, ReadingItem{Source: scan.SanitizeText(it.SourceName), Title: feed.Title(lang, it), URL: it.URL, PublishedAt: date, Tech: it.Tech})
+		out = append(out, ReadingItem{ID: it.ID, Source: scan.SanitizeText(it.SourceName), Title: feed.Title(lang, it), URL: it.URL, PublishedAt: date, Tech: it.Tech})
 	}
 	// The list is newest first: a stable sort by source keeps that order
 	// inside each source.

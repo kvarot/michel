@@ -66,7 +66,7 @@ func (s *server) requestLang(w http.ResponseWriter, r *http.Request) (i18n.Lang,
 
 func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 	m := MetaView{Version: s.deps.Version, Lang: s.deps.Lang, Languages: []string{string(i18n.EN), string(i18n.FR)},
-		Assistant: s.deps.Policy.Assistant.Name}
+		Assistant: s.currentPolicy().Assistant.Name}
 	if m.Assistant == "" {
 		m.Assistant = digest.DefaultAssistant
 	}
@@ -103,7 +103,7 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	}
 	// The page shows the last digest's window extended to now: after the
 	// morning digest, what it reported stays on the page all day.
-	opt := digest.Options{Assistant: s.deps.Policy.Assistant.Name, OSVRoot: s.deps.OSVRoot}
+	opt := digest.Options{Assistant: s.currentPolicy().Assistant.Name, OSVRoot: s.deps.OSVRoot, Allowed: s.allowed}
 	last, ok, err := digest.NewRepo(s.deps.Store).Last(r.Context())
 	if err != nil {
 		s.internal(w, r)
@@ -117,7 +117,7 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, http.StatusOK, todayView(d, lang))
 }
 
 func (s *server) projects(w http.ResponseWriter, r *http.Request) {
@@ -334,6 +334,11 @@ func (s *server) finding(w http.ResponseWriter, r *http.Request) {
 // readJSON decodes the body of r into v: JSON only, at most maxBody bytes,
 // one document, no unknown field. It answers the error itself.
 func (s *server) readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	return s.readJSONHint(w, r, v, i18n.T(s.answerLang(r), "api.bad_json_hint"))
+}
+
+// readJSONHint is readJSON with hint as the hint of an unreadable body.
+func (s *server) readJSONHint(w http.ResponseWriter, r *http.Request, v any, hint string) bool {
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mt != "application/json" {
 		s.fail(w, http.StatusUnsupportedMediaType, i18n.T(s.answerLang(r), "api.need_json"), "")
@@ -353,7 +358,7 @@ func (s *server) readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		s.fail(w, http.StatusRequestEntityTooLarge, i18n.T(s.answerLang(r), "api.too_large"), "")
 		return false
 	case err != nil:
-		s.fail(w, http.StatusBadRequest, i18n.T(s.answerLang(r), "api.bad_json"), i18n.T(s.answerLang(r), "api.bad_json_hint"))
+		s.fail(w, http.StatusBadRequest, i18n.T(s.answerLang(r), "api.bad_json"), hint)
 		return false
 	}
 	return true

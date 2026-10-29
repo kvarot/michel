@@ -55,7 +55,7 @@ func funcs(d Digest) map[string]any {
 		"exploitedDecided": func() string {
 			return i18n.N(lang, "digest.exploited_decided", d.ExploitedDecided)
 		},
-		"catalogLine":  func() string { return catalogLine(lang, d.Catalog) },
+		"catalogLine":  func() string { return CatalogLine(lang, d.Catalog) },
 		"previousData": func() string { return i18n.T(lang, "digest.catalog.previous_data") },
 		"stale": func() string {
 			days := int(d.Until.Sub(d.OSVFetchedAt) / (24 * time.Hour))

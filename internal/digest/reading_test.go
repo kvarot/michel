@@ -70,6 +70,18 @@ func TestDigestReadingListsUnreadMatchingItems(t *testing.T) {
 	if d.Reading[0].Source != "Example feed.a-news" || d.Reading[0].Title != "nginx news 00" || d.Reading[0].URL != "https://example.org/0" {
 		t.Errorf("first = %+v", d.Reading[0])
 	}
+	// Each item carries its feed item id, so the page can mark it read.
+	stored, err := feed.NewRepo(f.st).List(ctx, time.Time{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, it := range stored {
+		ids[it.URL+"|"+it.Title] = it.ID
+	}
+	if id := d.Reading[0].ID; id == "" || id != ids["https://example.org/0|nginx news 00"] {
+		t.Errorf("first id = %q, want %q", id, ids["https://example.org/0|nginx news 00"])
+	}
 	text, err := RenderText(d)
 	if err != nil || !strings.Contains(text, "To read:") || !strings.Contains(text, "Example feed.a-news: nginx news 00") || !strings.Contains(text, "https://example.org/0") {
 		t.Errorf("text:\n%s", text)

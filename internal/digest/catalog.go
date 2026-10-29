@@ -80,8 +80,9 @@ func catalogOf(ctx context.Context, s *store.Store, allowed func(host, purpose s
 	return c, nil
 }
 
-// catalogLine is the one-sentence summary of c in lang.
-func catalogLine(lang i18n.Lang, c Catalog) string {
+// CatalogLine is the one-sentence summary of c in lang (the digest's
+// catalog line, also shown on the Today page).
+func CatalogLine(lang i18n.Lang, c Catalog) string {
 	var parts []string
 	if c.Updated > 0 {
 		parts = append(parts, i18n.N(lang, "digest.catalog.updated", c.Updated))

@@ -38,6 +38,9 @@ type RunDeps struct {
 	Now     func() time.Time
 	Exec    func(ctx context.Context, name string, args, env []string, dir string) (stdout, stderr []byte, err error)
 	Proxy   func() (addr string, close func())
+	// Started, when set, receives the run id once the run is recorded, before
+	// the tool starts (the API answers with it and lets the run go on).
+	Started func(runID string)
 }
 
 // RunResult is the outcome of one run. ReportPath is local: it never
@@ -87,6 +90,9 @@ func RunPlugin(ctx context.Context, deps RunDeps, e source.Entry, p project.Proj
 	res.RunID = ulid.Make().String()
 	if err := insertRun(ctx, db, res.RunID, e.ID, p.ID, started); err != nil {
 		return res, fmt.Errorf("cannot record the run: %w", err)
+	}
+	if deps.Started != nil {
+		deps.Started(res.RunID)
 	}
 	mode := "run"
 	if input != "" {

@@ -2,11 +2,14 @@ package api
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/kvarot/michel/internal/analyze"
 	"github.com/kvarot/michel/internal/decide"
+	"github.com/kvarot/michel/internal/digest"
 	"github.com/kvarot/michel/internal/explain"
+	"github.com/kvarot/michel/internal/gitrepo"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
@@ -187,4 +190,142 @@ func glossaryOf(lang i18n.Lang, f explain.Facts, aliases []string) map[string]st
 		}
 	}
 	return out
+}
+
+// SourceView is one source as the Sources page shows it. State is the
+// displayed state (off, waiting_consent, on, hidden; a plugin or a reference
+// is never waiting_consent). Config is the merged settings without a secret's
+// name, a local file or folder, or a launch command: an installed skill or
+// MCP server says installed (and its sha), a plugin with a fixed report says
+// has_input. Badges are new_version, suggested (a feed off whose technology
+// you use) and archived. Note is the catalog's note, in the request's
+// language ("" for a source of yours).
+type SourceView struct {
+	Key      string         `json:"key"`
+	Kind     string         `json:"kind"`
+	Origin   string         `json:"origin"`
+	Name     string         `json:"name"`
+	URL      string         `json:"url"`
+	Hosts    []string       `json:"hosts"`
+	Purpose  string         `json:"purpose"`
+	State    string         `json:"state"`
+	Enabled  bool           `json:"enabled"`
+	Hidden   bool           `json:"hidden"`
+	Tech     []string       `json:"tech"`
+	Config   map[string]any `json:"config"`
+	LastRead LastReadView   `json:"last_read"`
+	Status   map[string]any `json:"status"`
+	Badges   []string       `json:"badges"`
+	Note     string         `json:"note"`
+}
+
+// LastReadView is the last read of a source: when (RFC 3339, "" if never),
+// its result (ok, error, denied, waiting_consent, skipped, unreachable), the
+// error in English without any local path, and the number of items.
+type LastReadView struct {
+	At     string `json:"at"`
+	Result string `json:"result"`
+	Error  string `json:"error"`
+	Items  int    `json:"items"`
+}
+
+// HostRuleView is one host of a source with the allow rule it needs and
+// whether the policy in force has it.
+type HostRuleView struct {
+	Host    string `json:"host"`
+	Purpose string `json:"purpose"`
+	Rule    string `json:"rule"`
+	Allowed bool   `json:"allowed"`
+}
+
+// SourceDetailView is GET /sources/{key}: the source, its rules and its
+// most recent items (a feed).
+type SourceDetailView struct {
+	SourceView
+	Rules []HostRuleView `json:"rules"`
+	Items []ReadingView  `json:"items"`
+}
+
+// ReadingView is one feed item ("to read"): Title is in the request's
+// language for a watched page's change; Read tells it was marked read.
+type ReadingView struct {
+	ID          string   `json:"id"`
+	SourceKey   string   `json:"source_key"`
+	Source      string   `json:"source"`
+	Title       string   `json:"title"`
+	URL         string   `json:"url"`
+	PublishedAt string   `json:"published_at"`
+	Tech        []string `json:"tech"`
+	Read        bool     `json:"read"`
+}
+
+// CatalogView is the digest's catalog with its one-sentence summary in the
+// request's language ("" when there is nothing to say).
+type CatalogView struct {
+	digest.Catalog
+	Line string `json:"line"`
+}
+
+// TodayView is GET /today: the digest (exploited flaws first, the items to
+// read, the catalog line) and the number of repositories to discover.
+type TodayView struct {
+	digest.Digest
+	Catalog     CatalogView `json:"catalog"`
+	DiscoverNew int         `json:"discover_new"`
+}
+
+// ConsentView is one host a source needs consent for: the sentence that
+// says what Michel does there, in the request's language, and the exact
+// rule that will be written in the policy file.
+type ConsentView struct {
+	Host    string `json:"host"`
+	Purpose string `json:"purpose"`
+	What    string `json:"what"`
+	Rule    string `json:"rule"`
+}
+
+// ConsentBody is the 409 of POST /sources/{key}/enable without consent.
+type ConsentBody struct {
+	Error   string        `json:"error"`
+	Hint    string        `json:"hint,omitempty"`
+	Consent []ConsentView `json:"consent"`
+}
+
+// PluginRunView is one run of a plugin, without its report file or log.
+type PluginRunView struct {
+	ID          string `json:"id"`
+	SourceKey   string `json:"source_key"`
+	Project     string `json:"project"`
+	StartedAt   string `json:"started_at"`
+	FinishedAt  string `json:"finished_at"`
+	ToolVersion string `json:"tool_version"`
+	Status      string `json:"status"`
+	Error       string `json:"error"`
+	Findings    int    `json:"findings"`
+}
+
+// PreviewView is GET /sources/{key}/preview: what installing (Kind install)
+// or upgrading (Kind upgrade) would bring and do. The folders it names are
+// the user's skills folder: the point of the preview.
+type PreviewView struct {
+	Kind    string           `json:"kind"`
+	Install *gitrepo.Preview `json:"install,omitempty"`
+	Upgrade *gitrepo.Diff    `json:"upgrade,omitempty"`
+}
+
+// fileURL, winPath and posixPath find the local paths of a free text (an
+// error stored by a read or a plugin run).
+var (
+	fileURL   = regexp.MustCompile(`file:/+[^\s"']*`)
+	winPath   = regexp.MustCompile(`(^|[^A-Za-z0-9.+-])(?:[A-Za-z]:[\\/]|\\\\[^\\\s]+\\)[^"'\n]*?(: |"|'|\n|$)`)
+	posixPath = regexp.MustCompile(`(^|[\s"'(=\[])/[^\s"':]*`)
+)
+
+// noPaths replaces every local path of s (Windows, POSIX, file:// URLs)
+// with <path>, after control characters are stripped. Web addresses stay.
+func noPaths(s string) string {
+	s = scan.SanitizeText(s)
+	s = fileURL.ReplaceAllString(s, "<path>")
+	s = winPath.ReplaceAllString(s, "${1}<path>${2}")
+	return posixPath.ReplaceAllString(s, "${1}<path>")
 }

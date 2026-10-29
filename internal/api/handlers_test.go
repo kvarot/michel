@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +15,9 @@ import (
 	"github.com/kvarot/michel/internal/digest"
 	"github.com/kvarot/michel/internal/explain"
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/source"
 )
 
 func TestTodayReturnsDigestInRequestedLang(t *testing.T) {
@@ -350,10 +353,61 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 	if err := digest.NewRepo(f.st).Save(context.Background(), digest.RunOf(d, now)); err != nil {
 		t.Fatal(err)
 	}
+	// Sources whose stored errors name folders, a plugin with a report file,
+	// an installed skill: their paths never leave either.
+	ctx := context.Background()
+	r := source.NewRepo(f.st)
+	pathErr := "open " + filepath.Join(f.proj.Path, "composer.lock") + ": denied; open " + filepath.Join(f.dir, "osv", "npm.zip") +
+		": denied; open " + winPathMarker + ": denied; open " + posixPathMarker + ": denied"
+	for _, key := range []string{"osv.npm", "enrich.kev", "feed.nginx"} {
+		if err := r.RecordRead(ctx, key, now, "error", pathErr, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report := filepath.Join(f.proj.Path, "report.sarif")
+	if err := os.WriteFile(report, []byte(demoSARIF), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Upsert(ctx, source.Entry{Key: "skill.demo", Kind: source.KindSkill, Origin: source.OriginUser, Name: "demo",
+		URL: "https://github.com/example/skill", Hosts: []string{"api.github.com", "codeload.github.com"}, Purpose: policy.PurposeRepo,
+		Config: source.Config{User: map[string]any{"repo": "example/skill", "pinned": demoPin, "installed_sha": demoPin,
+			"install_dir": filepath.Join(f.dir, "skills", "demo")}}}); err != nil {
+		t.Fatal(err)
+	}
 	var bodies []string
+	keep := func(_ int, b string) { bodies = append(bodies, b) }
+	addPlugin, _ := json.Marshal(map[string]any{"kind": "plugin", "name": "Demo SARIF", "format": "sarif", "input": report})
+	keep(f.send("POST", "/api/v1/sources", string(addPlugin)))
+	keep(f.send("POST", "/api/v1/sources/plugin.demo-sarif/enable", `{}`))
+	code, b := f.send("POST", "/api/v1/sources/plugin.demo-sarif/run", `{"project":"demo"}`)
+	bodies = append(bodies, b)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal([]byte(b), &started) != nil {
+		t.Fatalf("run = %d %s", code, b)
+	}
+	_, runBody := f.waitRun(started.RunID)
+	bodies = append(bodies, runBody)
+	keep(f.send("POST", "/api/v1/sources/enrich.kev/enable", `{}`))
+	keep(f.send("POST", "/api/v1/sources/enrich.kev/enable?lang=fr", `{}`))
+	keep(f.send("POST", "/api/v1/sources/enrich.kev/enable", `{"consent":true}`))
+	keep(f.send("POST", "/api/v1/sources/enrich.kev/disable", `{"forget":true}`))
+	keep(f.send("POST", "/api/v1/sources/skill.demo/enable", `{"consent":true}`))
+	keep(f.send("GET", "/api/v1/sources/skill.demo", ""))
+	keep(f.send("DELETE", "/api/v1/sources/skill.demo", ""))
+	keep(f.send("POST", "/api/v1/sources", `{"kind":"feed","name":"Mine","url":"https://example.org/feed"}`))
+	keep(f.send("POST", "/api/v1/sources", `{"kind":"feed","name":"Mine","url":"http://example.org/feed"}`))
+	keep(f.send("DELETE", "/api/v1/sources/feed.mine", ""))
+	keep(f.send("POST", "/api/v1/sources/reset", `{"key":"feed.nginx"}`))
+	keep(f.send("POST", "/api/v1/sources/feed.apple/run", `{"project":"demo"}`))
+	keep(f.send("GET", "/api/v1/sources/feed.apple/preview", ""))
 	for _, lang := range []string{"en", "fr"} {
 		for _, path := range apiRoutes(f) {
 			sep := "?"
+			if strings.Contains(path, "?") {
+				sep = "&"
+			}
 			_, body := f.do("GET", path+sep+"lang="+lang, testToken, "")
 			bodies = append(bodies, body)
 			_, body = f.do("GET", path, "", "")
@@ -372,7 +426,7 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 		_, b := f.do("POST", "/api/v1/findings/"+f.ids["ACME-2026-0001"]+"/decision", testToken, body)
 		bodies = append(bodies, b)
 	}
-	_, b := f.do("POST", "/api/v1/findings/"+f.gone+"/decision", testToken, `{"action":"fix"}`)
+	_, b = f.do("POST", "/api/v1/findings/"+f.gone+"/decision", testToken, `{"action":"fix"}`)
 	bodies = append(bodies, b)
 	var digests []digest.Run
 	f.get("/api/v1/digests", &digests)
@@ -381,6 +435,7 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 	}
 
 	banned := []string{f.proj.Path, filepath.ToSlash(f.proj.Path), strings.ReplaceAll(f.proj.Path, `\`, `\\`),
+		f.dir, filepath.ToSlash(f.dir), strings.ReplaceAll(f.dir, `\`, `\\`), `D:\\Data`, "/home/demo", "report_path", "install_dir",
 		testCmdMarker, installCmdMarker, "phpunit-secret-marker", "test_cmd", "install_cmd", testToken}
 	for _, body := range bodies {
 		for _, s := range banned {
@@ -389,7 +444,7 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 			}
 		}
 	}
-	if len(bodies) < 30 {
+	if len(bodies) < 60 {
 		t.Errorf("only %d responses checked", len(bodies))
 	}
 }

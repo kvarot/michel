@@ -68,6 +68,26 @@ describe('digestView', () => {
     expect(groups[0].items.map((i) => [i.package, i.decided])).toEqual([['acme/lib', 'fix'], ['vuln-pkg', '']])
   })
 
+  test('groupAttention marks the lines exploited in the wild or malicious', () => {
+    const groups = groupAttention({
+      exploited: [
+        { finding_id: 'f1', kev_added: '2026-03-12', malicious: false },
+        { finding_id: 'f3', kev_added: '', malicious: true },
+      ],
+      projects: [{
+        name: 'demo',
+        new: [
+          { name: 'acme/lib', worst_severity: 'critical', finding_ids: ['f0', 'f1'], osv_ids: ['A-1'] },
+          { name: 'vuln-pkg', worst_severity: 'high', finding_ids: ['f2'], osv_ids: ['A-2'] },
+          { name: 'evil-pkg', worst_severity: 'critical', finding_ids: ['f3'], osv_ids: ['MAL-1'] },
+        ],
+      }],
+    })
+    expect(groups[0].items.map((i) => [i.package, i.kev, i.malicious])).toEqual([
+      ['acme/lib', true, false], ['evil-pkg', false, true], ['vuln-pkg', false, false],
+    ])
+  })
+
   test('formatDate per lang', () => {
     expect(formatDate('2026-11-22T00:00:00Z', 'fr')).toBe('22/11/2026')
     expect(formatDate('2026-11-22T00:00:00Z', 'en')).toBe('2026-11-22')

@@ -27,10 +27,18 @@ export function severityOf(s) {
  * (older server) falls back to a new package of the same name, then "unknown". text is the "what" sentence for new packages,
  * the reason code for decisions to review and the due date for deferrals.
  * decided is the action already taken on a new package ("" when not decided).
- * @returns {{project: string, items: {kind: string, package: string, severity: string, text: string, findingIds: string[]}[]}[]}
+ * kev and malicious mark a line one of whose findings heads the digest
+ * (digest.exploited): exploited in the wild, or a malicious package.
+ * @returns {{project: string, items: {kind: string, package: string, severity: string, text: string, findingIds: string[], kev: boolean, malicious: boolean}[]}[]}
  */
 export function groupAttention(digest) {
   if (!digest || !Array.isArray(digest.projects)) return []
+  const exploited = {}
+  for (const e of digest.exploited || []) exploited[e.finding_id] = e
+  const marks = (ids) => ({
+    kev: ids.some((id) => exploited[id] && !!exploited[id].kev_added),
+    malicious: ids.some((id) => exploited[id] && !!exploited[id].malicious),
+  })
   return digest.projects.map((p) => {
     const fresh = p.new || []
     const severityByName = {}
@@ -59,6 +67,7 @@ export function groupAttention(digest) {
         findingIds: d.finding_id ? [d.finding_id] : [], osvIds: d.osv_id ? [d.osv_id] : [], overdue: !!d.overdue,
       })
     }
+    for (const item of items) Object.assign(item, marks(item.findingIds))
     const order = items.map((item, i) => ({ item, i }))
     order.sort((a, b) =>
       severityRank(a.item.severity) - severityRank(b.item.severity)

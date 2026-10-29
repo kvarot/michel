@@ -191,8 +191,10 @@ type Digest struct {
 const MaxReading = 10
 
 // ReadingItem is one feed item to read. Title is in the digest's language
-// for a watched page's change.
+// for a watched page's change. ID is the feed item's id (the page marks it
+// read with it).
 type ReadingItem struct {
+	ID          string   `json:"id"`
 	Source      string   `json:"source"`
 	Title       string   `json:"title"`
 	URL         string   `json:"url"`
