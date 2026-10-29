@@ -1,6 +1,6 @@
 {{- if ne .Kind "dependency" -}}
 {{- if .Urgent}}À corriger en premier. {{end -}}
-{{if eq .Kind "vulnerability"}}Corriger = mettre à jour le paquet que le rapport désigne.{{else}}Corriger = modifier ton code, pas une dépendance.{{end}}
+{{if eq .Kind "vulnerability"}}Corriger = mettre à jour le paquet que le rapport désigne.{{else}}Corriger = modifier ton projet (code ou configuration), pas une dépendance.{{end}}
 {{- else -}}
 {{- if .Urgent}}À corriger en premier. {{end -}}
 {{- if eq .Target "" -}}

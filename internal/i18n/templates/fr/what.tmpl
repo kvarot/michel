@@ -1,5 +1,5 @@
 {{- if ne .Kind "dependency" -}}
-{{.Tool}} signale la {{if eq .Kind "vulnerability"}}faille{{else}}règle{{end}} {{.RuleID}}{{if .Location}} dans {{.Location}}{{end}}.{{if .Summary}} Le rapport dit : « {{.Summary}} »{{end}}
+{{.Tool}} signale {{if eq .Kind "vulnerability"}}la faille{{else}}le problème{{end}} {{.RuleID}}{{if .Location}} dans {{.Location}}{{end}}.{{if .Summary}} Le rapport dit : « {{.Summary}} »{{end}}
 {{- else -}}
 {{- if .Malicious}}Attention : {{.Package}} {{.Installed}} est un paquet malveillant, publié exprès pour nuire à qui l'installe ; ce n'est pas une simple faille. {{end -}}
 {{- if not .HasAnalysis -}}

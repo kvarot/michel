@@ -256,10 +256,10 @@ func TestWhatForCodeFinding(t *testing.T) {
 		t.Errorf("EN impact = %q", en.Impact)
 	}
 	fr := mustRender(t, FR, f)
-	if fr.What != "semgrep signale la règle php.lang.security.exec-use dans src/a.php:12. Le rapport dit : « Executing non-constant commands. »" {
+	if fr.What != "semgrep signale le problème php.lang.security.exec-use dans src/a.php:12. Le rapport dit : « Executing non-constant commands. »" {
 		t.Errorf("FR what = %q", fr.What)
 	}
-	if fr.Cost != "Corriger = modifier ton code, pas une dépendance." {
+	if fr.Cost != "Corriger = modifier ton projet (code ou configuration), pas une dépendance." {
 		t.Errorf("FR cost = %q", fr.Cost)
 	}
 	// Without its location (what the channels get), the sentence still reads.
