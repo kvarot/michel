@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/gitrepo"
-	"github.com/kvarot/michel/internal/policy"
-	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/source"
 	"github.com/spf13/cobra"
 )
@@ -23,22 +21,11 @@ const previewFiles = 30
 // the scanned projects, where Michel never writes.
 func repoDeps(cmd *cobra.Command, deps *Deps) (gitrepo.Deps, error) {
 	dir, _ := cmd.Flags().GetString("data-dir")
-	skills, err := gitrepo.DefaultSkillsDir()
-	if err != nil {
+	d, err := gitrepo.NewDeps(cmd.Context(), deps.Store, deps.Audit, deps.Gateway, dir, deps.Now, "cli")
+	if errors.Is(err, gitrepo.ErrNoSkillsDir) {
 		return gitrepo.Deps{}, deps.Wrapf("cli.source.install.no_skills_dir", err)
 	}
-	projects, err := project.NewRepo(deps.Store).List(cmd.Context())
-	if err != nil {
-		return gitrepo.Deps{}, err
-	}
-	var forbidden []string
-	for _, p := range projects {
-		if p.Path != "" {
-			forbidden = append(forbidden, p.Path)
-		}
-	}
-	return gitrepo.Deps{Repo: source.NewRepo(deps.Store), Audit: deps.Audit, Client: deps.Gateway.Client(policy.PurposeRepo),
-		DataDir: dir, SkillsDir: skills, Forbidden: forbidden, Now: deps.Now, Actor: "cli"}, nil
+	return d, err
 }
 
 // repoEntry reads key and checks it is a skill or an MCP server whose hosts
@@ -320,7 +307,7 @@ func newSourceUpgradeCmd(deps *Deps) *cobra.Command {
 			if err = oldFolderKept(deps, err); err != nil {
 				return installErr(deps, key, err)
 			}
-			if err := gd.Repo.SetStatus(ctx, key, dropNewVersion(e.Status)); err != nil {
+			if err := gd.Repo.SetStatus(ctx, key, gitrepo.WithoutNewVersion(e.Status)); err != nil {
 				return sourceErr(deps, key, err)
 			}
 			if e.Kind == source.KindSkill {
@@ -333,19 +320,6 @@ func newSourceUpgradeCmd(deps *Deps) *cobra.Command {
 	}
 	c.Flags().BoolVar(&assumeYes, "yes", false, "give the consent without asking (for scripts)")
 	return c
-}
-
-// dropNewVersion is the status without its new version mark, once the new
-// version is installed.
-func dropNewVersion(st map[string]any) map[string]any {
-	out := map[string]any{}
-	for k, v := range st {
-		if k != "new_version" {
-			out[k] = v
-		}
-	}
-	out["new_version_available"] = false
-	return out
 }
 
 // uninstallSkill removes what an installation wrote, after y/N (or --yes).

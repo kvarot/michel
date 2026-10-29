@@ -52,6 +52,7 @@
   "item.overdue": "The date of {date} has passed",
   "item.previous": "You had chosen: {label}",
   "item.decided": "decided",
+  "item.epss": "Chance of an attack within 30 days: {p} %",
   "item.open": "Show details",
   "item.hide": "Hide details",
 

@@ -11,7 +11,7 @@
       </div>
       <div class="m-src__controls">
         <v-switch
-          :model-value="source.enabled && source.state !== 'hidden'"
+          :model-value="on"
           color="primary"
           density="compact"
           hide-details
@@ -73,7 +73,7 @@
 <script>
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
-import { badgeKeys, lastReadText, stateLabelKey } from '../lib/sourcesView.js'
+import { badgeKeys, lastReadText, stateLabelKey, switchOn } from '../lib/sourcesView.js'
 
 // mdi dots-vertical, for the default svg icon set.
 const dots = 'M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z'
@@ -90,6 +90,9 @@ export default {
     return { dots, open: false, loading: false, detail: null, failure: '' }
   },
   computed: {
+    on() {
+      return switchOn(this.source)
+    },
     stateKey() {
       return stateLabelKey(this.source.state)
     },

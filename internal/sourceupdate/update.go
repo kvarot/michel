@@ -97,6 +97,21 @@ type Result struct {
 	Skipped string
 }
 
+// GitHubTokenSecret is the secret whose value, when set, goes with the
+// GitHub API requests and raises the budget of an update.
+const GitHubTokenSecret = "github-token"
+
+// BudgetFor is the GitHub request budget of one update: BudgetWithToken
+// when the GitHub token secret is set in secrets, else BudgetWithoutToken.
+func BudgetFor(secrets secret.Store) *Budget {
+	if secrets != nil {
+		if _, err := secrets.Get(GitHubTokenSecret); err == nil {
+			return &Budget{Remaining: BudgetWithToken}
+		}
+	}
+	return &Budget{Remaining: BudgetWithoutToken}
+}
+
 // Budget is the GitHub request budget shared by the readers of one update.
 type Budget struct {
 	mu        sync.Mutex

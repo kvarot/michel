@@ -66,6 +66,23 @@ type Package struct {
 	// severe finding when every finding of the line is decided (new findings
 	// only), else "".
 	Decided string `json:"decided,omitempty"`
+	// KEV and Malicious are true when one of the line's findings is
+	// exploited in the wild (CISA list) or a malicious package; EPSS is the
+	// highest exploitation score of its findings; Kind is the sort of its
+	// findings (dependency, or a plugin's code, misconfig...).
+	KEV       bool    `json:"kev"`
+	Malicious bool    `json:"malicious"`
+	Kind      string  `json:"kind"`
+	EPSS      float64 `json:"epss"`
+}
+
+// mark adds the exploitation facts of f to the line.
+func (p *Package) mark(f scan.Finding) {
+	p.KEV = p.KEV || f.KEV
+	p.Malicious = p.Malicious || f.Malicious
+	if f.EPSS > p.EPSS {
+		p.EPSS = f.EPSS
+	}
 }
 
 // Superseded is a decision taken out of force in the window. A decision the
@@ -695,6 +712,7 @@ func (c computer) packages(ctx context.Context, p project.Project, findings []sc
 		if i, ok := index[k]; ok {
 			out[i].OSVIDs = append(out[i].OSVIDs, scan.SanitizeText(id))
 			out[i].FindingIDs = append(out[i].FindingIDs, f.ID)
+			out[i].mark(f)
 			if decidedAction(f) == "" {
 				out[i].Decided = ""
 			}
@@ -713,7 +731,12 @@ func (c computer) packages(ctx context.Context, p project.Project, findings []sc
 			label = "unknown"
 		}
 		pkg := Package{Name: scan.SanitizeText(name), Ecosystem: f.Ecosystem, Installed: scan.SanitizeText(f.InstalledVersion),
-			Target: scan.SanitizeText(target), WorstSeverity: label, OSVIDs: []string{scan.SanitizeText(id)}, FindingIDs: []string{f.ID}}
+			Target: scan.SanitizeText(target), WorstSeverity: label, OSVIDs: []string{scan.SanitizeText(id)}, FindingIDs: []string{f.ID},
+			Kind: scan.KindDependency}
+		if f.Kind != "" {
+			pkg.Kind = scan.SanitizeText(f.Kind)
+		}
+		pkg.mark(f)
 		if withWhat {
 			facts := explain.FactsFrom(f, a, has)
 			facts.FixLevel = p.FixLevel

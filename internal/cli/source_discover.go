@@ -8,7 +8,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/kvarot/michel/internal/gitrepo"
-	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/source"
 	"github.com/spf13/cobra"
 )
@@ -102,28 +101,9 @@ func discoverAdd(cmd *cobra.Command, deps *Deps, dr *gitrepo.DiscoveryRepo, repo
 	if !known {
 		return deps.Errorf("cli.source.discover.unknown", repo)
 	}
-	if !repoName.MatchString(repo) {
-		return deps.Errorf("cli.source.add.bad_repo", repo)
-	}
-	if !commitSHA.MatchString(pin) {
-		return deps.Errorf("cli.source.add.bad_pin", pin)
-	}
-	user := map[string]any{"repo": repo, "pinned": pin}
-	if path != "" {
-		clean, ok := cleanRepoPath(path)
-		if !ok {
-			return deps.Errorf("cli.source.add.bad_path", path)
-		}
-		user["path"] = clean
-	}
-	if name = strings.TrimSpace(name); name == "" {
-		name = repo[strings.Index(repo, "/")+1:]
-	}
-	e := source.Entry{Kind: k, Origin: source.OriginUser, Name: name, URL: "https://github.com/" + repo, Hosts: repoHosts,
-		Purpose: policy.PurposeRepo, Config: source.Config{Catalog: map[string]any{}, User: user}}
-	e.Key = source.KeyFor(k, name)
-	if !source.ValidKey(e.Key) {
-		return deps.Errorf("cli.source.add.no_name")
+	e, refusal := source.NewUserEntry(source.UserEntryRequest{Kind: k, Name: name, Repo: repo, Pin: pin, Path: path})
+	if refusal != nil {
+		return addRefusal(deps, refusal)
 	}
 	r := source.NewRepo(deps.Store)
 	if _, err := r.Get(ctx, e.Key); err == nil {

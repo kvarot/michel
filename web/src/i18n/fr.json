@@ -52,6 +52,7 @@
   "item.overdue": "La date du {date} est passée",
   "item.previous": "Tu avais choisi : {label}",
   "item.decided": "décidée",
+  "item.epss": "Risque d'attaque dans les 30 jours : {p} %",
   "item.open": "Voir le détail",
   "item.hide": "Masquer le détail",
 

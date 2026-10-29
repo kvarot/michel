@@ -314,18 +314,20 @@ type PreviewView struct {
 }
 
 // fileURL, winPath and posixPath find the local paths of a free text (an
-// error stored by a read or a plugin run).
+// error stored by a read or a plugin run). A path may hold spaces: it runs
+// to the next ": " (Go's error separator), quote, closing parenthesis, line
+// end or the end of the text.
 var (
-	fileURL   = regexp.MustCompile(`file:/+[^\s"']*`)
-	winPath   = regexp.MustCompile(`(^|[^A-Za-z0-9.+-])(?:[A-Za-z]:[\\/]|\\\\[^\\\s]+\\)[^"'\n]*?(: |"|'|\n|$)`)
-	posixPath = regexp.MustCompile(`(^|[\s"'(=\[])/[^\s"':]*`)
+	fileURL   = regexp.MustCompile(`file:/+[^"'\n]*?(: |"|'|\)|\n|$)`)
+	winPath   = regexp.MustCompile(`(^|[^A-Za-z0-9.+-])(?:[A-Za-z]:[\\/]|\\\\[^\\\s]+\\)[^"'\n]*?(: |"|'|\)|\n|$)`)
+	posixPath = regexp.MustCompile(`(^|[\s"'(=\[])/[^"'\n]*?(: |"|'|\)|\n|$)`)
 )
 
 // noPaths replaces every local path of s (Windows, POSIX, file:// URLs)
 // with <path>, after control characters are stripped. Web addresses stay.
 func noPaths(s string) string {
 	s = scan.SanitizeText(s)
-	s = fileURL.ReplaceAllString(s, "<path>")
+	s = fileURL.ReplaceAllString(s, "<path>${1}")
 	s = winPath.ReplaceAllString(s, "${1}<path>${2}")
-	return posixPath.ReplaceAllString(s, "${1}<path>")
+	return posixPath.ReplaceAllString(s, "${1}<path>${2}")
 }

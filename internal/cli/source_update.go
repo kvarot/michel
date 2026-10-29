@@ -14,9 +14,6 @@ import (
 	_ "github.com/kvarot/michel/internal/sourceupdate/readers"
 )
 
-// githubTokenSecret is the secret that raises the GitHub request budget.
-const githubTokenSecret = "github-token"
-
 func newSourceUpdateCmd(deps *Deps) *cobra.Command {
 	var kind string
 	c := &cobra.Command{
@@ -70,12 +67,8 @@ func sourceUpdate(cmd *cobra.Command, deps *Deps, keys []string, kind source.Kin
 	if err != nil {
 		return sourceupdate.Report{}, deps.Wrapf("cli.secret.open_failed", err, dir)
 	}
-	budget := sourceupdate.BudgetWithoutToken
-	if _, err := secrets.Get(githubTokenSecret); err == nil {
-		budget = sourceupdate.BudgetWithToken
-	}
 	return sourceupdate.Run(ctx, sourceupdate.Deps{Store: deps.Store, Repo: repo, Audit: deps.Audit, Gateway: deps.Gateway,
-		Secrets: secrets, OSVRoot: dbRoot(cmd, deps), Now: deps.Now, Budget: &sourceupdate.Budget{Remaining: budget}, Actor: "cli"},
+		Secrets: secrets, OSVRoot: dbRoot(cmd, deps), Now: deps.Now, Budget: sourceupdate.BudgetFor(secrets), Actor: "cli"},
 		keys, kind)
 }
 

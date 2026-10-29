@@ -68,23 +68,22 @@ describe('digestView', () => {
     expect(groups[0].items.map((i) => [i.package, i.decided])).toEqual([['acme/lib', 'fix'], ['vuln-pkg', '']])
   })
 
-  test('groupAttention marks the lines exploited in the wild or malicious', () => {
+  test('groupAttention takes kev, malicious, epss and kind from the package, exploited for the others', () => {
     const groups = groupAttention({
-      exploited: [
-        { finding_id: 'f1', kev_added: '2026-03-12', malicious: false },
-        { finding_id: 'f3', kev_added: '', malicious: true },
-      ],
+      exploited: [{ finding_id: 'f9', kev_added: '2026-03-12', malicious: false }],
       projects: [{
         name: 'demo',
         new: [
-          { name: 'acme/lib', worst_severity: 'critical', finding_ids: ['f0', 'f1'], osv_ids: ['A-1'] },
-          { name: 'vuln-pkg', worst_severity: 'high', finding_ids: ['f2'], osv_ids: ['A-2'] },
-          { name: 'evil-pkg', worst_severity: 'critical', finding_ids: ['f3'], osv_ids: ['MAL-1'] },
+          { name: 'acme/lib', worst_severity: 'critical', finding_ids: ['f0', 'f1'], osv_ids: ['A-1'], kev: true, epss: 0.42 },
+          { name: 'vuln-pkg', worst_severity: 'high', finding_ids: ['f2'], osv_ids: ['A-2'], kind: 'code' },
+          { name: 'evil-pkg', worst_severity: 'critical', finding_ids: ['f3'], osv_ids: ['MAL-1'], malicious: true },
         ],
+        superseded: [{ package: 'old-pkg', osv_id: 'A-9', finding_id: 'f9', reason: 'severity_changed', severity: 'low' }],
       }],
     })
-    expect(groups[0].items.map((i) => [i.package, i.kev, i.malicious])).toEqual([
-      ['acme/lib', true, false], ['evil-pkg', false, true], ['vuln-pkg', false, false],
+    expect(groups[0].items.map((i) => [i.package, i.kev, i.malicious, i.epss, i.findingKind])).toEqual([
+      ['acme/lib', true, false, 0.42, 'dependency'], ['evil-pkg', false, true, 0, 'dependency'], ['vuln-pkg', false, false, 0, 'code'],
+      ['old-pkg', true, false, 0, 'dependency'],
     ])
   })
 

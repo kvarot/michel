@@ -20,6 +20,7 @@ import (
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/sourceupdate"
 )
 
 const (
@@ -130,12 +131,29 @@ func TestSourcesListHidesSecretsAndPaths(t *testing.T) {
 	if v := views["osv.pypi"]; v.State != "off" {
 		t.Errorf("osv.pypi state %q", v.State)
 	}
-	// A plugin and a reference are never waiting for consent.
+	// A plugin is never waiting for consent; a reference with hosts is,
+	// like the digest's catalog line says.
 	if v := views["plugin.demo-sarif"]; v.State != "on" || v.Config["has_input"] != true {
 		t.Errorf("plugin = %+v", v)
 	}
-	if v := views["discover.github"]; v.State != "on" {
+	if v := views["discover.github"]; v.State != "waiting_consent" {
 		t.Errorf("discover.github state %q", v.State)
+	}
+	if err := r.RecordRead(ctx, "discover.github", now, "ok", "", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	var tv TodayView
+	f.get("/api/v1/today", &tv)
+	if !slices.Contains(tv.Catalog.WaitingConsent, "discover.github") {
+		t.Errorf("catalog waiting = %v", tv.Catalog.WaitingConsent)
+	}
+	f.setRules(policy.AllowRule{Host: "api.github.com", Purpose: policy.PurposeDiscover})
+	if v := f.sourceViews("/api/v1/sources")["discover.github"]; v.State != "on" {
+		t.Errorf("discover.github with its rule: %q", v.State)
+	}
+	f.get("/api/v1/today", &tv)
+	if slices.Contains(tv.Catalog.WaitingConsent, "discover.github") {
+		t.Errorf("catalog still waiting = %v", tv.Catalog.WaitingConsent)
 	}
 	sk := views["skill.demo"]
 	if sk.State != "off" || !slices.Contains(sk.Badges, "new_version") || !slices.Contains(sk.Badges, "archived") ||
@@ -424,15 +442,42 @@ func skillArchive(t *testing.T) []byte {
 	return b.Bytes()
 }
 
-func TestPreviewAndInstallSkill(t *testing.T) {
-	f := newFixture(t, nil)
-	arch := skillArchive(t)
+// newPin is the commit of the second version of example/skill, whose
+// front matter names the skill "renamed".
+const newPin = "1234512345123451234512345123451234512345"
+
+// renamedArchive is the archive of example/skill at newPin.
+func renamedArchive(t *testing.T) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	body := "---\nname: renamed\n---\n\n# Demo 2\n"
+	if err := tw.WriteHeader(&tar.Header{Name: "skill-" + newPin + "/skills/demo/SKILL.md", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	tw.Write([]byte(body))
+	tw.Close()
+	gz.Close()
+	return b.Bytes()
+}
+
+// serveSkill serves example/skill at demoPin and newPin, points the skills
+// folder at a temporary folder, writes the repository rules and adds
+// skill.demo (off). It returns the skills folder.
+func (f *fixture) serveSkill() string {
+	t := f.t
+	t.Helper()
+	old, renamed := skillArchive(t), renamedArchive(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/example/skill/tar.gz/"+demoPin {
+		switch r.URL.Path {
+		case "/example/skill/tar.gz/" + demoPin:
+			w.Write(old)
+		case "/example/skill/tar.gz/" + newPin:
+			w.Write(renamed)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		w.Write(arch)
 	}))
 	t.Cleanup(srv.Close)
 	t.Cleanup(gitrepo.SetBaseURLsForTest(srv.URL, srv.URL))
@@ -440,10 +485,24 @@ func TestPreviewAndInstallSkill(t *testing.T) {
 	t.Setenv(gitrepo.SkillsDirEnv, skills)
 	f.setRules(policy.AllowRule{Host: "api.github.com", Purpose: policy.PurposeRepo}, policy.AllowRule{Host: "codeload.github.com", Purpose: policy.PurposeRepo},
 		policy.AllowRule{Host: "127.0.0.1", Purpose: policy.PurposeRepo})
-
 	if code, b := f.send("POST", "/api/v1/sources", `{"kind":"skill","repo":"example/skill","pin":"`+demoPin+`","path":"skills/demo","name":"demo"}`); code != http.StatusCreated {
 		t.Fatalf("add = %d %s", code, b)
 	}
+	return skills
+}
+
+// markNewVersion records newPin as the new version of skill.demo.
+func (f *fixture) markNewVersion() {
+	f.t.Helper()
+	if err := source.NewRepo(f.st).SetStatus(context.Background(), "skill.demo", map[string]any{"stars": 3,
+		"new_version": map[string]any{"from": demoPin, "to": newPin}}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func TestPreviewAndInstallSkill(t *testing.T) {
+	f := newFixture(t, nil)
+	skills := f.serveSkill()
 	// Off: no preview yet.
 	if code, _ := f.send("GET", "/api/v1/sources/skill.demo/preview", ""); code != http.StatusConflict {
 		t.Errorf("preview while off = %d", code)
@@ -760,5 +819,133 @@ func TestTodayCarriesExploitedReadingCatalog(t *testing.T) {
 	f.get("/api/v1/today", &tv)
 	if !slices.Contains(tv.Catalog.WaitingConsent, "enrich.kev") {
 		t.Errorf("waiting = %+v", tv.Catalog.WaitingConsent)
+	}
+}
+
+func TestNoPathsStripsLocalPathsWithSpaces(t *testing.T) {
+	for in, want := range map[string]string{
+		"open /home/x/My Projects/y.zip: permission denied":     "open <path>: permission denied",
+		`open D:\Data\My Projects\y.zip: Access is denied.`:     "open <path>: Access is denied.",
+		`read "/var/lib/michel/a b.json" failed`:                `read "<path>" failed`,
+		"bad file (file:///home/x/My Projects/r.sarif) refused": "bad file (<path>) refused",
+		`Get "https://www.cisa.gov/feeds/kev.json": EOF`:        `Get "https://www.cisa.gov/feeds/kev.json": EOF`,
+		"open /tmp/x":             "open <path>",
+		"no path here: just text": "no path here: just text",
+	} {
+		if got := noPaths(in); got != want {
+			t.Errorf("noPaths(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestUpgradeSkillFromThePage(t *testing.T) {
+	f := newFixture(t, nil)
+	skills := f.serveSkill()
+	if code, b := f.send("POST", "/api/v1/sources/skill.demo/enable", `{}`); code != http.StatusOK {
+		t.Fatalf("enable = %d %s", code, b)
+	}
+	if code, b := f.send("POST", "/api/v1/sources/skill.demo/install", `{"sha":"`+demoPin+`"}`); code != http.StatusOK {
+		t.Fatalf("install = %d %s", code, b)
+	}
+	f.markNewVersion()
+	if v := f.sourceViews("/api/v1/sources")["skill.demo"]; !slices.Contains(v.Badges, "new_version") {
+		t.Errorf("badges = %v", v.Badges)
+	}
+	var p PreviewView
+	f.get("/api/v1/sources/skill.demo/preview", &p)
+	if p.Kind != "upgrade" || p.Upgrade == nil || p.Upgrade.From != demoPin || p.Upgrade.To != newPin ||
+		p.Upgrade.OldDir != filepath.Join(skills, "demo") || p.Upgrade.NewDir != filepath.Join(skills, "renamed") || !strings.Contains(p.Upgrade.SkillMDDiff, "renamed") {
+		t.Errorf("upgrade preview = %+v", p.Upgrade)
+	}
+	if _, err := os.Stat(filepath.Join(skills, "renamed")); !os.IsNotExist(err) {
+		t.Errorf("the preview installed: %v", err)
+	}
+	// The installed version is no upgrade target, nor another sha.
+	for _, sha := range []string{demoPin, otherPin} {
+		if code, _ := f.send("POST", "/api/v1/sources/skill.demo/upgrade", `{"sha":"`+sha+`"}`); code != http.StatusBadRequest {
+			t.Errorf("upgrade to %s = %d", sha, code)
+		}
+	}
+	// The old folder carries another version's marker: Michel keeps it and
+	// says so, the new version is installed all the same.
+	marker := filepath.Join(skills, "demo", gitrepo.MarkerFile)
+	if err := os.WriteFile(marker, []byte(`{"key":"skill.demo","sha":"`+otherPin+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, b := f.send("POST", "/api/v1/sources/skill.demo/upgrade", `{"sha":"`+newPin+`"}`)
+	var iv InstallView
+	if code != http.StatusOK || json.Unmarshal([]byte(b), &iv) != nil {
+		t.Fatalf("upgrade = %d %s", code, b)
+	}
+	if iv.Warning != i18n.T(i18n.EN, "api.source.install.old_folder_kept") || iv.Source.Config["installed_sha"] != newPin ||
+		slices.Contains(iv.Source.Badges, "new_version") || iv.Source.Status["new_version_available"] != false || iv.Source.Status["stars"] != float64(3) {
+		t.Errorf("upgrade view = %+v", iv)
+	}
+	if strings.Contains(b, f.dir) || strings.Contains(b, strings.ReplaceAll(f.dir, `\`, `\\`)) {
+		t.Errorf("answer names the data folder: %s", b)
+	}
+	if _, err := os.Stat(filepath.Join(skills, "renamed", "SKILL.md")); err != nil {
+		t.Errorf("new version not installed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skills, "demo")); err != nil {
+		t.Errorf("the foreign-marked folder was removed: %v", err)
+	}
+	// Nothing left to upgrade.
+	if code, _ := f.send("POST", "/api/v1/sources/skill.demo/upgrade", `{"sha":"`+newPin+`"}`); code != http.StatusConflict {
+		t.Errorf("second upgrade = %d", code)
+	}
+}
+
+func TestUpdateRoutesReadWithoutNetwork(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := context.Background()
+	// osv.packagist and osv.npm are on but wait for consent; enrich.kev too.
+	if err := source.NewRepo(f.st).SetEnabled(ctx, "enrich.kev", true); err != nil {
+		t.Fatal(err)
+	}
+	code, b := f.send("POST", "/api/v1/sources/enrich.kev/update", "")
+	var uv UpdateView
+	if code != http.StatusOK || json.Unmarshal([]byte(b), &uv) != nil {
+		t.Fatalf("update one = %d %s", code, b)
+	}
+	if !slices.Equal(uv.WaitingConsent, []string{"enrich.kev"}) || uv.Source == nil || uv.Source.Key != "enrich.kev" ||
+		uv.Source.LastRead.Result != "waiting_consent" || uv.Failed == nil || uv.Errors == nil || uv.SkipReasons == nil {
+		t.Errorf("update one = %+v", uv)
+	}
+	code, b = f.send("POST", "/api/v1/sources/update", `{}`)
+	uv = UpdateView{}
+	if code != http.StatusOK || json.Unmarshal([]byte(b), &uv) != nil {
+		t.Fatalf("update all = %d %s", code, b)
+	}
+	for _, k := range []string{"osv.packagist", "osv.npm", "enrich.kev"} {
+		if !slices.Contains(uv.WaitingConsent, k) {
+			t.Errorf("waiting = %v, lacks %s", uv.WaitingConsent, k)
+		}
+	}
+	if uv.Source != nil {
+		t.Errorf("update all names a source: %+v", uv.Source)
+	}
+	if code, _ := f.send("POST", "/api/v1/sources/nope.none/update", ""); code != http.StatusNotFound {
+		t.Errorf("unknown key = %d", code)
+	}
+	// One update at a time.
+	srv := New(f.deps, testToken).(*server)
+	srv.updating.Lock()
+	req := httptest.NewRequest("POST", "/api/v1/sources/update", nil)
+	req.Host = "127.0.0.1:7331"
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	srv.updating.Unlock()
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), i18n.T(i18n.EN, "api.source.update.busy")) {
+		t.Errorf("busy = %d %s", rec.Code, rec.Body.String())
+	}
+	// Errors and reasons leave without their paths.
+	v := updateView(sourceupdate.Report{Failed: []string{"feed.nginx"}, Skipped: []string{"osv.npm"},
+		Errors:      map[string]string{"feed.nginx": "open " + winPathMarker + ": denied; open " + posixPathMarker + ": denied"},
+		SkipReasons: map[string]string{"osv.npm": "cannot read /home/demo/My Data/osv: gone"}})
+	if v.Errors["feed.nginx"] != "open <path>: denied; open <path>: denied" || v.SkipReasons["osv.npm"] != "cannot read <path>: gone" ||
+		v.Updated == nil || v.WaitingConsent == nil {
+		t.Errorf("update view = %+v", v)
 	}
 }

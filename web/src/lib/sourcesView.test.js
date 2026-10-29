@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  agoText, badgeKeys, consentSentence, groupByKind, kinds, lastReadText, stateLabelKey, summary,
+  agoText, badgeKeys, consentSentence, groupByKind, kinds, lastReadText, stateLabelKey, summary, switchOn,
 } from './sourcesView.js'
 import { translate } from '../i18n/index.js'
 
@@ -34,6 +34,14 @@ describe('sourcesView', () => {
     expect(stateLabelKey('hidden')).toBe('sources.state.hidden')
     expect(stateLabelKey('bogus')).toBe('sources.state.off')
     expect(t(stateLabelKey('waiting_consent'))).toBe('attend ton accord')
+  })
+
+  test('switchOn: a source waiting for consent shows off, so turning it on asks for the consent', () => {
+    expect(switchOn({ state: 'on', enabled: true })).toBe(true)
+    expect(switchOn({ state: 'waiting_consent', enabled: true })).toBe(false)
+    expect(switchOn({ state: 'off', enabled: false })).toBe(false)
+    expect(switchOn({ state: 'hidden', enabled: true })).toBe(false)
+    expect(switchOn(null)).toBe(false)
   })
 
   test('badgeKeys for new_version, suggested and archived', () => {

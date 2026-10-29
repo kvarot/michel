@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -314,26 +311,40 @@ func newSourceDisableCmd(deps *Deps) *cobra.Command {
 	return c
 }
 
-var (
-	repoName  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-	commitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
-)
-
-// cleanRepoPath checks a --path folder inside a repository and returns it
-// in slash form: relative, no "..", no backslash or drive.
-func cleanRepoPath(p string) (string, bool) {
-	if strings.ContainsAny(p, `\:`) || filepath.IsAbs(p) || strings.HasPrefix(p, "/") {
-		return "", false
+// addRefusal is the message of a refused user entry (source.NewUserEntry).
+func addRefusal(deps *Deps, r *source.Refusal) error {
+	switch r.Code {
+	case "bad_tag":
+		return deps.Errorf("cli.tech.bad_tag", r.Args...)
+	case "bad_url":
+		return deps.Errorf("cli.source.add.bad_url", r.Args...)
+	case "bad_format":
+		return deps.Errorf("cli.source.add.bad_format", r.Args...)
+	case "bad_repo":
+		return deps.Errorf("cli.source.add.bad_repo", r.Args...)
+	case "feed_target":
+		return deps.Errorf("cli.source.add.feed_target")
+	case "no_ecosystem":
+		return deps.Errorf("cli.source.add.no_ecosystem")
+	case "bad_ecosystem":
+		return deps.Errorf("cli.source.add.bad_ecosystem", r.Args...)
+	case "no_format":
+		return deps.Errorf("cli.source.add.no_format")
+	case "bad_tool":
+		return deps.Errorf("cli.source.add.bad_tool", r.Args...)
+	case "no_name":
+		return deps.Errorf("cli.source.add.no_name")
+	case "no_repo":
+		return deps.Errorf("cli.source.add.no_repo", r.Args...)
+	case "bad_pin":
+		return deps.Errorf("cli.source.add.bad_pin", r.Args...)
+	case "bad_path":
+		return deps.Errorf("cli.source.add.bad_path", r.Args...)
+	case "bad_kind":
+		return deps.Errorf("cli.source.add.bad_kind", r.Args...)
 	}
-	clean := filepath.ToSlash(filepath.Clean(p))
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-		return "", false
-	}
-	return clean, true
+	return deps.Wrapf("cli.source.add.invalid", errors.New(r.Code))
 }
-
-// repoHosts are the hosts of a pinned repository: its state and its archive.
-var repoHosts = []string{"api.github.com", "codeload.github.com"}
 
 func newSourceAddCmd(deps *Deps) *cobra.Command {
 	var kind, name, rawURL, format, repo, ecosystem, input, tool, path, pin string
@@ -350,106 +361,19 @@ func newSourceAddCmd(deps *Deps) *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			e := source.Entry{Kind: source.Kind(kind), Origin: source.OriginUser, Name: strings.TrimSpace(name), Tech: cleanList(tech)}
-			user := map[string]any{}
-			switch e.Kind {
-			case source.KindFeed:
-				switch {
-				case rawURL != "":
-					u, err := url.Parse(rawURL)
-					if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
-						return deps.Errorf("cli.source.add.bad_url", rawURL)
-					}
-					if format == "" {
-						format = "auto"
-					}
-					if !slices.Contains([]string{"auto", "rss", "atom", "page"}, format) {
-						return deps.Errorf("cli.source.add.bad_format", format, kind, "auto, rss, atom, page")
-					}
-					e.URL, e.Hosts = rawURL, []string{u.Hostname()}
-					if e.Name == "" {
-						e.Name = u.Hostname()
-					}
-				case repo != "" && format == "github_advisories":
-					if !repoName.MatchString(repo) {
-						return deps.Errorf("cli.source.add.bad_repo", repo)
-					}
-					e.URL, e.Hosts = "https://github.com/"+repo+"/security/advisories", []string{"api.github.com"}
-					user["repo"] = repo
-					if e.Name == "" {
-						e.Name = repo
-					}
-				default:
-					return deps.Errorf("cli.source.add.feed_target")
+			req := source.UserEntryRequest{Kind: source.Kind(kind), Name: name, URL: rawURL, Format: format, Repo: repo,
+				Ecosystem: ecosystem, Tool: tool, Path: path, Pin: pin, Tech: tech}
+			if input != "" {
+				// A relative report path is the caller's folder.
+				abs, err := filepath.Abs(input)
+				if err != nil {
+					abs = input
 				}
-				e.Purpose = policy.PurposeFeed
-				user["format"] = format
-			case source.KindOSV:
-				eco := strings.TrimSpace(ecosystem)
-				if eco == "" {
-					return deps.Errorf("cli.source.add.no_ecosystem")
-				}
-				if strings.ContainsAny(eco, `/\`) || strings.Contains(eco, "..") || len(eco) > 64 {
-					return deps.Errorf("cli.source.add.bad_ecosystem", eco)
-				}
-				e.Name, e.URL = "OSV "+eco, "https://osv.dev/list?ecosystem="+url.QueryEscape(eco)
-				e.Hosts, e.Purpose = []string{"osv-vulnerabilities.storage.googleapis.com"}, policy.PurposeOSV
-				user["ecosystem"] = eco
-				e.Key = source.KeyFor(source.KindOSV, eco)
-			case source.KindPlugin:
-				if format == "" {
-					return deps.Errorf("cli.source.add.no_format")
-				}
-				if format != "sarif" && format != "trivy_json" {
-					return deps.Errorf("cli.source.add.bad_format", format, kind, "sarif, trivy_json")
-				}
-				if tool == "" {
-					tool = "generic"
-				}
-				if !slices.Contains([]string{"generic", "trivy", "semgrep", "codeql", "zap"}, tool) {
-					return deps.Errorf("cli.source.add.bad_tool", tool)
-				}
-				if e.Name == "" {
-					return deps.Errorf("cli.source.add.no_name")
-				}
-				user["format"], user["tool"], user["run"] = format, tool, false
-				if input != "" {
-					abs, err := filepath.Abs(input)
-					if err != nil {
-						abs = input
-					}
-					user["input"] = filepath.Clean(abs)
-				}
-			case source.KindSkill, source.KindMCP:
-				if repo == "" || pin == "" {
-					return deps.Errorf("cli.source.add.no_repo", kind)
-				}
-				if !repoName.MatchString(repo) {
-					return deps.Errorf("cli.source.add.bad_repo", repo)
-				}
-				if !commitSHA.MatchString(pin) {
-					return deps.Errorf("cli.source.add.bad_pin", pin)
-				}
-				user["repo"], user["pinned"] = repo, pin
-				if path != "" {
-					clean, ok := cleanRepoPath(path)
-					if !ok {
-						return deps.Errorf("cli.source.add.bad_path", path)
-					}
-					user["path"] = clean
-				}
-				if e.Name == "" {
-					e.Name = repo[strings.Index(repo, "/")+1:]
-				}
-				e.URL, e.Hosts, e.Purpose = "https://github.com/"+repo, repoHosts, policy.PurposeRepo
-			default:
-				return deps.Errorf("cli.source.add.bad_kind", kind)
+				req.Input = abs
 			}
-			if e.Key == "" {
-				e.Key = source.KeyFor(e.Kind, e.Name)
-			}
-			if !source.ValidKey(e.Key) {
-				return deps.Errorf("cli.source.add.no_name")
+			e, refusal := source.NewUserEntry(req)
+			if refusal != nil {
+				return addRefusal(deps, refusal)
 			}
 			repoR := source.NewRepo(deps.Store)
 			if _, err := repoR.Get(ctx, e.Key); err == nil {
@@ -457,7 +381,6 @@ func newSourceAddCmd(deps *Deps) *cobra.Command {
 			} else if !errors.Is(err, source.ErrNotFound) {
 				return sourceErr(deps, e.Key, err)
 			}
-			e.Config = source.Config{Catalog: map[string]any{}, User: user}
 			added, err := repoR.Upsert(ctx, e)
 			if err != nil {
 				return deps.Wrapf("cli.source.add.invalid", err)

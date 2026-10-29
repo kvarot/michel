@@ -109,6 +109,8 @@ type server struct {
 	policy policy.Policy
 	// updating is held while a source update runs: one at a time.
 	updating sync.Mutex
+	// policyMu serializes the writes of the policy file (enable, disable).
+	policyMu sync.Mutex
 }
 
 // currentPolicy is the policy in force.

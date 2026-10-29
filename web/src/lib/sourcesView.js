@@ -33,6 +33,15 @@ export function badgeKeys(source) {
 }
 
 /**
+ * switchOn tells whether the switch of a source shows "on": only when it
+ * works. A source waiting for consent shows off, so turning it on asks for
+ * the consent (the server answers 409 with the hosts).
+ */
+export function switchOn(source) {
+  return source?.state === 'on'
+}
+
+/**
  * consentSentence is the sentence of the consent dialog for one host: the
  * server's text (already in the page's language), else one naming the host.
  * @param {{host: string, what?: string}} consent

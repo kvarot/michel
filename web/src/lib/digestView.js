@@ -27,9 +27,11 @@ export function severityOf(s) {
  * (older server) falls back to a new package of the same name, then "unknown". text is the "what" sentence for new packages,
  * the reason code for decisions to review and the due date for deferrals.
  * decided is the action already taken on a new package ("" when not decided).
- * kev and malicious mark a line one of whose findings heads the digest
- * (digest.exploited): exploited in the wild, or a malicious package.
- * @returns {{project: string, items: {kind: string, package: string, severity: string, text: string, findingIds: string[], kev: boolean, malicious: boolean}[]}[]}
+ * kev and malicious mark a line one of whose findings is exploited in the
+ * wild or a malicious package: a new package carries them (with epss, its
+ * highest exploitation score, and findingKind, the sort of its findings); a
+ * decision to review or a deferral takes them from digest.exploited.
+ * @returns {{project: string, items: {kind: string, package: string, severity: string, text: string, findingIds: string[], kev: boolean, malicious: boolean, epss: number, findingKind: string}[]}[]}
  */
 export function groupAttention(digest) {
   if (!digest || !Array.isArray(digest.projects)) return []
@@ -52,7 +54,8 @@ export function groupAttention(digest) {
       items.push({
         kind: 'new', package: pkg.name, severity: severityOf(pkg.worst_severity), text: pkg.what || '',
         findingIds: pkg.finding_ids || [], osvIds: pkg.osv_ids || [], installed: pkg.installed || '', target: pkg.target || '',
-        decided: pkg.decided || '',
+        decided: pkg.decided || '', kev: !!pkg.kev, malicious: !!pkg.malicious, epss: pkg.epss || 0,
+        findingKind: pkg.kind || 'dependency',
       })
     }
     for (const s of p.superseded || []) {
@@ -67,7 +70,9 @@ export function groupAttention(digest) {
         findingIds: d.finding_id ? [d.finding_id] : [], osvIds: d.osv_id ? [d.osv_id] : [], overdue: !!d.overdue,
       })
     }
-    for (const item of items) Object.assign(item, marks(item.findingIds))
+    for (const item of items) {
+      if (item.kind !== 'new') Object.assign(item, marks(item.findingIds), { epss: 0, findingKind: 'dependency' })
+    }
     const order = items.map((item, i) => ({ item, i }))
     order.sort((a, b) =>
       severityRank(a.item.severity) - severityRank(b.item.severity)

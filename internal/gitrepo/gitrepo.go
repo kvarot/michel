@@ -25,6 +25,7 @@ import (
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/sourceupdate"
 )
 
 // Bounds of an archive: its compressed size, the bytes and files written.
@@ -47,7 +48,7 @@ const MarkerFile = ".michel-source"
 
 // GitHubTokenSecret is the secret whose value, when set, goes with the
 // GitHub API requests.
-const GitHubTokenSecret = "github-token"
+const GitHubTokenSecret = sourceupdate.GitHubTokenSecret
 
 var (
 	ErrTraversal     = errors.New("the archive holds a path that leaves its folder")
