@@ -7,7 +7,6 @@
 package plugin
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -56,12 +55,19 @@ var (
 	// ErrUnknownTool and ErrUnknownFormat refuse a plugin setting.
 	ErrUnknownTool   = errors.New("unknown plugin tool (use trivy, semgrep, codeql, zap or generic)")
 	ErrUnknownFormat = errors.New("unknown report format (use sarif or trivy_json)")
+	// ErrReportTooBig: the report is over MaxReportSize or MaxResults: the
+	// run fails rather than close the findings past the cap.
+	ErrReportTooBig = errors.New("the report is too big for Michel")
 	// ErrBadReport: the report cannot be read as SARIF or Trivy JSON.
 	ErrBadReport = errors.New("the report is not a SARIF or Trivy JSON file Michel can read")
 )
 
 // MaxReportSize is the most Michel reads of a report.
 const MaxReportSize = 50 << 20
+
+// MaxResults is the most results Michel reads from one report (a variable
+// for the tests).
+var MaxResults = 10000
 
 // ExternalFinding is one result of a tool's report. Location is a
 // slash-separated path relative to the project, with ":line" when known.
@@ -101,8 +107,13 @@ type tool struct {
 	exec ExecFunc
 	// detectEnv is the environment of "<tool> --version".
 	detectEnv []string
-	// argv is the command line of the last Run, for its hash in the audit.
-	argv []string
+	// dir is the tool's folder in the data folder, the working folder of
+	// "<tool> --version" (never the project); "" for the current folder.
+	dir string
+	// argv is the command line of the last Run, for its hash in the audit;
+	// output is what it wrote (stdout then stderr, capped), for the run log.
+	argv   []string
+	output []byte
 }
 
 func (t *tool) Key() string  { return t.key }
@@ -118,7 +129,7 @@ func (t *tool) Detect(ctx context.Context) (bool, string) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, _, err := t.exec(ctx, t.name, []string{"--version"}, t.detectEnv, "")
+	out, _, err := t.exec(ctx, t.name, []string{"--version"}, t.detectEnv, t.dir)
 	if errors.Is(err, exec.ErrNotFound) {
 		return false, ""
 	}
@@ -148,19 +159,17 @@ func (t *tool) Run(ctx context.Context, p project.Project, outDir string, env []
 		return "", err
 	}
 	t.argv = append([]string{t.name}, args...)
-	_, stderr, err := t.exec(ctx, t.name, args, env, outDir)
+	stdout, stderr, err := t.exec(ctx, t.name, args, env, outDir)
+	t.output = combined(stdout, stderr)
 	if err != nil {
-		return "", &RunError{Err: err, Stderr: stderr}
+		return "", &RunError{Err: err}
 	}
 	return report, nil
 }
 
-// RunError is a tool that failed; Stderr (capped) is kept for the local
-// run log only: its message never carries it.
-type RunError struct {
-	Err    error
-	Stderr []byte
-}
+// RunError is a tool that failed. Its message never carries what the tool
+// wrote: that only goes to the local run log.
+type RunError struct{ Err error }
 
 func (e *RunError) Error() string {
 	var ee *exec.ExitError
@@ -188,7 +197,7 @@ func (t *tool) Ingest(ctx context.Context, reportPath string, p project.Project)
 		return nil, fmt.Errorf("cannot read the report: %w", noPath(err))
 	}
 	if len(b) > MaxReportSize {
-		return nil, fmt.Errorf("%w: it is larger than %d MB", ErrBadReport, MaxReportSize>>20)
+		return nil, ErrReportTooBig
 	}
 	var out []ExternalFinding
 	switch formatOf(b, t.format) {
@@ -229,7 +238,7 @@ func formatOf(b []byte, configured string) string {
 // format. A provider built here detects and runs the tool with no network:
 // RunPlugin builds its own, fenced by the deny proxy.
 func ForEntry(e source.Entry) (Provider, error) {
-	t, err := forEntry(e, defaultExec, toolEnv("127.0.0.1:9"))
+	t, err := forEntry(e, defaultExec, toolEnv("127.0.0.1:9", ""))
 	if err != nil {
 		return nil, err
 	}
@@ -298,15 +307,20 @@ func defaultExec(ctx context.Context, name string, args, env []string, dir strin
 }
 
 // toolEnv is the whole environment of a tool: the few variables a program
-// needs to start (PATH, SystemRoot, TEMP/TMP, HOME/USERPROFILE), the proxy
-// at proxyAddr for every scheme, and the switches that keep Trivy and
-// Semgrep offline. No secret, token or other variable of Michel's reaches it.
-func toolEnv(proxyAddr string) []string {
+// needs to start (PATH, SystemRoot, TEMP/TMP), HOME and USERPROFILE set to
+// home (the tool keeps its settings and logs there, in the data folder; left
+// out when home is ""), the proxy at proxyAddr for every scheme, and the
+// switches that keep Trivy and Semgrep offline. No secret, token or other
+// variable of Michel's reaches it.
+func toolEnv(proxyAddr, home string) []string {
 	var env []string
-	for _, k := range []string{"PATH", "SystemRoot", "TEMP", "TMP", "HOME", "USERPROFILE"} {
+	for _, k := range []string{"PATH", "SystemRoot", "TEMP", "TMP"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
 		}
+	}
+	if home != "" {
+		env = append(env, "HOME="+home, "USERPROFILE="+home)
 	}
 	proxy := "http://" + proxyAddr
 	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
@@ -329,14 +343,23 @@ func noPath(err error) error {
 	return err
 }
 
-// firstLines keeps the start of a tool's output for the local run log.
-func firstLines(b []byte) string {
-	var sb strings.Builder
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	sc.Buffer(make([]byte, 0, 4096), maxOutput)
-	for sc.Scan() && sb.Len() < maxOutput {
-		sb.WriteString(scan.SanitizeText(sc.Text()))
-		sb.WriteByte('\n')
+// combined is what a tool wrote, stdout then stderr, for the local run log:
+// sanitized and capped at maxOutput bytes in all.
+func combined(stdout, stderr []byte) []byte {
+	var b bytes.Buffer
+	if len(stdout) > 0 {
+		b.WriteString("stdout:\n")
+		b.Write(stdout)
+		b.WriteString("\n")
 	}
-	return sb.String()
+	if len(stderr) > 0 {
+		b.WriteString("stderr:\n")
+		b.Write(stderr)
+		b.WriteString("\n")
+	}
+	s := scan.SanitizeText(strings.ToValidUTF8(b.String(), "�"))
+	if len(s) > maxOutput {
+		s = strings.ToValidUTF8(s[:maxOutput], "")
+	}
+	return []byte(s)
 }

@@ -571,8 +571,8 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 	for _, id := range order {
 		dec := latest[id]
 		f := byID[dec.FindingID]
-		name, id, _ := scan.Ref(f)
-		pd.Superseded = append(pd.Superseded, Superseded{Package: scan.SanitizeText(name), OSVID: scan.SanitizeText(id),
+		name, ref, _ := scan.Ref(f)
+		pd.Superseded = append(pd.Superseded, Superseded{Package: scan.SanitizeText(name), OSVID: scan.SanitizeText(ref),
 			FindingID: dec.FindingID, PreviousAction: string(dec.Action), Reason: string(dec.SupersededReason), Justification: dec.Justification,
 			Severity: severityLabel(effective(f))})
 	}

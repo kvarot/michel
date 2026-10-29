@@ -126,7 +126,9 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					res, err := plugin.RunPlugin(ctx, pluginDeps(cmd, deps), e, p, "")
 					if err != nil {
 						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_plugin_failed", p.Name, pluginErr(deps, e, p.Name, err), e.Key, p.Name))
-						continue
+						if !errors.Is(err, plugin.ErrAudit) {
+							continue
+						}
 					}
 					plugins = append(plugins, pluginRunView{Project: p.Name, Key: e.Key, RunResult: res})
 					pluginLines = append(pluginLines, pluginSummary(deps, e, p.Name, res))

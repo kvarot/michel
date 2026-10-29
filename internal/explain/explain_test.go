@@ -246,10 +246,10 @@ func TestWhatForCodeFinding(t *testing.T) {
 		t.Fatalf("facts = %+v", f)
 	}
 	en := mustRender(t, EN, f)
-	if en.What != `semgrep flags the rule php.lang.security.exec-use in src/a.php:12. The report says: "Executing non-constant commands."` {
+	if en.What != `semgrep flags the problem php.lang.security.exec-use in src/a.php:12. The report says: "Executing non-constant commands."` {
 		t.Errorf("EN what = %q", en.What)
 	}
-	if en.Cost != "Fixing it means changing your code, not a dependency." {
+	if en.Cost != "Fixing it means changing your project (code or configuration), not a dependency." {
 		t.Errorf("EN cost = %q", en.Cost)
 	}
 	if en.Impact != "This flaw is serious." {
@@ -264,12 +264,12 @@ func TestWhatForCodeFinding(t *testing.T) {
 	}
 	// Without its location (what the channels get), the sentence still reads.
 	f.Location = ""
-	if e := mustRender(t, EN, f); !strings.HasPrefix(e.What, "semgrep flags the rule php.lang.security.exec-use. ") {
+	if e := mustRender(t, EN, f); !strings.HasPrefix(e.What, "semgrep flags the problem php.lang.security.exec-use. ") {
 		t.Errorf("EN what without location = %q", e.What)
 	}
 	// A dependency finding keeps its sentences.
 	dep := mustRender(t, EN, sampleFacts())
-	if !strings.Contains(dep.What, "acme/lib 1.2.0 is used in 2 places") || strings.Contains(dep.Cost, "your code, not a dependency") {
+	if !strings.Contains(dep.What, "acme/lib 1.2.0 is used in 2 places") || strings.Contains(dep.Cost, "not a dependency") {
 		t.Errorf("dependency sentences changed: %+v", dep)
 	}
 }

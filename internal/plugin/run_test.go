@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kvarot/michel/internal/scan"
 )
 
 func (e env) findings(t *testing.T) map[string]string {
@@ -67,11 +69,15 @@ func TestPluginRunDeniesEgressAndNeverWritesInProject(t *testing.T) {
 		kind != KindMisconfig || key != "plugin.trivy" {
 		t.Errorf("kind %q key %q err %v", kind, key, err)
 	}
-	var status, version string
+	var status, version, log string
 	var n int
-	if err := e.st.DB().QueryRow(`SELECT status, tool_version, findings FROM plugin_run WHERE id = ?`, res.RunID).Scan(&status, &version, &n); err != nil ||
+	if err := e.st.DB().QueryRow(`SELECT status, tool_version, findings, log FROM plugin_run WHERE id = ?`, res.RunID).Scan(&status, &version, &n, &log); err != nil ||
 		status != "ok" || version != "0.99.0-fake" || n != 1 {
 		t.Errorf("plugin_run = %s %s %d %v", status, version, n, err)
+	}
+	// The tool's stdout is logged, and its home is its folder in the data folder.
+	if home := filepath.Join(e.deps.DataDir, "plugins", "trivy", "home"); !strings.Contains(log, "stdout:\nhome="+home) {
+		t.Errorf("log = %q, want the tool's home %s", log, home)
 	}
 	runs := e.events(t, "plugin.run")
 	if len(runs) != 1 || runs[0].result != "ok" || runs[0].target != "plugin.trivy" {
@@ -154,7 +160,11 @@ func TestPluginRunNotRunnableForZAP(t *testing.T) {
 func TestPluginRunToolFailureIsRecorded(t *testing.T) {
 	e := newEnv(t)
 	t.Setenv("MICHEL_CANARY", "x")
+	toolDir := filepath.Join(e.deps.DataDir, "plugins", "semgrep")
 	e.deps.Exec = func(_ context.Context, _ string, args, env []string, dir string) ([]byte, []byte, error) {
+		if dir != toolDir {
+			t.Errorf("%v runs from %q, want the tool's folder %q", args, dir, toolDir)
+		}
 		if len(args) == 1 && args[0] == "--version" {
 			return []byte("semgrep 1.90.0\n"), nil, nil
 		}
@@ -163,7 +173,7 @@ func TestPluginRunToolFailureIsRecorded(t *testing.T) {
 				t.Errorf("env leaks %s", kv)
 			}
 		}
-		return nil, []byte("boom at " + dir), errors.New("exit status 2")
+		return []byte("scanning\n"), []byte("boom at " + dir), errors.New("exit status 2")
 	}
 	rules := filepath.Join(e.deps.DataDir, "plugins", "semgrep", "rules")
 	if err := os.MkdirAll(rules, 0o755); err != nil {
@@ -177,7 +187,7 @@ func TestPluginRunToolFailureIsRecorded(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	var status, log string
-	if err := e.st.DB().QueryRow(`SELECT status, log FROM plugin_run`).Scan(&status, &log); err != nil || status != "failed" || !strings.Contains(log, "boom") {
+	if err := e.st.DB().QueryRow(`SELECT status, log FROM plugin_run`).Scan(&status, &log); err != nil || status != "failed" || !strings.Contains(log, "stdout:\nscanning") || !strings.Contains(log, "stderr:\nboom") {
 		t.Errorf("plugin_run = %s %q %v", status, log, err)
 	}
 	if runs := e.events(t, "plugin.run"); len(runs) != 1 || runs[0].result != "failed" {
@@ -212,8 +222,11 @@ func TestPluginRunNotInstalled(t *testing.T) {
 func TestEnvIsAnAllowlist(t *testing.T) {
 	t.Setenv("MICHEL_CANARY", "x")
 	t.Setenv("GITHUB_TOKEN", "x")
-	env := toolEnv("127.0.0.1:1")
-	want := map[string]bool{"HTTP_PROXY=http://127.0.0.1:1": true, "HTTPS_PROXY=http://127.0.0.1:1": true,
+	t.Setenv("HOME", "/real/home")
+	t.Setenv("USERPROFILE", "/real/home")
+	env := toolEnv("127.0.0.1:1", "/data/plugins/trivy/home")
+	want := map[string]bool{"HOME=/data/plugins/trivy/home": true, "USERPROFILE=/data/plugins/trivy/home": true,
+		"HTTP_PROXY=http://127.0.0.1:1": true, "HTTPS_PROXY=http://127.0.0.1:1": true,
 		"ALL_PROXY=http://127.0.0.1:1": true, "NO_PROXY=": true, "TRIVY_SKIP_DB_UPDATE=true": true, "SEMGREP_SEND_METRICS=off": true}
 	for _, kv := range env {
 		name := strings.ToUpper(kv[:strings.IndexByte(kv, '=')])
@@ -227,5 +240,93 @@ func TestEnvIsAnAllowlist(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Errorf("missing: %v", want)
+	}
+}
+
+func TestEnvNeverPassesTheUserHome(t *testing.T) {
+	t.Setenv("HOME", "/real/home")
+	for _, kv := range toolEnv("127.0.0.1:1", "/data/home") {
+		if strings.Contains(kv, "/real/home") {
+			t.Errorf("the user's home reaches the tool: %s", kv)
+		}
+	}
+}
+
+func TestIdentityIsFilePlusFingerprint(t *testing.T) {
+	a := toFinding("p", "plugin.codeql", ExternalFinding{RuleID: "js/x", Location: "src/a.js:10", Fingerprint: "abc:1"})
+	b := toFinding("p", "plugin.codeql", ExternalFinding{RuleID: "js/x", Location: "src/b.js:10", Fingerprint: "abc:1"})
+	moved := toFinding("p", "plugin.codeql", ExternalFinding{RuleID: "js/x", Location: "src/a.js:42", Fingerprint: "abc:1"})
+	if a.ID == b.ID {
+		t.Error("two files with the same line hash share one finding")
+	}
+	if a.ID != moved.ID {
+		t.Error("a line moved in the same file changed the finding's identity")
+	}
+	noFP := toFinding("p", "plugin.codeql", ExternalFinding{RuleID: "js/x", Location: "src/a.js:10"})
+	if noFP.ID != scan.FindingID("p", "plugin.codeql", "", "js/x", "src/a.js:10") {
+		t.Error("without fingerprint the identity is the location")
+	}
+}
+
+func TestPluginRunSameFingerprintInTwoFiles(t *testing.T) {
+	e := newEnv(t)
+	report := `{"version":"2.1.0","runs":[{"results":[
+{"ruleId":"js/x","level":"error","message":{"text":"m"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/a.js"},"region":{"startLine":3}}}],"partialFingerprints":{"primaryLocationLineHash":"same:1"}},
+{"ruleId":"js/x","level":"error","message":{"text":"m"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/b.js"},"region":{"startLine":3}}}],"partialFingerprints":{"primaryLocationLineHash":"same:1"}}]}]}`
+	path := filepath.Join(t.TempDir(), "r.sarif")
+	if err := os.WriteFile(path, []byte(report), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := RunPlugin(context.Background(), e.deps, pluginEntry("plugin.codeql", "codeql", "sarif", false), e.proj, path)
+	if err != nil || res.New != 2 {
+		t.Errorf("res = %+v %v, want 2 new findings", res, err)
+	}
+}
+
+func TestOversizedReportFailsAndClosesNothing(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	entry := pluginEntry("plugin.codeql", "codeql", "sarif", false)
+	input := filepath.Join("testdata", "codeql.sarif")
+	if res, err := RunPlugin(ctx, e.deps, entry, e.proj, input); err != nil || res.New != 2 {
+		t.Fatalf("first ingest = %+v %v", res, err)
+	}
+	old := MaxResults
+	MaxResults = 1
+	t.Cleanup(func() { MaxResults = old })
+	_, err := RunPlugin(ctx, e.deps, entry, e.proj, input)
+	if !errors.Is(err, ErrReportTooBig) {
+		t.Fatalf("err = %v, want ErrReportTooBig", err)
+	}
+	for k, s := range e.findings(t) {
+		if s == "gone" {
+			t.Errorf("%s closed by a report Michel could not read whole", k)
+		}
+	}
+	var failed int
+	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM plugin_run WHERE status = 'failed'`).Scan(&failed); err != nil || failed != 1 {
+		t.Errorf("failed runs = %d %v", failed, err)
+	}
+	f, _ := os.Open(filepath.Join("testdata", "trivy-misconfig.json"))
+	defer f.Close()
+	if _, _, err := ParseTrivyJSON(f, nil); !errors.Is(err, ErrReportTooBig) {
+		t.Errorf("trivy json over the cap: %v", err)
+	}
+}
+
+func TestPluginRunReportsAuditFailure(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	// The run row is written first; then the audit log becomes unwritable.
+	if _, err := e.st.DB().Exec(`DROP TABLE audit_event`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := RunPlugin(ctx, e.deps, pluginEntry("plugin.codeql", "codeql", "sarif", false), e.proj, filepath.Join("testdata", "codeql.sarif"))
+	if !errors.Is(err, ErrAudit) || res.New != 2 {
+		t.Errorf("res = %+v err = %v, want the findings saved and ErrAudit", res, err)
+	}
+	_, err = RunPlugin(ctx, e.deps, pluginEntry("plugin.zap", "zap", "sarif", false), e.proj, filepath.Join("testdata", "missing.sarif"))
+	if err == nil || errors.Is(err, ErrAudit) || !strings.Contains(err.Error(), "audit") {
+		t.Errorf("failed run with audit failure: %v", err)
 	}
 }

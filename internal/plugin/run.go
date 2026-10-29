@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,18 +94,25 @@ func RunPlugin(ctx context.Context, deps RunDeps, e source.Entry, p project.Proj
 	}
 	row := runRow{status: RunFailed}
 	argvHash := ""
-	record := func(result string, extra map[string]any) {
+	record := func(result string, extra map[string]any) error {
 		ev := map[string]any{"key": e.Key, "project": p.Name, "tool_version": row.version, "argv_hash": argvHash, "mode": mode,
 			"duration_ms": now().Sub(started).Milliseconds(), "findings": row.findings, "result": result}
 		for k, v := range extra {
 			ev[k] = v
 		}
-		_, _ = deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{Actor: "plugin", Action: "plugin.run", Target: e.Key, Result: result, Evidence: ev})
+		if _, err := deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{Actor: "plugin", Action: "plugin.run", Target: e.Key, Result: result, Evidence: ev}); err != nil {
+			return fmt.Errorf("cannot write the audit event: %w", err)
+		}
+		return nil
 	}
 	fail := func(err error) (RunResult, error) {
-		row.finished, row.errText = now(), err.Error()
-		_ = finishRun(context.WithoutCancel(ctx), db, res.RunID, row)
-		record(RunFailed, map[string]any{"error": err.Error()})
+		row.status, row.finished, row.errText = RunFailed, now(), err.Error()
+		if ferr := finishRun(context.WithoutCancel(ctx), db, res.RunID, row); ferr != nil {
+			err = errors.Join(err, fmt.Errorf("cannot record the run: %w", ferr))
+		}
+		if aerr := record(RunFailed, map[string]any{"error": row.errText}); aerr != nil {
+			err = errors.Join(err, aerr)
+		}
 		return res, err
 	}
 
@@ -130,17 +138,21 @@ func RunPlugin(ctx context.Context, deps RunDeps, e source.Entry, p project.Proj
 			// Fail closed: no tool runs without the proxy.
 			return fail(errors.New("cannot start the proxy that keeps the tool offline"))
 		}
-		env := toolEnv(addr)
-		prov.detectEnv = env
+		// The tool works from its folder in the data folder, with its own
+		// home there: what it writes (settings, logs, cache) stays out of
+		// the project and of the user's home.
+		dir := filepath.Join(dataDir, "plugins", prov.name)
+		home := filepath.Join(dir, "home")
+		if err := os.MkdirAll(home, 0o700); err != nil {
+			return fail(fmt.Errorf("cannot prepare the tool's folder: %w", noPath(err)))
+		}
+		env := toolEnv(addr, home)
+		prov.detectEnv, prov.dir = env, dir
 		installed, version := prov.Detect(ctx)
 		if !installed {
 			return fail(ErrNotInstalled)
 		}
 		row.version = version
-		dir := filepath.Join(dataDir, "plugins", prov.name)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fail(fmt.Errorf("cannot prepare the tool's folder: %w", noPath(err)))
-		}
 		rctx, cancel := context.WithTimeout(ctx, RunTimeout)
 		report, err = prov.Run(rctx, p, dir, env)
 		cancel()
@@ -148,10 +160,7 @@ func RunPlugin(ctx context.Context, deps RunDeps, e source.Entry, p project.Proj
 			sum := sha256.Sum256([]byte(strings.Join(prov.argv, "\x00")))
 			argvHash = hex.EncodeToString(sum[:])
 		}
-		var re *RunError
-		if errors.As(err, &re) {
-			row.log = firstLines(re.Stderr)
-		}
+		row.log = string(prov.output)
 		if err != nil {
 			return fail(err)
 		}
@@ -205,19 +214,31 @@ func RunPlugin(ctx context.Context, deps RunDeps, e source.Entry, p project.Proj
 		return fail(fmt.Errorf("cannot store the findings: %w", err))
 	}
 	res.ReportPath = report
+	// The findings are stored: a failing audit write does not undo them,
+	// but it is reported (the result is returned with the error).
+	var auditErrs []error
 	for _, s := range superseded {
-		_, _ = deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{Actor: "plugin", Action: "decision.superseded", Target: s.FindingID,
-			Result: "ok", Evidence: map[string]any{"finding_id": s.FindingID, "project_id": s.ProjectID, "reason": s.Reason, "previous_action": s.Previous}})
+		if _, err := deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{Actor: "plugin", Action: "decision.superseded", Target: s.FindingID,
+			Result: "ok", Evidence: map[string]any{"finding_id": s.FindingID, "project_id": s.ProjectID, "reason": s.Reason, "previous_action": s.Previous}}); err != nil {
+			auditErrs = append(auditErrs, fmt.Errorf("%w: %v", ErrAudit, err))
+		}
 	}
-	record(RunOK, map[string]any{"new": res.New, "still": res.Still, "gone": res.Gone, "skipped_known": res.SkippedKnown})
-	return res, nil
+	if err := record(RunOK, map[string]any{"new": res.New, "still": res.Still, "gone": res.Gone, "skipped_known": res.SkippedKnown}); err != nil {
+		auditErrs = append(auditErrs, fmt.Errorf("%w: %v", ErrAudit, err))
+	}
+	return res, errors.Join(auditErrs...)
 }
+
+// ErrAudit: the findings are stored but an audit event could not be written.
+var ErrAudit = errors.New("the findings are saved but the audit log cannot be written")
 
 // toFinding is the stored finding of one result of the report.
 func toFinding(projectID, sourceKey string, x ExternalFinding) scan.Finding {
-	ref := x.Fingerprint
-	if ref == "" {
-		ref = x.Location
+	// A fingerprint (CodeQL's line hash) follows a moved line but does not
+	// name the file: the identity is the file and the fingerprint.
+	ref := x.Location
+	if x.Fingerprint != "" {
+		ref = fileOf(x.Location) + "#" + x.Fingerprint
 	}
 	severity := x.Severity
 	if severity == "" {
@@ -230,4 +251,14 @@ func toFinding(projectID, sourceKey string, x ExternalFinding) scan.Finding {
 	return scan.Finding{ID: scan.FindingID(projectID, sourceKey, "", x.RuleID, ref), ProjectID: projectID, Kind: x.Kind,
 		SourceKey: sourceKey, RuleID: x.RuleID, Location: x.Location, Fingerprint: x.Fingerprint, SeverityLabel: severity,
 		CVSS: x.CVSS, Summary: x.Message, Aliases: aliases, FixedVersions: []string{}, DepGroups: []string{}}
+}
+
+// fileOf is a location without its ":line".
+func fileOf(location string) string {
+	if i := strings.LastIndexByte(location, ':'); i > 0 {
+		if _, err := strconv.Atoi(location[i+1:]); err == nil {
+			return location[:i]
+		}
+	}
+	return location
 }

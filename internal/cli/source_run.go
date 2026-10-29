@@ -52,13 +52,20 @@ func newSourceRunCmd(deps *Deps) *cobra.Command {
 				return deps.Errorf("cli.scan.removed", p.Name, p.Name)
 			}
 			res, err := plugin.RunPlugin(ctx, pluginDeps(cmd, deps), e, p, input)
-			if err != nil {
+			// ErrAudit: the findings are stored, only the audit write failed.
+			if err != nil && !errors.Is(err, plugin.ErrAudit) {
 				return pluginErr(deps, e, p.Name, err)
 			}
 			if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
-				return json.NewEncoder(deps.Stdout).Encode(pluginRunView{Project: p.Name, Key: key, RunResult: res})
+				if jerr := json.NewEncoder(deps.Stdout).Encode(pluginRunView{Project: p.Name, Key: key, RunResult: res}); jerr != nil {
+					return jerr
+				}
+			} else {
+				fmt.Fprintln(deps.Stdout, pluginSummary(deps, e, p.Name, res))
 			}
-			fmt.Fprintln(deps.Stdout, pluginSummary(deps, e, p.Name, res))
+			if err != nil {
+				return pluginErr(deps, e, p.Name, err)
+			}
 			return nil
 		},
 	}
@@ -99,6 +106,10 @@ func pluginErr(deps *Deps, e source.Entry, projectName string, err error) error 
 		return deps.Errorf("cli.source.run.no_rules")
 	case errors.Is(err, plugin.ErrDisabled):
 		return deps.Errorf("cli.source.run.off", e.Key, e.Key)
+	case errors.Is(err, plugin.ErrReportTooBig):
+		return deps.Errorf("cli.source.run.report_too_big", tool, plugin.MaxResults, plugin.MaxReportSize>>20)
+	case errors.Is(err, plugin.ErrAudit):
+		return deps.Wrapf("cli.source.run.audit_failed", err, tool, projectName)
 	}
 	return deps.Wrapf("cli.source.run.failed", err, tool, projectName)
 }

@@ -1,6 +1,6 @@
 {{- if ne .Kind "dependency" -}}
 {{- if .Urgent}}Fix this first. {{end -}}
-{{if eq .Kind "vulnerability"}}Fixing it means updating the package the report names.{{else}}Fixing it means changing your code, not a dependency.{{end}}
+{{if eq .Kind "vulnerability"}}Fixing it means updating the package the report names.{{else}}Fixing it means changing your project (code or configuration), not a dependency.{{end}}
 {{- else -}}
 {{- if .Urgent}}Fix this first. {{end -}}
 {{- if eq .Target "" -}}

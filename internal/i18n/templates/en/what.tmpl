@@ -1,5 +1,5 @@
 {{- if ne .Kind "dependency" -}}
-{{.Tool}} flags the {{if eq .Kind "vulnerability"}}flaw{{else}}rule{{end}} {{.RuleID}}{{if .Location}} in {{.Location}}{{end}}.{{if .Summary}} The report says: "{{.Summary}}"{{end}}
+{{.Tool}} flags {{if eq .Kind "vulnerability"}}the flaw{{else}}the problem{{end}} {{.RuleID}}{{if .Location}} in {{.Location}}{{end}}.{{if .Summary}} The report says: "{{.Summary}}"{{end}}
 {{- else -}}
 {{- if .Malicious}}Warning: {{.Package}} {{.Installed}} is a malicious package, published on purpose to harm whoever installs it; it is not a mere flaw. {{end -}}
 {{- if not .HasAnalysis -}}

@@ -18,7 +18,6 @@ const (
 	maxMessage  = 2000
 	maxRuleID   = 200
 	maxLocation = 500
-	maxResults  = 10000
 )
 
 type sarifLog struct {
@@ -79,8 +78,8 @@ func ParseSARIF(r io.Reader, projectRoot string) ([]ExternalFinding, error) {
 			rules[rule.ID] = rule
 		}
 		for _, res := range run.Results {
-			if len(out) >= maxResults {
-				return out, nil
+			if len(out) >= MaxResults {
+				return nil, ErrReportTooBig
 			}
 			rule, ok := rules[res.RuleID]
 			if !ok && res.RuleIndex != nil && *res.RuleIndex >= 0 && *res.RuleIndex < len(run.Tool.Driver.Rules) {

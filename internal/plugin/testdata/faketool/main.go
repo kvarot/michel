@@ -48,6 +48,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "the network was reachable")
 		os.Exit(3)
 	}
+	fmt.Println("home=" + os.Getenv("HOME"))
 	if err := os.WriteFile(out, []byte(report), 0o600); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(4)

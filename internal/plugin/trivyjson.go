@@ -53,8 +53,11 @@ func ParseTrivyJSON(r io.Reader, knownCVEs map[string]bool) (findings []External
 			continue
 		}
 		for _, m := range res.Misconfigurations {
-			if !strings.EqualFold(m.Status, "FAIL") || len(findings) >= maxResults {
+			if !strings.EqualFold(m.Status, "FAIL") {
 				continue
+			}
+			if len(findings) >= MaxResults {
+				return nil, 0, ErrReportTooBig
 			}
 			id := m.ID
 			if id == "" {
@@ -77,8 +80,11 @@ func ParseTrivyJSON(r io.Reader, knownCVEs map[string]bool) (findings []External
 				skippedKnown++
 				continue
 			}
-			if id == "" || len(findings) >= maxResults {
+			if id == "" {
 				continue
+			}
+			if len(findings) >= MaxResults {
+				return nil, 0, ErrReportTooBig
 			}
 			f := ExternalFinding{RuleID: clip(id, maxRuleID), Location: clip(target, maxLocation), Severity: trivySeverity(v.Severity),
 				Kind: KindVulnerability, Aliases: []string{clip(id, maxRuleID)},
