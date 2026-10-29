@@ -199,6 +199,9 @@ type Preview struct {
 	// WillWrite is the folder a skill is copied to; "" for an MCP server,
 	// which writes nothing outside the data folder.
 	WillWrite string `json:"will_write"`
+	// OldDir is the installed skill folder that the installation replaces
+	// and removes when this version has another name; "" otherwise.
+	OldDir string `json:"old_dir"`
 	// Launch is the line to run to add an MCP server to Claude Code; ""
 	// when the launch command is not known.
 	Launch string `json:"launch"`

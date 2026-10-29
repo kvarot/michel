@@ -127,6 +127,9 @@ func printPreview(deps *Deps, p gitrepo.Preview, kind source.Kind) {
 	}
 	fmt.Fprintln(out, deps.T("cli.source.install.never_run"))
 	if kind == source.KindSkill {
+		if p.OldDir != "" {
+			fmt.Fprintln(out, deps.T("cli.source.upgrade.folder_changes", p.OldDir, p.WillWrite))
+		}
 		fmt.Fprintln(out, deps.T("cli.source.install.will_write", p.WillWrite))
 		return
 	}
@@ -280,7 +283,7 @@ func newSourceUpgradeCmd(deps *Deps) *cobra.Command {
 			}
 			out := deps.Stderr
 			fmt.Fprintln(out, deps.T("cli.source.upgrade.title", key, diff.From, diff.To))
-			if diff.NewDir != "" && diff.OldDir != diff.NewDir {
+			if diff.NewDir != "" && !gitrepo.SameDir(diff.OldDir, diff.NewDir) {
 				fmt.Fprintln(out, deps.T("cli.source.upgrade.folder_changes", diff.OldDir, diff.NewDir))
 			}
 			list := func(files []string) string {

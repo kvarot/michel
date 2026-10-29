@@ -253,7 +253,14 @@ func PreviewInstall(ctx context.Context, d Deps, e source.Entry, sha string) (Pr
 		if d.SkillsDir == "" {
 			return Preview{}, fmt.Errorf("no skills folder")
 		}
-		p.WillWrite = filepath.Join(d.SkillsDir, name)
+		skills, err := filepath.Abs(d.SkillsDir)
+		if err != nil {
+			return Preview{}, fmt.Errorf("cannot resolve the skills folder: %w", err)
+		}
+		p.WillWrite = filepath.Join(skills, name)
+		// Install replaces the installed folder when the pinned version
+		// has another name: shown before consent like an upgrade.
+		p.OldDir = previousDir(e, p.WillWrite)
 	} else {
 		p.Launch, p.Downloads = launchOf(e)
 	}

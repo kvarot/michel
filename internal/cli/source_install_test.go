@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -201,13 +202,16 @@ func openStore(t *testing.T, dir string) *store.Store {
 	return s
 }
 
-func TestSourceUpgradeShowsAndAppliesARename(t *testing.T) {
-	dir, skills := setupSkill(t)
-	const newPin = "1234512345123451234512345123451234512345"
+const newPin = "1234512345123451234512345123451234512345"
+
+// serveNewVersion installs skill.demo at demoPin, then serves, at newPin, a
+// version of it whose front matter name is name.
+func serveNewVersion(t *testing.T, dir, name string) {
+	t.Helper()
 	var b bytes.Buffer
 	gz := gzip.NewWriter(&b)
 	tw := tar.NewWriter(gz)
-	body := "---\nname: renamed\n---\n\n# Demo 2\n"
+	body := "---\nname: " + name + "\n---\n\n# Demo 2\n"
 	tw.WriteHeader(&tar.Header{Name: "skill-" + newPin + "/skills/demo/SKILL.md", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
 	tw.Write([]byte(body))
 	tw.Close()
@@ -223,16 +227,27 @@ func TestSourceUpgradeShowsAndAppliesARename(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer srv.Close()
-	defer gitrepo.SetBaseURLsForTest(srv.URL, srv.URL)()
+	t.Cleanup(srv.Close)
+	t.Cleanup(gitrepo.SetBaseURLsForTest(srv.URL, srv.URL))
 	if _, out, _, err := run(t, dir, "source", "install", "skill.demo", "--yes"); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
+}
+
+// markNewVersion records newPin as the new version of skill.demo.
+func markNewVersion(t *testing.T, dir string) {
+	t.Helper()
 	s := openStore(t, dir)
+	defer s.Close()
 	if err := source.NewRepo(s).SetStatus(context.Background(), "skill.demo", map[string]any{"new_version": map[string]any{"from": demoPin, "to": newPin}}); err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+}
+
+func TestSourceUpgradeShowsAndAppliesARename(t *testing.T) {
+	dir, skills := setupSkill(t)
+	serveNewVersion(t, dir, "renamed")
+	markNewVersion(t, dir)
 	_, out, errOut, err := run(t, dir, "--lang", "en", "source", "upgrade", "skill.demo", "--yes")
 	if err != nil {
 		t.Fatalf("%v\n%s\n%s", err, out, errOut)
@@ -246,5 +261,61 @@ func TestSourceUpgradeShowsAndAppliesARename(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(skills, "demo")); !os.IsNotExist(err) {
 		t.Errorf("old folder still there: %v", err)
+	}
+}
+
+// source install on an installed skill whose pin now names a version with
+// another name shows, before consent, the folder it replaces and removes.
+func TestSourceInstallShowsTheFolderItReplaces(t *testing.T) {
+	dir, skills := setupSkill(t)
+	serveNewVersion(t, dir, "renamed")
+	s := openStore(t, dir)
+	repo := source.NewRepo(s)
+	e, err := repo.Get(context.Background(), "skill.demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := map[string]any{}
+	for k, v := range e.Config.User {
+		user[k] = v
+	}
+	user["pinned"] = newPin
+	if err := repo.SetUserConfig(context.Background(), "skill.demo", user); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	_, out, errOut, err := run(t, dir, "--lang", "en", "source", "install", "skill.demo", "--yes")
+	if err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, errOut)
+	}
+	want := "its folder moves from " + filepath.Join(skills, "demo") + " to " + filepath.Join(skills, "renamed")
+	if !strings.Contains(errOut, want) {
+		t.Errorf("preview lacks the replaced folder:\n%s", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(skills, "renamed", gitrepo.MarkerFile)); err != nil {
+		t.Errorf("new folder not marked: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(skills, "demo")); !os.IsNotExist(err) {
+		t.Errorf("old folder still there: %v", err)
+	}
+}
+
+// A case-only rename moves nothing on Windows (folder names ignore case):
+// no move is shown there. Elsewhere it is shown. Everywhere the folder
+// reported afterwards exists and carries the new marker.
+func TestSourceUpgradeCaseOnlyRename(t *testing.T) {
+	dir, skills := setupSkill(t)
+	serveNewVersion(t, dir, "Demo")
+	markNewVersion(t, dir)
+	_, out, errOut, err := run(t, dir, "--lang", "en", "source", "upgrade", "skill.demo", "--yes")
+	if err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, errOut)
+	}
+	if moved := strings.Contains(errOut, "its folder moves"); moved != (runtime.GOOS != "windows") {
+		t.Errorf("move shown = %v on %s:\n%s", moved, runtime.GOOS, errOut)
+	}
+	b, err := os.ReadFile(filepath.Join(skills, "Demo", gitrepo.MarkerFile))
+	if err != nil || !strings.Contains(string(b), newPin) {
+		t.Errorf("installed folder lost: %q %v", b, err)
 	}
 }

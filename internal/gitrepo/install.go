@@ -90,9 +90,9 @@ func insideAny(p string, roots []string) bool {
 // pinned to sha and records installed_sha (and install_dir for a skill); a
 // source.install event is written. When a new version of an installed skill
 // has another name (Upgrade shows the move), it is installed in the new
-// folder and the previous one is removed when it carries the marker of e;
-// otherwise the installation is kept and the error is ErrOldFolderKept, with
-// the folder returned.
+// folder and, once the config is saved, the previous one is removed when it
+// carries the marker of e at the installed sha; otherwise the installation
+// is kept and the error is ErrOldFolderKept, with the folder returned.
 func Install(ctx context.Context, d Deps, e source.Entry, sha string) (string, error) {
 	t, err := targetOf(e, sha)
 	if err != nil {
@@ -120,13 +120,14 @@ func Install(ctx context.Context, d Deps, e source.Entry, sha string) (string, e
 		}
 		user["install_dir"] = installedTo
 		ev["folder"] = name
-		if old := previousDir(e, installedTo); old != "" {
-			ev["previous_folder"] = filepath.Base(old)
-			leftover = removeOld(d, e.Key, old)
-		}
 	}
 	if err := d.Repo.SetUserConfig(ctx, e.Key, user); err != nil {
 		return "", err
+	}
+	// The previous folder goes only once the config names the new one.
+	if old := previousDir(e, installedTo); e.Kind == source.KindSkill && old != "" {
+		ev["previous_folder"] = filepath.Base(old)
+		leftover = removeOld(d, e.Key, e.Config.Str("installed_sha"), old, installedTo)
 	}
 	if d.Audit != nil {
 		if _, err := d.Audit.Record(ctx, audit.Event{Actor: d.actor(), Action: "source.install", Target: e.Key, Result: "ok", Evidence: ev}); err != nil {
@@ -140,23 +141,34 @@ func Install(ctx context.Context, d Deps, e source.Entry, sha string) (string, e
 // went elsewhere (its skill name changed); "" otherwise.
 func previousDir(e source.Entry, installedTo string) string {
 	old := e.Config.Str("install_dir")
-	if e.Config.Str("installed_sha") == "" || old == "" || sameDir(old, installedTo) {
+	if e.Config.Str("installed_sha") == "" || old == "" || SameDir(old, installedTo) {
 		return ""
 	}
 	return old
 }
 
 // removeOld removes the folder of the previous version after a move: only
-// when it lies in the skills folder, has a valid name and carries the
-// marker of key. Otherwise, or when the removal fails, it is left there and
-// the error (ErrOldFolderKept) says so; the new installation stays.
-func removeOld(d Deps, key, old string) error {
+// when it is not the folder just installed (installedTo) under another
+// spelling, lies in the skills folder, has a valid name and carries the
+// marker of key with the previous sha (oldSHA; the new installation's
+// marker has the new one). A case-only rename on a case-insensitive
+// filesystem resolves old to the new folder: it is kept, without error.
+// Otherwise, or when the removal fails, old is left there and the error
+// (ErrOldFolderKept) says so; the new installation stays.
+func removeOld(d Deps, key, oldSHA, old, installedTo string) error {
 	if _, err := os.Lstat(old); err != nil {
 		return nil // already gone
 	}
+	if a, err := os.Stat(old); err == nil {
+		if b, err := os.Stat(installedTo); err == nil && os.SameFile(a, b) {
+			return nil // the folder just installed
+		}
+	}
 	skills, err := filepath.Abs(d.SkillsDir)
-	if err != nil || d.SkillsDir == "" || !sameDir(filepath.Dir(old), skills) || !validSkillName(filepath.Base(old)) || !ownedBy(old, key) {
-		return fmt.Errorf("%w: %s does not carry Michel's marker for %s", ErrOldFolderKept, old, key)
+	m, marked := readMarker(old)
+	if err != nil || d.SkillsDir == "" || !SameDir(filepath.Dir(old), skills) || !validSkillName(filepath.Base(old)) ||
+		!marked || m.Key != key || oldSHA == "" || m.SHA != oldSHA {
+		return fmt.Errorf("%w: %s does not carry Michel's marker for %s at %s", ErrOldFolderKept, old, key, oldSHA)
 	}
 	if err := os.RemoveAll(old); err != nil {
 		return fmt.Errorf("%w: %s: %v", ErrOldFolderKept, old, err)
@@ -164,8 +176,8 @@ func removeOld(d Deps, key, old string) error {
 	return nil
 }
 
-// sameDir compares two folders after cleaning, without case on Windows.
-func sameDir(a, b string) bool {
+// SameDir compares two folders after cleaning, without case on Windows.
+func SameDir(a, b string) bool {
 	a, b = filepath.Clean(a), filepath.Clean(b)
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(a, b)
@@ -284,7 +296,7 @@ func Uninstall(ctx context.Context, d Deps, e source.Entry) error {
 	ev := map[string]any{"key": e.Key, "kind": string(e.Kind), "mode": "uninstalled"}
 	if dir := e.Config.Str("install_dir"); e.Kind == source.KindSkill && dir != "" {
 		skills, err := filepath.Abs(d.SkillsDir)
-		if d.SkillsDir == "" || err != nil || !sameDir(filepath.Dir(dir), skills) || !validSkillName(filepath.Base(dir)) {
+		if d.SkillsDir == "" || err != nil || !SameDir(filepath.Dir(dir), skills) || !validSkillName(filepath.Base(dir)) {
 			return fmt.Errorf("%w: %s is not a folder of the skills folder", ErrForeignDir, dir)
 		}
 		if _, err := os.Lstat(dir); err == nil {
@@ -351,7 +363,14 @@ func Upgrade(ctx context.Context, d Deps, e source.Entry, toSHA string) (Diff, e
 		if err != nil {
 			return Diff{}, err
 		}
-		diff.NewDir = filepath.Join(d.SkillsDir, name)
+		if d.SkillsDir == "" {
+			return Diff{}, errors.New("no skills folder")
+		}
+		skills, err := filepath.Abs(d.SkillsDir)
+		if err != nil {
+			return Diff{}, fmt.Errorf("cannot resolve the skills folder: %w", err)
+		}
+		diff.NewDir = filepath.Join(skills, name)
 		diff.OldDir = e.Config.Str("install_dir")
 		if diff.OldDir == "" {
 			diff.OldDir = diff.NewDir

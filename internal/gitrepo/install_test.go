@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/store"
 )
 
 const demoSkill = "---\nname: demo\ndescription: an example skill\n---\n\n# Demo\n\nline\x1b[31m with a control character\n"
@@ -327,6 +328,13 @@ func TestUpgradeMovesARenamedSkill(t *testing.T) {
 	if err != nil || diff.OldDir != oldDir || diff.NewDir != newDir {
 		t.Fatalf("diff = %+v err %v", diff, err)
 	}
+	// A direct install of that version shows the folder it replaces too.
+	if p, err := PreviewInstall(ctx, d, e, shaB); err != nil || p.OldDir != oldDir || p.WillWrite != newDir {
+		t.Fatalf("preview = %+v err %v", p, err)
+	}
+	if p, err := PreviewInstall(ctx, d, e, shaA); err != nil || p.OldDir != "" {
+		t.Fatalf("same name: preview old dir = %q err %v", p.OldDir, err)
+	}
 	if _, err := Install(ctx, d, e, shaB); !errors.Is(err, ErrForeignDir) {
 		t.Fatalf("foreign new folder: err = %v", err)
 	}
@@ -430,5 +438,141 @@ func TestUninstallRevalidatesInstallDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(d.SkillsDir, "demo", "SKILL.md")); err != nil {
 		t.Error("the installed skill was removed")
+	}
+}
+
+// An old folder whose marker carries the new sha is the new installation
+// seen under another spelling (a case-only rename on a case-insensitive
+// filesystem): it is never removed. Simulated by rewriting the marker, so
+// the test does not depend on the host's case sensitivity.
+func TestInstallKeepsAnOldFolderMarkedWithTheNewSHA(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	gh.archives[shaB] = buildTarGz(t, file("skills/demo/SKILL.md", strings.Replace(demoSkill, "name: demo", "name: renamed", 1)))
+	d := testDeps(t)
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	if _, err := Install(ctx, d, e, shaA); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = d.Repo.Get(ctx, e.Key)
+	oldDir := filepath.Join(d.SkillsDir, "demo")
+	m, _ := json.Marshal(marker{Key: e.Key, SHA: shaB})
+	if err := os.WriteFile(filepath.Join(oldDir, MarkerFile), m, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	to, err := Install(ctx, d, e, shaB)
+	if !errors.Is(err, ErrOldFolderKept) || to != filepath.Join(d.SkillsDir, "renamed") {
+		t.Fatalf("install: %q %v", to, err)
+	}
+	if _, err := os.Stat(filepath.Join(oldDir, "SKILL.md")); err != nil {
+		t.Error("a folder marked with the new sha was removed")
+	}
+}
+
+// removeOld never removes the folder just installed, even when it is named
+// with another spelling: the same-file check holds on every OS.
+func TestRemoveOldSkipsTheFolderJustInstalled(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	d := testDeps(t)
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	to, err := Install(ctx, d, e, shaA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeOld(d, e.Key, shaA, to, to); err != nil {
+		t.Fatalf("removeOld: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(to, MarkerFile)); err != nil {
+		t.Errorf("the folder just installed was removed: %v", err)
+	}
+	// A symbolic link to it (where the host allows one) is the same folder too.
+	link := filepath.Join(d.SkillsDir, "alias")
+	if os.Symlink(to, link) == nil {
+		if err := removeOld(d, e.Key, shaA, link, to); err != nil {
+			t.Fatalf("removeOld through a link: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(to, MarkerFile)); err != nil {
+			t.Errorf("the folder just installed was removed through a link: %v", err)
+		}
+	}
+}
+
+// A new version whose name differs only by case leaves one working
+// installation whatever the filesystem: the folder returned and recorded
+// exists and carries the new marker.
+func TestUpgradeCaseOnlyRenameKeepsTheNewFolder(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	gh.archives[shaB] = buildTarGz(t, file("skills/demo/SKILL.md", strings.Replace(demoSkill, "name: demo", "name: Demo", 1)))
+	d := testDeps(t)
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	if _, err := Install(ctx, d, e, shaA); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = d.Repo.Get(ctx, e.Key)
+	to, err := Install(ctx, d, e, shaB)
+	if err != nil {
+		t.Fatalf("install: %q %v", to, err)
+	}
+	if m := readMarkerT(t, to); m["key"] != e.Key || m["sha"] != shaB {
+		t.Errorf("marker of %s = %v", to, m)
+	}
+	if got, _ := d.Repo.Get(ctx, e.Key); got.Config.Str("install_dir") != to || got.Config.Str("installed_sha") != shaB {
+		t.Errorf("config = %+v", got.Config.User)
+	}
+}
+
+// With a relative skills folder the folders of an upgrade are absolute, like
+// the install_dir recorded, so a same-name version does not look like a move.
+func TestUpgradeFoldersAreAbsolute(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	gh.archives[shaB] = buildTarGz(t, file("skills/demo/SKILL.md", demoSkill+"more\n"))
+	d := testDeps(t)
+	t.Chdir(t.TempDir())
+	d.SkillsDir = "skills"
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	if _, err := Install(ctx, d, e, shaA); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = d.Repo.Get(ctx, e.Key)
+	diff, err := Upgrade(ctx, d, e, shaB)
+	if err != nil || !filepath.IsAbs(diff.NewDir) || !SameDir(diff.OldDir, diff.NewDir) {
+		t.Fatalf("diff = %+v err %v", diff, err)
+	}
+	if p, err := PreviewInstall(ctx, d, e, shaB); err != nil || !filepath.IsAbs(p.WillWrite) || p.OldDir != "" {
+		t.Fatalf("preview = %+v err %v", p, err)
+	}
+}
+
+// When the config cannot be saved, the previous folder is still there: it
+// is removed only once install_dir names the new one.
+func TestInstallKeepsTheOldFolderWhenTheConfigIsNotSaved(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.archives[shaA] = skillArchive(t, demoSkill)
+	gh.archives[shaB] = buildTarGz(t, file("skills/demo/SKILL.md", strings.Replace(demoSkill, "name: demo", "name: renamed", 1)))
+	d := testDeps(t)
+	ctx := context.Background()
+	e := addEntry(t, d, source.KindSkill, "skill", "skills/demo", nil)
+	if _, err := Install(ctx, d, e, shaA); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = d.Repo.Get(ctx, e.Key)
+	closed, err := store.Open(filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.Close()
+	d.Repo, d.Audit = source.NewRepo(closed), nil
+	if _, err := Install(ctx, d, e, shaB); err == nil {
+		t.Fatal("install succeeded with a closed store")
+	}
+	if _, err := os.Stat(filepath.Join(d.SkillsDir, "demo", MarkerFile)); err != nil {
+		t.Errorf("the old folder was removed before the config was saved: %v", err)
 	}
 }
