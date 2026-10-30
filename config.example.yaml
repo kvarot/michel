@@ -14,6 +14,10 @@ sovereignty:
     remote_error_reporting: false
     # 'michel source enable <key>' adds the rule a source needs here, after your consent
     # (keeping a copy of this file as config.yaml.bak); 'michel source disable <key> --forget' removes it.
+    # Purposes: osv.db, source.enrich, source.feed, source.repo, source.discover, notify.email,
+    # notify.webhook. plugin.<key> is never allowed. Hosts of each source: docs/sources.md.
+    # Example written by 'michel source enable enrich.kev':
+    #   - {host: www.cisa.gov, purpose: source.enrich}
     allow: []                   # each rule needs a host and a purpose
   audit:
     enabled: true

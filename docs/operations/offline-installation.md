@@ -2,7 +2,7 @@
 
 🇫🇷 Version française : [offline-installation.fr.md](offline-installation.fr.md)
 
-Michel scans lockfiles against OSV databases stored on disk. A scan never touches the network. Only `michel db update` does, and only if you explicitly allow it.
+Michel scans lockfiles against OSV databases stored on disk. A scan never touches the network. Only `michel db update` and `michel source update` (or `scan --update`) do, and only for the hosts you explicitly allowed.
 
 ## Build
 
@@ -49,13 +49,19 @@ michel db update
 michel db status
 ```
 
-`db update` downloads `Packagist/all.zip` and `npm/all.zip` from the OSV bucket, checks the zip, installs it atomically (the previous database is kept on any failure) and writes a `fetched_at` file next to each zip: `<osv root>/osv-scalibr/<ecosystem>/fetched_at` (RFC 3339 date). `db status` shows `STALE` when that date is older than 7 days. A database copied by other means, without the `fetched_at` file, is used normally but shows no date and is reported `STALE`.
+`db update` downloads the `all.zip` of each enabled ecosystem from the OSV bucket (`Packagist/all.zip` and `npm/all.zip` by default), checks the zip, installs it atomically (the previous database is kept on any failure) and writes a `fetched_at` file next to each zip: `<osv root>/osv-scalibr/<ecosystem>/fetched_at` (RFC 3339 date). `db status` shows `STALE` when that date is older than 7 days. A database copied by other means, without the `fetched_at` file, is used normally but shows no date and is reported `STALE`.
 
 ## Copying to an isolated machine
 
 1. On the connected machine, run `michel db update`.
 2. Copy the whole `osv/` folder (including the `fetched_at` files) to the isolated machine, at `<data-dir>/osv/` or anywhere you point `db.osv_path` to.
 3. On the isolated machine, no allow rule is needed. Check with `michel db status`.
+
+## Other databases, KEV and EPSS
+
+The OSV databases Michel downloads are those of the enabled `osv.*` sources: `osv.packagist` and `osv.npm` by default. `michel source enable osv.pypi` (for example) adds one, after your consent to the OSV bucket; `michel source update` (or `scan --update`) then downloads every enabled database, not only Packagist and npm. They all land in the same `osv/` folder, one sub-folder per ecosystem, so the copy above carries them too. Michel reads only Composer and npm lockfiles today (`composer.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`): the other databases wait for their readers.
+
+KEV and EPSS (`enrich.kev`, `enrich.epss`) are not files: `source update` stores them in Michel's database (`<data-dir>/michel.db`), next to your findings and decisions. There is no command to export or import them in this version, so they cannot be carried to an isolated machine on their own. Without them, a scan works the same; findings simply have no "exploited in the wild" mark and no EPSS figure. See [sources.md](../sources.md).
 
 ## Scanning
 
@@ -67,7 +73,7 @@ michel audit verify
 michel audit list --last 20
 ```
 
-`scan` looks for `composer.lock` and `package-lock.json` files, skipping any `vendor/` and `node_modules/` directory. A missing OSV database makes the scan fail before anything else, with the command to fix it. A corrupt manifest is recorded as failed (scan status `partial`) and the other manifests are still scanned. `audit verify` checks the hash chain of the audit log. `audit list` must not show any `egress.attempt` event after an offline scan.
+`scan` looks for `composer.lock`, `package-lock.json`, `yarn.lock` and `pnpm-lock.yaml` files, skipping any `vendor/` and `node_modules/` directory. A folder without any lockfile is recorded as `empty`, not as a failure. A missing OSV database makes the scan fail before anything else, with the command to fix it. A corrupt manifest is recorded as failed (scan status `partial`) and the other manifests are still scanned. `audit verify` checks the hash chain of the audit log. `audit list` must not show any `egress.attempt` event after an offline scan.
 
 ## Analysis
 

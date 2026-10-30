@@ -49,6 +49,8 @@ michel scan --all --update --digest # lit d'abord les sources activées (comme m
 
 **Période couverte.** Un digest couvre tout ce qui s'est passé depuis la fin du dernier digest envoyé avec `--send`, que ses canaux aient réussi ou non. La première fois, il couvre les 24 dernières heures. La période n'est pas plafonnée : après trois semaines d'absence, le digest dit « Tout ce qui a changé depuis le <date> » et liste tout. `--since AAAA-MM-JJ` impose le début, par exemple pour renvoyer après l'échec d'un canal.
 
+**Failles que des pirates utilisent déjà** passe en premier, avant les projets, dès que `enrich.kev` est activée : toutes les failles de la liste KEV de la CISA (ou les paquets malveillants) encore ouvertes ou que tu as décidé de corriger, quelles que soient leur date et leur gravité. Celles que tu as reportées ou ignorées avec une raison reviennent en une seule ligne de compte. **À lire** vient après les projets : au plus 10 avis d'éditeurs non lus, publiés pendant la période et qui parlent des technologies que tu utilises. Les deux sont expliqués dans [sources.fr.md](../sources.fr.md).
+
 **Rubriques**, pour chaque projet actif :
 
 - une ligne de compteurs : failles ouvertes par gravité, tes décisions par action, nombre de jours sans nouvelle faille critique (quand il n'y en a aucune d'ouverte, le digest affiche « 0 faille critique ouverte » comme un bon état à conserver) ;

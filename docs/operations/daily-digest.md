@@ -47,6 +47,8 @@ michel scan --all --update --digest # read the enabled sources first (as michel 
 
 **Window.** A digest covers everything since the end of the last digest sent with `--send`, whatever the result of its channels. The first time, it covers the last 24 hours. There is no cap: after three weeks away, the digest says "Everything that changed since <date>" and lists it all. `--since YYYY-MM-DD` forces the start, for example to send again after a channel failed.
 
+**Exploited in the wild** comes first, above the projects, once `enrich.kev` is on: every finding on CISA's KEV list (or a malicious package) that is open or decided "fix", whatever its window and severity. The ones you deferred or ignored with a reason come back as one count line. **To read** comes after the projects: at most 10 unread vendor advisories of the window, about the technologies you use. Both are explained in [sources.md](../sources.md).
+
 **Sections**, for each active project:
 
 - a counter line: open findings by severity, your decisions by action, days without a new critical finding ("0 critical open" is shown as a state to keep);
