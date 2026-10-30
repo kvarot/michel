@@ -57,7 +57,7 @@ func parseTime(s string) (time.Time, error) {
 // waits for the user: the project has no other attempt meanwhile.
 const busyStates = `('preparing','proposed','approved')`
 
-const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at, work_json, approved_by`
+const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at, work_json, approved_by, approved_proposal, approved_hash`
 
 func workJSON(w Work) (string, error) {
 	w.Mirror = w.Copy.Mirror
@@ -81,7 +81,7 @@ func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	if err != nil {
 		return Attempt{}, err
 	}
-	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,'')`,
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,'','','')`,
 		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now), work)
 	if err != nil {
 		return Attempt{}, fmt.Errorf("cannot save the fix attempt: %w", err)
@@ -108,10 +108,12 @@ func (r *Repo) SetWork(ctx context.Context, id string, w Work) error {
 }
 
 // Approve moves the attempt from proposed to approved and records who did
-// it (ErrBadTransition in any other state).
-func (r *Repo) Approve(ctx context.Context, id, by string) error {
-	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, approved_by = ?, updated_at = ? WHERE id = ? AND state = ?`,
-		string(StateApproved), by, ts(r.now()), id, string(StateProposed))
+// it and for which proposal (id and hash), in one conditional update
+// (ErrBadTransition in any other state).
+func (r *Repo) Approve(ctx context.Context, id, by, proposalID, hash string) error {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, approved_by = ?, approved_proposal = ?, approved_hash = ?, updated_at = ?
+		WHERE id = ? AND state = ?`,
+		string(StateApproved), by, proposalID, hash, ts(r.now()), id, string(StateProposed))
 	if err != nil {
 		return fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
@@ -129,7 +131,7 @@ type scanner interface{ Scan(...any) error }
 func scanAttempt(s scanner) (Attempt, error) {
 	var a Attempt
 	var state, created, updated, work string
-	if err := s.Scan(&a.ID, &a.FindingID, &a.ProjectID, &a.Origin, &state, &a.CloneDir, &a.SessionID, &a.Cause, &created, &updated, &work, &a.ApprovedBy); err != nil {
+	if err := s.Scan(&a.ID, &a.FindingID, &a.ProjectID, &a.Origin, &state, &a.CloneDir, &a.SessionID, &a.Cause, &created, &updated, &work, &a.ApprovedBy, &a.ApprovedProposal, &a.ApprovedHash); err != nil {
 		return Attempt{}, err
 	}
 	a.State = State(state)
@@ -226,7 +228,9 @@ func (r *Repo) SetRun(ctx context.Context, id, cloneDir, sessionID string) error
 const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw`
 
 // AddProposal stores p for its attempt and marks the attempt's previous
-// proposals Superseded, in one transaction. ID and CreatedAt are set here.
+// proposals Superseded, in one transaction that also checks the attempt is
+// preparing or proposed (ErrBadTransition otherwise: no proposal ever lands
+// on an approved or applied attempt). ID and CreatedAt are set here.
 func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	now := r.now()
 	id, err := r.newID(now)
@@ -248,6 +252,21 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET updated_at = ? WHERE id = ? AND state IN (?, ?)`,
+		ts(now), p.AttemptID, string(StatePreparing), string(StateProposed))
+	if err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Checked inside the transaction: the store has one connection.
+		var state string
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM fix_attempt WHERE id = ?`, p.AttemptID).Scan(&state); errors.Is(err, sql.ErrNoRows) {
+			return Proposal{}, fmt.Errorf("%w: %s", ErrNotFound, p.AttemptID)
+		} else if err != nil {
+			return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+		}
+		return Proposal{}, fmt.Errorf("%w (a proposal needs an attempt that is preparing or proposed, not %s)", ErrBadTransition, state)
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}

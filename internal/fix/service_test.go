@@ -92,6 +92,9 @@ type recorder struct {
 	runs []run
 	// fail makes the program named here exit with an error.
 	fail string
+	// onRun, when set, acts in the copy for a recorded command (a fake
+	// composer that rewrites the lockfile).
+	onRun func(name string, args []string, dir string)
 }
 
 type run struct {
@@ -109,6 +112,9 @@ func (r *recorder) exec(ctx context.Context, name string, args, env []string, di
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.runs = append(r.runs, run{name, args, env, dir})
+	if r.onRun != nil {
+		r.onRun(name, args, dir)
+	}
 	if r.fail != "" && name == r.fail {
 		return nil, []byte("1 failure"), &exec.ExitError{}
 	}

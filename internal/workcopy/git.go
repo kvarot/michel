@@ -203,7 +203,7 @@ func Env(d Deps) (env []string, homeDir string, err error) {
 
 // allowedGit is the closed list of git subcommands Michel runs.
 var allowedGit = []string{"clone", "init", "archive", "add", "diff", "commit", "fetch", "merge-base", "rev-parse",
-	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree"}
+	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree", "show"}
 
 // safeConfig neutralizes, for every git command, the settings of a
 // repository's own .git/config (the user's project is not trusted) that make

@@ -67,6 +67,10 @@ type Attempt struct {
 	// ApprovedBy is who approved the current proposal ("auto" when a level
 	// 3 rule did), "" before.
 	ApprovedBy string `json:"approved_by"`
+	// ApprovedProposal and ApprovedHash name the proposal the approval was
+	// given for: Apply applies that one and no other.
+	ApprovedProposal string `json:"approved_proposal"`
+	ApprovedHash     string `json:"approved_hash"`
 	// Work is the work copy and the update plan of the attempt (local
 	// paths: never sent out).
 	Work Work `json:"-"`

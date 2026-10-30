@@ -5,6 +5,9 @@
 -- consent is recorded per project.
 ALTER TABLE fix_attempt ADD COLUMN work_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE fix_attempt ADD COLUMN approved_by TEXT NOT NULL DEFAULT '';
+-- The approval is bound to one proposal: its id and hash, checked again at apply.
+ALTER TABLE fix_attempt ADD COLUMN approved_proposal TEXT NOT NULL DEFAULT '';
+ALTER TABLE fix_attempt ADD COLUMN approved_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE fix_proposal ADD COLUMN commit_sha TEXT NOT NULL DEFAULT '';
 ALTER TABLE fix_proposal ADD COLUMN diff_raw TEXT NOT NULL DEFAULT '';
 

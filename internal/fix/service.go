@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -766,10 +768,25 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	wd.ProxyAddr = proxyURL
 	var lines []string
 	plan := a.Work.Plan
+	// A proposal applied without a click must be Michel's own update: when
+	// the project allows one, the lockfile goes back to its base content
+	// before the update command rewrites it, so nothing the agent wrote in
+	// it survives (controller ruling 35).
+	autoCandidate := p.FixLevel >= 3 && p.AutoFixMinor && len(plan.Update) > 0
+	if autoCandidate {
+		if _, err := workcopy.RestoreBase(ctx, wd, c, plan.ManifestRel); err != nil {
+			if changeRefused(err) {
+				return fail("fix.cause.change_refused", err)
+			}
+			return Proposal{}, err
+		}
+	}
+	updateRan := false
 	if len(plan.Update) > 0 {
 		status, out, err := workcopy.RunTests(ctx, wd, c, plan.Update)
 		switch {
 		case err == nil && status == workcopy.TestsPassed:
+			updateRan = true
 			lines = append(lines, i18n.T(lang, "fix.msg.update_ran", strings.Join(plan.Update, " ")))
 		case err != nil && changeRefused(err):
 			return fail("fix.cause.change_refused", err)
@@ -897,14 +914,100 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 			d.Notify(ctx, len(waiting))
 		}
 	}
-	if hasAn && AutoApplicable(p, prop, an, effectiveRisk(d.Policy, p)) {
-		auto := d
-		auto.Actor = ActorAuto
-		if err := Approve(ctx, auto, attemptID, prop.Hash); err != nil {
+	if hasAn && autoCandidate && updateRan && AutoApplicable(p, prop, an, effectiveRisk(d.Policy, p)) {
+		own, err := michelsOwnChange(ctx, wd, c, plan, ch.Files)
+		if err != nil {
 			return prop, err
+		}
+		if own {
+			auto := d
+			auto.Actor = ActorAuto
+			if err := Approve(ctx, auto, attemptID, prop.Hash); err != nil {
+				return prop, err
+			}
+		} else {
+			_ = d.record(ctx, "fix.auto", attemptID, "skipped", map[string]any{"attempt_id": attemptID, "reason": "the change is not only Michel's own update"})
 		}
 	}
 	return prop, nil
+}
+
+// manifestOf is the manifest next to a lockfile (slash path).
+func manifestOf(lockRel string) string {
+	dir, base := path.Dir(lockRel), path.Base(lockRel)
+	var m string
+	switch base {
+	case "composer.lock":
+		m = "composer.json"
+	case "package-lock.json", "npm-shrinkwrap.json":
+		m = "package.json"
+	default:
+		return ""
+	}
+	if dir == "." {
+		return m
+	}
+	return dir + "/" + m
+}
+
+// michelsOwnChange reports whether the change is exactly what Michel's
+// update command produced: the files changed are the plan's lockfile
+// (rewritten by the command from its base content) and at most its
+// manifest, whose only difference with the base is the constraint of the
+// planned package. Any other file, or any other change of the manifest
+// (scripts, repositories, another package...), means the agent edited
+// something: the user validates by hand.
+func michelsOwnChange(ctx context.Context, wd workcopy.Deps, c workcopy.Copy, plan Plan, files []string) (bool, error) {
+	manifest := manifestOf(plan.ManifestRel)
+	if manifest == "" {
+		return false, nil
+	}
+	for _, f := range files {
+		if f != plan.ManifestRel && f != manifest {
+			return false, nil
+		}
+	}
+	if !slices.Contains(files, manifest) {
+		return true, nil
+	}
+	before, ok, err := workcopy.BaseFile(ctx, wd, c, manifest)
+	if err != nil || !ok {
+		return false, err
+	}
+	root, err := os.OpenRoot(c.Dir)
+	if err != nil {
+		return false, nil
+	}
+	defer root.Close()
+	after, err := root.ReadFile(filepath.FromSlash(manifest))
+	if err != nil {
+		return false, nil
+	}
+	return manifestLimitedTo(before, after, plan.Ecosystem, plan.Package), nil
+}
+
+// manifestLimitedTo reports whether the only difference between two
+// manifests is the constraint of pkg in the dependency sections.
+func manifestLimitedTo(before, after []byte, ecosystem, pkg string) bool {
+	var a, b map[string]any
+	if json.Unmarshal(before, &a) != nil || json.Unmarshal(after, &b) != nil || a == nil || b == nil {
+		return false
+	}
+	sections := []string{"dependencies", "devDependencies", "optionalDependencies", "peerDependencies"}
+	if ecosystem == "Packagist" {
+		sections = []string{"require", "require-dev"}
+	}
+	for _, m := range []map[string]any{a, b} {
+		for _, s := range sections {
+			if deps, ok := m[s].(map[string]any); ok {
+				delete(deps, pkg)
+				if len(deps) == 0 {
+					delete(m, s)
+				}
+			}
+		}
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // effectiveRisk is the risk rule of the project: the policy's with its
@@ -1028,7 +1131,7 @@ func Approve(ctx context.Context, d Deps, attemptID, hash string) error {
 		_ = d.record(ctx, "fix.approve", attemptID, "refused", map[string]any{"attempt_id": attemptID, "reason": "stale proposal", "current_hash": prop.Hash})
 		return ErrStaleProposal
 	}
-	if err := repo.Approve(ctx, attemptID, d.actor()); err != nil {
+	if err := repo.Approve(ctx, attemptID, d.actor(), prop.ID, prop.Hash); err != nil {
 		return err
 	}
 	return d.record(ctx, "fix.approve", attemptID, "ok", map[string]any{
@@ -1070,6 +1173,12 @@ func (d Deps) applyLocked(ctx context.Context, a Attempt) error {
 	}
 	if !ok {
 		return ErrNoProposal
+	}
+	// What was approved is what is applied: the current proposal must be
+	// the one the approval named.
+	if prop.ID != a.ApprovedProposal || prop.Hash != a.ApprovedHash || prop.Hash == "" {
+		_ = actor.record(ctx, "fix.apply", a.ID, "refused", map[string]any{"attempt_id": a.ID, "reason": "proposal changed after approval", "approved_hash": a.ApprovedHash, "current_hash": prop.Hash})
+		return ErrStaleProposal
 	}
 	branch := Branch(a.ID)
 	if mask.HasToken(string(prop.DiffRaw)) || mask.HasToken(prop.Diff) {
