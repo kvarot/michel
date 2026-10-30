@@ -25,6 +25,11 @@ var namePattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 // serve and never by michel secret set.
 const ReservedAPIToken = "api-token"
 
+// GitHubToken is the name of the GitHub token: when set, it goes with the
+// GitHub API requests of the sources (advisories, repository status,
+// discovery) and raises the request budget of an update.
+const GitHubToken = "github-token"
+
 // Store reads and writes named secrets.
 type Store interface {
 	Set(name string, value []byte) error

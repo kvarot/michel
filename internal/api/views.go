@@ -2,7 +2,6 @@ package api
 
 import (
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/kvarot/michel/internal/analyze"
@@ -313,21 +312,78 @@ type PreviewView struct {
 	Upgrade *gitrepo.Diff    `json:"upgrade,omitempty"`
 }
 
-// fileURL, winPath and posixPath find the local paths of a free text (an
-// error stored by a read or a plugin run). A path may hold spaces: it runs
-// to the next ": " (Go's error separator), quote, closing parenthesis, line
-// end or the end of the text.
-var (
-	fileURL   = regexp.MustCompile(`file:/+[^"'\n]*?(: |"|'|\)|\n|$)`)
-	winPath   = regexp.MustCompile(`(^|[^A-Za-z0-9.+-])(?:[A-Za-z]:[\\/]|\\\\[^\\\s]+\\)[^"'\n]*?(: |"|'|\)|\n|$)`)
-	posixPath = regexp.MustCompile(`(^|[\s"'(=\[])/[^"'\n]*?(: |"|'|\)|\n|$)`)
-)
-
 // noPaths replaces every local path of s (Windows, POSIX, file:// URLs)
 // with <path>, after control characters are stripped. Web addresses stay.
+//
+// A path starts with file:/, a drive (C:\ or C:/) or a share (\\host\)
+// after a character that cannot end a word, or with / at the start of the
+// text or after a space, quote, "(", "=" or "[". It may hold spaces and
+// parentheses, so it runs to the next ": " (Go's error separator), quote,
+// line end or end of the text, or to a ")" that no "(" of the path opened:
+// in "(see /tmp/x) refused" that ")" closes the text's own group and stays.
 func noPaths(s string) string {
 	s = scan.SanitizeText(s)
-	s = fileURL.ReplaceAllString(s, "<path>${1}")
-	s = winPath.ReplaceAllString(s, "${1}<path>${2}")
-	return posixPath.ReplaceAllString(s, "${1}<path>${2}")
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if !pathStart(s, i) {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		b.WriteString("<path>")
+		i = pathEnd(s, i)
+	}
+	return b.String()
+}
+
+// pathStart tells whether a local path starts at s[i].
+func pathStart(s string, i int) bool {
+	var prev byte = ' '
+	if i > 0 {
+		prev = s[i-1]
+	}
+	rest := s[i:]
+	switch {
+	case strings.HasPrefix(rest, "file:/"):
+		return true
+	case rest[0] == '/' && strings.IndexByte(" \t\n\v\f\r\"'(=[", prev) >= 0:
+		return true
+	case isWordByte(prev):
+		return false
+	case len(rest) >= 3 && isLetter(rest[0]) && rest[1] == ':' && (rest[2] == '\\' || rest[2] == '/'):
+		return true
+	case strings.HasPrefix(rest, `\\`):
+		host, _, found := strings.Cut(rest[2:], `\`)
+		return found && host != "" && !strings.ContainsAny(host, " \t\n\v\f\r")
+	}
+	return false
+}
+
+// pathEnd is the index just past the path that starts at s[i].
+func pathEnd(s string, i int) int {
+	depth := 0
+	for ; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '"' || c == '\'' || c == '\n':
+			return i
+		case c == ':' && i+1 < len(s) && s[i+1] == ' ':
+			return i
+		case c == '(':
+			depth++
+		case c == ')':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return i
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
+// isWordByte is a character a drive letter cannot follow: C:\ in a.C:\ or
+// 1C:\ is not a path start.
+func isWordByte(c byte) bool {
+	return isLetter(c) || c >= '0' && c <= '9' || c == '.' || c == '+' || c == '-'
 }

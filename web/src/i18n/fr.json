@@ -52,7 +52,7 @@
   "item.overdue": "La date du {date} est passée",
   "item.previous": "Tu avais choisi : {label}",
   "item.decided": "décidée",
-  "item.epss": "Risque d'attaque dans les 30 jours : {p} %",
+  "item.epss": "Risque d'attaque dans les 30 jours : {p}",
   "item.open": "Voir le détail",
   "item.hide": "Masquer le détail",
 
@@ -214,7 +214,7 @@
   "fact.kev": "Exploitée par des attaquants",
   "fact.kev_value": "oui : sur la liste des failles exploitées de la CISA (agence américaine de cybersécurité) depuis le {date}",
   "fact.epss": "Risque d'attaque (EPSS)",
-  "fact.epss_value": "{p} % de chances d'être attaquée dans les 30 jours, plus que {pct} % des failles",
+  "fact.epss_value": "{p} de chances d'être attaquée dans les 30 jours, plus que {pct} des failles",
 
   "sources.title": "Tes sources",
   "sources.summary.on.one": "{n} source active",
@@ -265,6 +265,7 @@
   "sources.switch": "Activer ou désactiver {name}",
   "sources.menu": "Actions pour {name}",
   "sources.action.detail": "Détail",
+  "sources.action.disable": "Désactiver sans donner ton accord",
   "sources.action.update": "Mettre à jour",
   "sources.action.remove": "Retirer",
   "sources.action.reset": "Réinitialiser",

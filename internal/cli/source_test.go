@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/store"
 )
@@ -249,5 +250,19 @@ func TestSourceResetPurgeNeedsYes(t *testing.T) {
 	}
 	if _, err := sourceEntry(t, dir, "feed.demo"); !errors.Is(err, source.ErrNotFound) {
 		t.Errorf("user source kept by --purge-user --yes: %v", err)
+	}
+}
+
+// TestAddRefusalMapsEveryCode: a refusal code without its sentence would
+// fall to the generic message.
+func TestAddRefusalMapsEveryCode(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
+		deps := &Deps{Lang: lang}
+		for _, code := range source.RefusalCodes {
+			err := addRefusal(deps, &source.Refusal{Code: code, Args: []any{"x", "y", "z"}})
+			if err == nil || err.Error() == deps.T("cli.source.add.invalid", errors.New(code)) || strings.Contains(err.Error(), code) {
+				t.Errorf("%s: code %s has no sentence: %v", lang, code, err)
+			}
+		}
 	}
 }

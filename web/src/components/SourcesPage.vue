@@ -189,6 +189,8 @@ export default {
     },
     act(action, s) {
       switch (action) {
+        case 'disable':
+          return this.toggle(s, false)
         case 'update':
           return this.updateOne(s)
         case 'remove':

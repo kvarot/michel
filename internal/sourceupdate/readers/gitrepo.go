@@ -116,12 +116,12 @@ func githubToken(secrets secret.Store) (string, error) {
 	if secrets == nil {
 		return "", nil
 	}
-	v, err := secrets.Get(gitrepo.GitHubTokenSecret)
+	v, err := secrets.Get(secret.GitHubToken)
 	if errors.Is(err, secret.ErrNotFound) {
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("cannot read the secret %s: %w", gitrepo.GitHubTokenSecret, err)
+		return "", fmt.Errorf("cannot read the secret %s: %w", secret.GitHubToken, err)
 	}
 	return strings.TrimSpace(string(v)), nil
 }

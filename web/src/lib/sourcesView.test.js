@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  agoText, badgeKeys, consentSentence, groupByKind, kinds, lastReadText, stateLabelKey, summary, switchOn,
+  agoText, badgeKeys, consentSentence, groupByKind, kinds, lastReadText, rowActions, stateLabelKey, summary, switchOn,
 } from './sourcesView.js'
 import { translate } from '../i18n/index.js'
 
@@ -42,6 +42,19 @@ describe('sourcesView', () => {
     expect(switchOn({ state: 'off', enabled: false })).toBe(false)
     expect(switchOn({ state: 'hidden', enabled: true })).toBe(false)
     expect(switchOn(null)).toBe(false)
+  })
+
+  test('rowActions: a source waiting for consent can be turned off', () => {
+    const waiting = { kind: 'enrichment', state: 'waiting_consent', enabled: true, origin: 'catalog' }
+    expect(rowActions(waiting)).toEqual(['detail', 'disable', 'update', 'remove', 'reset'])
+    expect(rowActions({ ...waiting, state: 'on' })).not.toContain('disable')
+    expect(rowActions({ kind: 'feed', state: 'off', enabled: false, origin: 'user' })).toEqual(['detail', 'remove'])
+    expect(rowActions({ kind: 'skill', state: 'on', enabled: true, origin: 'catalog' })).toEqual(['detail', 'update', 'install', 'remove', 'reset'])
+    expect(rowActions({ kind: 'skill', state: 'on', enabled: true, config: { installed: true }, badges: ['new_version'] })).toContain('upgrade')
+    expect(rowActions({ kind: 'plugin', state: 'on', enabled: true })).toEqual(['detail', 'update', 'run', 'remove'])
+    expect(rowActions({ kind: 'reference', state: 'hidden', enabled: true, origin: 'catalog' })).toEqual(['detail', 'reset'])
+    expect(t('sources.action.disable')).toBe('Désactiver sans donner ton accord')
+    expect(en('sources.action.disable')).toBe('Turn off without giving consent')
   })
 
   test('badgeKeys for new_version, suggested and archived', () => {

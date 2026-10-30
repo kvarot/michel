@@ -13,7 +13,6 @@ import (
 
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/source"
-	"github.com/kvarot/michel/internal/sourceupdate"
 	"github.com/kvarot/michel/internal/store"
 )
 
@@ -61,10 +60,21 @@ func (f *fakeAPI) requests() []string {
 	return append([]string(nil), f.paths...)
 }
 
+// countBudget is a Budget of Remaining requests.
+type countBudget struct{ Remaining int }
+
+func (b *countBudget) Take(n int) bool {
+	if b.Remaining < n {
+		return false
+	}
+	b.Remaining -= n
+	return true
+}
+
 func TestStatusUsesThreeRequestsAndBudget(t *testing.T) {
 	api := newFakeAPI(t)
 	client := testClient(policy.PurposeRepo)
-	b := &sourceupdate.Budget{Remaining: 3}
+	b := &countBudget{Remaining: 3}
 	st, err := Status(context.Background(), client, "tok", "example", "skill", b)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +93,7 @@ func TestStatusUsesThreeRequestsAndBudget(t *testing.T) {
 			t.Errorf("authorization = %q", a)
 		}
 	}
-	b = &sourceupdate.Budget{Remaining: 2}
+	b = &countBudget{Remaining: 2}
 	before := len(api.requests())
 	if _, err := Status(context.Background(), client, "", "example", "skill", b); !errors.Is(err, ErrBudget) {
 		t.Fatalf("budget 2: err = %v", err)
@@ -123,7 +133,7 @@ func TestStatusFlagsNewVersion(t *testing.T) {
 
 func TestDiscoverSkipsKnownRepos(t *testing.T) {
 	api := newFakeAPI(t)
-	found, err := Discover(context.Background(), testClient(policy.PurposeDiscover), "", []string{"mcp-security", "bad topic!"}, &sourceupdate.Budget{Remaining: 5})
+	found, err := Discover(context.Background(), testClient(policy.PurposeDiscover), "", []string{"mcp-security", "bad topic!"}, &countBudget{Remaining: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +170,7 @@ func TestDiscoverSkipsKnownRepos(t *testing.T) {
 	if err := dr.SetState(context.Background(), "example/none", "ignored"); !errors.Is(err, ErrUnknownDiscovery) {
 		t.Errorf("unknown repo: %v", err)
 	}
-	if _, err := Discover(context.Background(), testClient(policy.PurposeDiscover), "", []string{"a", "b"}, &sourceupdate.Budget{Remaining: 1}); !errors.Is(err, ErrBudget) {
+	if _, err := Discover(context.Background(), testClient(policy.PurposeDiscover), "", []string{"a", "b"}, &countBudget{Remaining: 1}); !errors.Is(err, ErrBudget) {
 		t.Errorf("budget: %v", err)
 	}
 }

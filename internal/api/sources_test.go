@@ -303,6 +303,26 @@ func TestEnableWithConsentWritesRuleAndReloadsGateway(t *testing.T) {
 	}
 }
 
+func TestDisableASourceWaitingForConsent(t *testing.T) {
+	f := newFixture(t, nil)
+	// Turned on, its host never allowed: it waits for the consent.
+	if err := source.NewRepo(f.st).SetEnabled(context.Background(), "enrich.kev", true); err != nil {
+		t.Fatal(err)
+	}
+	var v SourceView
+	f.get("/api/v1/sources/enrich.kev", &v)
+	if v.State != "waiting_consent" || !v.Enabled {
+		t.Fatalf("before = %+v", v)
+	}
+	code, b := f.send("POST", "/api/v1/sources/enrich.kev/disable", `{}`)
+	if code != http.StatusOK || json.Unmarshal([]byte(b), &v) != nil || v.State != "off" || v.Enabled {
+		t.Errorf("disable = %d %s", code, b)
+	}
+	if ok, _ := f.gw.Allowed("www.cisa.gov", policy.PurposeEnrich); ok {
+		t.Error("disable allowed the host")
+	}
+}
+
 func TestAddSourceValidates(t *testing.T) {
 	f := newFixture(t, nil)
 	refused := i18n.T(i18n.EN, "api.source.add.refused")
@@ -585,6 +605,8 @@ func (f *fixture) waitRun(id string) (PluginRunView, string) {
 func TestRunPluginReturns202AndRunStatus(t *testing.T) {
 	f := newFixture(t, nil)
 	report := filepath.Join(t.TempDir(), "report.sarif")
+	// The runs end before the report's folder goes.
+	t.Cleanup(f.h.Close)
 	if err := os.WriteFile(report, []byte(demoSARIF), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -652,6 +674,13 @@ func TestRunPluginReturns202AndRunStatus(t *testing.T) {
 	v, raw = f.waitRun(started.RunID)
 	if v.Status != "failed" || v.Error == "" || strings.Contains(raw, "report.sarif") || strings.Contains(raw, filepath.Dir(report)) {
 		t.Errorf("failed run = %+v %s", v, raw)
+	}
+
+	// Once the handler is closed, no run starts: it would outlive the server.
+	f.h.Close()
+	if code, b := f.send("POST", "/api/v1/sources/plugin.demo-sarif/run", `{"project":"demo"}`); code != http.StatusServiceUnavailable ||
+		!strings.Contains(b, i18n.T(i18n.EN, "api.closing")) {
+		t.Errorf("run after close = %d %s", code, b)
 	}
 }
 
@@ -831,6 +860,17 @@ func TestNoPathsStripsLocalPathsWithSpaces(t *testing.T) {
 		`Get "https://www.cisa.gov/feeds/kev.json": EOF`:        `Get "https://www.cisa.gov/feeds/kev.json": EOF`,
 		"open /tmp/x":             "open <path>",
 		"no path here: just text": "no path here: just text",
+		// A path may hold parentheses: only a ")" it did not open ends it.
+		`exec: C:\Program Files (x86)\tool\x.exe: file does not exist`:       "exec: <path>: file does not exist",
+		`open \\srv\share\a (1).txt: Access is denied.`:                      "open <path>: Access is denied.",
+		`run C:\Program Files (x86)\tool\x.exe`:                              "run <path>",
+		`tool "C:\Program Files (x86)\tool\x.exe" failed`:                    `tool "<path>" failed`,
+		"open /home/u/My (old) files/report.json: no such file or directory": "open <path>: no such file or directory",
+		"read /home/u/My (old) files/report.json":                            "read <path>",
+		"bad report (see /tmp/x) refused":                                    "bad report (see <path>) refused",
+		`bad report (see C:\Program Files (x86)\x.json), skipped`:            "bad report (see <path>), skipped",
+		"bad file (file:///home/u/My (old) files/r.sarif) refused":           "bad file (<path>) refused",
+		"bad file (/home/u/a (b)) refused":                                   "bad file (<path>) refused",
 	} {
 		if got := noPaths(in); got != want {
 			t.Errorf("noPaths(%q) = %q, want %q", in, got, want)
@@ -929,7 +969,9 @@ func TestUpdateRoutesReadWithoutNetwork(t *testing.T) {
 		t.Errorf("unknown key = %d", code)
 	}
 	// One update at a time.
-	srv := New(f.deps, testToken).(*server)
+	h := New(f.deps, testToken)
+	defer h.Close()
+	srv := h.s
 	srv.updating.Lock()
 	req := httptest.NewRequest("POST", "/api/v1/sources/update", nil)
 	req.Host = "127.0.0.1:7331"
@@ -947,5 +989,17 @@ func TestUpdateRoutesReadWithoutNetwork(t *testing.T) {
 	if v.Errors["feed.nginx"] != "open <path>: denied; open <path>: denied" || v.SkipReasons["osv.npm"] != "cannot read <path>: gone" ||
 		v.Updated == nil || v.WaitingConsent == nil {
 		t.Errorf("update view = %+v", v)
+	}
+}
+
+// TestRefusalTextMapsEveryCode: a refusal code without its sentence would
+// reach the page as the bare code.
+func TestRefusalTextMapsEveryCode(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
+		for _, code := range source.RefusalCodes {
+			if got := refusalText(lang, &source.Refusal{Code: code, Args: []any{"x", "y", "z"}}); got == "" || strings.Contains(got, code) {
+				t.Errorf("%s: code %s has no sentence: %q", lang, code, got)
+			}
+		}
 	}
 }

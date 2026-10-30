@@ -45,6 +45,7 @@ type fixture struct {
 	proj   project.Project
 	deps   Deps
 	srv    *httptest.Server
+	h      *Handler
 	ids    map[string]string // osv id -> finding id
 	gone   string
 	nItems int
@@ -112,7 +113,11 @@ func newFixture(t *testing.T, web fs.FS) *fixture {
 			return p, err
 		},
 		Sources: Sources{Gateway: f.gw, DataDir: dir}}
-	f.srv = httptest.NewServer(New(f.deps, testToken))
+	f.h = New(f.deps, testToken)
+	f.srv = httptest.NewServer(f.h)
+	// The handler's background work (plugin runs) ends before the store
+	// closes and the folders go: cleanups run last registered first.
+	t.Cleanup(f.h.Close)
 	t.Cleanup(f.srv.Close)
 	return f
 }

@@ -334,6 +334,8 @@ func addRefusal(deps *Deps, r *source.Refusal) error {
 		return deps.Errorf("cli.source.add.bad_tool", r.Args...)
 	case "no_name":
 		return deps.Errorf("cli.source.add.no_name")
+	case "bad_input":
+		return deps.Errorf("cli.source.add.bad_input")
 	case "no_repo":
 		return deps.Errorf("cli.source.add.no_repo", r.Args...)
 	case "bad_pin":

@@ -13,7 +13,7 @@
     <p class="m-row__meta m-small m-muted">
       <span v-if="item.osvIds.length">{{ $t('item.advisories', { n: item.osvIds.length }) }}</span>
       <span v-if="item.kind === 'new' || item.kind === 'gone'">{{ upgrade }}</span>
-      <span v-if="item.epss > 0">{{ $t('item.epss', { p: Math.round(item.epss * 1000) / 10 }) }}</span>
+      <span v-if="item.epss > 0">{{ $t('item.epss', { p: percent(item.epss) }) }}</span>
     </p>
     <p v-if="item.kind === 'new' && item.text" class="m-row__what m-voice">{{ item.text }}</p>
     <p v-else-if="item.kind === 'superseded'" class="m-row__what">
@@ -44,7 +44,7 @@
 
 <script>
 import FindingSheet from './FindingSheet.vue'
-import { formatDate } from '../lib/digestView.js'
+import { formatDate, formatPercent } from '../lib/digestView.js'
 
 let seq = 0
 
@@ -70,6 +70,11 @@ export default {
     },
     dueDate() {
       return formatDate(this.item.text, this.$ui.lang)
+    },
+  },
+  methods: {
+    percent(share) {
+      return formatPercent(share, this.$ui.lang)
     },
   },
 }

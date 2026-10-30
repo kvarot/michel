@@ -152,7 +152,7 @@
 <script>
 import DecisionPanel from './DecisionPanel.vue'
 import { api } from '../api.js'
-import { formatDate, severityOf } from '../lib/digestView.js'
+import { formatDate, formatPercent, severityOf } from '../lib/digestView.js'
 
 const kinds = ['dependency', 'code', 'misconfig', 'web', 'vulnerability']
 
@@ -180,8 +180,8 @@ export default {
       return formatDate(this.f?.kev_added, this.$ui.lang) || '?'
     },
     epss() {
-      const pct = (x) => Math.round((x || 0) * 1000) / 10
-      return { p: pct(this.f?.epss), pct: Math.floor((this.f?.epss_percentile || 0) * 100) }
+      const lang = this.$ui.lang
+      return { p: formatPercent(this.f?.epss, lang), pct: formatPercent(this.f?.epss_percentile, lang, true) }
     },
     glossary() {
       return this.f?.glossary || {}

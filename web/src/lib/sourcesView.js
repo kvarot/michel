@@ -42,6 +42,28 @@ export function switchOn(source) {
 }
 
 /**
+ * rowActions lists the menu actions of a source, in order. A source waiting
+ * for consent is turned on but its switch shows off: "disable" turns it off
+ * without giving the consent.
+ * @param {{kind: string, state: string, enabled?: boolean, origin?: string, badges?: string[], config?: object}} source
+ * @returns {string[]}
+ */
+export function rowActions(source) {
+  const s = source || {}
+  const out = ['detail']
+  if (s.state === 'waiting_consent') out.push('disable')
+  if (s.enabled && s.kind !== 'reference') out.push('update')
+  if ((s.kind === 'skill' || s.kind === 'mcp') && s.state === 'on') {
+    if (s.config?.installed !== true) out.push('install')
+    else if ((s.badges || []).includes('new_version')) out.push('upgrade')
+  }
+  if (s.kind === 'plugin' && s.state === 'on') out.push('run')
+  if (s.state !== 'hidden') out.push('remove')
+  if (s.origin === 'catalog') out.push('reset')
+  return out
+}
+
+/**
  * consentSentence is the sentence of the consent dialog for one host: the
  * server's text (already in the page's language), else one naming the host.
  * @param {{host: string, what?: string}} consent

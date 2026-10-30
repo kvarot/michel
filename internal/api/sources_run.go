@@ -67,12 +67,15 @@ func (s *server) sourceRun(w http.ResponseWriter, r *http.Request) {
 	done := make(chan error, 1)
 	rd := plugin.RunDeps{Store: s.deps.Store, Audit: s.deps.Audit, Repo: source.NewRepo(s.deps.Store), DataDir: s.dataDir(), Now: s.deps.Now,
 		Exec: s.deps.Sources.PluginExec, Proxy: s.deps.Sources.PluginProxy, Started: func(id string) { started <- id }}
-	// The run outlives the request: the page follows it.
-	ctx := context.WithoutCancel(r.Context())
-	go func() {
+	// The run outlives the request (the page follows it) but not the server:
+	// it runs on the server's context, which Close cancels and waits for.
+	if !s.goBackground(func(ctx context.Context) {
 		_, err := plugin.RunPlugin(ctx, rd, e, p, e.Config.Str("input"))
 		done <- err
-	}()
+	}) {
+		s.fail(w, http.StatusServiceUnavailable, i18n.T(lang, "api.closing"), "")
+		return
+	}
 	select {
 	case id := <-started:
 		writeJSON(w, http.StatusAccepted, map[string]string{"run_id": id})

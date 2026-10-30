@@ -111,6 +111,44 @@ type server struct {
 	updating sync.Mutex
 	// policyMu serializes the writes of the policy file (enable, disable).
 	policyMu sync.Mutex
+	// bg is the context of the work that outlives a request (a plugin run):
+	// Close cancels it, then waits for that work (runs) to end. bgMu guards
+	// closed, so that no work starts once Close began.
+	bg     context.Context
+	stop   context.CancelFunc
+	bgMu   sync.Mutex
+	closed bool
+	runs   sync.WaitGroup
+}
+
+// Handler is the API and page handler New builds. Close stops the work it
+// started in the background.
+type Handler struct{ s *server }
+
+// ServeHTTP serves one request.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.s.ServeHTTP(w, r) }
+
+// Close cancels the background work (plugin runs) and waits for it to end.
+// Call it after the HTTP server shut down; it may be called more than once.
+func (h *Handler) Close() {
+	s := h.s
+	s.bgMu.Lock()
+	s.closed = true
+	s.bgMu.Unlock()
+	s.stop()
+	s.runs.Wait()
+}
+
+// goBackground runs f in the background on the server's context, false
+// (f not run) once Close began.
+func (s *server) goBackground(f func(ctx context.Context)) bool {
+	s.bgMu.Lock()
+	defer s.bgMu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.runs.Go(func() { f(s.bg) })
+	return true
 }
 
 // currentPolicy is the policy in force.
@@ -122,7 +160,8 @@ func (s *server) currentPolicy() policy.Policy {
 
 // New builds the handler. Token is required on every /api/v1 route
 // (Authorization: Bearer or, for the first page load only, ?token= on "/").
-func New(deps Deps, token string) http.Handler {
+// Close it after the HTTP server shut down.
+func New(deps Deps, token string) *Handler {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
@@ -133,8 +172,9 @@ func New(deps Deps, token string) http.Handler {
 		deps.Sources.Gateway = egress.New(deps.Policy, nil)
 	}
 	s := &server{deps: deps, token: []byte(token), mux: http.NewServeMux(), policy: deps.Policy}
+	s.bg, s.stop = context.WithCancel(context.Background())
 	s.routes()
-	return s
+	return &Handler{s: s}
 }
 
 func (s *server) routes() {

@@ -326,9 +326,7 @@ func (s *server) sourceEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.PathValue("key")
-	s.policyMu.Lock()
-	_, texts, err := source.Enable(r.Context(), s.consentDeps(), key, req.Consent)
-	s.policyMu.Unlock()
+	texts, err := s.enable(r.Context(), key, req.Consent)
 	switch {
 	case errors.Is(err, source.ErrConsentRequired):
 		body := ConsentBody{Error: i18n.T(lang, "api.source.consent_needed"), Hint: i18n.T(lang, "api.source.consent_needed_hint"), Consent: []ConsentView{}}
@@ -347,6 +345,21 @@ func (s *server) sourceEnable(w http.ResponseWriter, r *http.Request) {
 	s.viewOf(w, r, http.StatusOK, key, lang)
 }
 
+// enable and disable change a source and the policy file it writes, one
+// change at a time.
+func (s *server) enable(ctx context.Context, key string, consent bool) ([]source.ConsentText, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	_, texts, err := source.Enable(ctx, s.consentDeps(), key, consent)
+	return texts, err
+}
+
+func (s *server) disable(ctx context.Context, key string, forget bool) error {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	return source.Disable(ctx, s.consentDeps(), key, forget)
+}
+
 // DisableRequest is the body of POST /sources/{key}/disable.
 type DisableRequest struct {
 	Forget bool `json:"forget"`
@@ -362,9 +375,7 @@ func (s *server) sourceDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.PathValue("key")
-	s.policyMu.Lock()
-	err := source.Disable(r.Context(), s.consentDeps(), key, req.Forget)
-	s.policyMu.Unlock()
+	err := s.disable(r.Context(), key, req.Forget)
 	var shared source.ErrRuleShared
 	switch {
 	case errors.As(err, &shared):

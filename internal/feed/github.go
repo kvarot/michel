@@ -16,10 +16,6 @@ import (
 // githubAPI is the GitHub REST API; tests point it at a local server.
 var githubAPI = "https://api.github.com"
 
-// GitHubTokenSecret is the secret whose value, when set, goes with the
-// GitHub requests (Authorization: Bearer).
-const GitHubTokenSecret = "github-token"
-
 // repoPattern is an owner/name pair of GitHub.
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$`)
 
@@ -33,14 +29,14 @@ func fetchGitHub(ctx context.Context, deps Deps, e source.Entry) (body []byte, e
 	}
 	headers := map[string]string{"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 	if deps.Secrets != nil {
-		tok, err := deps.Secrets.Get(GitHubTokenSecret)
+		tok, err := deps.Secrets.Get(secret.GitHubToken)
 		switch {
 		case err == nil:
 			if t := strings.TrimSpace(string(tok)); t != "" {
 				headers["Authorization"] = "Bearer " + t
 			}
 		case !errors.Is(err, secret.ErrNotFound):
-			return nil, "", fmt.Errorf("cannot read the secret %s: %w", GitHubTokenSecret, err)
+			return nil, "", fmt.Errorf("cannot read the secret %s: %w", secret.GitHubToken, err)
 		}
 	}
 	if deps.TakeGitHub != nil && !deps.TakeGitHub() {

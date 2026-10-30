@@ -25,7 +25,6 @@ import (
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/source"
-	"github.com/kvarot/michel/internal/sourceupdate"
 )
 
 // Bounds of an archive: its compressed size, the bytes and files written.
@@ -46,9 +45,15 @@ const (
 // folder without it (or with another source's key) is never touched.
 const MarkerFile = ".michel-source"
 
-// GitHubTokenSecret is the secret whose value, when set, goes with the
-// GitHub API requests.
-const GitHubTokenSecret = sourceupdate.GitHubTokenSecret
+// Budget is the GitHub request budget Status and Discover take their
+// requests from (sourceupdate.Budget). A nil Budget does not count.
+type Budget interface {
+	// Take spends n requests and reports whether they were available.
+	Take(n int) bool
+}
+
+// take spends n requests of b; a nil b does not count.
+func take(b Budget, n int) bool { return b == nil || b.Take(n) }
 
 var (
 	ErrTraversal     = errors.New("the archive holds a path that leaves its folder")

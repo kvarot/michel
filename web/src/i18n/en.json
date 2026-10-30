@@ -52,7 +52,7 @@
   "item.overdue": "The date of {date} has passed",
   "item.previous": "You had chosen: {label}",
   "item.decided": "decided",
-  "item.epss": "Chance of an attack within 30 days: {p} %",
+  "item.epss": "Chance of an attack within 30 days: {p}",
   "item.open": "Show details",
   "item.hide": "Hide details",
 
@@ -214,7 +214,7 @@
   "fact.kev": "Exploited in the wild",
   "fact.kev_value": "yes: on CISA's list since {date}",
   "fact.epss": "Chance of an attack (EPSS)",
-  "fact.epss_value": "{p} % within 30 days, more than {pct} % of the flaws",
+  "fact.epss_value": "{p} within 30 days, more than {pct} of the flaws",
 
   "sources.title": "Your sources",
   "sources.summary.on.one": "{n} source on",
@@ -265,6 +265,7 @@
   "sources.switch": "Turn {name} on or off",
   "sources.menu": "Actions for {name}",
   "sources.action.detail": "Details",
+  "sources.action.disable": "Turn off without giving consent",
   "sources.action.update": "Update",
   "sources.action.remove": "Remove",
   "sources.action.reset": "Reset",

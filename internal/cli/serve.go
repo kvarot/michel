@@ -127,7 +127,8 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			if fsys, ok := web.Dist(); ok {
 				d.Web = fsys
 			}
-			srv := &http.Server{Handler: api.New(d, token), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+			h := api.New(d, token)
+			srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 				WriteTimeout: time.Minute, IdleTimeout: 2 * time.Minute}
 			if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "serve", Action: "api.start", Target: bound, Result: "ok",
 				Evidence: map[string]any{"listen": bound}}); err != nil {
@@ -153,6 +154,8 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			shutdown, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
+			// The plugin runs the page started are cancelled and waited for.
+			h.Close()
 			if _, err := deps.Audit.Record(context.Background(), audit.Event{Actor: "serve", Action: "api.stop", Target: bound, Result: "ok",
 				Evidence: map[string]any{"listen": bound}}); err != nil {
 				return deps.Wrapf("cli.serve.audit_failed", err)

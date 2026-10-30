@@ -73,7 +73,7 @@
 <script>
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
-import { badgeKeys, lastReadText, stateLabelKey, switchOn } from '../lib/sourcesView.js'
+import { badgeKeys, lastReadText, rowActions, stateLabelKey, switchOn } from '../lib/sourcesView.js'
 
 // mdi dots-vertical, for the default svg icon set.
 const dots = 'M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z'
@@ -102,21 +102,8 @@ export default {
     lastRead() {
       return lastReadText(this.source.last_read, this.now, this.$t)
     },
-    installed() {
-      return this.source.config?.installed === true
-    },
     actions() {
-      const s = this.source
-      const out = ['detail']
-      if (s.enabled && s.kind !== 'reference') out.push('update')
-      if ((s.kind === 'skill' || s.kind === 'mcp') && s.state === 'on') {
-        if (!this.installed) out.push('install')
-        else if ((s.badges || []).includes('new_version')) out.push('upgrade')
-      }
-      if (s.kind === 'plugin' && s.state === 'on') out.push('run')
-      if (s.state !== 'hidden') out.push('remove')
-      if (s.origin === 'catalog') out.push('reset')
-      return out
+      return rowActions(this.source)
     },
     stars() {
       const n = this.detail?.status?.stars

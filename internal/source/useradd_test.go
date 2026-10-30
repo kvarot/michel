@@ -1,7 +1,9 @@
 package source
 
 import (
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"testing"
 
@@ -54,5 +56,31 @@ func TestNewUserEntryValidatesLikeSourceAdd(t *testing.T) {
 	e, r = NewUserEntry(UserEntryRequest{Kind: KindOSV, Ecosystem: "Hackage"})
 	if r != nil || e.Key != "osv.hackage" || e.Name != "OSV Hackage" {
 		t.Errorf("osv = %+v %+v", e, r)
+	}
+}
+
+// TestRefusalCodesListsEveryCode keeps RefusalCodes in step with the codes
+// NewUserEntry gives: the callers' tests map every code of the list.
+func TestRefusalCodesListsEveryCode(t *testing.T) {
+	src, err := os.ReadFile("useradd.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := map[string]bool{}
+	for _, m := range regexp.MustCompile(`refuse\("([a-z_]+)"`).FindAllStringSubmatch(string(src), -1) {
+		used[m[1]] = true
+	}
+	if len(used) == 0 {
+		t.Fatal("no refuse call found")
+	}
+	for c := range used {
+		if !slices.Contains(RefusalCodes, c) {
+			t.Errorf("code %s is not in RefusalCodes", c)
+		}
+	}
+	for _, c := range RefusalCodes {
+		if !used[c] {
+			t.Errorf("RefusalCodes lists %s, which no refusal gives", c)
+		}
 	}
 }

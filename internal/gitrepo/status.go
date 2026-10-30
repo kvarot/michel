@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/scan"
-	"github.com/kvarot/michel/internal/sourceupdate"
 )
 
 // maxAPIBytes bounds one GitHub API answer.
@@ -86,11 +85,11 @@ func getJSON(ctx context.Context, client *http.Client, rawURL, token string, out
 // (a repository without release is fine). The three requests are taken from
 // budget at once: when it holds fewer, nothing is sent and the error is
 // ErrBudget.
-func Status(ctx context.Context, client *http.Client, token, owner, repo string, budget *sourceupdate.Budget) (RepoStatus, error) {
+func Status(ctx context.Context, client *http.Client, token, owner, repo string, budget Budget) (RepoStatus, error) {
 	if _, _, err := SplitRepo(owner + "/" + repo); err != nil {
 		return RepoStatus{}, err
 	}
-	if !budget.Take(3) {
+	if !take(budget, 3) {
 		return RepoStatus{}, ErrBudget
 	}
 	base := apiBase + "/repos/" + owner + "/" + repo

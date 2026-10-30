@@ -31,13 +31,17 @@ type UserEntryRequest struct {
 
 // Refusal says why a user entry is refused: Code names the reason (each
 // caller has its own sentence for it, with or without its flags) and Args
-// are the values the sentence quotes. Codes: bad_tag, bad_url, bad_format,
-// bad_repo, feed_target, no_ecosystem, bad_ecosystem, no_format, bad_tool,
-// no_name, bad_input, no_repo, bad_pin, bad_path, bad_kind.
+// are the values the sentence quotes. Code is one of RefusalCodes.
 type Refusal struct {
 	Code string
 	Args []any
 }
+
+// RefusalCodes are the codes of a Refusal. A caller maps each one to its
+// sentence; the tests of the command line and of the API check that none
+// is missing.
+var RefusalCodes = []string{"bad_tag", "bad_url", "bad_format", "bad_repo", "feed_target", "no_ecosystem", "bad_ecosystem",
+	"no_format", "bad_tool", "no_name", "bad_input", "no_repo", "bad_pin", "bad_path", "bad_kind"}
 
 var (
 	repoName  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)

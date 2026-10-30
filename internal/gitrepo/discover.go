@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/kvarot/michel/internal/scan"
-	"github.com/kvarot/michel/internal/sourceupdate"
 )
 
 // Discovery is a repository found by topic, "to discover". State is new,
@@ -42,14 +41,14 @@ const maxDescription = 300
 // 20 per topic: one request each, taken from budget (ErrBudget when it is
 // spent, with what was found before). A topic that is not a GitHub topic
 // is skipped. The request carries only the topic.
-func Discover(ctx context.Context, client *http.Client, token string, topics []string, budget *sourceupdate.Budget) ([]Discovery, error) {
+func Discover(ctx context.Context, client *http.Client, token string, topics []string, budget Budget) ([]Discovery, error) {
 	out := []Discovery{}
 	seen := map[string]bool{}
 	for _, t := range topics {
 		if !topicPattern.MatchString(t) {
 			continue
 		}
-		if !budget.Take(1) {
+		if !take(budget, 1) {
 			return out, ErrBudget
 		}
 		q := url.Values{"q": {"topic:" + t}, "sort": {"stars"}, "per_page": {"20"}}
