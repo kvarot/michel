@@ -34,9 +34,10 @@ type Deps struct {
 	DataDir string
 	// Exec runs a subprocess. Nil means defaultExec.
 	Exec ExecFunc
-	// ProxyAddr is the host:port of Michel's egress proxy, given to every
-	// subprocess for every scheme. Empty means an address where nothing
-	// listens, so a subprocess reaches no network.
+	// ProxyAddr is Michel's egress proxy, given to every subprocess for
+	// every scheme: host:port, or the http:// URL allowproxy.Listen returns
+	// (with its token). Empty means an address where nothing listens, so a
+	// subprocess reaches no network.
 	ProxyAddr string
 	// Now dates the commits of the copy. Nil means time.Now.
 	Now func() time.Time
@@ -81,6 +82,10 @@ func (c *capped) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// DefaultExec is the runner used when Deps.Exec is nil, for the packages
+// that drive other fix subprocesses (internal/agent).
+var DefaultExec ExecFunc = defaultExec
 
 // defaultExec runs name with exactly env (never Michel's own environment),
 // from dir, without stdin, stdout capped at maxGitOutput and stderr at
@@ -157,6 +162,7 @@ func (h home) env(proxyAddr string, extra ...string) []string {
 	if proxyAddr == "" {
 		proxyAddr = "127.0.0.1:9" // discard port: nothing answers
 	}
+	proxyAddr = strings.TrimPrefix(proxyAddr, "http://")
 	env = append(env, "HOME="+h.dir, "USERPROFILE="+h.dir,
 		"COMPOSER_HOME="+filepath.Join(h.dir, "composer"), "npm_config_cache="+filepath.Join(h.dir, "npm"))
 	proxy := "http://" + proxyAddr
@@ -182,6 +188,17 @@ func (h home) env(proxyAddr string, extra ...string) []string {
 		// Replacement refs of a repository never change what git reads.
 		"GIT_NO_REPLACE_OBJECTS=1")
 	return append(env, extra...)
+}
+
+// Env returns the whole environment of a fix subprocess (see home.env),
+// after creating <DataDir>/fix-home, and that folder. internal/agent starts
+// Claude Code from it.
+func Env(d Deps) (env []string, homeDir string, err error) {
+	h, err := ensureHome(d)
+	if err != nil {
+		return nil, "", err
+	}
+	return h.env(d.ProxyAddr), h.dir, nil
 }
 
 // allowedGit is the closed list of git subcommands Michel runs.

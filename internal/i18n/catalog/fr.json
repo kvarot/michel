@@ -1,4 +1,7 @@
 {
+  "agent.hint.not_installed": "Claude Code n'est pas installé sur cet ordinateur. Installe-le (https://claude.com/claude-code), puis réessaie. En attendant, tu peux lire le brief.",
+  "agent.hint.not_logged_in": "Claude Code n'est pas connecté. Lance claude dans un terminal et connecte-toi, puis réessaie. En attendant, tu peux lire le brief.",
+  "agent.hint.too_old": "Ta version de Claude Code est trop ancienne : Michel ne peut pas la lancer à l'écart de tes propres réglages. Mets-la à jour avec claude update, puis réessaie.",
   "api.bad_host": "Refusé : cette adresse n'est pas celle où Michel écoute.",
   "api.bad_json": "Michel ne peut pas lire la demande.",
   "api.bad_json_hint": "Envoie un seul objet JSON, avec seulement les champs action, why et until.",

@@ -1,4 +1,7 @@
 {
+  "agent.hint.not_installed": "Claude Code is not installed on this computer. Install it (https://claude.com/claude-code), then try again. Meanwhile, you can read the brief.",
+  "agent.hint.not_logged_in": "Claude Code is not logged in. Run claude in a terminal and log in, then try again. Meanwhile, you can read the brief.",
+  "agent.hint.too_old": "Your version of Claude Code is too old: Michel cannot run it apart from your own settings. Update it with claude update, then try again.",
   "api.bad_host": "Refused: this address is not the one Michel listens on.",
   "api.bad_json": "Michel cannot read the request.",
   "api.bad_json_hint": "Send one JSON object with only the fields action, why and until.",

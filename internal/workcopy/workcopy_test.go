@@ -1381,3 +1381,22 @@ func TestTreeSizeIgnoresExcludedFiles(t *testing.T) {
 		t.Errorf("excluded files were counted: %v", err)
 	}
 }
+
+func TestEnvAcceptsProxyURL(t *testing.T) {
+	d := Deps{DataDir: t.TempDir(), ProxyAddr: "http://michel:0123abcd@127.0.0.1:4567"}
+	env, home, err := Env(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if home != filepath.Join(d.DataDir, "fix-home") {
+		t.Errorf("home = %s", home)
+	}
+	if !slices.Contains(env, "HTTPS_PROXY=http://michel:0123abcd@127.0.0.1:4567") {
+		t.Errorf("HTTPS_PROXY missing or doubled scheme: %v", env)
+	}
+	d.ProxyAddr = "127.0.0.1:4567"
+	env, _, _ = Env(d)
+	if !slices.Contains(env, "https_proxy=http://127.0.0.1:4567") {
+		t.Errorf("host:port form: %v", env)
+	}
+}
