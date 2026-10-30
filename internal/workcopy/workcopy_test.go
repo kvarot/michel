@@ -412,7 +412,7 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 			"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0", "COREPACK_ENABLE_NETWORK=0",
 			"npm_config_git=" + filepath.Join(home, "no-git"), "GIT_NO_REPLACE_OBJECTS=1",
 			"npm_config_proxy=http://127.0.0.1:1", "npm_config_https_proxy=http://127.0.0.1:1", "npm_config_noproxy=",
-			"npm_config_strict_ssl=true", "COMPOSER_NO_INTERACTION=1"} {
+			"npm_config_strict_ssl=true", "COMPOSER_NO_INTERACTION=1", "COMPOSER_VENDOR_DIR=vendor", "COMPOSER_BIN_DIR=vendor/bin"} {
 			if !slices.Contains(r.env, want) {
 				t.Errorf("%s %v: %s missing from the environment", r.name, r.args, want)
 			}
@@ -436,65 +436,6 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 	}
 }
 
-func TestInstallArgvByLockfile(t *testing.T) {
-	rec := &recorder{}
-	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
-	c := fakeCopy(t, d)
-	writeFile(t, c.Dir, "composer.lock", "{}")
-	writeFile(t, c.Dir, "web/package-lock.json", "{}")
-	writeFile(t, c.Dir, "pn/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
-	writeFile(t, c.Dir, "y1/yarn.lock", "# yarn lockfile v1\n")
-	writeFile(t, c.Dir, "y2/yarn.lock", "__metadata:\n  version: 8\n")
-	writeFile(t, c.Dir, "y2/package.json", `{"packageManager":"yarn@4.5.0"}`)
-	npmrc := filepath.Join(d.DataDir, "fix-home", "npmrc")
-	for _, tc := range []struct {
-		eco, rel, name string
-		args           []string
-		dir            string
-	}{
-		{"Packagist", "composer.lock", "composer", []string{"install", "--no-scripts", "--no-interaction", "--no-plugins"}, ""},
-		{"npm", "web/package-lock.json", "npm", []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund", "--userconfig", npmrc}, "web"},
-		{"npm", "pn/pnpm-lock.yaml", "pnpm", []string{"install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"}, "pn"},
-		{"npm", "y1/yarn.lock", "yarn", []string{"install", "--frozen-lockfile", "--ignore-scripts", "--non-interactive"}, "y1"},
-		{"npm", "y2/yarn.lock", "yarn", []string{"install", "--immutable", "--mode=skip-build"}, "y2"},
-	} {
-		rec.runs = nil
-		if err := Install(context.Background(), d, c, tc.eco, tc.rel); err != nil {
-			t.Errorf("%s: %v", tc.rel, err)
-			continue
-		}
-		r := rec.runs[0]
-		if r.name != tc.name || !slices.Equal(r.args, tc.args) || r.dir != filepath.Join(c.Dir, filepath.FromSlash(tc.dir)) {
-			t.Errorf("%s: ran %s %v in %s", tc.rel, r.name, r.args, r.dir)
-		}
-	}
-	rec.runs = nil
-	for _, tc := range []struct{ eco, rel string }{{"npm", "composer.lock"}, {"Packagist", "missing/composer.lock"}, {"Packagist", "../composer.lock"}, {"Packagist", "README.md"}, {"PyPI", "composer.lock"}} {
-		if err := Install(context.Background(), d, c, tc.eco, tc.rel); err == nil {
-			t.Errorf("Install(%s, %s) accepted", tc.eco, tc.rel)
-		}
-	}
-	if err := Install(context.Background(), d, Copy{Dir: t.TempDir()}, "Packagist", "composer.lock"); !errors.Is(err, ErrNotACopy) {
-		t.Errorf("install outside a copy: %v, want ErrNotACopy", err)
-	}
-	if len(rec.runs) != 0 {
-		t.Errorf("a refused install ran %v", rec.runs)
-	}
-	if b, err := os.ReadFile(npmrc); err != nil || len(b) != 0 {
-		t.Errorf("Michel's npmrc is not an empty file: %v", err)
-	}
-	d.Exec = func(context.Context, string, []string, []string, string) ([]byte, []byte, error) {
-		return nil, []byte("Your requirements could not be resolved"), &exec.ExitError{}
-	}
-	err := Install(context.Background(), d, c, "Packagist", "composer.lock")
-	var ce *CmdError
-	if !errors.As(err, &ce) || !strings.Contains(ce.Output, "could not be resolved") {
-		t.Errorf("failed install: %v", err)
-	}
-}
-
-// committedFix prepares a copy of a project that is dirty and on another
-// branch than its default one, then commits a change in the copy.
 func committedFix(t *testing.T) (fixture, Copy, string) {
 	t.Helper()
 	f := newFixture(t)
@@ -857,36 +798,6 @@ func TestPlantedHooksDoNotRun(t *testing.T) {
 	}
 }
 
-func TestInstallRefusesUnsafeProjectSettings(t *testing.T) {
-	rec := &recorder{}
-	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
-	c := fakeCopy(t, d)
-	writeFile(t, c.Dir, "a/yarn.lock", "# yarn lockfile v1\n")
-	writeFile(t, c.Dir, "a/.yarnrc.yml", "yarnPath: .yarn/releases/yarn.cjs\n")
-	writeFile(t, c.Dir, "b/yarn.lock", "__metadata:\n  version: 8\n")
-	writeFile(t, c.Dir, "b/.yarnrc.yml", "plugins:\n  - path: .yarn/plugins/x.cjs\n")
-	writeFile(t, c.Dir, "c/sub/yarn.lock", "# yarn lockfile v1\n")
-	writeFile(t, c.Dir, "c/.yarnrc", "yarn-path \".yarn/releases/yarn-1.js\"\n")
-	writeFile(t, c.Dir, "d/package-lock.json", "{}")
-	writeFile(t, c.Dir, "d/package.json", `{"packageManager":"pnpm@9.0.0"}`)
-	writeFile(t, c.Dir, "e/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
-	writeFile(t, c.Dir, "e/package.json", `{"packageManager":"yarn@1.22.0+sha256.abc"}`)
-	for _, rel := range []string{"a/yarn.lock", "b/yarn.lock", "c/sub/yarn.lock", "d/package-lock.json", "e/pnpm-lock.yaml"} {
-		if err := Install(context.Background(), d, c, "npm", rel); !errors.Is(err, ErrUnsafeInstall) {
-			t.Errorf("%s: %v, want ErrUnsafeInstall", rel, err)
-		}
-	}
-	if len(rec.runs) != 0 {
-		t.Errorf("an unsafe install ran %v", rec.runs)
-	}
-	writeFile(t, c.Dir, "f/yarn.lock", "# yarn lockfile v1\n")
-	writeFile(t, c.Dir, "f/.yarnrc.yml", "nodeLinker: node-modules\n")
-	writeFile(t, c.Dir, "f/package.json", `{"packageManager":"yarn@4.5.0"}`)
-	if err := Install(context.Background(), d, c, "npm", "f/yarn.lock"); err != nil {
-		t.Errorf("a plain yarn project is refused: %v", err)
-	}
-}
-
 func TestInstallRefusesSymlinkedManifestDir(t *testing.T) {
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
@@ -960,112 +871,6 @@ func TestMirrorIsOutsideCopyTree(t *testing.T) {
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s left after Remove", p)
 		}
-	}
-}
-
-func TestInstallRefusesPackageManagerURL(t *testing.T) {
-	rec := &recorder{}
-	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
-	c := fakeCopy(t, d)
-	writeFile(t, c.Dir, "y/yarn.lock", "# yarn lockfile v1\n")
-	writeFile(t, c.Dir, "p/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
-	for _, tc := range []struct{ rel, pm string }{
-		{"y/yarn.lock", "yarn@https://evil.example/x.tgz"},
-		{"p/pnpm-lock.yaml", "pnpm@file:../x"},
-		{"y/yarn.lock", "yarn@git+ssh://git@evil.example/x.git"},
-		{"y/yarn.lock", "yarn@latest"},
-		{"y/yarn.lock", "yarn"},
-		{"y/yarn.lock", "yarn@1.22.0 extra"},
-		{"y/yarn.lock", "yarn@1.22.0+sha256.abc/../x"},
-		{"p/pnpm-lock.yaml", "pnpm@9.0.0:x"},
-	} {
-		writeFile(t, c.Dir, filepath.Dir(tc.rel)+"/package.json", `{"packageManager":`+strconv.Quote(tc.pm)+`}`)
-		if err := Install(context.Background(), d, c, "npm", tc.rel); !errors.Is(err, ErrUnsafeInstall) {
-			t.Errorf("packageManager %q: %v, want ErrUnsafeInstall", tc.pm, err)
-		}
-	}
-	writeFile(t, c.Dir, "y/package.json", `{"packageManager":{"name":"yarn"}}`)
-	if err := Install(context.Background(), d, c, "npm", "y/yarn.lock"); !errors.Is(err, ErrUnsafeInstall) {
-		t.Errorf("packageManager object: %v, want ErrUnsafeInstall", err)
-	}
-	if len(rec.runs) != 0 {
-		t.Errorf("an unsafe install ran %d commands", len(rec.runs))
-	}
-	// The nearest package.json is clean, a parent one is hostile.
-	writeFile(t, c.Dir, "top/package.json", `{"packageManager":"yarn@https://evil.example/x.tgz"}`)
-	writeFile(t, c.Dir, "top/app/package.json", `{"name":"acme-lib"}`)
-	writeFile(t, c.Dir, "top/app/yarn.lock", "# yarn lockfile v1\n")
-	if err := Install(context.Background(), d, c, "npm", "top/app/yarn.lock"); !errors.Is(err, ErrUnsafeInstall) {
-		t.Errorf("hostile packageManager in a parent folder: %v, want ErrUnsafeInstall", err)
-	}
-}
-
-func TestInstallAcceptsPinnedPackageManager(t *testing.T) {
-	rec := &recorder{}
-	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
-	c := fakeCopy(t, d)
-	writeFile(t, c.Dir, "y/yarn.lock", "# yarn lockfile v1\n")
-	writeFile(t, c.Dir, "p/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
-	writeFile(t, c.Dir, "n/package-lock.json", "{}")
-	for _, tc := range []struct{ rel, pm string }{
-		{"y/yarn.lock", "yarn@1.22.22"},
-		{"y/yarn.lock", "yarn@4.5.0-rc.1+sha512.0123abcdef"},
-		{"p/pnpm-lock.yaml", "pnpm@9.12.3+sha256.deadbeef"},
-		{"n/package-lock.json", "npm@10.8.2"},
-	} {
-		writeFile(t, c.Dir, filepath.Dir(tc.rel)+"/package.json", `{"packageManager":`+strconv.Quote(tc.pm)+`}`)
-		rec.runs = nil
-		if err := Install(context.Background(), d, c, "npm", tc.rel); err != nil {
-			t.Errorf("packageManager %q refused: %v", tc.pm, err)
-			continue
-		}
-		if len(rec.runs) != 1 || !slices.Contains(rec.runs[0].env, "COREPACK_ENABLE_NETWORK=0") {
-			t.Errorf("packageManager %q: corepack may download", tc.pm)
-		}
-	}
-	writeFile(t, c.Dir, "p/package.json", `{"packageManager":"yarn@1.22.22"}`)
-	if err := Install(context.Background(), d, c, "npm", "p/pnpm-lock.yaml"); !errors.Is(err, ErrUnsafeInstall) {
-		t.Errorf("another manager than the lockfile's: %v, want ErrUnsafeInstall", err)
-	}
-}
-
-func TestInstallRefusesExecutingNpmSettings(t *testing.T) {
-	rec := &recorder{}
-	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
-	c := fakeCopy(t, d)
-	cases := map[string][2]string{
-		"a": {".npmrc", "registry=https://registry.example\nscript-shell=/tmp/x.sh\n"},
-		"b": {".npmrc", "  node-options = --require ./evil.js\n"},
-		"c": {".npmrc", "git=./evil\n"},
-		"d": {".npmrc", "userconfig=../x\n"},
-		"e": {".npmrc", "globalconfig=../x\n"},
-		"f": {".npmrc", "prefix=../x\n"},
-		"g": {".npmrc", "cache=../x\n"},
-		"h": {".npmrc", "shell=./evil\n"},
-		"i": {"pnpm-workspace.yaml", "scriptShell: ./evil.sh\n"},
-		"j": {".pnpmrc", "global-pnpmfile=./evil.cjs\n"},
-	}
-	for dir, f := range cases {
-		writeFile(t, c.Dir, dir+"/package-lock.json", "{}")
-		writeFile(t, c.Dir, dir+"/"+f[0], f[1])
-		if err := Install(context.Background(), d, c, "npm", dir+"/package-lock.json"); !errors.Is(err, ErrUnsafeInstall) {
-			t.Errorf("%s with %q: %v, want ErrUnsafeInstall", f[0], f[1], err)
-		}
-	}
-	// A setting in a parent folder of the lockfile counts too.
-	writeFile(t, c.Dir, "up/.npmrc", "script-shell=./evil.sh\n")
-	writeFile(t, c.Dir, "up/web/package-lock.json", "{}")
-	if err := Install(context.Background(), d, c, "npm", "up/web/package-lock.json"); !errors.Is(err, ErrUnsafeInstall) {
-		t.Errorf(".npmrc in a parent folder: %v, want ErrUnsafeInstall", err)
-	}
-	if len(rec.runs) != 0 {
-		t.Errorf("an unsafe install ran %d commands", len(rec.runs))
-	}
-	// Registry and scoped auth settings are allowed.
-	writeFile(t, c.Dir, "ok/package-lock.json", "{}")
-	writeFile(t, c.Dir, "ok/.npmrc", "# comment\nregistry=https://registry.example/\n@acme:registry=https://npm.example/\n//npm.example/:_authToken=${NPM_TOKEN}\n")
-	if err := Install(context.Background(), d, c, "npm", "ok/package-lock.json"); err != nil {
-		t.Errorf("registry settings refused: %v", err)
 	}
 }
 
@@ -1222,94 +1027,6 @@ func TestCheckBinaryRefusesTextContent(t *testing.T) {
 	}
 }
 
-func TestNpmSettingsAreAllowlisted(t *testing.T) {
-	rec := &recorder{}
-	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
-	c := fakeCopy(t, d)
-	refused := []struct{ file, body string }{
-		{".npmrc", "\"git\"=./evil\n"},
-		{".npmrc", "${X}=y\n"},
-		{".npmrc", "proxy=http://evil.example\n"},
-		{".npmrc", "store-dir=../x\n"},
-		{".npmrc", "strict-ssl=false\n"},
-		{".npmrc", "[section]\nregistry=https://r.example\n"},
-		{".npmrc", "registry\\x=y\n"},
-		{".npmrc", "ignore-scripts\n"},
-		{".pnpmrc", "side-effects-cache=false\n"},
-		{"pnpm-workspace.yaml", "packages: [a]\nstoreDir: ../x\n"},
-		{".yarnrc", "cache-folder /tmp/x\n"},
-		{".yarnrc", "--install.ignore-scripts false\n"},
-	}
-	for i, tc := range refused {
-		dir := fmt.Sprintf("r%d", i)
-		lock := "package-lock.json"
-		if tc.file == ".yarnrc" {
-			lock = "yarn.lock"
-			writeFile(t, c.Dir, dir+"/"+lock, "# yarn lockfile v1\n")
-		} else {
-			writeFile(t, c.Dir, dir+"/"+lock, "{}")
-		}
-		writeFile(t, c.Dir, dir+"/"+tc.file, tc.body)
-		if err := Install(context.Background(), d, c, "npm", dir+"/"+lock); !errors.Is(err, ErrUnsafeInstall) {
-			t.Errorf("%s %q: %v, want ErrUnsafeInstall", tc.file, tc.body, err)
-		}
-	}
-	if len(rec.runs) != 0 {
-		t.Errorf("a refused install ran %d commands", len(rec.runs))
-	}
-	writeFile(t, c.Dir, "ok/package-lock.json", "{}")
-	writeFile(t, c.Dir, "ok/.npmrc", "# c\n; c\nregistry=https://r.example/\n@acme:registry=https://npm.example/\n"+
-		"//npm.example/:_authToken=${NPM_TOKEN}\n//npm.example/path/:_auth=abc\n//npm.example/:username=u\n//npm.example/:_password=p\nalways-auth=true\n")
-	writeFile(t, c.Dir, "ok/pnpm-workspace.yaml", "packages:\n  - web\n")
-	if err := Install(context.Background(), d, c, "npm", "ok/package-lock.json"); err != nil {
-		t.Errorf("registry and auth settings refused: %v", err)
-	}
-	writeFile(t, c.Dir, "oky/yarn.lock", "# yarn lockfile v1\n")
-	writeFile(t, c.Dir, "oky/.yarnrc", "# yarn\nregistry \"https://r.example\"\n\"@acme:registry\" \"https://y.example\"\nlastUpdateCheck 1730000000000\n")
-	if err := Install(context.Background(), d, c, "npm", "oky/yarn.lock"); err != nil {
-		t.Errorf("yarn registry settings refused: %v", err)
-	}
-}
-
-func TestInstallRefusesLinkedInstallFolders(t *testing.T) {
-	rec := &recorder{}
-	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
-	c := fakeCopy(t, d)
-	outside := t.TempDir()
-	writeFile(t, c.Dir, "a/composer.lock", "{}")
-	if err := os.Symlink(outside, filepath.Join(c.Dir, "a", "vendor")); err == nil {
-		if err := Install(context.Background(), d, c, "Packagist", "a/composer.lock"); !errors.Is(err, ErrOutsideCopy) {
-			t.Errorf("linked vendor: %v, want ErrOutsideCopy", err)
-		}
-	} else {
-		t.Logf("symbolic links unavailable: %v", err)
-	}
-	if runtime.GOOS == "windows" {
-		writeFile(t, c.Dir, "b/package-lock.json", "{}")
-		out, err := exec.Command("cmd", "/c", "mklink", "/J", filepath.Join(c.Dir, "b", "node_modules"), outside).CombinedOutput()
-		if err != nil {
-			t.Fatalf("mklink /J: %v %s", err, out)
-		}
-		if err := Install(context.Background(), d, c, "npm", "b/package-lock.json"); !errors.Is(err, ErrOutsideCopy) {
-			t.Errorf("junction node_modules: %v, want ErrOutsideCopy", err)
-		}
-	}
-	for _, key := range []string{"vendor-dir", "bin-dir", "cache-dir", "data-dir", "home", "cache-files-dir"} {
-		writeFile(t, c.Dir, "k/composer.lock", "{}")
-		writeFile(t, c.Dir, "k/composer.json", `{"config":{"`+key+`":"../../outside"}}`)
-		if err := Install(context.Background(), d, c, "Packagist", "k/composer.lock"); !errors.Is(err, ErrUnsafeInstall) {
-			t.Errorf("composer config %s: %v, want ErrUnsafeInstall", key, err)
-		}
-	}
-	if len(rec.runs) != 0 {
-		t.Errorf("a refused install ran %d commands", len(rec.runs))
-	}
-	writeFile(t, c.Dir, "k/composer.json", `{"config":{"sort-packages":true}}`)
-	if err := Install(context.Background(), d, c, "Packagist", "k/composer.lock"); err != nil {
-		t.Errorf("a plain composer.json refused: %v", err)
-	}
-}
-
 func TestPrepareBoundsTheArchive(t *testing.T) {
 	f := newFixture(t)
 	old := maxCopyFiles
@@ -1357,5 +1074,301 @@ func TestExtractCreatesNoExcludedFolder(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "private")); !errors.Is(err, os.ErrNotExist) {
 		t.Error("the excluded folder was created")
+	}
+}
+
+func TestInstallArgvByLockfile(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	writeFile(t, c.Dir, "composer.lock", "{}")
+	writeFile(t, c.Dir, "web/package-lock.json", "{}")
+	writeFile(t, c.Dir, "pn/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+	writeFile(t, c.Dir, "y1/yarn.lock", "# yarn lockfile v1\n")
+	npmrc := filepath.Join(d.DataDir, "fix-home", "npmrc")
+	for _, tc := range []struct {
+		eco, rel, name string
+		args           []string
+		dir            string
+	}{
+		{"Packagist", "composer.lock", "composer", []string{"install", "--no-scripts", "--no-interaction", "--no-plugins"}, ""},
+		{"npm", "web/package-lock.json", "npm", []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund", "--userconfig", npmrc}, "web"},
+	} {
+		rec.runs = nil
+		if err := Install(context.Background(), d, c, tc.eco, tc.rel); err != nil {
+			t.Errorf("%s: %v", tc.rel, err)
+			continue
+		}
+		r := rec.runs[0]
+		if r.name != tc.name || !slices.Equal(r.args, tc.args) || r.dir != filepath.Join(c.Dir, filepath.FromSlash(tc.dir)) {
+			t.Errorf("%s: ran %s %v in %s", tc.rel, r.name, r.args, r.dir)
+		}
+	}
+	rec.runs = nil
+	for _, rel := range []string{"pn/pnpm-lock.yaml", "y1/yarn.lock"} {
+		if err := Install(context.Background(), d, c, "npm", rel); !errors.Is(err, ErrInstallUnsupported) {
+			t.Errorf("%s: %v, want ErrInstallUnsupported", rel, err)
+		}
+	}
+	for _, tc := range []struct{ eco, rel string }{{"npm", "composer.lock"}, {"Packagist", "missing/composer.lock"}, {"Packagist", "../composer.lock"}, {"Packagist", "README.md"}, {"PyPI", "composer.lock"}} {
+		if err := Install(context.Background(), d, c, tc.eco, tc.rel); err == nil {
+			t.Errorf("Install(%s, %s) accepted", tc.eco, tc.rel)
+		}
+	}
+	if err := Install(context.Background(), d, Copy{Dir: t.TempDir()}, "Packagist", "composer.lock"); !errors.Is(err, ErrNotACopy) {
+		t.Errorf("install outside a copy: %v, want ErrNotACopy", err)
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("a refused install ran %d commands", len(rec.runs))
+	}
+	if b, err := os.ReadFile(npmrc); err != nil || len(b) != 0 {
+		t.Errorf("Michel's npmrc is not an empty file: %v", err)
+	}
+	d.Exec = func(context.Context, string, []string, []string, string) ([]byte, []byte, error) {
+		return nil, []byte("Your requirements could not be resolved"), &exec.ExitError{}
+	}
+	err := Install(context.Background(), d, c, "Packagist", "composer.lock")
+	var ce *CmdError
+	if !errors.As(err, &ce) || !strings.Contains(ce.Output, "could not be resolved") {
+		t.Errorf("failed install: %v", err)
+	}
+}
+
+// installCase writes files in a fresh folder of the copy and installs its
+// lockfile; it returns the error.
+func installCase(t *testing.T, d Deps, c Copy, dir string, files map[string]string) error {
+	t.Helper()
+	lock, eco := "", ""
+	for name, body := range files {
+		writeFile(t, c.Dir, dir+"/"+name, body)
+		switch filepath.Base(name) {
+		case "composer.lock":
+			lock, eco = name, "Packagist"
+		case "package-lock.json":
+			lock, eco = name, "npm"
+		}
+	}
+	return Install(context.Background(), d, c, eco, dir+"/"+lock)
+}
+
+func TestNpmrcIsAllowlisted(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	for i, body := range []string{
+		"\"git\"=./evil\n", "${X}=y\n", "proxy=http://evil.example\n", "store-dir=../x\n", "strict-ssl=false\n",
+		"[section]\nregistry=https://r.example\n", "registry\\x=y\n", "ignore-scripts\n", "script-shell=/tmp/x.sh\n",
+		"  node-options = --require ./evil.js\n", "git=./evil\n", "userconfig=../x\n", "prefix=../x\n",
+		"registry=https://r.example/\rvirtual-store-dir=../../../outside\rstore-dir=C:/x\n",
+	} {
+		if err := installCase(t, d, c, fmt.Sprintf("r%d", i), map[string]string{"package-lock.json": "{}", ".npmrc": body}); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf(".npmrc %q: %v, want ErrUnsafeInstall", body, err)
+		}
+	}
+	// A setting in a parent folder of the lockfile counts too.
+	if err := installCase(t, d, c, "up", map[string]string{".npmrc": "script-shell=./evil.sh\n", "web/package-lock.json": "{}"}); !errors.Is(err, ErrUnsafeInstall) {
+		t.Errorf(".npmrc in a parent folder: %v, want ErrUnsafeInstall", err)
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("a refused install ran %d commands", len(rec.runs))
+	}
+	if err := installCase(t, d, c, "ok", map[string]string{"package-lock.json": "{}", ".npmrc": "# c\r\n; c\r\nregistry=https://r.example/\r\n@acme:registry=https://npm.example/\n" +
+		"//npm.example/:_authToken=${NPM_TOKEN}\n//npm.example/path/:_auth=abc\n//npm.example/:username=u\n//npm.example/:_password=p\nalways-auth=true\n"}); err != nil {
+		t.Errorf("registry and auth settings refused: %v", err)
+	}
+}
+
+func TestPackageJSONIsChecked(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	refused := []string{
+		`{"packageManager":"yarn@1.22.22"}`,
+		`{"packageManager":"pnpm@9.0.0"}`,
+		`{"packageManager":"npm@https://evil.example/x.tgz"}`,
+		`{"packageManager":"npm@file:../x"}`,
+		`{"packageManager":"npm@latest"}`,
+		`{"packageManager":"npm"}`,
+		`{"packageManager":{"name":"npm"}}`,
+		`{"packageManager":"npm@10.8.2","PackageManager":"yarn@1.0.0"}`,
+		`{"dependencies":{"a":"file:../../outside"}}`,
+		`{"devDependencies":{"a":"link:../x"}}`,
+		`{"optionalDependencies":{"a":"../x"}}`,
+		`{"peerDependencies":{"a":"/abs/x"}}`,
+		`{"dependencies":{"a":"C:\\x"}}`,
+		`{"overrides":{"a":{"b":"file:./x"}}}`,
+		`{"workspaces":["../outside/*"]}`,
+		`{"workspaces":{"packages":["/abs"]}}`,
+		`{"dependencies":{"a":"^1.0.0"},"dependencies":{"a":"file:../x"}}`,
+	}
+	for i, pkg := range refused {
+		if err := installCase(t, d, c, fmt.Sprintf("r%d", i), map[string]string{"package-lock.json": "{}", "package.json": pkg}); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("package.json %s: %v, want ErrUnsafeInstall", pkg, err)
+		}
+	}
+	// The nearest package.json is clean, a parent one is hostile.
+	if err := installCase(t, d, c, "top", map[string]string{"package.json": `{"packageManager":"yarn@https://evil.example/x.tgz"}`,
+		"app/package.json": `{"name":"acme-lib"}`, "app/package-lock.json": "{}"}); !errors.Is(err, ErrUnsafeInstall) {
+		t.Errorf("hostile packageManager in a parent folder: %v, want ErrUnsafeInstall", err)
+	}
+	for i, lock := range []string{
+		`{"packages":{"node_modules/a":{"resolved":"../../outside","link":true}}}`,
+		`{"packages":{"node_modules/a":{"resolved":"file:../x.tgz"}}}`,
+		`{"packages":{"node_modules/a":{"resolved":"git+ssh://git@evil.example/x.git"}}}`,
+	} {
+		if err := installCase(t, d, c, fmt.Sprintf("l%d", i), map[string]string{"package-lock.json": lock}); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("package-lock.json %s: %v, want ErrUnsafeInstall", lock, err)
+		}
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("a refused install ran %d commands", len(rec.runs))
+	}
+	for i, pm := range []string{"npm@10.8.2", "npm@11.0.0-pre.1+sha512.0123abcdef"} {
+		rec.runs = nil
+		pkg := `{"packageManager":` + strconv.Quote(pm) + `,"dependencies":{"a":"^1.2.3","b":"npm:c@1"},"workspaces":["packages/*"]}`
+		lock := `{"packages":{"":{},"node_modules/a":{"resolved":"https://registry.npmjs.org/a/-/a-1.2.3.tgz"},"node_modules/w":{"resolved":"packages/w","link":true}}}`
+		if err := installCase(t, d, c, fmt.Sprintf("ok%d", i), map[string]string{"package-lock.json": lock, "package.json": pkg}); err != nil {
+			t.Errorf("packageManager %q refused: %v", pm, err)
+			continue
+		}
+		if len(rec.runs) != 1 || !slices.Contains(rec.runs[0].env, "COREPACK_ENABLE_NETWORK=0") {
+			t.Errorf("packageManager %q: corepack may download", pm)
+		}
+	}
+}
+
+func TestComposerSettingsAreAllowlisted(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	refused := []string{
+		`{"config":{"vendor-dir":"../../x"},"Config":null}`,
+		`{"Config":{"vendor-dir":"../../x"}}`,
+		`{"config":{"sort-packages":true},"config":{"vendor-dir":"../x"}}`,
+		`{"config":"vendor"}`,
+		`{"config":{"vendor-dir":"../x"}}`,
+		`{"config":{"bin-dir":"../x"}}`,
+		`{"config":{"cache-dir":"../x"}}`,
+		`{"config":{"data-dir":"../x"}}`,
+		`{"config":{"home":"../x"}}`,
+		`{"config":{"disable-tls":true}}`,
+		`{"config":{"secure-http":false}}`,
+		`{"config":{"process-timeout":0}}`,
+		`{"repositories":[{"type":"path","url":"../outside"}]}`,
+		`{"repositories":[{"type":"artifact","url":"./zips"}]}`,
+		`{"repositories":[{"type":"vcs","url":"https://evil.example/x.git"}]}`,
+		`{"repositories":[{"type":"git","url":"https://evil.example/x.git"}]}`,
+		`{"repositories":[{"type":"package","package":{"name":"a/b","version":"1.0","dist":{"url":"file:///x","type":"zip"}}}]}`,
+		`{"repositories":[{"type":"composer","url":"http://insecure.example"}]}`,
+		`{"repositories":{"x":{"type":"composer","url":"https://r.example","options":{"ssl":{"verify_peer":false}}}}}`,
+		`not json`,
+	}
+	for i, cj := range refused {
+		if err := installCase(t, d, c, fmt.Sprintf("r%d", i), map[string]string{"composer.lock": "{}", "composer.json": cj}); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("composer.json %s: %v, want ErrUnsafeInstall", cj, err)
+		}
+	}
+	for i, lock := range []string{
+		`{"packages":[{"name":"a/b","dist":{"type":"path","url":"../outside"}}]}`,
+		`{"packages-dev":[{"name":"a/b","dist":{"type":"zip","url":"file:///x.zip"}}]}`,
+		`{"packages":[{"name":"a/b","source":{"type":"path","url":"../x"}}]}`,
+		`{"packages":[{"name":"a/b","source":{"type":"git","url":"../x"}}]}`,
+	} {
+		if err := installCase(t, d, c, fmt.Sprintf("l%d", i), map[string]string{"composer.lock": lock}); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("composer.lock %s: %v, want ErrUnsafeInstall", lock, err)
+		}
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("a refused install ran %d commands", len(rec.runs))
+	}
+	ok := `{"name":"acme/lib","config":{"sort-packages":true,"platform":{"php":"8.2"},"allow-plugins":{"a/b":true},"optimize-autoloader":true,"preferred-install":"dist","platform-check":false,"audit":{"abandoned":"ignore"}},` +
+		`"repositories":[{"type":"composer","url":"https://repo.example"},{"packagist.org":false}]}`
+	lock := `{"packages":[{"name":"acme/lib","dist":{"type":"zip","url":"https://api.github.com/repos/acme/lib/zipball/x"},"source":{"type":"git","url":"https://github.com/acme/lib.git"}}]}`
+	if err := installCase(t, d, c, "ok", map[string]string{"composer.lock": lock, "composer.json": ok}); err != nil {
+		t.Errorf("a plain composer project refused: %v", err)
+	}
+}
+
+func TestInstallStartsFromFreshFolders(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	outside := t.TempDir()
+	writeFile(t, outside, "keep.txt", "keep\n")
+	writeFile(t, c.Dir, "a/composer.lock", "{}")
+	writeFile(t, c.Dir, "a/vendor/autoload.php", "<?php\n")
+	if err := os.Link(filepath.Join(outside, "keep.txt"), filepath.Join(c.Dir, "a", "vendor", "hard.txt")); err != nil {
+		t.Logf("hard links unavailable: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(c.Dir, "a", "vendor", "inner")); err != nil {
+		t.Logf("symbolic links unavailable: %v", err)
+	}
+	if err := Install(context.Background(), d, c, "Packagist", "a/composer.lock"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(c.Dir, "a", "vendor")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("vendor was not deleted before the install")
+	}
+	junction := func(link, target string) bool {
+		if runtime.GOOS != "windows" {
+			return os.Symlink(target, link) == nil
+		}
+		out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+		if err != nil {
+			t.Logf("mklink /J: %v %s", err, out)
+		}
+		return err == nil
+	}
+	// node_modules itself a link (junction on Windows): the link goes, the
+	// target stays.
+	writeFile(t, c.Dir, "b/package-lock.json", "{}")
+	if junction(filepath.Join(c.Dir, "b", "node_modules"), outside) {
+		if err := Install(context.Background(), d, c, "npm", "b/package-lock.json"); err != nil {
+			t.Fatalf("Install: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(c.Dir, "b", "node_modules")); !errors.Is(err, os.ErrNotExist) {
+			t.Error("the node_modules link was not removed")
+		}
+	}
+	// A junction inside node_modules: removed with it, never followed.
+	writeFile(t, c.Dir, "e/package-lock.json", "{}")
+	writeFile(t, c.Dir, "e/node_modules/x/index.js", "x\n")
+	if junction(filepath.Join(c.Dir, "e", "node_modules", "inner"), outside) {
+		if err := Install(context.Background(), d, c, "npm", "e/package-lock.json"); err != nil {
+			t.Fatalf("Install: %v", err)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(outside, "keep.txt")); err != nil || string(b) != "keep\n" {
+		t.Errorf("a file outside the copy was touched: %v", err)
+	}
+	// bin stays checked: a link there is refused.
+	writeFile(t, c.Dir, "f/package-lock.json", "{}")
+	if junction(filepath.Join(c.Dir, "f", "bin"), outside) {
+		if err := Install(context.Background(), d, c, "npm", "f/package-lock.json"); !errors.Is(err, ErrOutsideCopy) {
+			t.Errorf("linked bin: %v, want ErrOutsideCopy", err)
+		}
+	}
+}
+
+func TestCheckExcludedReadsNamesLikeWindows(t *testing.T) {
+	c := Copy{Exclude: []string{"private"}}
+	for _, p := range []string{".ENV.", ".env ", "CONFIG~1/server.key", "PRIVAT~1/x.php", "SERVER~1.KEY", "src/A~12.TXT"} {
+		if err := checkExcluded(c, []string{p}); !errors.Is(err, ErrExcludedPath) {
+			t.Errorf("%q: %v, want ErrExcludedPath", p, err)
+		}
+	}
+	if err := checkExcluded(c, []string{"src/tilde~x.php", "a~/b.php"}); err != nil {
+		t.Errorf("plain names refused: %v", err)
+	}
+}
+
+func TestTreeSizeIgnoresExcludedFiles(t *testing.T) {
+	f := newFixture(t)
+	old := maxCopyFiles
+	// The fixture holds 8 files, 4 of them excluded.
+	maxCopyFiles = 5
+	defer func() { maxCopyFiles = old }()
+	if _, err := Prepare(context.Background(), f.deps, f.proj, "01JATTEMPT0000000000000000"); err != nil {
+		t.Errorf("excluded files were counted: %v", err)
 	}
 }

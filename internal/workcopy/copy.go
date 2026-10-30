@@ -80,13 +80,16 @@ var idShape = regexp.MustCompile(`^[0-9A-Za-z]{1,64}$`)
 // excludedFiles are the file name patterns never copied, at any depth.
 var excludedFiles = []string{".env*", "*.pem", "*.key", "id_*"}
 
-// Limits of a copy: per file, in all, and in number of files. They are
-// checked on the tree of Base (git ls-tree) before anything is archived,
-// and again while extracting. Variables so that tests can lower them.
+// Limits of a copy: per file, in all, and in number of files (excluded
+// files not counted). They are checked on the tree of Base (git ls-tree)
+// before anything is archived, and again while extracting. 30,000 files
+// keeps the ls-tree listing (about 60 bytes plus the path per file, 256
+// bytes allowed per file) under maxGitOutput; a longer listing is
+// ErrCopyTooLarge. Variables so that tests can lower them.
 var (
 	maxCopyFile  int64 = 256 << 20
 	maxCopyTotal int64 = 4 << 30
-	maxCopyFiles       = 100000
+	maxCopyFiles       = 30000
 )
 
 // plainAttributes turn off, for every path, what git would otherwise do
@@ -140,6 +143,10 @@ func excludePathspecs(exclude []string) []string {
 // macOS file systems do not tell them apart).
 func isExcluded(rel string, exclude []string) bool {
 	segs := strings.Split(strings.ToLower(rel), "/")
+	// Read the way NTFS reads names: ".ENV." is .env.
+	for i, s := range segs {
+		segs[i] = strings.TrimRight(s, ". ")
+	}
 	base := segs[len(segs)-1]
 	for _, p := range excludedFiles {
 		if ok, _ := path.Match(p, base); ok {
@@ -164,19 +171,19 @@ func inExcludedFolder(segs, exclude []string) bool {
 
 // checkTreeSize refuses a Base tree over the limits of a copy, before
 // anything is archived: git ls-tree -r -l of the mirror.
-func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string) error {
+func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, exclude []string) error {
 	out, stderr, err := h.git(ctx, d, mirror, mirror, nil, nil, "ls-tree", "-r", "-l", "-z", "--full-tree", base)
 	if err != nil {
 		return gitErr("ls-tree", err, stderr)
 	}
-	if len(out) >= maxGitOutput {
+	if len(out) >= maxGitOutput || len(out) > maxCopyFiles*256+(1<<20) {
 		return ErrCopyTooLarge
 	}
 	var files int
 	var total int64
 	for _, e := range strings.Split(string(out), "\x00") {
-		meta, _, ok := strings.Cut(e, "\t")
-		if !ok {
+		meta, name, ok := strings.Cut(e, "\t")
+		if !ok || isExcluded(name, exclude) {
 			continue
 		}
 		f := strings.Fields(meta) // mode type id size
@@ -272,7 +279,7 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := writeAttributes(c.Mirror); err != nil {
 		return fail(err)
 	}
-	if err := h.checkTreeSize(ctx, d, c.Mirror, base); err != nil {
+	if err := h.checkTreeSize(ctx, d, c.Mirror, base, exclude); err != nil {
 		return fail(err)
 	}
 	if _, stderr, err := h.git(ctx, d, tmp, c.Mirror, nil, nil, "archive", "--format=tar", "-o", archive, base); err != nil {

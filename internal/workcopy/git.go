@@ -176,6 +176,9 @@ func (h home) env(proxyAddr string, extra ...string) []string {
 		// checks on.
 		"npm_config_proxy="+proxy, "npm_config_https_proxy="+proxy, "npm_config_noproxy=", "npm_config_strict_ssl=true",
 		"COMPOSER_NO_INTERACTION=1", "COMPOSER_CACHE_DIR="+filepath.Join(h.dir, "composer", "cache"),
+		// composer installs in vendor next to the lockfile, whatever the
+		// project says (environment settings win over composer.json).
+		"COMPOSER_VENDOR_DIR=vendor", "COMPOSER_BIN_DIR=vendor/bin",
 		// Replacement refs of a repository never change what git reads.
 		"GIT_NO_REPLACE_OBJECTS=1")
 	return append(env, extra...)

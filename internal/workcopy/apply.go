@@ -139,11 +139,15 @@ func (h home) checkRange(ctx context.Context, d Deps, repo, from, to string) ([]
 	return files, nil
 }
 
+// shortName is a segment shaped like an 8.3 short name (PRIVAT~1,
+// SERVER~1.KEY): Windows would read it as another, maybe excluded, name.
+var shortName = regexp.MustCompile(`~[0-9]+(?:\.[^/]*)?(?:/|$)`)
+
 // checkExcluded refuses a change touching an excluded file: a name or
 // folder of the exclusions, or a file of c.Excluded, ignoring case.
 func checkExcluded(c Copy, files []string) error {
 	for _, f := range files {
-		bad := isExcluded(f, c.Exclude)
+		bad := isExcluded(f, c.Exclude) || shortName.MatchString(f)
 		for _, x := range c.Excluded {
 			if strings.EqualFold(f, x) {
 				bad = true
