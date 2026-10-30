@@ -59,3 +59,17 @@ Ruling 12: S8 (raw '@' inside a URL password, partially masked) and S9 (denylist
 Task 2: minor (deferred): ${{ secrets.X }} partially masked (noise); lowercase YAML secret_key_base:, PASSPHRASE=, KEY_ID= not matched; SORT_KEY/PRIMARY_KEY over-masked.
 Task 2: complete (commits 57dde47..5c94c8f, review clean after 2 rounds)
 Task 3: BASE 5c94c8f
+Task 3: BASE corrected to 57e1b73 (after ledger mirror commit)
+Task 3: implementer DONE 2c41bcc (refs derived from ids; reading via feed ListToRead; Build lang vs Markdown lang)
+Task 3: security review (automated): (S10) skill written to global ~/.claude/skills embeds untrusted text (changelog breaking lines, reading titles, explanation, package/version) unfenced ⇒ prompt injection into every Claude Code session.
+Ruling 13: keep the skill in ~/.claude/skills (never write in the scanned project, Global Constraints) but: every untrusted free text goes in a computed-length fenced data block under a line saying it is untrusted data, package/versions validated by regex before rendering, frontmatter description built only from validated fields, changelog in the skill reduced to counts + breaking lines inside the fence — cost if wrong: residual injection risk if a model ignores fences.
+Task 3: FR + S10 fixes 2bda07c, 624af9b; open point: plugin findings skip package/version validation (package outside fence)
+Task 3: security review (automated): (S11) validate() returns nil for non-dependency kinds, so Package/OSVID reach the skill frontmatter description unchecked; sanitize at the sink too (WriteSkill re-validates or refuses).
+Task 3: review Needs fixes — I1 lines cut (200 runes, 6-line window) before masking ⇒ secret fragments leak. ⚠️ RemoveSkill on finding close → carry to T8; MCP get_brief must go through Build → carry to T4.
+Ruling 14: advisory references derived from ids (osv.dev, nvd, GitHub advisories) instead of stored OSV references — the store keeps none; adding it is a scan-format change outside plan 5 — cost if wrong: links less specific than the advisory's own list.
+Ruling 15: Task 3 fix round 1 also takes S11 (re-validate at the skill sink, refuse on failure, all kinds) and minors pkgRe leading '-'/'~', relDirRe spaces, composer require on major jump, Path validates ids, strip bidi/zero-width chars — same files — cost if wrong: longer round.
+Task 3: minor (deferred): dead code Directness==""; CLI --remove-skill needs finding in store; DoneWhen lang vs Markdown lang; CLI re-Lstat instead of using RemoveOwnedDir bool.
+Task 3: fix round 1 BASE 624af9b
+Task 3: fix round 1/5 (7 addressed, 0 open — mask before cut, sink validation, pkg/dir patterns, composer require on major, Path ids, invisible chars; commits 624af9b..fc52bd4)
+Task 3: minor (deferred): snippet window may shift a few lines when the cited line sits inside a multi-line secret (content still masked); lone \r not normalized; tests written after fixes (reviewer confirmed each would fail on old code).
+Task 3: complete (commits 57e1b73..fc52bd4, review clean)
