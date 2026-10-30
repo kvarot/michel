@@ -63,19 +63,19 @@ describe('proposalSentence', () => {
   const facts = { package: 'guzzlehttp/guzzle', from: '7.4.0', to: '7.4.5', sites: 12, tests: 'passed' }
 
   test('says the versions, the call sites and the tests in French', () => {
-    expect(proposalSentence(facts, 'fr')).toBe("Je passe guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; 12 endroits l'utilisent, les tests passent.")
-    expect(proposalSentence({ ...facts, sites: 1, tests: 'failed' }, 'fr')).toBe("Je passe guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; 1 endroit l'utilise, les tests échouent.")
-    expect(proposalSentence({ ...facts, sites: 0, tests: 'not_run' }, 'fr')).toBe("Je passe guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; ton code ne l'appelle nulle part directement, les tests n'ont pas tourné.")
+    expect(proposalSentence(facts, 'fr')).toBe("Je passe guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; 12 endroits de ton code l'utilisent, les tests passent.")
+    expect(proposalSentence({ ...facts, sites: 1, tests: 'failed' }, 'fr')).toBe("Je passe guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; 1 endroit de ton code l'utilise, les tests échouent.")
+    expect(proposalSentence({ ...facts, sites: 0, tests: 'not_run' }, 'fr')).toBe("Je passe guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; ton code ne s'en sert pas directement, les tests n'ont pas pu être lancés.")
   })
 
   test('says it in English', () => {
-    expect(proposalSentence(facts, 'en')).toBe('I move guzzlehttp/guzzle from 7.4.0 to 7.4.5; 12 places use it, the tests pass.')
-    expect(proposalSentence({ ...facts, sites: 1 }, 'en')).toBe('I move guzzlehttp/guzzle from 7.4.0 to 7.4.5; 1 place uses it, the tests pass.')
+    expect(proposalSentence(facts, 'en')).toBe('I move guzzlehttp/guzzle from 7.4.0 to 7.4.5; 12 places in your code use it, the tests pass.')
+    expect(proposalSentence({ ...facts, sites: 1 }, 'en')).toBe('I move guzzlehttp/guzzle from 7.4.0 to 7.4.5; 1 place in your code uses it, the tests pass.')
   })
 
   test('leaves out what is unknown', () => {
     expect(proposalSentence({ ...facts, sites: null }, 'fr')).toBe('Je passe guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; les tests passent.')
-    expect(proposalSentence({ ...facts, to: '' }, 'en')).toBe('I update guzzlehttp/guzzle (installed: 7.4.0); 12 places use it, the tests pass.')
+    expect(proposalSentence({ ...facts, to: '' }, 'en')).toBe('I update guzzlehttp/guzzle (installed: 7.4.0); 12 places in your code use it, the tests pass.')
     expect(proposalSentence(null, 'fr')).toBe('')
   })
 
@@ -123,14 +123,13 @@ describe('levelLabel', () => {
 
 describe('activityLine', () => {
   test('says in one line what the agent does', () => {
-    expect(activityLine({ role: 'tool', text: 'Bash vendor/bin/phpunit' }, 'fr')).toBe("L'agent lance les tests.")
-    expect(activityLine({ role: 'tool', text: 'Bash npm test' }, 'en')).toBe('The agent runs the tests.')
-    expect(activityLine({ role: 'tool', text: 'Bash composer update acme/lib' }, 'fr')).toBe("L'agent met à jour les dépendances.")
     expect(activityLine({ role: 'tool', text: 'Read src/Client.php' }, 'fr')).toBe("L'agent lit src/Client.php.")
     expect(activityLine({ role: 'tool', text: 'Edit composer.json' }, 'fr')).toBe("L'agent modifie composer.json.")
     expect(activityLine({ role: 'tool', text: 'Grep Guzzle' }, 'fr')).toBe("L'agent cherche dans le code.")
-    expect(activityLine({ role: 'tool', text: 'mcp__michel__propose_fix' }, 'fr')).toBe("L'agent envoie sa proposition à Michel.")
-    expect(activityLine({ role: 'tool', text: 'Bash ls -la' }, 'fr')).toBe("L'agent lance une commande sur la copie.")
+    expect(activityLine({ role: 'tool', text: 'mcp__michel__propose_fix' }, 'fr')).toBe("L'agent envoie sa proposition : Michel lance les tests sur la copie.")
+    expect(activityLine({ role: 'tool', text: 'mcp__michel__propose_fix' }, 'en')).toBe('The agent sends its proposal: Michel runs the tests on the copy.')
+    // The agent has no command tool (ruling 33): a stray one is only "working".
+    expect(activityLine({ role: 'tool', text: 'Bash vendor/bin/phpunit' }, 'fr')).toBe("L'agent travaille.")
     expect(activityLine({ role: 'tool', text: 'Strange' }, 'en')).toBe('The agent is working.')
     expect(activityLine(null, 'fr')).toBe('')
   })

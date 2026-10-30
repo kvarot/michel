@@ -129,14 +129,12 @@ export function levelLabel(n, lang) {
   return { title: translate(lang, `fix.level.${n}.title`), text: translate(lang, `fix.level.${n}.text`) }
 }
 
-// Commands that run tests, and those that change dependencies.
-const testCommand = /(phpunit|\bpest\b|artisan test|composer (run-script )?test|npm (run )?test|yarn test|pnpm test|jest|vitest|mocha)/i
-const depsCommand = /\b(composer|npm|yarn|pnpm)\s+(update|upgrade|install|require|ci|i|add|remove)\b/i
-
 /**
  * activityLine says in one line what the agent does, from an "activity"
- * event (a MessageView of role tool, text "<Tool> <summary>"): it runs the
- * tests, reads a file, changes a file... never the raw command.
+ * event (a MessageView of role tool, text "<Tool> <summary>"): it reads a
+ * file, changes a file, searches the code, sends its proposal. The agent
+ * has no command tool (ruling 33): Michel runs the update, the install and
+ * the tests himself and says so in the conversation.
  * @param {{text: string}|null} event
  * @param {string} lang
  */
@@ -150,11 +148,6 @@ export function activityLine(event, lang) {
   if (/propose_fix/.test(tool)) return t('propose')
   if (tool.startsWith('mcp__')) return t('ask_michel')
   switch (tool) {
-    case 'Bash':
-    case 'PowerShell':
-      if (testCommand.test(rest)) return t('tests')
-      if (depsCommand.test(rest)) return t('deps')
-      return t('command')
     case 'Read':
       return rest ? t('read', { file: rest }) : t('read_any')
     case 'Edit':
