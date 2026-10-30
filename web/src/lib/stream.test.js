@@ -130,3 +130,28 @@ describe('connect', () => {
     expect(waits).toEqual([1000, 2000, 4000, 8000, 8000, 8000])
   })
 })
+
+describe('connect drops', () => {
+  test('onDrop is called after a failure only, not after a stream that ended cleanly', async () => {
+    let drops = 0
+    let n = 0
+    await new Promise((resolve) => {
+      const conn = connect({
+        url: '/x',
+        headers: {},
+        fetchImpl: async () => {
+          n += 1
+          if (n === 1) return { ok: true, status: 200, body: body(['event: state\ndata: {}\n\n']) }
+          if (n === 2) throw new Error('offline')
+          conn.close()
+          resolve()
+          return new Promise(() => {})
+        },
+        wait: async () => {},
+        onEvent: () => {},
+        onDrop: () => { drops += 1 },
+      })
+    })
+    expect(drops).toBe(1)
+  })
+})

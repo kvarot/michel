@@ -41,7 +41,11 @@
       <section class="m-fixset__group" :aria-labelledby="`${uid}-ai`">
         <h4 :id="`${uid}-ai`" class="m-fixset__label">{{ $t('fixset.ai') }}</h4>
         <template v-if="consent">
-          <p v-if="consent.refusal" class="m-small">{{ consent.refusal }}</p>
+          <template v-if="consent.switch_mode">
+            <p class="m-small">{{ $t('fixset.ai_strict') }}</p>
+            <v-btn size="small" variant="tonal" color="primary" class="m-fixset__give" @click="dialog = true">{{ $t('fixset.ai_give') }}</v-btn>
+          </template>
+          <p v-else-if="consent.refusal" class="m-small">{{ consent.refusal }}</p>
           <p v-else-if="consent.consented && !(consent.lines || []).length" class="m-small">{{ $t('fixset.ai_given', { date: givenDate }) }}</p>
           <template v-else>
             <p class="m-small">{{ $t('fixset.ai_missing') }}</p>
@@ -66,6 +70,7 @@
       <AiConsentDialog
         :project="name"
         :lines="consent ? consent.lines : []"
+        :switch-mode="!!(consent && consent.switch_mode)"
         :busy="consentBusy"
         :error="consentError"
         @accept="giveConsent"
@@ -168,7 +173,8 @@ export default {
       this.consentBusy = true
       this.consentError = ''
       try {
-        this.consent = await api.post(this.q(`/projects/${encodeURIComponent(this.name)}/ai-consent`))
+        const body = this.consent?.switch_mode ? { switch_to_standard: true } : undefined
+        this.consent = await api.post(this.q(`/projects/${encodeURIComponent(this.name)}/ai-consent`), body)
         this.dialog = false
       } catch (err) {
         this.consentError = err?.offline ? this.$t('offline.hint') : err?.error || this.$t('error.generic')

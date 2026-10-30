@@ -65,6 +65,15 @@
           <p class="m-small">{{ $t(`fix.proposal.tests_${testsKey}`) }}</p>
           <pre v-if="p.tests_output" class="m-code m-prop__pre"><MaskedText :text="p.tests_output" /></pre>
           <p v-else-if="p.tests_status !== 'not_run'" class="m-muted m-small">{{ $t('fix.proposal.tests_output_none') }}</p>
+          <template v-if="commands.length">
+            <h3 class="m-prop__label">{{ $t('fix.proposal.commands') }}</h3>
+            <ul class="m-prop__files">
+              <li v-for="(c, i) in commands" :key="`${c.what}-${i}`" class="m-small">
+                <template v-if="c.what === 'tests'">{{ $t('fix.proposal.cmd.tests') }}</template>
+                <template v-else>{{ $t(`fix.proposal.cmd.${c.what}`) }} <span class="m-code">{{ c.argv }}</span></template>
+              </li>
+            </ul>
+          </template>
           <h3 class="m-prop__label">{{ $t('fix.proposal.rescan') }}</h3>
           <p class="m-small">{{ $t(p.rescan_clean ? 'fix.proposal.rescan_clean' : 'fix.proposal.rescan_dirty') }}</p>
           <p class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
@@ -87,7 +96,7 @@
     </section>
 
     <v-dialog v-model="refuseOpen" max-width="440">
-      <v-card role="alertdialog" aria-labelledby="fix-refuse-title">
+      <v-card aria-labelledby="fix-refuse-title">
         <v-card-title id="fix-refuse-title" class="m-prop__dialog-title">{{ $t('fix.refuse.title') }}</v-card-title>
         <v-card-text>
           <p class="m-prop__dialog-body">{{ $t('fix.refuse.body') }}</p>
@@ -156,6 +165,10 @@ export default {
     testsKey() {
       const s = this.p?.tests_status
       return ['passed', 'failed', 'not_run'].includes(s) ? s : 'not_run'
+    },
+    // commands: what Michel ran for the proposal (update, install, tests).
+    commands() {
+      return (this.p?.commands || []).filter((c) => ['update', 'install', 'tests'].includes(c.what))
     },
     shortHash() {
       return String(this.p?.hash || '').slice(0, 12)

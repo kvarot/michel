@@ -504,5 +504,14 @@
   "fix.activity.edit_any": "The agent changes a file.",
   "fix.activity.search": "The agent searches the code.",
   "fix.activity.plan": "The agent plans its work.",
-  "fix.activity.working": "The agent is working."
+  "fix.activity.working": "The agent is working.",
+
+  "fix.consent.strict_intro": "Your policy is in strict_local mode: nothing leaves your computer and no external AI is used. It is the strongest protection.",
+  "fix.consent.strict_change": "For an agent (Claude Code) to fix this project, Michel must switch your policy to standard mode: external AI will be allowed, but only towards the addresses below, and only for the projects you consent to. Michel keeps a copy of the old policy (.bak file).",
+  "fix.consent.strict_accept": "Allow external AI (standard mode)",
+  "fixset.ai_strict": "Your policy is in strict_local mode: no external AI. For an agent to work on this project, Michel must first switch to standard mode, with your consent.",
+  "fix.proposal.commands": "What Michel ran on the copy",
+  "fix.proposal.cmd.update": "Update:",
+  "fix.proposal.cmd.install": "Install:",
+  "fix.proposal.cmd.tests": "Your project's tests (the test command you set)"
 }

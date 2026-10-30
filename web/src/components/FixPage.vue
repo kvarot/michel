@@ -55,7 +55,11 @@
       </nav>
 
       <div class="m-fix__center">
-        <p v-if="!selectedFinding" class="m-voice m-fix__pick">{{ $t('fix.pick') }}</p>
+        <div v-if="waiting" class="m-fix__state m-muted" role="status">
+          <v-progress-circular indeterminate size="18" width="2" color="primary" />
+          {{ $t('fix.loading') }}
+        </div>
+        <p v-else-if="!selectedFinding" class="m-voice m-fix__pick">{{ $t('fix.pick') }}</p>
         <template v-else>
           <div v-if="viewLoading" class="m-fix__state m-muted" role="status">
             <v-progress-circular indeterminate size="18" width="2" color="primary" />
@@ -67,7 +71,7 @@
             :messages="messages"
             :activity="activity"
             :can-start="canStart"
-            :starting="starting"
+            :starting="startingFor !== '' && startingFor === selectedFinding.id"
             :sending="sending"
             :reconnecting="reconnecting"
             @start="start"
@@ -77,6 +81,10 @@
         <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
           <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
           <p v-if="actionError.hint" class="m-small">{{ actionError.hint }}</p>
+          <details v-if="actionError.data && actionError.data.detail" class="m-fix__detail">
+            <summary class="m-small">{{ $t('fix.proposal.detail') }}</summary>
+            <p class="m-code m-small">{{ actionError.data.detail }}</p>
+          </details>
         </v-alert>
       </div>
 
@@ -99,6 +107,7 @@
       <AiConsentDialog
         :project="consent.project"
         :lines="consent.lines"
+        :switch-mode="consent.switchMode"
         :busy="consent.busy"
         :error="consent.error"
         @accept="acceptConsent"
@@ -114,7 +123,7 @@ import FixChat from './FixChat.vue'
 import FixProposal from './FixProposal.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
-import { activityLine, fixHash, groupAttempts, isFinal, mergeMessages, stateLine } from '../lib/fixView.js'
+import { acceptResult, activityLine, fixHash, groupAttempts, isFinal, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
 
 // listEvery is how often the list is read again while the page is open: an
 // attempt started alone (level 2) or proposed through michel mcp shows up.
@@ -157,14 +166,19 @@ export default {
       sheet: null,
       sheetFor: '',
       sheetLoading: false,
-      starting: false,
+      // startingFor is the finding whose start is running ('' for none).
+      startingFor: '',
       approving: false,
       refusing: false,
       sending: false,
       actionError: null,
-      consent: { open: false, project: '', lines: [], busy: false, error: '', findingId: '' },
+      consent: { open: false, project: '', lines: [], switchMode: false, busy: false, error: '', findingId: '' },
       conn: null,
       timer: null,
+      // alive is false once the page is gone: late answers are dropped.
+      alive: true,
+      // pending is the attempt asked and not answered yet (null for none).
+      pending: null,
     }
   },
   computed: {
@@ -199,6 +213,10 @@ export default {
     canStart() {
       return !this.agentProblem
     },
+    // waiting: the attempt the address names is on its way (a direct link).
+    waiting() {
+      return !!this.route.attempt && !this.current && this.pending === this.route.attempt
+    },
   },
   watch: {
     route: {
@@ -223,6 +241,8 @@ export default {
     this.timer = setInterval(() => this.loadList(true, false), listEvery)
   },
   beforeUnmount() {
+    this.alive = false
+    this.pending = null
     this.closeStream()
     clearInterval(this.timer)
   },
@@ -311,43 +331,52 @@ export default {
 
     /** select shows the address's attempt or finding. */
     select() {
+      if (!this.alive) return
+      const act = selectAction(this.route, this.pending ?? this.current?.id ?? null, this.attempts)
+      if (act.kind === 'keep') return
       this.actionError = null
-      const { attempt, finding } = this.route
-      if (attempt) {
-        if (this.current?.id !== attempt) this.openAttempt(attempt)
+      if (act.kind === 'open') {
+        this.openAttempt(act.id)
         return
       }
+      // A finding already tried shows its newest attempt (its history, "OK, réessaie").
+      if (act.kind === 'redirect') {
+        window.location.replace(fixHash({ attempt: act.id }))
+        return
+      }
+      this.pending = null
       this.closeStream()
       this.current = null
       this.messages = []
       this.activity = ''
       this.shownHash = ''
       this.proposalUpdated = false
-      if (!finding) return
-      // A finding already tried shows its newest attempt (its history, "OK, réessaie").
-      const tried = this.attempts.find((a) => a.finding?.id === finding)
-      if (tried) {
-        window.location.replace(fixHash({ attempt: tried.id }))
-        return
-      }
-      this.loadSheet(finding)
+      if (act.kind === 'finding') this.loadSheet(act.id)
     },
     /** openAttempt reads the attempt in full and follows its stream until it is over. */
     async openAttempt(id) {
+      this.pending = id
       this.closeStream()
-      this.viewLoading = !this.current || this.current.id !== id
+      this.viewLoading = !!this.current && this.current.id !== id
       this.proposalUpdated = false
+      let v = null
+      let failure = null
       try {
-        const v = await api.get(this.q(`/fix/${encodeURIComponent(id)}`))
-        if (this.route.attempt !== id) return
-        this.show(v)
-        if (!isFinal(v.state)) this.follow(id)
+        v = await api.get(this.q(`/fix/${encodeURIComponent(id)}`))
       } catch (err) {
-        if (err?.status !== 401) this.actionError = err
-        this.current = null
-      } finally {
-        this.viewLoading = false
+        failure = err
       }
+      // A late answer (page gone, or another attempt asked since) is dropped.
+      if (!acceptResult(this, id)) return
+      this.pending = null
+      this.viewLoading = false
+      if (failure) {
+        if (failure?.status !== 401) this.actionError = failure
+        this.current = null
+        return
+      }
+      this.show(v)
+      if (!isFinal(v.state)) this.follow(id)
     },
     /** show puts an AttemptView (in full) on screen. */
     show(v) {
@@ -368,6 +397,8 @@ export default {
       else this.attempts.unshift(line)
     },
     follow(id) {
+      if (!this.alive) return
+      this.closeStream()
       this.conn = api.stream(this.q(`/fix/${encodeURIComponent(id)}/events`), (ev) => this.onEvent(id, ev), (status) => {
         this.reconnecting = status === 'reconnecting'
       })
@@ -410,27 +441,43 @@ export default {
     /** start launches a fix on the selected finding; a missing consent opens the dialog. */
     async start() {
       const f = this.selectedFinding
-      if (!f || this.starting) return
-      this.starting = true
+      if (!f || this.startingFor) return
+      this.startingFor = f.id
       this.actionError = null
+      const project = this.current?.project || this.sheet?.project || f.project || ''
       try {
         const r = await api.post(this.q(`/findings/${encodeURIComponent(f.id)}/fix`))
         const a = r?.attempt
+        if (!this.alive) return
         if (a) {
           this.attempts.unshift({ ...a, messages: null })
           this.$emit('changed')
-          window.location.hash = fixHash({ attempt: a.id })
+          // Only while the user still looks at that finding.
+          if (this.selectedFinding?.id === f.id) window.location.hash = fixHash({ attempt: a.id })
         }
       } catch (err) {
-        if (err?.status === 401) return
-        if (err?.status === 409 && err.data?.code === 'fix.err.consent_required') {
-          const project = this.current?.project || this.sheet?.project || f.project || ''
-          this.consent = { open: true, project, lines: err.data.consent || [], busy: false, error: '', findingId: f.id }
+        if (!this.alive || err?.status === 401) return
+        const code = err?.data?.code
+        if (err?.status === 409 && code === 'fix.err.consent_required') {
+          this.consent = { open: true, project, lines: err.data.consent || [], switchMode: false, busy: false, error: '', findingId: f.id }
           return
+        }
+        // strict_local: the consent screen explains it and offers the switch (ruling 41).
+        if (err?.status === 403 && code === 'fix.err.strict_local' && project) {
+          try {
+            const v = await api.get(this.q(`/projects/${encodeURIComponent(project)}/ai-consent`))
+            if (!this.alive) return
+            if (v?.switch_mode) {
+              this.consent = { open: true, project, lines: v.lines || [], switchMode: true, busy: false, error: '', findingId: f.id }
+              return
+            }
+          } catch {
+            // The refusal below says it in plain words.
+          }
         }
         this.actionError = err
       } finally {
-        this.starting = false
+        this.startingFor = ''
       }
     },
     async acceptConsent() {
@@ -442,7 +489,8 @@ export default {
       c.busy = true
       c.error = ''
       try {
-        await api.post(this.q(`/projects/${encodeURIComponent(c.project)}/ai-consent`))
+        await api.post(this.q(`/projects/${encodeURIComponent(c.project)}/ai-consent`), c.switchMode ? { switch_to_standard: true } : undefined)
+        if (!this.alive) return
         c.open = false
         this.start()
       } catch (err) {
@@ -472,16 +520,19 @@ export default {
       this.actionError = null
       try {
         const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/approve`), { hash: this.shownHash })
+        if (!this.alive || this.current?.id !== id) return
         this.closeStream()
         this.show(v)
         this.proposalUpdated = false
+        // approved (the branch is not there yet): keep following until it is.
+        if (!isFinal(v.state)) this.follow(id)
         this.$emit('changed')
       } catch (err) {
         if (err?.status === 401) return
         this.actionError = err
-        if (err?.status === 409 || err?.status === 502) {
+        if (this.alive && (err?.status === 409 || err?.status === 502)) {
           await this.openAttempt(id)
-          this.actionError = err
+          if (this.alive) this.actionError = err
         }
       } finally {
         this.approving = false
@@ -494,6 +545,7 @@ export default {
       this.actionError = null
       try {
         const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/refuse`), reason ? { reason } : {})
+        if (!this.alive || this.current?.id !== id) return
         this.closeStream()
         this.show(v)
         this.$emit('changed')
@@ -561,6 +613,8 @@ export default {
 }
 .m-fix__pick { font-size: 1.1rem; margin: 0; }
 .m-fix__error p { margin: 0; }
+.m-fix__detail summary { cursor: pointer; }
+.m-fix__detail p { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
 @media (max-width: 1100px) {
   .m-fix__grid { grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr); }
   .m-fix__right { grid-column: 2; }

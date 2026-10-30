@@ -16,19 +16,23 @@
         <p v-if="starting" class="m-chat__line m-voice" role="status">{{ $t('fix.chat.starting') }}</p>
         <p v-else class="m-muted m-small m-chat__hint">{{ $t('fix.chat.start_hint') }}</p>
       </template>
-      <p v-else-if="state === 'preparing'" class="m-chat__line m-voice" role="status" aria-live="polite">
+      <p v-else-if="state === 'preparing'" class="m-chat__line m-voice" role="status">
         <v-progress-circular indeterminate size="16" width="2" color="primary" />
         <span>{{ activity || $t('fix.chat.thinking') }}</span>
       </p>
       <p v-else-if="state === 'proposed'" class="m-chat__line m-voice">{{ $t('fix.chat.proposed') }}</p>
       <p v-else-if="attempt && attempt.branch" class="m-chat__line m-voice">{{ $t('fix.chat.applied', { branch: attempt.branch }) }}</p>
-      <p v-if="attempt && attempt.cause && ['failed', 'refused', 'superseded', 'inconclusive'].includes(state)" class="m-chat__cause m-small">
-        <MaskedText :text="$t('fix.chat.cause', { cause: attempt.cause })" />
-      </p>
+      <div v-if="attempt && attempt.cause && ['failed', 'refused', 'superseded', 'inconclusive'].includes(state)" class="m-chat__cause m-small">
+        <p><MaskedText :text="$t('fix.chat.cause', { cause: attempt.cause })" /></p>
+        <details v-if="attempt.cause_detail" class="m-chat__detail">
+          <summary>{{ $t('fix.proposal.detail') }}</summary>
+          <p class="m-code"><MaskedText :text="attempt.cause_detail" /></p>
+        </details>
+      </div>
       <p v-if="reconnecting" class="m-muted m-small" role="status">{{ $t('fix.chat.reconnecting') }}</p>
     </div>
 
-    <ol ref="list" class="m-chat__messages" aria-live="polite">
+    <ol ref="list" class="m-chat__messages">
       <li v-if="!messages.length && attempt" class="m-muted m-small">{{ $t('fix.chat.empty') }}</li>
       <li v-for="m in messages" :key="m.id" class="m-msg" :class="`m-msg--${role(m)}`">
         <span class="m-msg__who m-small">{{ $t(`fix.chat.role.${role(m)}`) }}</span>
@@ -122,6 +126,9 @@ export default {
 .m-chat__line { display: flex; align-items: center; gap: 0.6rem; margin: 0; font-size: 1.1rem; line-height: 1.5; }
 .m-chat__hint { margin: 0; max-width: 56ch; }
 .m-chat__cause { margin: 0; padding: 0.5rem 0.75rem; border-radius: 8px; background: rgba(var(--v-theme-warning), 0.1); }
+.m-chat__cause p { margin: 0; }
+.m-chat__detail summary { cursor: pointer; margin-top: 0.35rem; }
+.m-chat__detail p { margin-top: 0.25rem; overflow-wrap: anywhere; }
 .m-chat__messages {
   list-style: none;
   margin: 0;

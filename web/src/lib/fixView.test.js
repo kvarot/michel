@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  activityLine, canApprove, fixGroups, fixHash, fixRoute, groupAttempts, isFinal, levelLabel, levels, mergeMessages,
+  acceptResult, activityLine, canApprove, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, levelLabel, levels, mergeMessages,
   proposalFacts, proposalSentence, splitMasked, stateLine,
 } from './fixView.js'
 
@@ -178,5 +178,32 @@ describe('fixRoute', () => {
     expect(fixHash({ attempt: '01ABC' })).toBe('#/fix/01ABC')
     expect(fixHash({ finding: 'f 1' })).toBe('#/fix?finding=f%201')
     expect(fixHash()).toBe('#/fix')
+  })
+})
+
+describe('selectAction', () => {
+  const attempts = [{ id: 'a2', finding: { id: 'f1' } }, { id: 'a1', finding: { id: 'f1' } }]
+
+  test('opens an attempt unless it is the one shown or on its way', () => {
+    expect(selectAction({ attempt: 'a1', finding: '' }, null, attempts)).toEqual({ kind: 'open', id: 'a1' })
+    expect(selectAction({ attempt: 'a1', finding: '' }, 'a1', attempts)).toEqual({ kind: 'keep', id: 'a1' })
+    // A then B then A: B is on its way, so A is opened again.
+    expect(selectAction({ attempt: 'a1', finding: '' }, 'b1', attempts)).toEqual({ kind: 'open', id: 'a1' })
+  })
+
+  test('a finding already tried goes to its newest attempt', () => {
+    expect(selectAction({ attempt: '', finding: 'f1' }, null, attempts)).toEqual({ kind: 'redirect', id: 'a2' })
+    expect(selectAction({ attempt: '', finding: 'f9' }, 'a1', attempts)).toEqual({ kind: 'finding', id: 'f9' })
+    expect(selectAction({ attempt: '', finding: '' }, 'a1', attempts)).toEqual({ kind: 'none', id: '' })
+    expect(selectAction(null, null, null)).toEqual({ kind: 'none', id: '' })
+  })
+})
+
+describe('acceptResult', () => {
+  test('drops a late answer: page gone, or another attempt asked since', () => {
+    expect(acceptResult({ alive: true, pending: 'a1' }, 'a1')).toBe(true)
+    expect(acceptResult({ alive: false, pending: 'a1' }, 'a1')).toBe(false)
+    expect(acceptResult({ alive: true, pending: 'b1' }, 'a1')).toBe(false)
+    expect(acceptResult({ alive: true, pending: null }, 'a1')).toBe(false)
   })
 })

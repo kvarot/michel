@@ -247,3 +247,37 @@ export function fixHash({ attempt = '', finding = '' } = {}) {
   if (finding) return `#/fix?finding=${encodeURIComponent(finding)}`
   return '#/fix'
 }
+
+/**
+ * selectAction decides what the Fix page does for its address. shownId is
+ * the attempt on its way (asked, not answered yet), else the one shown,
+ * else null. It returns:
+ * - {kind: 'keep', id}: that attempt is already shown or on its way;
+ * - {kind: 'open', id}: read the attempt and follow it;
+ * - {kind: 'redirect', id}: a finding already tried goes to its newest
+ *   attempt (attempts is GET /fixes, newest first);
+ * - {kind: 'finding', id}: a finding not started yet;
+ * - {kind: 'none', id: ''}: nothing chosen.
+ * @param {{attempt: string, finding: string}|null} route
+ * @param {string|null} shownId
+ * @param {object[]|null} attempts
+ */
+export function selectAction(route, shownId, attempts) {
+  const r = route || { attempt: '', finding: '' }
+  if (r.attempt) return { kind: r.attempt === shownId ? 'keep' : 'open', id: r.attempt }
+  if (!r.finding) return { kind: 'none', id: '' }
+  const tried = (attempts || []).find((a) => a?.finding?.id === r.finding)
+  return tried ? { kind: 'redirect', id: tried.id } : { kind: 'finding', id: r.finding }
+}
+
+/**
+ * acceptResult tells whether the answer for attempt id still counts: the
+ * page is still there (alive) and id is the attempt it waits for (pending).
+ * A late answer (the page left, or another attempt was asked since) is
+ * dropped, so no stream is opened for a page that is gone.
+ * @param {{alive: boolean, pending: string|null}} state
+ * @param {string} id
+ */
+export function acceptResult(state, id) {
+  return !!state && state.alive === true && state.pending === id
+}

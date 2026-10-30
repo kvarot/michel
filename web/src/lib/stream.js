@@ -65,7 +65,8 @@ function sleep(ms) {
  * it connects again: after the server's "retry" (else minDelay) when the
  * stream had sent something, else after a delay that doubles at each
  * failure up to maxDelay. A reconnect replays what the server sends first,
- * so the caller de-duplicates. A 401 or another 4xx (but 408 and 429) stops
+ * so the caller de-duplicates. onDrop is called after a failure only (the
+ * connection failed, or the stream ended without sending anything). A 401 or another 4xx (but 408 and 429) stops
  * for good and calls onStop({status}).
  * @param {{
  *   url: string,
@@ -128,6 +129,7 @@ export function connect(options) {
   async function loop() {
     while (!closed) {
       let delay
+      let failed
       try {
         const r = await once()
         if (r.stop) {
@@ -136,12 +138,15 @@ export function connect(options) {
           return
         }
         if (r.got) failures = 0
+        failed = !r.got
         delay = r.got ? retry || minDelay : Math.min(minDelay * 2 ** failures++, maxDelay)
       } catch {
+        failed = true
         delay = Math.min(minDelay * 2 ** failures++, maxDelay)
       }
       if (closed) return
-      onDrop()
+      // A stream that ended after sending something is reconnected quietly.
+      if (failed) onDrop()
       await wait(delay)
     }
   }
