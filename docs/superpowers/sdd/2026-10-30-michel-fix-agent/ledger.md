@@ -49,3 +49,13 @@ Ruling 8: mask table on Linux stays protected by the existing secret store (0600
 Ruling 9: fix round 1 of Task 2 also takes S3 (merge overlapping spans), the minors abs_path with spaces / ':'-lists, ScanFiles symlinks (Lstat, skip), bare TOKEN=/KEY= names, Load counts + Atoi error, StreamUnmasker concurrency doc — same files, security-relevant — cost if wrong: a longer round.
 Task 2: fix round 1 BASE 8f9c7db
 Ruling 10 (Kévin, 2026-10-30): push feat/fix-agent after each task and mirror this ledger to docs/superpowers/sdd/2026-10-30-michel-fix-agent/ledger.md (committed) — instruction directe — cost if wrong: none.
+Task 2: security review (automated) on 89efc34: (S5) ${…}/%env( skip is prefix-based (fail-open: ${X:-secret}); (S6) unclosed quote ⇒ partial masking; (S7) env names without underscore before suffix (DBPASSWORD=, APPKEY=) no longer matched.
+Task 2: fix round 1/5 (7 addressed, 0 open — nonce tokens, quoted values, merged spans, paths, symlinks, Load, doc; commits 8f9c7db..89efc34)
+Ruling 11: fix round 2 of Task 2 takes S5-S7 plus the re-review minors with a leak (escaped quotes, backticks, own-nonce-only placeholder skip, pure ${NAME} skip only) and the common config forms (DB_PASS, SECRET_KEY_BASE, `pass` keyword, password in a connection URL user:pw@); after that, remaining detector gaps (XML <password>, YAML block scalars, dashed names) are a documented residual risk — policy § 8 « la détection automatique des secrets n'est jamais parfaite » and the copy itself is read by the agent anyway (spec § 7.2) — cost if wrong: some secret forms reach the brief/MCP/page unmasked.
+Task 2: fix round 2 BASE 89efc34
+Task 2: security review (automated) on 5c94c8f: (S8) url_password stops at first '@' / ':' — password containing '@' leaks its tail; (S9) denylist '.*PUBLIC_?KEY.*' lets PUBLIC_KEY_PASSWORD / X_PUBLIC_KEY_SECRET through.
+Task 2: fix round 2/5 (6 addressed, 0 open — env suffixes, strict ref skip, quotes, own-token skip, pass/key keywords, url passwords; commits 89efc34..5c94c8f)
+Ruling 12: S8 (raw '@' inside a URL password, partially masked) and S9 (denylist .*PUBLIC_?KEY.* — re-review probed GPG_PUBLIC_KEY_PASSWORD still masked by the assignment detector) are parked as residual detector gaps under ruling 11 — RFC 3986 requires '@' percent-encoded in userinfo; the second detector covers secret keywords — cost if wrong: an unencoded '@' password or a public-key-named secret reaches the brief unmasked.
+Task 2: minor (deferred): ${{ secrets.X }} partially masked (noise); lowercase YAML secret_key_base:, PASSPHRASE=, KEY_ID= not matched; SORT_KEY/PRIMARY_KEY over-masked.
+Task 2: complete (commits 57dde47..5c94c8f, review clean after 2 rounds)
+Task 3: BASE 5c94c8f
