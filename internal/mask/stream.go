@@ -4,8 +4,8 @@ import "strings"
 
 // StreamUnmasker unmasks a text that arrives in chunks. It never emits part
 // of a token: text from the last "[" is held back while it could still grow
-// into "[secret-N]" (within the length of the longest known token), and
-// released as soon as it cannot.
+// into a token of its Masker (within the length of the longest known token),
+// and released as soon as it cannot. It is not safe for concurrent use.
 type StreamUnmasker struct {
 	m   *Masker
 	buf string
@@ -14,18 +14,19 @@ type StreamUnmasker struct {
 // NewStreamUnmasker returns a StreamUnmasker over m.
 func NewStreamUnmasker(m *Masker) *StreamUnmasker { return &StreamUnmasker{m: m} }
 
-// couldBeToken reports whether tail (starting with "[") may be the start of a token.
-func couldBeToken(tail string, maxLen int) bool {
+// couldBeToken reports whether tail (starting with "[") may be the start of
+// a token that begins with prefix.
+func couldBeToken(tail, prefix string, maxLen int) bool {
 	if len(tail) >= maxLen { // a full-length token would already be closed
 		return false
 	}
-	if len(tail) <= len(tokenPrefix) {
-		return strings.HasPrefix(tokenPrefix, tail)
+	if len(tail) <= len(prefix) {
+		return strings.HasPrefix(prefix, tail)
 	}
-	if !strings.HasPrefix(tail, tokenPrefix) {
+	if !strings.HasPrefix(tail, prefix) {
 		return false
 	}
-	for _, c := range tail[len(tokenPrefix):] {
+	for _, c := range tail[len(prefix):] {
 		if c < '0' || c > '9' {
 			return false
 		}
@@ -37,7 +38,7 @@ func couldBeToken(tail string, maxLen int) bool {
 func (s *StreamUnmasker) Write(chunk string) string {
 	s.buf += chunk
 	cut := len(s.buf)
-	if i := strings.LastIndexByte(s.buf, '['); i >= 0 && couldBeToken(s.buf[i:], s.m.maxTokenLen()) {
+	if i := strings.LastIndexByte(s.buf, '['); i >= 0 && couldBeToken(s.buf[i:], s.m.prefix, s.m.maxTokenLen()) {
 		cut = i
 	}
 	out := s.m.Unmask(s.buf[:cut])

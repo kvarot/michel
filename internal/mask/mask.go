@@ -1,11 +1,22 @@
 // Package mask replaces secrets in text meant for an agent by tokens
-// "[secret-N]" and puts them back in what the agent returns. The table of
-// tokens lives in the secret store, never in the data base or the audit.
+// "[secret-<nonce>-N]" and puts them back in what the agent returns, for the
+// page only. Michel never unmasks into a commit: applying a proposal is
+// refused as soon as HasToken finds a token in it.
+//
+// Every Masker has its own random nonce, so a token that was already in the
+// input (any "[secret-..]" text, whatever its nonce) is never resolved:
+// Unmask and StreamUnmasker only replace tokens made by that Masker. The
+// table of tokens lives in the secret store, never in the data base or the
+// audit. Counts are per session and are not saved.
 package mask
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,8 +30,14 @@ type Table map[string]string
 // pathPlaceholder replaces an absolute path; it is not reversible.
 const pathPlaceholder = "<path>"
 
+var nonceRe = regexp.MustCompile(`^[0-9a-f]{8}$`)
+
 // Masker masks and unmasks text. It is safe for concurrent use.
 type Masker struct {
+	nonce  string
+	prefix string // "[secret-<nonce>-"
+	re     *regexp.Regexp
+
 	mu      sync.Mutex
 	table   Table
 	byValue map[string]string
@@ -28,12 +45,30 @@ type Masker struct {
 	counts  map[string]int
 }
 
-// New returns an empty Masker; tokens are numbered from 1.
-func New() *Masker {
-	return &Masker{table: Table{}, byValue: map[string]string{}, next: 1, counts: map[string]int{}}
+func newWithNonce(nonce string) *Masker {
+	return &Masker{
+		nonce:   nonce,
+		prefix:  "[secret-" + nonce + "-",
+		re:      regexp.MustCompile(`^\[secret-` + nonce + `-([0-9]+)\]$`),
+		table:   Table{},
+		byValue: map[string]string{},
+		next:    1,
+		counts:  map[string]int{},
+	}
 }
 
-func tokenName(n int) string { return tokenPrefix + strconv.Itoa(n) + "]" }
+// New returns an empty Masker with a fresh random nonce; tokens are numbered
+// from 1.
+func New() *Masker {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("mask: no randomness: " + err.Error())
+	}
+	return newWithNonce(hex.EncodeToString(b[:]))
+}
+
+// token returns the n-th token of this Masker.
+func (m *Masker) token(n int) string { return m.prefix + strconv.Itoa(n) + "]" }
 
 // Mask replaces every secret of s by its token (the same value always gets
 // the same token) and every absolute path by "<path>".
@@ -57,7 +92,7 @@ func (m *Masker) Mask(s string) string {
 		value := s[f.start:f.end]
 		tok, ok := m.byValue[value]
 		if !ok {
-			tok = tokenName(m.next)
+			tok = m.token(m.next)
 			m.next++
 			m.byValue[value] = tok
 			m.table[tok] = value
@@ -68,19 +103,16 @@ func (m *Masker) Mask(s string) string {
 	return b.String()
 }
 
-// Unmask puts the real values back in place of the known tokens of s.
-// Unknown tokens and "<path>" are left as they are.
+// Unmask puts the real values back in place of the tokens of this Masker.
+// Any other token-shaped text (other nonce, old shape, "<path>") is left as
+// it is.
 func (m *Masker) Unmask(s string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.unmaskLocked(s)
-}
-
-func (m *Masker) unmaskLocked(s string) string {
-	if !strings.Contains(s, tokenPrefix) {
+	if !strings.Contains(s, m.prefix) {
 		return s
 	}
-	return tokenRe.ReplaceAllStringFunc(s, func(tok string) string {
+	return tokenShape.ReplaceAllStringFunc(s, func(tok string) string {
 		if v, ok := m.table[tok]; ok {
 			return v
 		}
@@ -88,7 +120,8 @@ func (m *Masker) unmaskLocked(s string) string {
 	})
 }
 
-// Counts returns how many items each detector masked so far (never values).
+// Counts returns how many items each detector masked in this session (never
+// values). They are not saved.
 func (m *Masker) Counts() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -114,15 +147,20 @@ func (m *Masker) Table() Table {
 func (m *Masker) maxTokenLen() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(tokenName(m.next - 1))
+	return len(m.token(m.next - 1))
 }
 
 func storeName(attemptID string) string { return "mask-" + strings.ToLower(attemptID) }
 
-// Save writes the token table to the secret store as "mask-<attempt id>"
-// (encrypted by the store).
+type saved struct {
+	Nonce string `json:"nonce"`
+	Table Table  `json:"table"`
+}
+
+// Save writes the nonce and the token table to the secret store as
+// "mask-<attempt id>" (encrypted by the store).
 func (m *Masker) Save(st secret.Store, attemptID string) error {
-	data, err := json.Marshal(m.Table())
+	data, err := json.Marshal(saved{Nonce: m.nonce, Table: m.Table()})
 	if err != nil {
 		return err
 	}
@@ -132,23 +170,29 @@ func (m *Masker) Save(st secret.Store, attemptID string) error {
 	return nil
 }
 
-// Load reads the table saved by Save; numbering goes on after it.
+var errCorrupt = errors.New("mask table is corrupt")
+
+// Load reads what Save wrote: same nonce, same tokens; numbering goes on
+// after the table. A malformed table is an error.
 func Load(st secret.Store, attemptID string) (*Masker, error) {
 	data, err := st.Get(storeName(attemptID))
 	if err != nil {
 		return nil, fmt.Errorf("cannot load the mask table: %w", err)
 	}
-	var t Table
-	if err := json.Unmarshal(data, &t); err != nil {
-		return nil, fmt.Errorf("mask table is corrupt: %w", err)
+	var s saved
+	if err := json.Unmarshal(data, &s); err != nil || !nonceRe.MatchString(s.Nonce) {
+		return nil, errCorrupt
 	}
-	m := New()
-	for tok, v := range t {
-		sub := tokenRe.FindStringSubmatch(tok)
-		if sub == nil || sub[0] != tok {
-			return nil, fmt.Errorf("mask table is corrupt: bad token")
+	m := newWithNonce(s.Nonce)
+	for tok, v := range s.Table {
+		sub := m.re.FindStringSubmatch(tok)
+		if sub == nil {
+			return nil, errCorrupt
 		}
-		n, _ := strconv.Atoi(sub[1])
+		n, err := strconv.Atoi(sub[1])
+		if err != nil || n < 1 {
+			return nil, errCorrupt
+		}
 		if n >= m.next {
 			m.next = n + 1
 		}

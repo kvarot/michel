@@ -3,6 +3,7 @@ package mask
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -15,15 +16,32 @@ func fakeAWS() string { return "AKIA" + "ABCDEFGHIJKLMNOP" }
 func TestMaskStableTokens(t *testing.T) {
 	m := New()
 	got := m.Mask("k=" + fakeAWS() + " x " + fakeAWS())
-	if got != "k=[secret-1] x [secret-1]" {
-		t.Fatalf("got %q", got)
+	if want := "k=" + m.token(1) + " x " + m.token(1); got != want {
+		t.Fatalf("got %q want %q", got, want)
 	}
 	other := "AKIA" + "ZZZZZZZZZZZZZZZZ"
-	if got := m.Mask(other + " " + fakeAWS()); got != "[secret-2] [secret-1]" {
-		t.Fatalf("got %q", got)
+	if got, want := m.Mask(other+" "+fakeAWS()), m.token(2)+" "+m.token(1); got != want {
+		t.Fatalf("got %q want %q", got, want)
 	}
 	if m.Counts()["aws_key"] != 4 {
 		t.Fatalf("counts %v", m.Counts())
+	}
+}
+
+func TestTokensCarryNonce(t *testing.T) {
+	a, b := New(), New()
+	if !regexp.MustCompile(`^[0-9a-f]{8}$`).MatchString(a.nonce) {
+		t.Fatalf("nonce %q", a.nonce)
+	}
+	if a.nonce == b.nonce {
+		t.Fatal("two maskers share a nonce")
+	}
+	out := a.Mask(fakeAWS())
+	if out != "[secret-"+a.nonce+"-1]" {
+		t.Fatalf("token %q", out)
+	}
+	if b.Unmask(out) != out {
+		t.Fatal("another masker resolved a foreign token")
 	}
 }
 
@@ -37,8 +55,27 @@ func TestUnmaskRestores(t *testing.T) {
 	if got := m.Unmask(masked); got != in {
 		t.Fatalf("got %q want %q", got, in)
 	}
-	if got := m.Unmask("[secret-99] stays"); got != "[secret-99] stays" {
+	if got := m.Unmask(m.token(99) + " stays"); got != m.token(99)+" stays" {
 		t.Fatalf("unknown token changed: %q", got)
+	}
+}
+
+func TestUnmaskIgnoresForeignTokens(t *testing.T) {
+	m := New()
+	in := "fixture [secret-1] and [secret-deadbeef-1] and key " + fakeAWS()
+	masked := m.Mask(in)
+	if !strings.HasPrefix(masked, "fixture [secret-1] and [secret-deadbeef-1] and key ") || strings.Contains(masked, fakeAWS()) {
+		t.Fatalf("masked %q", masked)
+	}
+	if got := m.Unmask(masked); got != in {
+		t.Fatalf("got %q want %q", got, in)
+	}
+	if got := m.Unmask("[secret-1] [secret-deadbeef-1]"); got != "[secret-1] [secret-deadbeef-1]" {
+		t.Fatalf("foreign tokens resolved: %q", got)
+	}
+	s := NewStreamUnmasker(m)
+	if got := s.Write("[secret-1] [secret-deadbeef-1] x") + s.Flush(); got != "[secret-1] [secret-deadbeef-1] x" {
+		t.Fatalf("stream resolved foreign tokens: %q", got)
 	}
 }
 
@@ -53,8 +90,18 @@ func TestMaskDetectors(t *testing.T) {
 		{"github pat", "tok " + pat, "github_token", pat},
 		{"env", "DB_PASSWORD=s3cr3tvalue\nOTHER=1", "env_value", "s3cr3tvalue"},
 		{"env short", "API_KEY=abc", "env_value", "abc"},
+		{"env bare short key", "KEY=short", "env_value", "short"},
+		{"env bare short token", "TOKEN=x", "env_value", "x"},
+		{"env lowercase", "db_secret=abcdef", "env_value", "abcdef"},
+		{"env quoted spaces", `DB_PASSWORD="correct horse battery"`, "env_value", "correct horse battery"},
+		{"env single quoted", "API_TOKEN='a b'", "env_value", "a b"},
+		{"env export", "export APP_KEY=base64:abcDEF", "env_value", "base64:abcDEF"},
 		{"assignment", `{"api_key": "abcdefgh12345"}`, "assignment", "abcdefgh12345"},
 		{"assignment arrow", "'token' => 'abcdefgh12345'", "assignment", "abcdefgh12345"},
+		{"assignment quoted phrase", `"password": "my long pass phrase"`, "assignment", "my long pass phrase"},
+		{"assignment semicolon", "password=abc;defghijklmn", "env_value", "abc;defghijklmn"},
+		{"assignment short", "password: hunter2", "assignment", "hunter2"},
+		{"assignment pwd", "pwd=ab", "assignment", "ab"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,11 +119,10 @@ func TestMaskDetectors(t *testing.T) {
 		})
 	}
 	m := New()
-	if out := m.Mask("password: short"); out != "password: short" {
-		t.Fatalf("short value masked: %q", out)
-	}
-	if out := m.Mask("see https://example.com/a/b/c"); strings.Contains(out, "<path>") {
-		t.Fatalf("url treated as path: %q", out)
+	for _, in := range []string{"password: null", "token=true", "secret: False", `password=""`, "password=${DB_PASS}", "DB_PASSWORD=%env(DB_PASS)%", "token:", "see https://example.com/a/b/c"} {
+		if out := m.Mask(in); out != in {
+			t.Errorf("non-value changed: %q -> %q", in, out)
+		}
 	}
 	// masking already masked text does not create nested tokens
 	once := m.Mask("password: " + "abcdefgh12345")
@@ -85,11 +131,44 @@ func TestMaskDetectors(t *testing.T) {
 	}
 }
 
+func TestMaskDoesNotSkipValueStartingWithToken(t *testing.T) {
+	for _, in := range []string{
+		"password=[secret-1]hunter2hunter2",
+		"password=<path>hunter2hunter2",
+		"DB_TOKEN=[secret-1]hunter2hunter2",
+	} {
+		m := New()
+		if out := m.Mask(in); strings.Contains(out, "hunter2") {
+			t.Fatalf("%q leaked: %q", in, out)
+		}
+		if m.Unmask(m.Mask(in)) != in {
+			t.Fatalf("%q does not round trip", in)
+		}
+	}
+}
+
+func TestMaskMergesOverlappingSpans(t *testing.T) {
+	m := New()
+	in := "API_TOKEN=xyz" + fakeAWS() + "tail"
+	out := m.Mask(in)
+	if out != "API_TOKEN="+m.token(1) {
+		t.Fatalf("got %q", out)
+	}
+	if m.Counts()["aws_key"] != 1 || m.Counts()["env_value"] != 0 {
+		t.Fatalf("counts %v", m.Counts())
+	}
+	m = New()
+	out = m.Mask("k=" + fakeAWS() + "ghp_" + strings.Repeat("a1", 20) + " end")
+	if strings.Contains(out, "AKIA") || strings.Contains(out, "a1a1") {
+		t.Fatalf("adjacent spans leaked: %q", out)
+	}
+}
+
 func TestMaskPEMBlock(t *testing.T) {
 	pem := "-----BEGIN " + "RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\nKUpRKfFLfRYC9AIKjbJTWit+CqvjWYzvQwECAwEAAQ==\n-----END " + "RSA PRIVATE KEY-----"
 	m := New()
 	out := m.Mask("before\n" + pem + "\nafter")
-	if out != "before\n[secret-1]\nafter" {
+	if out != "before\n"+m.token(1)+"\nafter" {
 		t.Fatalf("got %q", out)
 	}
 	if m.Counts()["private_key"] != 1 {
@@ -122,6 +201,21 @@ func TestMaskAbsolutePathsNotReversible(t *testing.T) {
 	}
 }
 
+func TestMaskAbsolutePathVariants(t *testing.T) {
+	tests := map[string]string{
+		`in D:\data\My Documents\x1\a.php done`:    `in <path> done`,
+		`in D:\data\My Documents\x1\a.php`:         `in <path>`,
+		`PATH=/srv/a/b:/srv/c/d:/srv/e/f`:          `PATH=<path>:<path>:<path>`,
+		`err at D:/data/x1/a.php: boom`:            `err at <path>: boom`,
+		`see https://example.com/a/b and /srv/q/r`: `see https://example.com/a/b and <path>`,
+	}
+	for in, want := range tests {
+		if got := New().Mask(in); got != want {
+			t.Errorf("Mask(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestMaskConcurrent(t *testing.T) {
 	m := New()
 	var wg sync.WaitGroup
@@ -131,7 +225,7 @@ func TestMaskConcurrent(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
 				m.Mask(fakeAWS())
-				m.Unmask("[secret-1]")
+				m.Unmask(m.token(1))
 			}
 		}()
 	}
@@ -143,12 +237,14 @@ func TestMaskConcurrent(t *testing.T) {
 
 func TestStreamUnmaskerJoinsSplitTokens(t *testing.T) {
 	m := New()
-	if m.Mask(fakeAWS()) != "[secret-1]" {
+	tok := m.Mask(fakeAWS())
+	if tok != m.token(1) {
 		t.Fatal("setup")
 	}
+	cut := len("[secret-") + 3
 	s := NewStreamUnmasker(m)
 	var all strings.Builder
-	for _, c := range []string{"voici [sec", "ret-1] fin"} {
+	for _, c := range []string{"voici " + tok[:cut], tok[cut:] + " fin"} {
 		out := s.Write(c)
 		if strings.Contains(out, "[sec") {
 			t.Fatalf("partial token emitted: %q", out)
@@ -163,8 +259,8 @@ func TestStreamUnmaskerJoinsSplitTokens(t *testing.T) {
 
 func TestStreamUnmaskerCharByChar(t *testing.T) {
 	m := New()
-	m.Mask(fakeAWS())
-	in := "a [x] [secret-1][secret-1] [ [secret-"
+	tok := m.Mask(fakeAWS())
+	in := "a [x] " + tok + tok + " [ [secret-"
 	s := NewStreamUnmasker(m)
 	var all strings.Builder
 	for _, r := range in {
@@ -221,11 +317,50 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 	// numbering continues after the loaded table
-	if got := l.Mask("AKIA" + "ZZZZZZZZZZZZZZZZ"); got != "[secret-3]" {
+	if got := l.Mask("AKIA" + "ZZZZZZZZZZZZZZZZ"); got != l.token(3) {
 		t.Fatalf("got %q", got)
 	}
 	if _, err := Load(st, "01HZXYABCDEFGHJKMNPQRSTVWY"); err == nil {
 		t.Fatal("missing table must fail")
+	}
+}
+
+func TestSaveLoadKeepsNonce(t *testing.T) {
+	st, _ := secret.Open(t.TempDir())
+	m := New()
+	m.Mask(fakeAWS())
+	if err := m.Save(st, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(st, "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.nonce != m.nonce {
+		t.Fatalf("nonce %q != %q", l.nonce, m.nonce)
+	}
+	if l.Mask(fakeAWS()) != m.token(1) {
+		t.Fatal("same value must keep its token after Load")
+	}
+}
+
+func TestLoadRejectsCorruptTables(t *testing.T) {
+	st, _ := secret.Open(t.TempDir())
+	for name, body := range map[string]string{
+		"notjson":     `nope`,
+		"badnonce":    `{"nonce":"XYZ","table":{}}`,
+		"foreign":     `{"nonce":"0a0b0c0d","table":{"[secret-deadbeef-1]":"v"}}`,
+		"badnumber":   `{"nonce":"0a0b0c0d","table":{"[secret-0a0b0c0d-x]":"v"}}`,
+		"zero":        `{"nonce":"0a0b0c0d","table":{"[secret-0a0b0c0d-0]":"v"}}`,
+		"overflow":    `{"nonce":"0a0b0c0d","table":{"[secret-0a0b0c0d-99999999999999999999]":"v"}}`,
+		"legacyshape": `{"nonce":"0a0b0c0d","table":{"[secret-1]":"v"}}`,
+	} {
+		if err := st.Set("mask-"+name, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(st, name); err == nil {
+			t.Errorf("%s: corrupt table accepted", name)
+		}
 	}
 }
 
@@ -256,34 +391,30 @@ func TestScanFilesReportsNoValue(t *testing.T) {
 	}
 }
 
+func TestScanFilesSkipsSymlinks(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "k.txt"), []byte(fakeAWS()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Symlink(filepath.Join(outside, "k.txt"), filepath.Join(root, "link.txt")); err != nil {
+		t.Skipf("symlinks not available: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "dir")); err != nil {
+		t.Skipf("symlinks not available: %v", err)
+	}
+	if hits := ScanFiles(root, []string{"link.txt", "dir/k.txt"}); len(hits) != 0 {
+		t.Fatalf("followed a symlink: %+v", hits)
+	}
+}
+
 func TestHasToken(t *testing.T) {
 	for in, want := range map[string]bool{
-		"a [secret-1] b": true, "[secret-42]": true,
-		"[secret-]": false, "[secret-x]": false, "secret-1": false, "[note]": false, "": false,
+		"a [secret-1] b": true, "[secret-42]": true, "[secret-deadbeef-7]": true,
+		"[secret-]": false, "secret-1": false, "[note]": false, "": false,
 	} {
 		if HasToken(in) != want {
 			t.Errorf("HasToken(%q) = %v", in, !want)
 		}
-	}
-}
-
-func TestMaskDoesNotSkipValueStartingWithToken(t *testing.T) {
-	for _, in := range []string{
-		"password=[secret-1]hunter2hunter2",
-		"password=<path>hunter2hunter2",
-		"DB_TOKEN=[secret-1]hunter2hunter2",
-	} {
-		m := New()
-		if out := m.Mask(in); strings.Contains(out, "hunter2") {
-			t.Fatalf("%q leaked: %q", in, out)
-		}
-		if m.Unmask(m.Mask(in)) != in {
-			t.Fatalf("%q does not round trip", in)
-		}
-	}
-	m := New()
-	once := m.Mask("password=" + "abcdefgh12345")
-	if m.Mask(once) != once {
-		t.Fatal("exact token must stay")
 	}
 }
