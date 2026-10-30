@@ -432,3 +432,23 @@ func TestRecordRefusedRecordsDeniedAttempt(t *testing.T) {
 		t.Fatalf("sink got %+v", sink.got)
 	}
 }
+
+func TestMatchRuleReturnsTheMatchingRule(t *testing.T) {
+	g := egress.New(pol(
+		policy.AllowRule{Host: "*.example.com", Purpose: "fix.install"},
+		policy.AllowRule{Host: "127.0.0.1", Purpose: "agent.claude"},
+	), nil)
+	if r, ok := g.MatchRule("repo.example.com", "fix.install"); !ok || r.Host != "*.example.com" {
+		t.Errorf("wildcard: %+v %v", r, ok)
+	}
+	if r, ok := g.MatchRule("127.0.0.1", "agent.claude"); !ok || r.Host != "127.0.0.1" {
+		t.Errorf("exact: %+v %v", r, ok)
+	}
+	if _, ok := g.MatchRule("127.0.0.1", "fix.install"); ok {
+		t.Error("purpose mismatch matched")
+	}
+	// The loopback grant of local.* purposes is not a rule.
+	if _, ok := g.MatchRule("127.0.0.1", "local.test"); ok {
+		t.Error("loopback grant returned as a rule")
+	}
+}

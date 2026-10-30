@@ -11,6 +11,10 @@ package allowproxy
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -30,6 +34,9 @@ import (
 // Attempt stay on the host the client asked for. Tests only: production code
 // never sets it, and it is nil in production.
 var DialAddrForTest func(host string) string
+
+// proxyUser is the user name in the proxy URL.
+const proxyUser = "michel"
 
 const (
 	// maxTunnels caps the connections a proxy serves at once; one more is
@@ -60,6 +67,8 @@ type proxy struct {
 	cancel  context.CancelFunc
 	slots   chan struct{}
 	wg      sync.WaitGroup
+	// cred is the base64 Basic credential every request must carry.
+	cred string
 
 	mu       sync.Mutex
 	closed   bool
@@ -67,19 +76,28 @@ type proxy struct {
 	recorded int
 }
 
-// Listen starts a proxy on 127.0.0.1 (a free port) for purpose. A CONNECT to
-// host:443 is tunnelled through gw.DialContext(ctx, purpose, "tcp",
-// "host:443"); a refusal is answered 403 Forbidden and the connection
-// closed. Plain HTTP requests are refused (HTTPS only). close stops the
-// listener, closes every connection and tunnel, and returns once all the
-// proxy's goroutines have ended; it may be called twice.
-func Listen(gw *egress.Gateway, purpose string) (addr string, close func(), err error) {
+// Listen starts a proxy on 127.0.0.1 (a free port) for purpose and returns
+// its URL, http://michel:<token>@127.0.0.1:<port>, with a random token of
+// its own: every request must carry Proxy-Authorization: Basic with these
+// credentials, or it is answered 407 (so that another local process cannot
+// borrow the proxy's allowlist). A CONNECT to host:443 is tunnelled through
+// gw.DialContext(ctx, purpose, "tcp", "host:443"); a refusal is answered
+// 403 Forbidden and the connection closed. Plain HTTP requests are refused
+// (HTTPS only). close stops the listener, closes every connection and
+// tunnel, and returns once all the proxy's goroutines have ended; it may be
+// called twice.
+func Listen(gw *egress.Gateway, purpose string) (proxyURL string, close func(), err error) {
 	if gw == nil {
 		return "", nil, errors.New("allowproxy: nil gateway")
 	}
 	if purpose == "" {
 		return "", nil, errors.New("allowproxy: empty purpose")
 	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", nil, fmt.Errorf("allowproxy: token: %w", err)
+	}
+	token := hex.EncodeToString(raw[:])
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, err
@@ -89,11 +107,12 @@ func Listen(gw *egress.Gateway, purpose string) (addr string, close func(), err 
 		gw: gw, purpose: purpose, ln: ln, ctx: ctx, cancel: cancel,
 		slots: make(chan struct{}, maxTunnels),
 		conns: map[net.Conn]struct{}{},
+		cred:  base64.StdEncoding.EncodeToString([]byte(proxyUser + ":" + token)),
 	}
 	p.wg.Add(1)
 	go p.serve()
 	var once sync.Once
-	return ln.Addr().String(), func() { once.Do(p.close) }, nil
+	return "http://" + proxyUser + ":" + token + "@" + ln.Addr().String(), func() { once.Do(p.close) }, nil
 }
 
 func (p *proxy) close() {
@@ -147,8 +166,9 @@ func (p *proxy) serve() {
 		select {
 		case p.slots <- struct{}{}:
 		default:
+			p.record("", "too many connections")
 			_ = c.SetWriteDeadline(time.Now().Add(lingerTimeout))
-			_, _ = io.WriteString(c, answer(503, "Service Unavailable"))
+			_, _ = io.WriteString(c, answer(503, "Service Unavailable", ""))
 			_ = c.Close()
 			continue
 		}
@@ -166,17 +186,20 @@ func (p *proxy) serve() {
 	}
 }
 
-// answer is a complete response without a body. It never echoes anything
-// the client sent.
-func answer(code int, text string) string {
-	return fmt.Sprintf("HTTP/1.1 %d %s\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", code, text)
+// answer is a complete response without a body; extra is a header line
+// (with its CRLF) or empty. It never echoes anything the client sent.
+func answer(code int, text, extra string) string {
+	return fmt.Sprintf("HTTP/1.1 %d %s\r\n%sConnection: close\r\nContent-Length: 0\r\n\r\n", code, text, extra)
 }
 
 // refuse answers code to c, waits briefly for the client to stop sending so
 // that it reads the answer rather than a reset, and leaves c to be closed.
-func refuse(c net.Conn, code int, text string) {
+func refuse(c net.Conn, code int, text string) { refuseWith(c, code, text, "") }
+
+// refuseWith is refuse with an extra header line.
+func refuseWith(c net.Conn, code int, text, extra string) {
 	_ = c.SetWriteDeadline(time.Now().Add(lingerTimeout))
-	if _, err := io.WriteString(c, answer(code, text)); err != nil {
+	if _, err := io.WriteString(c, answer(code, text, extra)); err != nil {
 		return
 	}
 	if cw, ok := c.(interface{ CloseWrite() error }); ok {
@@ -186,16 +209,59 @@ func refuse(c net.Conn, code int, text string) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(c, maxHeaderBytes))
 }
 
-// refuseRecorded refuses c with 403 and records the refusal for host.
-func (p *proxy) refuseRecorded(c net.Conn, host, reason string) {
+// record records a refusal the proxy decided by itself. reason is always one
+// of the proxy's fixed strings; host is sanitized and bounded. The last
+// record under maxRecorded says that further refusals are not recorded.
+func (p *proxy) record(host, reason string) {
 	p.mu.Lock()
-	record := p.recorded < maxRecorded
+	n := p.recorded
 	p.recorded++
 	p.mu.Unlock()
-	if record {
+	switch {
+	case n < maxRecorded-1:
 		_ = p.gw.RecordRefused(sanitizeHost(host), p.purpose, reason)
+	case n == maxRecorded-1:
+		_ = p.gw.RecordRefused(sanitizeHost(host), p.purpose, "further refusals not recorded")
 	}
+}
+
+// refuseRecorded refuses c with 403 and records the refusal for host.
+func (p *proxy) refuseRecorded(c net.Conn, host, reason string) {
+	p.record(host, reason)
 	refuse(c, 403, "Forbidden")
+}
+
+// authorized checks the Proxy-Authorization header values, the credential
+// in constant time; the empty reason means they carry the proxy's own.
+func (p *proxy) authorized(values []string) string {
+	if len(values) == 0 {
+		return "proxy authentication missing"
+	}
+	if len(values) > 1 {
+		return "proxy authentication refused"
+	}
+	scheme, cred, _ := strings.Cut(strings.TrimSpace(values[0]), " ")
+	ok := subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cred)), []byte(p.cred)) == 1
+	if !strings.EqualFold(scheme, "Basic") || !ok {
+		return "proxy authentication refused"
+	}
+	return ""
+}
+
+// requestHost is the host a request aims at, for the audit only (it is
+// sanitized and bounded when recorded).
+func requestHost(target string, hosts []string) string {
+	host := target
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	if host == "" && len(hosts) > 0 {
+		host = hosts[0]
+	}
+	return host
 }
 
 func (p *proxy) handle(c net.Conn) {
@@ -217,18 +283,13 @@ func (p *proxy) handle(c net.Conn) {
 		return
 	}
 	hosts := hdr["Host"]
+	if why := p.authorized(hdr["Proxy-Authorization"]); why != "" {
+		p.record(requestHost(target, hosts), why)
+		refuseWith(c, 407, "Proxy Authentication Required", "Proxy-Authenticate: Basic realm=\"michel\"\r\n")
+		return
+	}
 	if method != "CONNECT" {
-		host := target
-		if i := strings.Index(host, "://"); i >= 0 {
-			host = host[i+3:]
-		}
-		if i := strings.IndexAny(host, "/?#"); i >= 0 {
-			host = host[:i]
-		}
-		if host == "" && len(hosts) > 0 {
-			host = hosts[0]
-		}
-		p.refuseRecorded(c, host, "plain HTTP refused: HTTPS only")
+		p.refuseRecorded(c, requestHost(target, hosts), "plain HTTP refused: HTTPS only")
 		return
 	}
 	if proto != "HTTP/1.1" && proto != "HTTP/1.0" {
@@ -238,7 +299,7 @@ func (p *proxy) handle(c net.Conn) {
 	host, reason := checkTarget(target)
 	if reason == "" {
 		switch {
-		case len(hosts) > 1 || len(hosts) == 1 && hosts[0] != target:
+		case len(hosts) > 1 || len(hosts) == 1 && !sameAuthority(hosts[0], target):
 			reason = "host header differs from the CONNECT target"
 		case hdr.Get("Content-Length") != "" && hdr.Get("Content-Length") != "0" || len(hdr["Transfer-Encoding"]) > 0:
 			reason = "request body refused before CONNECT"
@@ -250,7 +311,7 @@ func (p *proxy) handle(c net.Conn) {
 		reason = p.checkIP(host)
 	}
 	if reason != "" {
-		p.refuseRecorded(c, hostOf(target), reason)
+		p.refuseRecorded(c, requestHost(target, nil), reason)
 		return
 	}
 	_ = c.SetReadDeadline(time.Time{})
@@ -289,14 +350,21 @@ func (p *proxy) handle(c net.Conn) {
 // exact address for the purpose (not a wildcard, not the loopback grant of
 // local.* purposes). The empty reason means accepted.
 func (p *proxy) checkIP(ip string) string {
-	ok, why := p.gw.Allowed(ip, p.purpose)
-	if !ok {
-		return "" // the gateway refuses and records it
+	if r, ok := p.gw.MatchRule(ip, p.purpose); ok && strings.ToLower(r.Host) == ip {
+		return ""
 	}
-	if why != fmt.Sprintf("allowed by rule %s/%s", ip, p.purpose) {
+	if ok, _ := p.gw.Allowed(ip, p.purpose); ok {
 		return "IP address target without a rule naming it"
 	}
-	return ""
+	return "" // the gateway refuses and records it
+}
+
+// sameAuthority reports whether a Host header names the (already validated,
+// lower case) CONNECT target, with or without its port (undici's ProxyAgent
+// sends the host alone), in any case.
+func sameAuthority(hostHeader, target string) bool {
+	h := strings.ToLower(hostHeader)
+	return h == target || h+":443" == target
 }
 
 func splitRequestLine(line string) (method, target, proto string, ok bool) {
@@ -319,7 +387,7 @@ func checkTarget(target string) (string, string) {
 		return "", "CONNECT target is not host:port"
 	}
 	if port != "443" {
-		return "", "port " + port + " refused: only 443 is tunnelled"
+		return "", "port refused: only 443 is tunnelled"
 	}
 	if host != strings.ToLower(host) {
 		return "", "CONNECT target not in lower case"
@@ -368,14 +436,6 @@ func validHostname(h string) bool {
 		}
 	}
 	return strings.Trim(labels[len(labels)-1], "0123456789") != ""
-}
-
-// hostOf is the host part of a request target, for the audit.
-func hostOf(target string) string {
-	if h, _, err := net.SplitHostPort(target); err == nil {
-		return h
-	}
-	return target
 }
 
 // sanitizeHost keeps an audited host to the characters of a host name, lower

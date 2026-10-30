@@ -135,6 +135,22 @@ func (g *Gateway) Attempts() []Attempt {
 	return append([]Attempt(nil), g.attempts...)
 }
 
+// MatchRule returns the allowlist rule that lets host be contacted for
+// purpose, if any. The loopback grant of local.* purposes is not a rule and
+// is not returned. It does not record an Attempt.
+func (g *Gateway) MatchRule(host, purpose string) (policy.AllowRule, bool) {
+	host = strings.ToLower(host)
+	g.mu.Lock()
+	rules := g.rules // SetRules never mutates a published slice
+	g.mu.Unlock()
+	for _, r := range rules {
+		if r.Purpose == purpose && hostMatches(strings.ToLower(r.Host), host) {
+			return r, true
+		}
+	}
+	return policy.AllowRule{}, false
+}
+
 // RecordRefused records a refused Attempt for host and purpose that never
 // reached the allowlist check: a request a proxy turns down by itself
 // (plain HTTP, a port other than 443, a malformed target). It dials nothing
