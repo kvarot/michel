@@ -53,6 +53,9 @@ type FixErrorBody struct {
 	Hint    string            `json:"hint,omitempty"`
 	Code    string            `json:"code"`
 	Consent []ConsentLineView `json:"consent,omitempty"`
+	// Detail is a short technical detail (sanitized, no path, no secret)
+	// the page folds behind "Voir le détail".
+	Detail string `json:"detail,omitempty"`
 }
 
 // FixFindingView is the finding an attempt works on.
@@ -100,29 +103,33 @@ type MessageView struct {
 
 // StateView is the state event of the stream.
 type StateView struct {
-	State      string `json:"state"`
-	Cause      string `json:"cause"`
-	ApprovedBy string `json:"approved_by"`
-	Branch     string `json:"branch,omitempty"`
-	UpdatedAt  string `json:"updated_at"`
+	State string `json:"state"`
+	Cause string `json:"cause"`
+	// CauseDetail is the technical detail behind Cause (sanitized).
+	CauseDetail string `json:"cause_detail"`
+	ApprovedBy  string `json:"approved_by"`
+	Branch      string `json:"branch,omitempty"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 // AttemptView is one fix attempt. Branch is the branch created in the
 // user's repository, once applied. Messages is the conversation, oldest
 // first (null in lists).
 type AttemptView struct {
-	ID         string         `json:"id"`
-	Finding    FixFindingView `json:"finding"`
-	Project    string         `json:"project"`
-	Origin     string         `json:"origin"`
-	State      string         `json:"state"`
-	Cause      string         `json:"cause"`
-	ApprovedBy string         `json:"approved_by"`
-	Branch     string         `json:"branch,omitempty"`
-	CreatedAt  string         `json:"created_at"`
-	UpdatedAt  string         `json:"updated_at"`
-	Proposal   *ProposalView  `json:"proposal"`
-	Messages   []MessageView  `json:"messages"`
+	ID      string         `json:"id"`
+	Finding FixFindingView `json:"finding"`
+	Project string         `json:"project"`
+	Origin  string         `json:"origin"`
+	State   string         `json:"state"`
+	Cause   string         `json:"cause"`
+	// CauseDetail is the technical detail behind Cause (sanitized).
+	CauseDetail string        `json:"cause_detail"`
+	ApprovedBy  string        `json:"approved_by"`
+	Branch      string        `json:"branch,omitempty"`
+	CreatedAt   string        `json:"created_at"`
+	UpdatedAt   string        `json:"updated_at"`
+	Proposal    *ProposalView `json:"proposal"`
+	Messages    []MessageView `json:"messages"`
 }
 
 // ConsentLineView is one line of the AI consent screen: its catalog key,
@@ -306,7 +313,8 @@ func proposalView(m *mask.Masker, p fix.Proposal, full bool) *ProposalView {
 }
 
 func stateView(m *mask.Masker, a fix.Attempt) StateView {
-	v := StateView{State: string(a.State), Cause: shown(m, a.Cause), ApprovedBy: a.ApprovedBy, UpdatedAt: stamp(a.UpdatedAt)}
+	v := StateView{State: string(a.State), Cause: shown(m, a.Cause), CauseDetail: shown(m, noPaths(a.CauseDetail)), ApprovedBy: a.ApprovedBy,
+		UpdatedAt: stamp(a.UpdatedAt)}
 	if a.State == fix.StateApplied || a.State == fix.StateProvenFixed || a.State == fix.StateInconclusive {
 		v.Branch = fix.Branch(a.ID)
 	}
@@ -318,7 +326,7 @@ func stateView(m *mask.Masker, a fix.Attempt) StateView {
 func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool) (AttemptView, error) {
 	m := s.displayMasker(a.ID)
 	st := stateView(m, a)
-	v := AttemptView{ID: a.ID, Origin: a.Origin, State: st.State, Cause: st.Cause, ApprovedBy: a.ApprovedBy, Branch: st.Branch,
+	v := AttemptView{ID: a.ID, Origin: a.Origin, State: st.State, Cause: st.Cause, CauseDetail: st.CauseDetail, ApprovedBy: a.ApprovedBy, Branch: st.Branch,
 		CreatedAt: stamp(a.CreatedAt), UpdatedAt: stamp(a.UpdatedAt)}
 	fi, p, found, err := s.lookup(ctx, a.FindingID)
 	if err != nil {
@@ -519,8 +527,8 @@ func (s *server) fixApprove(w http.ResponseWriter, r *http.Request) {
 		}
 		// The approval stands: Michel applies it again at its next start.
 		detail := mask.New().Mask(noPaths(err.Error()))
-		writeJSON(w, http.StatusBadGateway, FixErrorBody{Error: i18n.T(lang, "api.fix.apply_failed", detail),
-			Hint: i18n.T(lang, "api.fix.apply_failed_hint"), Code: "api.fix.apply_failed"})
+		writeJSON(w, http.StatusBadGateway, FixErrorBody{Error: i18n.T(lang, "api.fix.apply_failed"),
+			Hint: i18n.T(lang, "api.fix.apply_failed_hint"), Code: "api.fix.apply_failed", Detail: detail})
 		return
 	}
 	s.answerAttempt(w, r, http.StatusOK, a.ID)

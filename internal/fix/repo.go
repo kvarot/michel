@@ -57,7 +57,7 @@ func parseTime(s string) (time.Time, error) {
 // waits for the user: the project has no other attempt meanwhile.
 const busyStates = `('preparing','proposed','approved')`
 
-const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at, work_json, approved_by, approved_proposal, approved_hash`
+const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at, work_json, approved_by, approved_proposal, approved_hash, cause_detail`
 
 func workJSON(w Work) (string, error) {
 	w.Mirror = w.Copy.Mirror
@@ -84,7 +84,7 @@ func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 		return Attempt{}, err
 	}
 	res, err := r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`)
-		SELECT ?,?,?,?,?,?,?,?,?,?,?,'','',''
+		SELECT ?,?,?,?,?,?,?,?,?,?,?,'','','',''
 		WHERE NOT EXISTS (SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN `+busyStates+`)`,
 		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now), work, a.ProjectID)
 	if err != nil {
@@ -145,7 +145,7 @@ type scanner interface{ Scan(...any) error }
 func scanAttempt(s scanner) (Attempt, error) {
 	var a Attempt
 	var state, created, updated, work string
-	if err := s.Scan(&a.ID, &a.FindingID, &a.ProjectID, &a.Origin, &state, &a.CloneDir, &a.SessionID, &a.Cause, &created, &updated, &work, &a.ApprovedBy, &a.ApprovedProposal, &a.ApprovedHash); err != nil {
+	if err := s.Scan(&a.ID, &a.FindingID, &a.ProjectID, &a.Origin, &state, &a.CloneDir, &a.SessionID, &a.Cause, &created, &updated, &work, &a.ApprovedBy, &a.ApprovedProposal, &a.ApprovedHash, &a.CauseDetail); err != nil {
 		return Attempt{}, err
 	}
 	a.State = State(state)
@@ -226,6 +226,14 @@ func (r *Repo) SetState(ctx context.Context, id string, from []State, to State, 
 		return err
 	}
 	return fmt.Errorf("%w (moving to %s)", ErrBadTransition, to)
+}
+
+// SetCauseDetail records the technical detail behind the attempt's cause.
+func (r *Repo) SetCauseDetail(ctx context.Context, id, detail string) error {
+	if _, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET cause_detail = ? WHERE id = ?`, detail, id); err != nil {
+		return fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	return nil
 }
 
 // SetRun records the work copy and the agent session of an attempt.

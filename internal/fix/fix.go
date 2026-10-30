@@ -59,11 +59,14 @@ type Attempt struct {
 	Origin    string `json:"origin"`
 	State     State  `json:"state"`
 	// CloneDir is the work copy, a local path: never sent out.
-	CloneDir  string    `json:"-"`
-	SessionID string    `json:"session_id"`
-	Cause     string    `json:"cause"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CloneDir  string `json:"-"`
+	SessionID string `json:"session_id"`
+	Cause     string `json:"cause"`
+	// CauseDetail is the short technical detail behind Cause (sanitized:
+	// no path, no secret), "" when there is none.
+	CauseDetail string    `json:"cause_detail"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 	// ApprovedBy is who approved the current proposal ("auto" when a level
 	// 3 rule did), "" before.
 	ApprovedBy string `json:"approved_by"`

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kvarot/michel/internal/gitrepo"
 	"github.com/kvarot/michel/internal/project"
 )
 
@@ -163,7 +162,7 @@ func TestAuditHasNoRawErrors(t *testing.T) {
 	_ = p
 }
 
-func TestSweepDropsTokensSkillsAndMasks(t *testing.T) {
+func TestSweepDropsTokensAndMasks(t *testing.T) {
 	f := newFixture(t)
 	f.consent()
 	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
@@ -174,17 +173,8 @@ func TestSweepDropsTokensSkillsAndMasks(t *testing.T) {
 	if tokenStillSet(f.d.Secrets, a.ID) {
 		t.Error("token of a proposed attempt kept after its session ended")
 	}
-	// Give it a token again (as if serve had died before the session end)
-	// and a stale skill of another finding, and age a refused attempt.
+	// Give it a token again (as if serve had died before the session end).
 	if err := SetAttemptToken(f.d.Secrets, a.ID, "again"); err != nil {
-		t.Fatal(err)
-	}
-	stale := filepath.Join(f.d.SkillsDir, "michel-fix-fzzzzzzz")
-	if err := gitrepo.WriteOwnedDir(stale, "fix:FZZZZZZZ00", map[string][]byte{"SKILL.md": []byte("old")}); err != nil {
-		t.Fatal(err)
-	}
-	foreign := filepath.Join(f.d.SkillsDir, "michel-fix-user")
-	if err := os.MkdirAll(foreign, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := Sweep(context.Background(), f.d); err != nil {
@@ -192,15 +182,6 @@ func TestSweepDropsTokensSkillsAndMasks(t *testing.T) {
 	}
 	if tokenStillSet(f.d.Secrets, a.ID) {
 		t.Error("token of a non-preparing attempt survived the sweep")
-	}
-	if _, err := os.Stat(stale); err == nil {
-		t.Error("stale skill survived the sweep")
-	}
-	if _, err := os.Stat(foreign); err != nil {
-		t.Error("a folder Michel did not write was removed")
-	}
-	if _, err := os.Stat(filepath.Join(f.d.SkillsDir, mustSkill(t, f.finding.ID))); err != nil {
-		t.Error("the skill of the live attempt was removed")
 	}
 	// The mask table lives while the attempt is recent, goes with its
 	// messages once old and finished.
@@ -219,11 +200,6 @@ func TestSweepDropsTokensSkillsAndMasks(t *testing.T) {
 	if _, err := f.d.Secrets.Get("mask-" + strings.ToLower(a.ID)); err == nil {
 		t.Error("mask table survived the purge of an old finished attempt")
 	}
-}
-
-func mustSkill(t *testing.T, findingID string) string {
-	t.Helper()
-	return "michel-fix-" + strings.ToLower(findingID[:8])
 }
 
 func TestPurgeProjectForgetsSecrets(t *testing.T) {

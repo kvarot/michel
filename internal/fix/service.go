@@ -23,7 +23,6 @@ import (
 	"github.com/kvarot/michel/internal/brief"
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/egress/allowproxy"
-	"github.com/kvarot/michel/internal/gitrepo"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/mask"
 	"github.com/kvarot/michel/internal/policy"
@@ -77,12 +76,10 @@ type Deps struct {
 	// worker reads it at each pass instead of keeping Policy.
 	LivePolicy func() policy.Policy
 	// DataDir is Michel's data folder; OSVRoot the offline databases of the
-	// re-scan (empty: the policy's db.osv_path); SkillsDir the Claude Code
-	// skills folder (empty: ~/.claude/skills).
-	DataDir   string
-	OSVRoot   string
-	SkillsDir string
-	Lang      i18n.Lang
+	// re-scan (empty: the policy's db.osv_path).
+	DataDir string
+	OSVRoot string
+	Lang    i18n.Lang
 	// Agent starts Claude Code for a spec with the agent deps of the
 	// attempt (proxy and data folder filled in). Nil means agent.Start.
 	Agent func(ctx context.Context, ad agent.Deps, s agent.Spec) (Session, error)
@@ -161,13 +158,6 @@ func (d Deps) work() workcopy.Deps {
 		w.Now = d.Now
 	}
 	return w
-}
-
-func (d Deps) skillsDir() (string, error) {
-	if d.SkillsDir != "" {
-		return d.SkillsDir, nil
-	}
-	return gitrepo.DefaultSkillsDir()
 }
 
 var defaultSessions = NewSessions()
@@ -438,8 +428,10 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 	}
 	lang := d.lang()
 	fail := func(key string, cause error) (Attempt, error) {
-		text := i18n.T(lang, key, scan.SanitizeText(noPath(cause).Error()))
-		_ = repo.SetState(ctx, a.ID, []State{StatePreparing}, StateFailed, text)
+		text := i18n.T(lang, plainCause(key, cause))
+		if repo.SetState(ctx, a.ID, []State{StatePreparing}, StateFailed, text) == nil {
+			_ = repo.SetCauseDetail(ctx, a.ID, auditDetail(d, cause))
+		}
 		got, _ := repo.GetAttempt(ctx, a.ID)
 		d.cleanup(ctx, got, true)
 		return got, cause
@@ -500,13 +492,6 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		}
 	}
 	if err := repo.SetWork(ctx, a.ID, w); err != nil {
-		return fail("fix.cause.prepare_failed", err)
-	}
-	skills, err := d.skillsDir()
-	if err != nil {
-		return fail("fix.cause.prepare_failed", err)
-	}
-	if _, err := brief.WriteSkill(skills, b, lang); err != nil {
 		return fail("fix.cause.prepare_failed", err)
 	}
 	var raw [32]byte
@@ -680,8 +665,10 @@ func (d Deps) applyAuto(ctx context.Context, a Attempt) {
 	if err == nil || errors.Is(err, ErrMaskToken) || errors.Is(err, ErrStaleProposal) {
 		return
 	}
-	cause := i18n.T(d.lang(), "fix.cause.apply_failed", auditDetail(d, err))
-	_ = d.repo().SetState(ctx, a.ID, []State{StateApproved}, StateFailed, cause)
+	cause := i18n.T(d.lang(), plainCause("fix.cause.apply_failed", err))
+	if d.repo().SetState(ctx, a.ID, []State{StateApproved}, StateFailed, cause) == nil {
+		_ = d.repo().SetCauseDetail(ctx, a.ID, auditDetail(d, err))
+	}
 	d.cleanup(ctx, a, true)
 }
 
@@ -706,12 +693,11 @@ func (d Deps) applyApproved(ctx context.Context, id string) error {
 	return nil
 }
 
-// cleanup removes what an ended attempt leaves: the skill, the token, the
-// mask table, and the copy and its mirror when removeCopy.
+// cleanup removes what an ended attempt leaves: the token, the mask
+// table, and the copy and its mirror when removeCopy. The fix flow writes
+// no Claude Code skill (controller ruling 42: the agent reads the brief
+// through Michel's MCP server; only michel brief --write-skill writes one).
 func (d Deps) cleanup(ctx context.Context, a Attempt, removeCopy bool) {
-	if skills, err := d.skillsDir(); err == nil {
-		_ = brief.RemoveSkill(skills, a.FindingID)
-	}
 	if d.Secrets != nil {
 		_ = DeleteAttemptToken(d.Secrets, a.ID)
 	}
@@ -749,7 +735,37 @@ func SendMessage(ctx context.Context, d Deps, attemptID, text string) error {
 	return nil
 }
 
-// refusals of the work copy that end the attempt with a cause.
+// plainCause is the key of the sentence that tells the user, in plain
+// words, why an attempt stopped and what to do. stage is the step that
+// failed (fix.cause.prepare_failed, change_refused, agent_start_failed,
+// apply_failed); a known error of the work copy gets its own sentence. The
+// technical detail goes apart (Attempt.CauseDetail).
+func plainCause(stage string, err error) string {
+	switch {
+	case errors.Is(err, ErrNotGit), errors.Is(err, workcopy.ErrNotGitRepo):
+		return "fix.cause.not_git"
+	case errors.Is(err, workcopy.ErrNoCommit):
+		return "fix.cause.no_commit"
+	case errors.Is(err, workcopy.ErrCopyTooLarge):
+		return "fix.cause.too_large"
+	case errors.Is(err, workcopy.ErrUnsafeInstall):
+		return "fix.cause.unsafe_install"
+	case stage == "fix.cause.change_refused" || changeRefused(err):
+		return "fix.cause.change_refused"
+	case stage == "fix.cause.agent_start_failed", stage == "fix.cause.apply_failed":
+		return stage
+	case err != nil && gitFailed.MatchString(err.Error()):
+		return "fix.cause.git_failed"
+	default:
+		return "fix.cause.prepare_failed"
+	}
+}
+
+// gitFailed matches the error of a failed git command (workcopy's gitErr).
+var gitFailed = regexp.MustCompile(`\bgit [a-z-]+ failed\b`)
+
+// changeRefused reports whether err is one of the refusals of the work
+// copy that end the attempt with a cause.
 func changeRefused(err error) bool {
 	for _, target := range []error{workcopy.ErrOutsideCopy, workcopy.ErrExcludedPath, workcopy.ErrBinaryChange, workcopy.ErrDiffTooLarge,
 		workcopy.ErrCopyTampered, workcopy.ErrNotACopy, workcopy.ErrInvalidCommit} {
@@ -859,9 +875,11 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 		_, _ = repo.AddMessage(ctx, Message{AttemptID: attemptID, Role: RoleMichel, Text: tell(text)})
 	}
 	fail := func(key string, cause error) (Proposal, error) {
-		text := i18n.T(lang, key, tell(noPath(cause).Error()))
+		text := i18n.T(lang, plainCause(key, cause))
 		say(text)
-		_ = repo.SetState(ctx, attemptID, []State{StatePreparing, StateProposed}, StateFailed, text)
+		if repo.SetState(ctx, attemptID, []State{StatePreparing, StateProposed}, StateFailed, text) == nil {
+			_ = repo.SetCauseDetail(ctx, attemptID, auditDetail(d, cause))
+		}
 		got, _ := repo.GetAttempt(ctx, attemptID)
 		d.sessions().Close(attemptID)
 		d.cleanup(ctx, got, true)
@@ -1561,31 +1579,14 @@ func Sweep(ctx context.Context, d Deps) error {
 	if err != nil {
 		return err
 	}
-	keep, liveFinding := map[string]bool{}, map[string]bool{}
+	keep := map[string]bool{}
 	for _, a := range all {
 		if !finished(a.State) {
 			keep[a.ID] = true
 		}
-		if a.State == StatePreparing || a.State == StateProposed || a.State == StateApproved {
-			liveFinding[a.FindingID] = true
-		}
 		// A token serves a session of a preparing attempt only.
 		if a.State != StatePreparing && d.Secrets != nil {
 			_ = DeleteAttemptToken(d.Secrets, a.ID)
-		}
-	}
-	// Skills Michel wrote for findings without a live attempt.
-	if skills, err := d.skillsDir(); err == nil {
-		entries, _ := os.ReadDir(skills)
-		for _, e := range entries {
-			if !e.IsDir() || !strings.HasPrefix(e.Name(), "michel-fix-") {
-				continue
-			}
-			key, ok := gitrepo.OwnerKey(filepath.Join(skills, e.Name()))
-			fid, isFix := strings.CutPrefix(key, "fix:")
-			if ok && isFix && !liveFinding[fid] {
-				_ = brief.RemoveSkill(skills, fid)
-			}
 		}
 	}
 	wd := d.work()
@@ -1667,9 +1668,6 @@ func PurgeProject(ctx context.Context, d Deps, projectID string) error {
 		if d.Secrets != nil {
 			_ = mask.Delete(d.Secrets, a.ID)
 			_ = DeleteAttemptToken(d.Secrets, a.ID)
-		}
-		if skills, err := d.skillsDir(); err == nil {
-			_ = brief.RemoveSkill(skills, a.FindingID)
 		}
 	}
 	// A process that just left a folder can still hold it for an instant

@@ -135,7 +135,7 @@ func newFixFixture(t *testing.T, opts ...func(ff *fixFixture)) *fixFixture {
 		}
 		ff.fd = &fix.Deps{
 			Store: f.st, Audit: f.log, Secrets: f.deps.Secrets, Gateway: f.gw, Policy: pol, PolicyPath: f.policyPath,
-			DataDir: f.dir, SkillsDir: filepath.Join(t.TempDir(), "skills"), Lang: i18n.EN,
+			DataDir: f.dir, Lang: i18n.EN,
 			Work:   workcopy.Deps{DataDir: f.dir, Exec: exe, Now: func() time.Time { return now }},
 			Rescan: func(context.Context, string, scan.Finding, project.Project) (bool, error) { return true, nil },
 			AgentStatus: func(context.Context) agent.Status {
@@ -707,5 +707,33 @@ func TestProposalViewCarriesVersions(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &list); err != nil || resp.StatusCode != http.StatusOK || len(list) != 1 || list[0].Proposal == nil ||
 		list[0].Proposal.ToVersion != "1.2.5" {
 		t.Errorf("list = %d %s", resp.StatusCode, body)
+	}
+}
+
+// TestFailedCauseIsPlainWithDetailApart: the cause of a failed attempt is
+// the plain sentence; the technical detail comes apart, without any path.
+func TestFailedCauseIsPlainWithDetailApart(t *testing.T) {
+	ff := newFixFixture(t)
+	id, _ := ff.seedProposed()
+	repo := fix.NewRepo(ff.st)
+	ctx := context.Background()
+	cause := i18n.T(i18n.FR, "fix.cause.git_failed")
+	if err := repo.SetState(ctx, id, []fix.State{fix.StateProposed}, fix.StateFailed, cause); err != nil {
+		t.Fatal(err)
+	}
+	detail := `git clone failed: exit status 128 (fatal: failed to unlink 'C:\Users\demo\AppData\michel\worktrees\x': Filename too long) /home/demo/.local/michel/x`
+	if err := repo.SetCauseDetail(ctx, id, detail); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := ff.do("GET", "/api/v1/fix/"+id+"?lang=fr", testToken, "")
+	var v AttemptView
+	if err := json.Unmarshal([]byte(body), &v); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("attempt = %d %s", resp.StatusCode, body)
+	}
+	if v.Cause != cause || strings.Contains(v.Cause, "git clone") {
+		t.Errorf("cause = %q", v.Cause)
+	}
+	if !strings.Contains(v.CauseDetail, "Filename too long") || strings.Contains(v.CauseDetail, `Users\demo`) || strings.Contains(v.CauseDetail, "/home/demo") {
+		t.Errorf("cause detail = %q", v.CauseDetail)
 	}
 }

@@ -16,8 +16,8 @@ import (
 	"github.com/kvarot/michel/internal/agent"
 	"github.com/kvarot/michel/internal/analyze"
 	"github.com/kvarot/michel/internal/audit"
-	"github.com/kvarot/michel/internal/brief"
 	"github.com/kvarot/michel/internal/egress"
+	"github.com/kvarot/michel/internal/gitrepo"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/mask"
 	"github.com/kvarot/michel/internal/policy"
@@ -178,6 +178,9 @@ type fixture struct {
 	finding scan.Finding
 	rec     *recorder
 	policy  string
+	// skills is MICHEL_SKILLS_DIR during the test: the fix flow must
+	// write nothing there (controller ruling 42).
+	skills string
 	// agentAct is what the fake agent does once started, with the attempt
 	// id and the copy folder; nil writes a lockfile change and proposes.
 	agentAct func(ctx context.Context, d Deps, attemptID, dir string)
@@ -191,6 +194,8 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	needGit(t)
+	skills := filepath.Join(t.TempDir(), "skills")
+	t.Setenv(gitrepo.SkillsDirEnv, skills)
 	env := testGitEnv(t)
 	root := t.TempDir()
 	gitT(t, env, root, "init", "-q", "-b", "main")
@@ -210,7 +215,7 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fixture{t: t, env: env, st: st, proj: p, rec: &recorder{}}
+	f := &fixture{skills: skills, t: t, env: env, st: st, proj: p, rec: &recorder{}}
 	f.finding = f.seed("acme/lib", "GHSA-xxxx-yyyy-zzzz", "1.0.0", "1.2.5", "composer.lock", "Packagist")
 
 	dataDir := t.TempDir()
@@ -240,7 +245,7 @@ func newFixture(t *testing.T) *fixture {
 			}
 			return p, err
 		},
-		DataDir: dataDir, SkillsDir: filepath.Join(t.TempDir(), "skills"), Lang: i18n.EN,
+		DataDir: dataDir, Lang: i18n.EN,
 		Work: workcopy.Deps{DataDir: dataDir, Exec: f.rec.exec, Now: now},
 		Rescan: func(context.Context, string, scan.Finding, project.Project) (bool, error) {
 			return true, nil
@@ -710,11 +715,6 @@ func TestApplyCreatesBranchAndRemovesCopy(t *testing.T) {
 	}
 	f.wait(a.ID)
 	got := f.attempt(a.ID)
-	skillName, _ := brief.SkillName(f.finding.ID)
-	skill := filepath.Join(f.d.SkillsDir, skillName)
-	if _, err := os.Stat(filepath.Join(skill, "SKILL.md")); err != nil {
-		t.Errorf("no skill written for the attempt: %v", err)
-	}
 	p, _, _ := f.d.Repo.CurrentProposal(context.Background(), a.ID)
 	if err := Approve(context.Background(), f.d, a.ID, p.Hash); err != nil {
 		t.Fatal(err)
@@ -740,7 +740,7 @@ func TestApplyCreatesBranchAndRemovesCopy(t *testing.T) {
 	if after.State != StateApplied {
 		t.Errorf("state = %s", after.State)
 	}
-	for _, dir := range []string{got.Work.Copy.Dir, got.Work.Copy.Mirror, skill} {
+	for _, dir := range []string{got.Work.Copy.Dir, got.Work.Copy.Mirror} {
 		if _, err := os.Lstat(dir); err == nil {
 			t.Errorf("%s still exists after apply", filepath.Base(dir))
 		}
@@ -1182,5 +1182,25 @@ func TestSweepCleansStaleFolders(t *testing.T) {
 		if m.Text == "old" {
 			t.Error("the old message was not purged")
 		}
+	}
+}
+
+// TestStartWritesNoSkill: a fix attempt never writes a Claude Code skill
+// into the user's profile (controller ruling 42); the agent reads the brief
+// through Michel's MCP server.
+func TestStartWritesNoSkill(t *testing.T) {
+	f := newFixture(t)
+	f.consent()
+	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.wait(a.ID)
+	if err := Sweep(context.Background(), f.d); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(f.skills)
+	if err == nil && len(entries) > 0 {
+		t.Errorf("the fix flow wrote under MICHEL_SKILLS_DIR: %v", entries)
 	}
 }
