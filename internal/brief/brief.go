@@ -110,15 +110,18 @@ type Brief struct {
 }
 
 // Path is where the brief file of a finding lives.
-func Path(dataDir, projectID, findingID string) string {
-	return filepath.Join(dataDir, "briefs", projectID, findingID+".md")
+func Path(dataDir, projectID, findingID string) (string, error) {
+	if !idRe.MatchString(projectID) || !idRe.MatchString(findingID) {
+		return "", errBadID
+	}
+	return filepath.Join(dataDir, "briefs", projectID, findingID+".md"), nil
 }
 
 var (
 	idRe       = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	pkgRe      = regexp.MustCompile(`^[@A-Za-z0-9._/~+-]{1,214}$`)
+	pkgRe      = regexp.MustCompile(`^[@A-Za-z0-9][@A-Za-z0-9._/~+-]{0,213}$`)
 	versionRe  = regexp.MustCompile(`^[0-9A-Za-z.+_-]{1,64}$`)
-	relDirRe   = regexp.MustCompile(`^[A-Za-z0-9._/ -]{1,200}$`)
+	relDirRe   = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$`)
 	osvIDRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$`)
 	cveRe      = regexp.MustCompile(`^CVE-[0-9]{4}-[0-9]{4,10}$`)
 	ghsaRe     = regexp.MustCompile(`^GHSA(-[0-9a-z]{4}){3}$`)
@@ -198,12 +201,15 @@ func Build(ctx context.Context, d Deps, findingID string, m *mask.Masker) (Brief
 				if len(b.Breaking) == MaxBreaking {
 					break
 				}
-				if l = shorten(bulletRe.ReplaceAllString(l, "")); l != "" && !slices.Contains(b.Breaking, m.Mask(l)) {
-					b.Breaking = append(b.Breaking, m.Mask(l))
+				// Mask the whole line before it is cut, so no fragment of a
+				// secret survives the cut.
+				l = shorten(bulletRe.ReplaceAllString(m.Mask(clean(l)), ""))
+				if l != "" && !slices.Contains(b.Breaking, l) {
+					b.Breaking = append(b.Breaking, l)
 				}
 			}
 		}
-		b.UpdateCommands = updateCommands(fi, b.Directness, b.Fixed)
+		b.UpdateCommands = updateCommands(fi, b.Directness, b.Jump, b.Fixed)
 	}
 	b.References = references(fi)
 	b.Reading = reading(ctx, d.Store, p, fi, lang, m)
@@ -275,7 +281,20 @@ func findFinding(ctx context.Context, s *store.Store, id string) (scan.Finding, 
 
 // clean strips control characters and line breaks of one line of text.
 func clean(s string) string {
-	return strings.Join(strings.Fields(scan.SanitizeText(s)), " ")
+	return strings.Join(strings.Fields(stripInvisible(scan.SanitizeText(s))), " ")
+}
+
+// stripInvisible removes the bidirectional controls (U+202A-U+202E,
+// U+2066-U+2069) and the zero-width characters (U+200B-U+200D, U+FEFF), which
+// hide text from a reader or from a detector.
+func stripInvisible(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069, r >= 0x200B && r <= 0x200D, r == 0xFEFF:
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // shorten keeps the first maxLineLen characters of a line.
@@ -322,11 +341,9 @@ func callSites(p project.Project, fi scan.Finding, a analyze.Analysis, hasA bool
 		if rel == "" || s.Line < 1 || s.IsTest {
 			continue
 		}
-		snip := readSnippet(p.Path, rel, s.Line)
-		if snip == "" {
-			snip = s.Snippet
-		}
-		out = append(out, Site{File: rel, Line: s.Line, Snippet: m.Mask(strings.TrimRight(snip, "\n"))})
+		// No fallback to the one-line text of the search: it was cut before
+		// any masking.
+		out = append(out, Site{File: rel, Line: s.Line, Snippet: readSnippet(p.Path, rel, s.Line, m)})
 	}
 	return out, total
 }
@@ -334,7 +351,7 @@ func callSites(p project.Project, fi scan.Finding, a analyze.Analysis, hasA bool
 // readSnippet reads the SnippetLines lines around line (2 before, 3 after)
 // of the project's file rel. A link, a file outside the project or a file
 // over maxSourceSize gives "". Lines are cut at maxLineLen.
-func readSnippet(root, rel string, line int) string {
+func readSnippet(root, rel string, line int, m *mask.Masker) string {
 	full := filepath.Join(root, filepath.FromSlash(rel))
 	fi, err := os.Lstat(full)
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxSourceSize {
@@ -357,8 +374,27 @@ func readSnippet(root, rel string, line int) string {
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
-	from, to := max(line-3, 0), min(line+3, len(lines)) // 0-based, to exclusive
+	// Mask the whole file before it is split and cut: a secret may begin
+	// above the window (a key body) or end past the cut column. The site's
+	// line is found again in the masked text by masking what precedes it
+	// (a multi-line secret becomes one token and moves the lines).
+	text := stripInvisible(strings.ReplaceAll(string(raw), "\r\n", "\n"))
+	before := 0
+	for i, n := 0, 1; i < len(text); i++ {
+		if n == line {
+			before = i
+			break
+		}
+		if text[i] == '\n' {
+			n++
+		}
+	}
+	if line > 1 && before == 0 {
+		return ""
+	}
+	idx := strings.Count(m.Mask(text[:before]), "\n")
+	lines := strings.Split(m.Mask(text), "\n")
+	from, to := max(idx-2, 0), min(idx+4, len(lines)) // 0-based, to exclusive
 	if from >= to {
 		return ""
 	}
@@ -379,14 +415,14 @@ func readSnippet(root, rel string, line int) string {
 		sb.WriteString(strings.TrimRight(l, " "))
 		sb.WriteByte('\n')
 	}
-	return sb.String()
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // updateCommands are the commands that bring the package to the fixed
 // version, from a closed list per package manager (never from free text:
 // names and versions are checked first). A manifest below the project root
 // gets a "cd" first.
-func updateCommands(fi scan.Finding, directness, target string) []string {
+func updateCommands(fi scan.Finding, directness, jump, target string) []string {
 	if target == "" || !pkgRe.MatchString(fi.Package) || strings.Contains(fi.Package, "..") || !versionRe.MatchString(target) {
 		return []string{}
 	}
@@ -395,6 +431,9 @@ func updateCommands(fi scan.Finding, directness, target string) []string {
 	case fi.Ecosystem == "Packagist":
 		if directness == string(analyze.Transitive) {
 			cmds = []string{"composer update " + fi.Package + " --with-dependencies"}
+		} else if jump == string(analyze.JumpMajor) {
+			// The constraint of composer.json must move to the new major.
+			cmds = []string{"composer require " + fi.Package + ":^" + target}
 		} else {
 			cmds = []string{"composer update " + fi.Package + ":^" + target + " --with-all-dependencies"}
 		}
@@ -461,11 +500,11 @@ func reading(ctx context.Context, s *store.Store, p project.Project, fi scan.Fin
 		if !(strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://")) || strings.ContainsAny(u, " \t\r\n") {
 			continue
 		}
-		title := shorten(feed.Title(lang, it))
+		title := shorten(m.Mask(clean(feed.Title(lang, it))))
 		if title == "" {
 			continue
 		}
-		out = append(out, m.Mask(title)+" - "+u)
+		out = append(out, title+" - "+m.Mask(u))
 	}
 	return out
 }

@@ -58,7 +58,10 @@ func newBriefCmd(deps *Deps) *cobra.Command {
 				return err
 			}
 			if write {
-				path := brief.Path(dataDir, p.ID, fi.ID)
+				path, err := brief.Path(dataDir, p.ID, fi.ID)
+				if err != nil {
+					return err
+				}
 				if err := writeFileAtomic(path, brief.Markdown(b, deps.Lang)); err != nil {
 					return err
 				}

@@ -1,6 +1,7 @@
 package brief
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -33,6 +34,12 @@ func WriteSkill(skillsDir string, b Brief, lang i18n.Lang) (string, error) {
 	name, err := SkillName(b.FindingID)
 	if err != nil {
 		return "", err
+	}
+	// Re-checked here, at the sink, for every kind of finding: the
+	// description is read by Claude Code as an instruction.
+	if (b.Package != "" && (!pkgRe.MatchString(b.Package) || strings.Contains(b.Package, ".."))) ||
+		(b.OSVID != "" && !osvIDRe.MatchString(b.OSVID)) {
+		return "", errors.New("cannot write the skill: the package name or the advisory id is not a plain identifier")
 	}
 	lang = langOf(lang)
 	front := frontMatter(b)
