@@ -160,6 +160,8 @@
   "cli.findings.not_found": "Cannot list findings for %s: no project has this name. Run 'michel project list' to see the registered names.",
   "cli.findings.unknown_severity": "Unknown severity %q. Use one of %s.",
   "cli.findings.unknown_status": "Unknown status %q. Use one of %s.",
+  "cli.mcp.bound": "michel mcp: session tied to the fix attempt %s; propose_fix is available.",
+  "cli.mcp.read_only": "michel mcp: read-only session; propose_fix is not available.",
   "cli.notify.all_projects": "all",
   "cli.notify.audit_failed": "Michel cannot write to the audit log: %v. Check that the data folder is writable, then try again.",
   "cli.notify.channels_invalid": "Michel cannot use the notify section of your policy: %v. Fix it under notify.channels in your policy file.",
