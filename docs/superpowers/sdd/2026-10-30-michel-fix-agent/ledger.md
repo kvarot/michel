@@ -166,3 +166,13 @@ Task 8: fix round 3 BASE 96bec8f
 Task 8: fix round 3/5 (5 addressed, 0 open — change from written tree, propose lock, fail-closed archive, commit vs snapshot check, strict Remove; commits 96bec8f..caf5d5d)
 Task 8: minor (deferred): commitMatches blob closure treats rev-parse exit 128 as absent (corrupt mirror only); proposeLock per process (one MCP process per attempt); applyApproved TryLock.
 Task 8: complete (commits cfd71a4..caf5d5d, review clean after 3 rounds)
+Task 9: BASE a508fdd
+Task 9: implementer DONE 2f21de1 (also fixed Task 8 Refuse-while-working bug). 43 FR strings.
+Ruling 38: the API and page never unmask: secrets show as [secret-…] tokens on the page — spec § 11 « aucune valeur masquée dans … l'API » wins over plan T9's StreamUnmasker display — cost if wrong: the user sees tokens instead of their own secret values in agent text.
+Ruling 39: fix.msg.update_ran may show Michel's own update command (package + version, no path) — it tells the user what was run (spec § 4.11 « chaque action dit ce qu'elle va faire ») — cost if wrong: none.
+Task 9: controller finding for the fix round — the level-2 worker keeps serve's starting policy, so consent given on the page is ignored by automatic starts until restart (must read the live policy).
+Task 9: FR e436395; live policy 2bfbc06
+Task 9: review Approved. ⚠️ PATCH /projects/{name} owned by Task 1 (done, TestPatchProjectLevels).
+Task 9: minor (deferred): michel fix clean runs Sweep which may apply approved attempts (help text + busy guard); finished-attempt streams keep polling; GET /fixes cost per attempt (mask.Load); agent-status cache can hold a failure 10 s (request ctx); shutdown cancels in-flight Start/Apply; split-secret test case asserts nothing; refusal test uses a hand-written list; clean uses serve's message key.
+Task 9: complete (commits a508fdd..2bfbc06, review clean)
+Ruling 40: Task 10 Step 5 (manual browser check with the fake claude) is done by the controller after the implementer commits (the implementer runs vitest + build only) — cost if wrong: none.
