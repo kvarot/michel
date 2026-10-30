@@ -1,4 +1,5 @@
 {
+  "agent.hint.env": "Michel n'a pas pu préparer l'environnement de Claude Code. Relance Michel, puis réessaie.",
   "agent.hint.not_installed": "Claude Code n'est pas installé sur cet ordinateur. Installe-le (https://claude.com/claude-code), puis réessaie. En attendant, tu peux lire le brief.",
   "agent.hint.not_logged_in": "Claude Code n'est pas connecté. Lance claude dans un terminal et connecte-toi, puis réessaie. En attendant, tu peux lire le brief.",
   "agent.hint.too_old": "Ta version de Claude Code est trop ancienne : Michel ne peut pas la lancer sans que tes propres réglages s'en mêlent. Mets-la à jour avec claude update, puis réessaie.",

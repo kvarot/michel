@@ -178,7 +178,7 @@ func TestLaunchArgvIsClosedAndIsolated(t *testing.T) {
 			t.Errorf("argv lacks %s: %q", w, r.Args)
 		}
 	}
-	for flag, v := range map[string]string{"--setting-sources": "", "--disallowedTools": "Bash,WebFetch,WebSearch", "--permission-mode": "dontAsk",
+	for flag, v := range map[string]string{"--setting-sources": "", "--disallowedTools": "Bash", "--permission-mode": "dontAsk",
 		"--permission-prompts": "none", "--tools": "Read,Edit,Write,Glob,Grep", "--max-turns": "30"} {
 		if got, ok := argAfter(r.Args, flag); !ok || got != v {
 			t.Errorf("argv %s = %q (%t), want %q", flag, got, ok, v)
@@ -195,12 +195,12 @@ func TestLaunchArgvIsClosedAndIsolated(t *testing.T) {
 	if slices.Contains(r.Args, "--resume") {
 		t.Error("--resume without a ResumeID")
 	}
-	home := filepath.Join(f.d.DataDir, "fix-home")
+	agentDir := filepath.Join(f.d.DataDir, "agent", "01ATTEMPT")
 	mcpPath, _ := argAfter(r.Args, "--mcp-config")
 	setPath, _ := argAfter(r.Args, "--settings")
 	for _, p := range []string{mcpPath, setPath} {
-		if filepath.Dir(p) != home {
-			t.Errorf("generated file %s is not in fix-home", p)
+		if filepath.Dir(p) != agentDir {
+			t.Errorf("generated file %s is not in <data>/agent/<attempt>", p)
 		}
 	}
 	if !strings.HasPrefix(filepath.Base(mcpPath), "mcp-") || !strings.HasPrefix(filepath.Base(setPath), "settings-") {
@@ -326,6 +326,11 @@ func TestLaunchDeniesBash(t *testing.T) {
 	if v, _ := argAfter(args, "--disallowedTools"); !slices.Contains(strings.Split(v, ","), "Bash") {
 		t.Errorf("--disallowedTools = %q, want Bash in it", v)
 	}
+	// Every deny rule is on argv too: a settings file that fails validation
+	// is silently ignored with --print.
+	if got := flagValues(args, "--disallowedTools"); !slices.Equal(got, deny) {
+		t.Errorf("--disallowedTools %q, want the settings deny list %q", got, deny)
+	}
 	if v, _ := argAfter(args, "--tools"); slices.Contains(strings.Split(v, ","), "Bash") {
 		t.Errorf("--tools = %q names Bash", v)
 	}
@@ -391,6 +396,9 @@ func TestLaunchLoadsNoProjectOrUserSettings(t *testing.T) {
 		t.Errorf("a %s hook ran", e.Name())
 	}
 	for _, a := range r.Args {
+		if slices.Contains(denyRules(), a) {
+			continue // a rule refusing that file, not a file to load
+		}
 		if strings.Contains(a, ".claude") || strings.Contains(a, ".mcp.json") || strings.Contains(a, "CLAUDE.md") {
 			t.Errorf("argv names a file of the project or the user: %q", a)
 		}
@@ -439,7 +447,7 @@ func TestLaunchEnvAllowlisted(t *testing.T) {
 		}
 	}
 	for k, want := range map[string]string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
-		"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "DISABLE_AUTOUPDATER": "1", "npm_config_ignore_scripts": "true",
+		"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "DISABLE_AUTOUPDATER": "1",
 		"COMPOSER_HOME": filepath.Join(f.d.DataDir, "fix-home", "composer")} {
 		if v, _ := envValue(r.Env, k); v != want {
 			t.Errorf("%s = %q, want %q", k, v, want)
@@ -678,7 +686,7 @@ func samePath(a, b string) bool {
 }
 
 func TestStatusMessage(t *testing.T) {
-	for _, h := range []string{HintNotInstalled, HintNotLoggedIn, HintTooOld} {
+	for _, h := range []string{HintNotInstalled, HintNotLoggedIn, HintTooOld, HintEnv} {
 		for _, l := range []i18n.Lang{i18n.EN, i18n.FR} {
 			if m := (Status{Hint: h}).Message(l); m == "" || strings.HasPrefix(m, "!") {
 				t.Errorf("Message(%s, %s) = %q", h, l, m)
@@ -687,5 +695,139 @@ func TestStatusMessage(t *testing.T) {
 	}
 	if m := (Status{}).Message(i18n.FR); m != "" {
 		t.Errorf("no hint: %q", m)
+	}
+}
+
+// flagValues are the arguments after flag up to the next option.
+func flagValues(args []string, flag string) []string {
+	i := slices.Index(args, flag)
+	if i < 0 {
+		return nil
+	}
+	var out []string
+	for _, a := range args[i+1:] {
+		if strings.HasPrefix(a, "--") {
+			break
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// setTurns rewrites the fake's replayed conversation.
+func (f *fixture) setTurns(t *testing.T, turns [][]string) {
+	t.Helper()
+	c, _ := json.Marshal(fakeConfig{Version: "2.1.314", Turns: turns})
+	if err := os.WriteFile(filepath.Join(filepath.Dir(f.bin), "fake.json"), c, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestToolEventPathsAreRelative(t *testing.T) {
+	f := newFixture(t, fakeConfig{})
+	tool := func(name string, input map[string]string) string {
+		b, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{
+			map[string]any{"type": "tool_use", "id": "t", "name": name, "input": input}}}})
+		return string(b)
+	}
+	outside := filepath.Join(f.d.Home, ".claude", ".credentials.json")
+	f.setTurns(t, [][]string{{initLine,
+		tool("Edit", map[string]string{"file_path": filepath.Join(f.copy, "src", "a.php")}),
+		tool("Read", map[string]string{"file_path": outside}),
+		tool("Grep", map[string]string{"pattern": "Guzzle", "path": filepath.Join(f.copy, "lib")}),
+		tool("Glob", map[string]string{"pattern": filepath.Join(f.copy, "**", "*.php")}),
+		tool("Glob", map[string]string{"pattern": "**/*.json"}),
+		tool("mcp__michel__propose_fix", map[string]string{"command": "see " + filepath.Join(f.copy, "x.txt") + " and " + outside}),
+		resultLine}})
+	s, err := Start(context.Background(), f.d, f.spec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := drain(t, s)
+	_ = s.Close()
+	want := []string{"src/a.php", "<path>", "lib", "**/*.php", "**/*.json", "see x.txt and <path>"}
+	var got []string
+	for _, e := range ev {
+		if e.Kind == KindTool {
+			got = append(got, e.Text)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("tool texts = %q, want %q", got, want)
+	}
+	for _, e := range ev {
+		if strings.Contains(e.Text, f.d.DataDir) || strings.Contains(e.Text, f.d.Home) {
+			t.Errorf("event carries an absolute path: %+v", e)
+		}
+	}
+}
+
+func TestGeneratedFilesInAgentFolder(t *testing.T) {
+	f := newFixture(t, fakeConfig{Turns: [][]string{{initLine, resultLine}}})
+	s, err := Start(context.Background(), f.d, f.spec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := <-s.Events(); e.Kind != KindDone {
+		t.Fatalf("first event %v", e)
+	}
+	agentDir := filepath.Join(f.d.DataDir, "agent", "01ATTEMPT")
+	entries, err := os.ReadDir(agentDir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("agent folder: %v, %d entries", err, len(entries))
+	}
+	for _, e := range entries {
+		b, _ := os.ReadFile(filepath.Join(agentDir, e.Name()))
+		if strings.Contains(string(b), "test-token-not-secret") && !strings.HasPrefix(e.Name(), "mcp-") {
+			t.Errorf("%s holds the MCP token", e.Name())
+		}
+	}
+	// Nothing generated lands in fix-home (the HOME of the tests Michel runs).
+	home, _ := os.ReadDir(filepath.Join(f.d.DataDir, "fix-home"))
+	for _, e := range home {
+		if strings.HasPrefix(e.Name(), "mcp-") || strings.HasPrefix(e.Name(), "settings-") {
+			t.Errorf("fix-home holds %s", e.Name())
+		}
+	}
+	s.CloseInput()
+	drain(t, s)
+	_ = s.Close()
+	if _, err := os.Stat(agentDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("agent folder left after the session: %v", err)
+	}
+	// A failed start leaves nothing either.
+	spec := f.spec()
+	spec.ResumeID = "not-a-session"
+	if _, err := Start(context.Background(), f.d, spec); err == nil {
+		t.Fatal("bad resume id accepted")
+	}
+	if _, err := os.Stat(agentDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("agent folder left after a failed start: %v", err)
+	}
+}
+
+func TestStartRefusesWithoutJob(t *testing.T) {
+	f := newFixture(t, fakeConfig{Turns: [][]string{{initLine, resultLine}}})
+	old := newTree
+	newTree = func(*exec.Cmd) (processTree, error) { return processTree{}, errors.New("no job") }
+	defer func() { newTree = old }()
+	if _, err := Start(context.Background(), f.d, f.spec()); !errors.Is(err, ErrNoJob) {
+		t.Fatalf("Start = %v, want ErrNoJob", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.d.DataDir, "agent", "01ATTEMPT")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("agent folder left: %v", err)
+	}
+}
+
+func TestDetectEnvFailure(t *testing.T) {
+	f := newFixture(t, fakeConfig{LoggedIn: true})
+	f.d.Home = "relative-profile"
+	if st := Detect(context.Background(), f.d); st.Hint != HintEnv {
+		t.Errorf("Detect = %+v, want the env hint", st)
+	}
+	f = newFixture(t, fakeConfig{LoggedIn: true})
+	f.d.DataDir = ""
+	if st := Detect(context.Background(), f.d); st.Hint != HintEnv {
+		t.Errorf("Detect = %+v, want the env hint", st)
 	}
 }

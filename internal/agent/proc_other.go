@@ -16,7 +16,9 @@ func setProcessGroup(cmd *exec.Cmd) {
 // processTree is Claude Code's process group.
 type processTree struct{ pgid int }
 
-func newProcessTree(cmd *exec.Cmd) processTree { return processTree{pgid: cmd.Process.Pid} }
+func newProcessTree(cmd *exec.Cmd) (processTree, error) {
+	return processTree{pgid: cmd.Process.Pid}, nil
+}
 
 // kill sends SIGKILL to the whole group.
 func (t processTree) kill() {

@@ -89,6 +89,7 @@ const (
 	HintNotInstalled = "agent.hint.not_installed"
 	HintNotLoggedIn  = "agent.hint.not_logged_in"
 	HintTooOld       = "agent.hint.too_old"
+	HintEnv          = "agent.hint.env" // Michel could not build Claude Code's environment
 )
 
 // Status is what Michel knows of the installed Claude Code.
@@ -110,6 +111,8 @@ func (s Status) Message(lang i18n.Lang) string {
 		return i18n.T(lang, "agent.hint.not_logged_in")
 	case HintTooOld:
 		return i18n.T(lang, "agent.hint.too_old")
+	case HintEnv:
+		return i18n.T(lang, "agent.hint.env")
 	}
 	return ""
 }
@@ -139,8 +142,16 @@ const detectTimeout = 30 * time.Second
 // the isolation options (claude --help) and is logged in (claude auth status
 // --json, the documented status command: it reads the user's login, sends
 // no prompt). Nothing of the answers but the version and loggedIn is kept.
+// When the environment of Claude Code cannot be built (data folder or user
+// profile missing), the hint is HintEnv and nothing runs. auth status takes
+// no --setting-sources (its help lists --json and --text only), so it runs
+// with Claude Code's default sources; it only reads the login.
 func Detect(ctx context.Context, d Deps) Status {
 	st := Status{}
+	if _, err := environment(d); err != nil {
+		st.Hint = HintEnv
+		return st
+	}
 	version, err := installed(ctx, d)
 	if err != nil {
 		st.Hint = HintNotInstalled
@@ -153,7 +164,7 @@ func Detect(ctx context.Context, d Deps) Status {
 	}
 	env, err := environment(d)
 	if err != nil {
-		st.Hint = HintNotLoggedIn
+		st.Hint = HintEnv
 		return st
 	}
 	cctx, cancel := context.WithTimeout(ctx, detectTimeout)

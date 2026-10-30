@@ -52,10 +52,6 @@ const DefaultTimeout = 20 * time.Minute
 // exists in it.
 const tools = "Read,Edit,Write,Glob,Grep"
 
-// disallowed is the --disallowedTools value: Bash and the web tools,
-// denied whatever else would allow them.
-const disallowed = "Bash,WebFetch,WebSearch"
-
 // mcpServer is the name of Michel's server in the generated MCP config.
 const mcpServer = "michel"
 
@@ -130,9 +126,8 @@ var loginVars = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CO
 // isolationEnv turns off what Claude Code would load or reach besides
 // Michel's settings: CLAUDE.md memory files (of the copy, its parents and
 // the user), auto memory, claude.ai MCP connectors, the auto updater and
-// the non-essential traffic (telemetry, error reports). The npm settings
-// keep the agent's npm install without scripts and the user's ~/.npmrc.
-func isolationEnv(fixHome string) []string {
+// the non-essential traffic (telemetry, error reports).
+func isolationEnv() []string {
 	return []string{
 		"CLAUDE_CODE_DISABLE_CLAUDE_MDS=1",
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
@@ -140,8 +135,6 @@ func isolationEnv(fixHome string) []string {
 		"DISABLE_AUTOUPDATER=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		"DISABLE_TELEMETRY=1",
-		"npm_config_ignore_scripts=true",
-		"npm_config_userconfig=" + filepath.Join(fixHome, "npmrc"),
 	}
 }
 
@@ -152,7 +145,7 @@ func isolationEnv(fixHome string) []string {
 // setting sources and strict MCP keep the settings there unread), the login
 // variables and isolationEnv.
 func environment(d Deps) ([]string, error) {
-	base, fixHome, err := workcopy.Env(d.workcopy())
+	base, _, err := workcopy.Env(d.workcopy())
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +154,7 @@ func environment(d Deps) ([]string, error) {
 		return nil, errors.New("Michel cannot find the user's profile folder, where Claude Code keeps its login")
 	}
 	override := map[string]bool{"HOME": true, "USERPROFILE": true}
-	for _, kv := range isolationEnv(fixHome) {
+	for _, kv := range isolationEnv() {
 		k, _, _ := strings.Cut(kv, "=")
 		override[strings.ToUpper(k)] = true
 	}
@@ -178,7 +171,7 @@ func environment(d Deps) ([]string, error) {
 			env = append(env, k+"="+v)
 		}
 	}
-	return append(env, isolationEnv(fixHome)...), nil
+	return append(env, isolationEnv()...), nil
 }
 
 // sessionID is the shape of a Claude Code session id (a UUID).
@@ -195,7 +188,10 @@ func argv(s Spec, mcpPath, settingsPath string) ([]string, error) {
 		"--disable-slash-commands",
 		"--allowedTools"}
 	a = append(a, allowRules(s)...)
-	a = append(a, "--disallowedTools", disallowed)
+	// The deny rules too: --print silently ignores a settings file that
+	// fails validation, so argv carries every permission.
+	a = append(a, "--disallowedTools")
+	a = append(a, denyRules()...)
 	if s.ResumeID != "" {
 		if !sessionID.MatchString(s.ResumeID) {
 			return nil, errors.New("the session to resume is not a Claude Code session id")
@@ -228,11 +224,24 @@ func copyDir(d Deps, dir string) error {
 	return nil
 }
 
+// ErrNoJob is returned when Claude Code's process tree cannot be put under
+// Michel's control (a job object on Windows): it is killed, not left to run.
+var ErrNoJob = errors.New("Michel cannot keep Claude Code's processes under control")
+
+// agentDir is the folder of the generated files of an attempt's sessions,
+// <DataDir>/agent/<attempt> (the attempt is the copy's folder name). It is
+// not fix-home, the HOME of the tests Michel runs.
+func agentDir(d Deps, s Spec) string {
+	return filepath.Join(d.DataDir, "agent", filepath.Base(filepath.Clean(s.Dir)))
+}
+
 // Start launches Claude Code for s. It refuses when Claude Code is missing
 // (ErrNotInstalled) or lacks the isolation options (ErrTooOld), writes the
-// settings and MCP files of the session in fix-home, starts claude from the
-// copy with its own process group (job object on Windows), sends s.Prompt
-// and returns the session, whose events end when the process ends.
+// settings and MCP files of the session in <DataDir>/agent/<attempt>
+// (removed when the session ends or fails to start), starts claude from the
+// copy in a job object on Windows (ErrNoJob when that fails) or its own
+// process group, sends s.Prompt and returns the session, whose events end
+// when the process ends.
 func Start(ctx context.Context, d Deps, s Spec) (*Session, error) {
 	if err := copyDir(d, s.Dir); err != nil {
 		return nil, err
@@ -251,19 +260,21 @@ func Start(ctx context.Context, d Deps, s Spec) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	fixHome := filepath.Join(d.DataDir, "fix-home")
 	var id [8]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
 	}
 	tag := hex.EncodeToString(id[:])
-	mcpPath := filepath.Join(fixHome, "mcp-"+tag+".json")
-	settingsPath := filepath.Join(fixHome, "settings-"+tag+".json")
-	files := []string{mcpPath, settingsPath}
+	dir := agentDir(d, s)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, errors.New("Michel cannot write the settings of the agent")
+	}
+	mcpPath := filepath.Join(dir, "mcp-"+tag+".json")
+	settingsPath := filepath.Join(dir, "settings-"+tag+".json")
 	removeFiles := func() {
-		for _, f := range files {
-			_ = os.Remove(f)
-		}
+		_ = os.Remove(mcpPath)
+		_ = os.Remove(settingsPath)
+		_ = os.Remove(dir) // only when no other session of the attempt uses it
 	}
 	for f, b := range map[string][]byte{mcpPath: mcp, settingsPath: settings} {
 		if err := os.WriteFile(f, b, 0o600); err != nil {
@@ -284,7 +295,11 @@ func Start(ctx context.Context, d Deps, s Spec) (*Session, error) {
 	cmd.Dir = s.Dir
 	cmd.Env = env
 	setProcessGroup(cmd)
-	sess, err := launch(cmd, timeout, removeFiles)
+	sess, err := launch(cmd, s.Dir, timeout, removeFiles)
+	if errors.Is(err, ErrNoJob) {
+		removeFiles()
+		return nil, err
+	}
 	if err != nil {
 		removeFiles()
 		return nil, fmt.Errorf("Michel cannot start Claude Code: %w", noPath(err))

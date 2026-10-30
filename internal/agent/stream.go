@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -47,6 +48,10 @@ const (
 	maxCmd  = 300      // tool summary
 )
 
+// newTree puts a started Claude Code under Michel's control (a variable
+// for the tests).
+var newTree = newProcessTree
+
 // closeGrace is how long Close waits for Claude Code to end after its
 // input is closed, before killing its process tree.
 var closeGrace = 3 * time.Second
@@ -61,6 +66,7 @@ type Session struct {
 	quit    chan struct{} // closed by kill: events are dropped, not sent
 	tree    processTree
 	cleanup func()
+	dir     string // the copy: tool paths are shown relative to it
 
 	wmu      sync.Mutex  // one stdin write at a time
 	inClosed atomic.Bool // stdin closed; closing never waits for a write
@@ -77,7 +83,7 @@ type Session struct {
 }
 
 // launch starts cmd with pipes and the readers of its output.
-func launch(cmd *exec.Cmd, timeout time.Duration, cleanup func()) (*Session, error) {
+func launch(cmd *exec.Cmd, dir string, timeout time.Duration, cleanup func()) (*Session, error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -91,8 +97,13 @@ func launch(cmd *exec.Cmd, timeout time.Duration, cleanup func()) (*Session, err
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	s := &Session{cmd: cmd, stdin: stdin, events: make(chan Event, 256), done: make(chan struct{}), quit: make(chan struct{}), cleanup: cleanup}
-	s.tree = newProcessTree(cmd)
+	tree, err := newTree(cmd)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, ErrNoJob
+	}
+	s := &Session{cmd: cmd, dir: dir, stdin: stdin, events: make(chan Event, 256), done: make(chan struct{}), quit: make(chan struct{}), cleanup: cleanup, tree: tree}
 	s.timer = time.AfterFunc(timeout, func() { s.kill(CauseTimeout) })
 	go s.run(stdout)
 	return s, nil
@@ -313,7 +324,7 @@ func (s *Session) parse(line []byte) {
 					s.send(Event{Kind: KindText, Text: t})
 				}
 			case "tool_use":
-				s.send(Event{Kind: KindTool, Tool: clean(b.Name, maxTool), Text: toolSummary(b.Input)})
+				s.send(Event{Kind: KindTool, Tool: clean(b.Name, maxTool), Text: toolSummary(b.Input, s.dir)})
 			}
 		}
 	case "result":
@@ -333,23 +344,60 @@ func (s *Session) parse(line []byte) {
 }
 
 // toolSummary is a one-line summary of a tool's input: its command, or
-// the file or pattern it works on.
-func toolSummary(input json.RawMessage) string {
+// the file, folder or pattern it works on, with paths relative to the copy
+// (dir) and any other absolute path shown as <path>.
+func toolSummary(input json.RawMessage, dir string) string {
 	var in struct {
 		Command  string `json:"command"`
 		FilePath string `json:"file_path"`
+		Path     string `json:"path"`
 		Pattern  string `json:"pattern"`
 	}
 	if json.Unmarshal(input, &in) != nil {
 		return ""
 	}
-	for _, v := range []string{in.Command, in.FilePath, in.Pattern} {
+	if in.Command != "" {
+		v, _, _ := strings.Cut(in.Command, "\n")
+		return clean(relCommand(v, dir), maxCmd)
+	}
+	for _, v := range []string{in.FilePath, in.Path, in.Pattern} {
 		if v != "" {
 			v, _, _ = strings.Cut(v, "\n")
-			return clean(v, maxCmd)
+			return clean(relPath(v, dir), maxCmd)
 		}
 	}
 	return ""
+}
+
+// absolute reports whether p is an absolute path on any OS Michel runs on.
+func absolute(p string) bool {
+	return filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) ||
+		len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/')
+}
+
+// relPath is p relative to dir (slashes), "<path>" for an absolute path
+// outside dir, p itself when it is relative.
+func relPath(p, dir string) string {
+	if !absolute(p) {
+		return p
+	}
+	rel, err := filepath.Rel(dir, filepath.Clean(p))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "<path>"
+	}
+	return filepath.ToSlash(rel)
+}
+
+// absInText matches an absolute path starting a word of a command.
+var absInText = regexp.MustCompile(`(^|[\s'"=(])((?:[A-Za-z]:[\\/]|/|\\\\)[^\s'"]*)`)
+
+// relCommand shows the copy's paths in a command relative to it and any
+// other absolute path as <path>.
+func relCommand(c, dir string) string {
+	for _, prefix := range []string{dir + string(filepath.Separator), filepath.ToSlash(dir) + "/"} {
+		c = strings.ReplaceAll(c, prefix, "")
+	}
+	return absInText.ReplaceAllString(c, "${1}<path>")
 }
 
 // clean sanitizes untrusted text and caps it at max bytes, on a rune

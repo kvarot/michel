@@ -20,33 +20,34 @@ func setProcessGroup(cmd *exec.Cmd) {
 // kills them all, and so does closing its last handle (Michel exiting).
 type processTree struct{ job windows.Handle }
 
-// newProcessTree puts the started process in a new job object. A process
-// it started before the assignment is outside the job (Claude Code starts
-// nothing before reading its input); without a job, kill falls back to
-// killing the process alone.
-func newProcessTree(cmd *exec.Cmd) processTree {
+// newProcessTree puts the started process in a new job object that kills
+// everything in it when its last handle closes. Any failure is an error:
+// Start then kills the process rather than run it outside the job. A
+// process it started before the assignment would be outside the job
+// (Claude Code starts nothing before reading its input).
+func newProcessTree(cmd *exec.Cmd) (processTree, error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
-		return processTree{}
+		return processTree{}, err
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		_ = windows.CloseHandle(job)
-		return processTree{}
+		return processTree{}, err
 	}
 	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(cmd.Process.Pid))
 	if err != nil {
 		_ = windows.CloseHandle(job)
-		return processTree{}
+		return processTree{}, err
 	}
 	defer windows.CloseHandle(h)
 	if err := windows.AssignProcessToJobObject(job, h); err != nil {
 		_ = windows.CloseHandle(job)
-		return processTree{}
+		return processTree{}, err
 	}
-	return processTree{job: job}
+	return processTree{job: job}, nil
 }
 
 // kill ends every process of the job.
