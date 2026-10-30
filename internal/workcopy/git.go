@@ -170,19 +170,27 @@ func (h home) env(proxyAddr string, extra ...string) []string {
 		"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0", "COREPACK_ENABLE_NETWORK=0",
 		// npm runs git for git dependencies: a program that does not exist,
 		// so they fail instead of running git with the project's settings.
-		"npm_config_git="+filepath.Join(h.dir, "no-git"))
+		"npm_config_git="+filepath.Join(h.dir, "no-git"),
+		// npm and pnpm go through the proxy whatever the project's .npmrc
+		// says (environment settings win over project files), with TLS
+		// checks on.
+		"npm_config_proxy="+proxy, "npm_config_https_proxy="+proxy, "npm_config_noproxy=", "npm_config_strict_ssl=true",
+		"COMPOSER_NO_INTERACTION=1", "COMPOSER_CACHE_DIR="+filepath.Join(h.dir, "composer", "cache"),
+		// Replacement refs of a repository never change what git reads.
+		"GIT_NO_REPLACE_OBJECTS=1")
 	return append(env, extra...)
 }
 
 // allowedGit is the closed list of git subcommands Michel runs.
 var allowedGit = []string{"clone", "init", "archive", "add", "diff", "commit", "fetch", "merge-base", "rev-parse",
-	"read-tree", "apply", "write-tree", "commit-tree"}
+	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree"}
 
 // safeConfig neutralizes, for every git command, the settings of a
 // repository's own .git/config (the user's project is not trusted) that make
 // git run a program or write on its own: hooks (an empty folder of Michel's
 // outside the subprocesses' home, as core.hooksPath), the file system monitor, automatic gc and
-// maintenance, credential helpers and commit signing. System and global
+// maintenance, credential helpers, commit signing and an attributes file.
+// System and global
 // configuration are not read at all (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL).
 func (h home) safeConfig() []string {
 	return []string{
@@ -192,6 +200,7 @@ func (h home) safeConfig() []string {
 		"-c", "maintenance.auto=false",
 		"-c", "credential.helper=",
 		"-c", "commit.gpgSign=false",
+		"-c", "core.attributesFile=",
 	}
 }
 

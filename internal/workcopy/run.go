@@ -164,10 +164,8 @@ func checkYarn(root, dir string) error {
 			}
 		}
 		if b, err := os.ReadFile(filepath.Join(d, ".yarnrc")); err == nil {
-			for _, line := range strings.Split(string(b), "\n") {
-				if k := strings.TrimSpace(line); strings.HasPrefix(k, "yarn-path") || strings.HasPrefix(k, `"yarn-path"`) {
-					return fmt.Errorf("%w: .yarnrc sets yarn-path", ErrUnsafeInstall)
-				}
+			if err := checkYarnrc(b); err != nil {
+				return err
 			}
 		}
 		if d == root || filepath.Dir(d) == d {
@@ -227,26 +225,22 @@ func checkPackageManager(root, dir, prog string) error {
 	})
 }
 
-// execKeys are the npm and pnpm settings that choose a program to run, or
-// move npm's configuration, cache or prefix out of Michel's folder (keys
-// compared lowercase, without - and _). Registry and auth settings are
-// allowed: the traffic goes through the egress proxy.
-var execKeys = map[string]bool{
-	"git": true, "scriptshell": true, "nodeoptions": true, "shell": true, "prefix": true,
-	"globalconfig": true, "userconfig": true, "cache": true, "pnpmfile": true, "globalpnpmfile": true,
-	"npmpath": true, "nodeversion": true, "usenodeversion": true, "shellemulator": true,
+// npmKey is the only shape of .npmrc key Michel accepts: the registry, a
+// scope's registry, the credentials of a registry host, always-auth. Any
+// other setting (proxy, store, scripts, git, shell, TLS...) refuses the
+// install: the allowlist is the list, not the dangerous keys.
+var npmKey = regexp.MustCompile(`^(?:registry|always-auth|@[a-z0-9][a-z0-9._-]*:registry|//[A-Za-z0-9.-]+(?::[0-9]+)?(?:/[A-Za-z0-9._~%@/-]*)?:(?:_authToken|_auth|username|_password))$`)
+
+// plainKey reports whether k is written plainly: no quote, no variable,
+// no backslash, no space.
+func plainKey(k string) bool {
+	return k != "" && !strings.ContainsAny(k, "\"'`\\ \t$[]{}")
 }
 
-func execKey(k string) bool {
-	k = strings.ToLower(strings.TrimSpace(k))
-	k = strings.TrimSuffix(k, "[]")
-	k = strings.NewReplacer("-", "", "_", "").Replace(k)
-	return execKeys[k]
-}
-
-// checkNpmrc refuses an install when a .npmrc (or .pnpmrc) from the folder
-// of the lockfile up to the copy root, or a pnpm-workspace.yaml, sets one
-// of execKeys.
+// checkNpmrc refuses an install when a .npmrc or .pnpmrc from the folder of
+// the lockfile up to the copy root holds a key outside npmKey (or a
+// section, or a key that is not written plainly), or a pnpm-workspace.yaml
+// holds a setting other than packages and catalogs.
 func checkNpmrc(root, dir string) error {
 	return upTo(root, dir, func(d string) error {
 		for _, name := range []string{".npmrc", ".pnpmrc"} {
@@ -260,8 +254,9 @@ func checkNpmrc(root, dir string) error {
 					continue
 				}
 				k, _, _ := strings.Cut(line, "=")
-				if execKey(k) {
-					return fmt.Errorf("%w: %s sets %s", ErrUnsafeInstall, name, scan.SanitizeText(strings.TrimSpace(k)))
+				k = strings.TrimSpace(k)
+				if !plainKey(k) || !npmKey.MatchString(k) {
+					return fmt.Errorf("%w: %s holds a setting Michel does not allow", ErrUnsafeInstall, name)
 				}
 			}
 		}
@@ -271,13 +266,90 @@ func checkNpmrc(root, dir string) error {
 				return fmt.Errorf("%w: pnpm-workspace.yaml cannot be read", ErrUnsafeInstall)
 			}
 			for k := range cfg {
-				if execKey(k) {
-					return fmt.Errorf("%w: pnpm-workspace.yaml sets %s", ErrUnsafeInstall, scan.SanitizeText(k))
+				if k != "packages" && k != "catalog" && k != "catalogs" {
+					return fmt.Errorf("%w: pnpm-workspace.yaml holds a setting Michel does not allow", ErrUnsafeInstall)
 				}
 			}
 		}
 		return nil
 	})
+}
+
+// yarnrcKeys are the only .yarnrc (yarn v1) settings Michel accepts.
+var yarnrcKey = regexp.MustCompile(`^(?:registry|always-auth|lastUpdateCheck|disable-self-update-check|@[a-z0-9][a-z0-9._-]*:registry)$`)
+
+// checkYarnrc refuses a .yarnrc line whose key is not in yarnrcKey. A key
+// may be quoted ("@scope:registry"), not built from a variable.
+func checkYarnrc(b []byte) error {
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		var k string
+		if line[0] == '"' {
+			end := strings.IndexByte(line[1:], '"')
+			if end < 0 {
+				return fmt.Errorf("%w: .yarnrc cannot be read", ErrUnsafeInstall)
+			}
+			k = line[1 : end+1]
+		} else {
+			k, _, _ = strings.Cut(line, " ")
+		}
+		if !plainKey(k) || !yarnrcKey.MatchString(k) {
+			return fmt.Errorf("%w: .yarnrc holds a setting Michel does not allow", ErrUnsafeInstall)
+		}
+	}
+	return nil
+}
+
+// installFolders are the folders an install writes into, next to the
+// lockfile: a link there would make it write outside the copy.
+var installFolders = []string{"vendor", "node_modules", ".pnpm-store", ".yarn", "bin"}
+
+// checkInstallFolders refuses an install whose output folders (in dir) are
+// symbolic links, junctions or other reparse points, or resolve outside the
+// copy.
+func checkInstallFolders(c Copy, dir string) error {
+	for _, n := range installFolders {
+		p := filepath.Join(dir, n)
+		info, err := os.Lstat(p)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			return fmt.Errorf("%w: %s is a link", ErrOutsideCopy, n)
+		}
+		if err := insideCopy(c, p); err != nil {
+			return fmt.Errorf("%w: %s leads outside the copy", ErrOutsideCopy, n)
+		}
+	}
+	return nil
+}
+
+// composerDirKeys are the composer.json config settings that move where
+// composer writes; a project setting one is refused.
+var composerDirKeys = []string{"vendor-dir", "bin-dir", "cache-dir", "cache-files-dir", "cache-repo-dir", "cache-vcs-dir", "data-dir", "home"}
+
+// checkComposer refuses a composer.json (next to the lockfile) whose config
+// moves composer's folders.
+func checkComposer(dir string) error {
+	b, err := os.ReadFile(filepath.Join(dir, "composer.json"))
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Config map[string]json.RawMessage `json:"config"`
+	}
+	if json.Unmarshal(b, &doc) != nil {
+		return fmt.Errorf("%w: composer.json cannot be read", ErrUnsafeInstall)
+	}
+	for _, k := range composerDirKeys {
+		if _, ok := doc.Config[k]; ok {
+			return fmt.Errorf("%w: composer.json sets %s", ErrUnsafeInstall, k)
+		}
+	}
+	return nil
 }
 
 // Install installs the dependencies of the lockfile manifestRel (a slash
@@ -319,6 +391,14 @@ func Install(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string)
 		return err
 	}
 	prog, args := installArgv(name, content, h.npmrc())
+	if err := checkInstallFolders(c, dir); err != nil {
+		return err
+	}
+	if prog == "composer" {
+		if err := checkComposer(dir); err != nil {
+			return err
+		}
+	}
 	if prog == "yarn" {
 		if err := checkYarn(c.Dir, dir); err != nil {
 			return err

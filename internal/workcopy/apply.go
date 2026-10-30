@@ -1,6 +1,7 @@
 package workcopy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
@@ -26,6 +28,12 @@ var (
 	ErrInvalidBranch = errors.New("invalid fix branch name")
 	// ErrBranchExists: the fix branch already exists in the project.
 	ErrBranchExists = errors.New("the fix branch already exists in the project")
+	// ErrExcludedPath: the change touches a file left out of the copy (a
+	// .env, a key, an excluded folder, in any case).
+	ErrExcludedPath = errors.New("the change touches a file Michel keeps out of the copy")
+	// ErrBinaryChange: a text file would be shown as a binary change, so
+	// its content would not be visible before validation.
+	ErrBinaryChange = errors.New("a text file of the change would be shown as binary")
 	// ErrInvalidCommit: not a fix commit of the mirror (full id, exactly one
 	// parent, Base).
 	ErrInvalidCommit = errors.New("invalid fix commit")
@@ -131,6 +139,49 @@ func (h home) checkRange(ctx context.Context, d Deps, repo, from, to string) ([]
 	return files, nil
 }
 
+// checkExcluded refuses a change touching an excluded file: a name or
+// folder of the exclusions, or a file of c.Excluded, ignoring case.
+func checkExcluded(c Copy, files []string) error {
+	for _, f := range files {
+		bad := isExcluded(f, c.Exclude)
+		for _, x := range c.Excluded {
+			if strings.EqualFold(f, x) {
+				bad = true
+			}
+		}
+		if bad {
+			return fmt.Errorf("%w: %s", ErrExcludedPath, scan.SanitizeText(strings.ToValidUTF8(f, "")))
+		}
+	}
+	return nil
+}
+
+// checkBinary refuses a binary change of a file whose new content (in dir)
+// is text: valid UTF-8 without a NUL byte. A deleted file is not checked.
+func checkBinary(dir string, paths []string) error {
+	for _, p := range paths {
+		b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p)))
+		if err != nil {
+			continue
+		}
+		if utf8.Valid(b) && !bytes.Contains(b, []byte{0}) {
+			return fmt.Errorf("%w: %s", ErrBinaryChange, scan.SanitizeText(strings.ToValidUTF8(p, "")))
+		}
+	}
+	return nil
+}
+
+// binaryPaths are the paths git diff --numstat -z reports as binary.
+func binaryPaths(out []byte) []string {
+	var paths []string
+	for _, e := range strings.Split(string(out), "\x00") {
+		if strings.HasPrefix(e, "-\t-\t") {
+			paths = append(paths, strings.TrimPrefix(e, "-\t-\t"))
+		}
+	}
+	return paths
+}
+
 // Change is the change of a fix copy, computed by Michel.
 type Change struct {
 	// Raw is the binary patch (git diff --binary) from the copy's base to
@@ -160,6 +211,11 @@ func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
+	// The index starts again from Root: nothing the agent staged itself
+	// (git add -f of an excluded file) survives.
+	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "read-tree", c.Root); err != nil {
+		return Change{}, gitErr("read-tree", err, stderr)
+	}
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(c.Exclude)...)...); err != nil {
 		return Change{}, gitErr("add", err, stderr)
 	}
@@ -167,12 +223,23 @@ func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
+	if err := checkExcluded(c, files); err != nil {
+		return Change{}, err
+	}
 	common := []string{"--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"}
+	numstat, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, "--numstat", "-z", c.Root, "--")...)
+	if err != nil {
+		return Change{}, gitErr("diff", err, stderr)
+	}
+	if err := checkBinary(c.Dir, binaryPaths(numstat)); err != nil {
+		return Change{}, err
+	}
 	raw, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, "--binary", c.Root, "--")...)
 	if err != nil {
 		return Change{}, gitErr("diff", err, stderr)
 	}
-	text, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, c.Root, "--")...)
+	// --text: whatever the attributes say, the text of every change is shown.
+	text, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, "--text", c.Root, "--")...)
 	if err != nil {
 		return Change{}, gitErr("diff", err, stderr)
 	}
@@ -262,6 +329,9 @@ func (h home) checkFixCommit(ctx context.Context, d Deps, c Copy, sha string) er
 	}
 	files, err := h.checkRange(ctx, d, c.Mirror, c.Base, sha)
 	if err != nil {
+		return err
+	}
+	if err := checkExcluded(c, files); err != nil {
 		return err
 	}
 	if len(files) == 0 {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -267,11 +268,10 @@ func TestDiffRejectsOutsideCopy(t *testing.T) {
 	c := prepare(t, f)
 	writeFile(t, c.Dir, "README.md", "fixed\n")
 	if err := os.Symlink(f.proj.Path, filepath.Join(c.Dir, "link")); err != nil {
-		// No symlink privilege (Windows): record one in the index the way git
-		// does on a file system without links.
-		writeFile(t, c.Dir, "link", f.proj.Path)
-		blob := gitT(t, f.env, c.Dir, "hash-object", "-w", "link")
-		gitT(t, f.env, c.Dir, "-c", "core.symlinks=false", "update-index", "--add", "--cacheinfo", "120000,"+blob+",link")
+		// No symlink privilege (Windows): no link can exist in the copy, and
+		// an entry staged by hand is dropped (Diff restarts the index from
+		// Root), so there is nothing to refuse end to end.
+		t.Skipf("symbolic links unavailable: %v", err)
 	}
 	if _, err := Diff(context.Background(), f.deps, c); !errors.Is(err, ErrOutsideCopy) {
 		t.Errorf("Diff with a symbolic link: %v, want ErrOutsideCopy", err)
@@ -410,7 +410,9 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 			"npm_config_cache=" + filepath.Join(home, "npm"), "HTTPS_PROXY=http://127.0.0.1:1", "HTTP_PROXY=http://127.0.0.1:1",
 			"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + filepath.Join(home, "gitconfig"), "GIT_TERMINAL_PROMPT=0",
 			"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0", "COREPACK_ENABLE_NETWORK=0",
-			"npm_config_git=" + filepath.Join(home, "no-git")} {
+			"npm_config_git=" + filepath.Join(home, "no-git"), "GIT_NO_REPLACE_OBJECTS=1",
+			"npm_config_proxy=http://127.0.0.1:1", "npm_config_https_proxy=http://127.0.0.1:1", "npm_config_noproxy=",
+			"npm_config_strict_ssl=true", "COMPOSER_NO_INTERACTION=1"} {
 			if !slices.Contains(r.env, want) {
 				t.Errorf("%s %v: %s missing from the environment", r.name, r.args, want)
 			}
@@ -1132,5 +1134,228 @@ func TestExtractSkipsUnsafeTarEntries(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(tmp, "escape.txt")); err == nil {
 		t.Error("an entry was written outside the copy")
+	}
+}
+
+func TestExcludedPathsNeverReachTheCommit(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, ".ENV", "DB_PASSWORD=other\n")
+	writeFile(t, c.Dir, "config/SERVER.KEY", "key\n")
+	writeFile(t, c.Dir, "new.pem", "pem\n")
+	writeFile(t, c.Dir, "private/planted.php", "<?php\n")
+	writeFile(t, c.Dir, "PRIVATE/planted.php", "<?php\n")
+	gitT(t, f.env, c.Dir, "add", "-f", "new.pem", "private/planted.php")
+	writeFile(t, c.Dir, "README.md", "fixed\n")
+	ch, err := Diff(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !slices.Equal(ch.Files, []string{"README.md"}) {
+		t.Errorf("files %v, want only README.md", ch.Files)
+	}
+	sha, err := Commit(context.Background(), f.deps, c, "fix")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if got := gitT(t, f.env, c.Mirror, "diff", "--name-only", c.Base, sha); got != "README.md" {
+		t.Errorf("the fix commit changes %q", got)
+	}
+}
+
+func TestCheckExcludedIsCaseInsensitive(t *testing.T) {
+	c := Copy{Excluded: []string{"config/.env.local"}, Exclude: []string{"private"}}
+	for _, p := range []string{".ENV", ".Env.production", "config/SERVER.KEY", "a/Cert.PEM", "ID_RSA", "PRIVATE/x.php", "src/Private/x", "CONFIG/.ENV.LOCAL"} {
+		if err := checkExcluded(c, []string{"src/ok.php", p}); !errors.Is(err, ErrExcludedPath) {
+			t.Errorf("%q: %v, want ErrExcludedPath", p, err)
+		}
+	}
+	if err := checkExcluded(c, []string{"src/ok.php", "privateer/x.php", "keys.php", "environment.php"}); err != nil {
+		t.Errorf("plain files refused: %v", err)
+	}
+}
+
+func TestPrepareExcludesCaseVariants(t *testing.T) {
+	f := newFixture(t)
+	writeFile(t, f.proj.Path, "certs/Server.PEM", "pem\n")
+	f.proj.Exclude = []string{"private", "secret-docs"}
+	writeFile(t, f.proj.Path, "Secret-Docs/notes.txt", "p\n")
+	gitT(t, f.env, f.proj.Path, "add", "-A")
+	gitT(t, f.env, f.proj.Path, "commit", "-q", "-m", "case")
+	c := prepare(t, f)
+	for _, rel := range []string{"certs/Server.PEM", "Secret-Docs"} {
+		if _, err := os.Lstat(filepath.Join(c.Dir, filepath.FromSlash(rel))); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was copied", rel)
+		}
+	}
+	if !slices.Contains(c.Excluded, "certs/Server.PEM") || !slices.Contains(c.Excluded, "Secret-Docs/notes.txt") {
+		t.Errorf("Excluded %v", c.Excluded)
+	}
+}
+
+func TestDisplayIgnoresDiffAttributes(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, ".gitattributes", "* -diff\n")
+	writeFile(t, c.Dir, "README.md", "fixed line\n")
+	ch, err := Diff(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !strings.Contains(ch.Display, "+fixed line") || strings.Contains(ch.Display, "Binary files") {
+		t.Errorf("Display hides the change:\n%s", ch.Display)
+	}
+	if !strings.Contains(string(ch.Raw), "+fixed line") || strings.Contains(string(ch.Raw), "GIT binary patch") {
+		t.Errorf("Raw is not a text patch:\n%s", ch.Raw)
+	}
+}
+
+func TestCheckBinaryRefusesTextContent(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt", "plain text\n")
+	writeFile(t, dir, "b.bin", "\x00\x01\x02")
+	if err := checkBinary(dir, []string{"a.txt"}); !errors.Is(err, ErrBinaryChange) {
+		t.Errorf("text shown as binary: %v, want ErrBinaryChange", err)
+	}
+	if err := checkBinary(dir, []string{"b.bin", "deleted.txt"}); err != nil {
+		t.Errorf("a real binary or a deletion refused: %v", err)
+	}
+}
+
+func TestNpmSettingsAreAllowlisted(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	refused := []struct{ file, body string }{
+		{".npmrc", "\"git\"=./evil\n"},
+		{".npmrc", "${X}=y\n"},
+		{".npmrc", "proxy=http://evil.example\n"},
+		{".npmrc", "store-dir=../x\n"},
+		{".npmrc", "strict-ssl=false\n"},
+		{".npmrc", "[section]\nregistry=https://r.example\n"},
+		{".npmrc", "registry\\x=y\n"},
+		{".npmrc", "ignore-scripts\n"},
+		{".pnpmrc", "side-effects-cache=false\n"},
+		{"pnpm-workspace.yaml", "packages: [a]\nstoreDir: ../x\n"},
+		{".yarnrc", "cache-folder /tmp/x\n"},
+		{".yarnrc", "--install.ignore-scripts false\n"},
+	}
+	for i, tc := range refused {
+		dir := fmt.Sprintf("r%d", i)
+		lock := "package-lock.json"
+		if tc.file == ".yarnrc" {
+			lock = "yarn.lock"
+			writeFile(t, c.Dir, dir+"/"+lock, "# yarn lockfile v1\n")
+		} else {
+			writeFile(t, c.Dir, dir+"/"+lock, "{}")
+		}
+		writeFile(t, c.Dir, dir+"/"+tc.file, tc.body)
+		if err := Install(context.Background(), d, c, "npm", dir+"/"+lock); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("%s %q: %v, want ErrUnsafeInstall", tc.file, tc.body, err)
+		}
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("a refused install ran %d commands", len(rec.runs))
+	}
+	writeFile(t, c.Dir, "ok/package-lock.json", "{}")
+	writeFile(t, c.Dir, "ok/.npmrc", "# c\n; c\nregistry=https://r.example/\n@acme:registry=https://npm.example/\n"+
+		"//npm.example/:_authToken=${NPM_TOKEN}\n//npm.example/path/:_auth=abc\n//npm.example/:username=u\n//npm.example/:_password=p\nalways-auth=true\n")
+	writeFile(t, c.Dir, "ok/pnpm-workspace.yaml", "packages:\n  - web\n")
+	if err := Install(context.Background(), d, c, "npm", "ok/package-lock.json"); err != nil {
+		t.Errorf("registry and auth settings refused: %v", err)
+	}
+	writeFile(t, c.Dir, "oky/yarn.lock", "# yarn lockfile v1\n")
+	writeFile(t, c.Dir, "oky/.yarnrc", "# yarn\nregistry \"https://r.example\"\n\"@acme:registry\" \"https://y.example\"\nlastUpdateCheck 1730000000000\n")
+	if err := Install(context.Background(), d, c, "npm", "oky/yarn.lock"); err != nil {
+		t.Errorf("yarn registry settings refused: %v", err)
+	}
+}
+
+func TestInstallRefusesLinkedInstallFolders(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	outside := t.TempDir()
+	writeFile(t, c.Dir, "a/composer.lock", "{}")
+	if err := os.Symlink(outside, filepath.Join(c.Dir, "a", "vendor")); err == nil {
+		if err := Install(context.Background(), d, c, "Packagist", "a/composer.lock"); !errors.Is(err, ErrOutsideCopy) {
+			t.Errorf("linked vendor: %v, want ErrOutsideCopy", err)
+		}
+	} else {
+		t.Logf("symbolic links unavailable: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		writeFile(t, c.Dir, "b/package-lock.json", "{}")
+		out, err := exec.Command("cmd", "/c", "mklink", "/J", filepath.Join(c.Dir, "b", "node_modules"), outside).CombinedOutput()
+		if err != nil {
+			t.Fatalf("mklink /J: %v %s", err, out)
+		}
+		if err := Install(context.Background(), d, c, "npm", "b/package-lock.json"); !errors.Is(err, ErrOutsideCopy) {
+			t.Errorf("junction node_modules: %v, want ErrOutsideCopy", err)
+		}
+	}
+	for _, key := range []string{"vendor-dir", "bin-dir", "cache-dir", "data-dir", "home", "cache-files-dir"} {
+		writeFile(t, c.Dir, "k/composer.lock", "{}")
+		writeFile(t, c.Dir, "k/composer.json", `{"config":{"`+key+`":"../../outside"}}`)
+		if err := Install(context.Background(), d, c, "Packagist", "k/composer.lock"); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("composer config %s: %v, want ErrUnsafeInstall", key, err)
+		}
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("a refused install ran %d commands", len(rec.runs))
+	}
+	writeFile(t, c.Dir, "k/composer.json", `{"config":{"sort-packages":true}}`)
+	if err := Install(context.Background(), d, c, "Packagist", "k/composer.lock"); err != nil {
+		t.Errorf("a plain composer.json refused: %v", err)
+	}
+}
+
+func TestPrepareBoundsTheArchive(t *testing.T) {
+	f := newFixture(t)
+	old := maxCopyFiles
+	maxCopyFiles = 3
+	defer func() { maxCopyFiles = old }()
+	if _, err := Prepare(context.Background(), f.deps, f.proj, "01JATTEMPT0000000000000000"); !errors.Is(err, ErrCopyTooLarge) {
+		t.Errorf("Prepare of a too large project: %v, want ErrCopyTooLarge", err)
+	}
+	for _, p := range []string{filepath.Join(f.deps.DataDir, "fix-tmp", "01JATTEMPT0000000000000000"), filepath.Join(f.deps.DataDir, "worktrees", f.proj.ID, "01JATTEMPT0000000000000000")} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s left after a refused Prepare", p)
+		}
+	}
+}
+
+func TestExtractCreatesNoExcludedFolder(t *testing.T) {
+	tmp := t.TempDir()
+	archive := filepath.Join(tmp, "a.tar")
+	out, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(out)
+	for _, e := range []struct {
+		name string
+		typ  byte
+	}{{"private/", tar.TypeDir}, {"private/sub/", tar.TypeDir}, {"private/sub/x.txt", tar.TypeReg}, {"src/", tar.TypeDir}, {"src/a.txt", tar.TypeReg}} {
+		hdr := &tar.Header{Name: e.name, Typeflag: e.typ, Mode: 0o755}
+		if e.typ == tar.TypeReg {
+			hdr.Size = 1
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if e.typ == tar.TypeReg {
+			tw.Write([]byte("x"))
+		}
+	}
+	tw.Close()
+	out.Close()
+	dir := filepath.Join(tmp, "copy")
+	os.Mkdir(dir, 0o755)
+	if _, _, err := extract(archive, dir, []string{"private"}); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "private")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("the excluded folder was created")
 	}
 }

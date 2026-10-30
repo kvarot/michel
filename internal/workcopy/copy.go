@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/kvarot/michel/internal/mask"
@@ -40,10 +41,11 @@ var (
 )
 
 // Copy is the fix copy of one attempt. It is two folders of the data
-// folder:
-//   - Mirror, <data>/worktrees/<project id>/<attempt id>.git: a bare clone
-//     of the user's repository, private to Michel (never in the agent's
-//     reach), where the fix commit is built and from which it is fetched;
+// folder, in separate trees:
+//   - Mirror, <data>/fix-mirrors/<project id>/<attempt id>.git: a bare
+//     clone of the user's repository (every blob, the excluded ones too),
+//     private to Michel and never in or next to the agent's copy, where the
+//     fix commit is built and from which it is fetched;
 //   - Dir, <data>/worktrees/<project id>/<attempt id>: the agent's copy, a
 //     fresh repository holding the files of Base minus the excluded ones
 //     and one synthetic commit (Root). It has no history, no excluded
@@ -78,11 +80,13 @@ var idShape = regexp.MustCompile(`^[0-9A-Za-z]{1,64}$`)
 // excludedFiles are the file name patterns never copied, at any depth.
 var excludedFiles = []string{".env*", "*.pem", "*.key", "id_*"}
 
-// Limits of a copy: per file, in all, and in number of files.
-const (
-	maxCopyFile  = 256 << 20
-	maxCopyTotal = 4 << 30
-	maxCopyFiles = 500000
+// Limits of a copy: per file, in all, and in number of files. They are
+// checked on the tree of Base (git ls-tree) before anything is archived,
+// and again while extracting. Variables so that tests can lower them.
+var (
+	maxCopyFile  int64 = 256 << 20
+	maxCopyTotal int64 = 4 << 30
+	maxCopyFiles       = 100000
 )
 
 // plainAttributes turn off, for every path, what git would otherwise do
@@ -90,7 +94,9 @@ const (
 // export-ignore and export-subst (archive), end-of-line conversion,
 // filters, ident and re-encoding. Written in the info/attributes of the
 // mirror and of the copy, it wins over the project's .gitattributes.
-const plainAttributes = "* -export-ignore -export-subst -text -eol -filter -ident -working-tree-encoding\n"
+// "!diff" drops any diff attribute of the project (a "-diff" would show a
+// text change as "Binary files differ").
+const plainAttributes = "* -export-ignore -export-subst -text -eol -filter -ident -working-tree-encoding !diff\n"
 
 // IsGitRepo reports whether path is the top folder of a git repository: it
 // holds a .git folder with a HEAD, or a .git file pointing to one (a linked
@@ -121,29 +127,73 @@ func IsGitRepo(path string) bool {
 func excludePathspecs(exclude []string) []string {
 	out := []string{"."}
 	for _, p := range excludedFiles {
-		out = append(out, ":(exclude,glob)**/"+p)
+		out = append(out, ":(exclude,glob,icase)**/"+p)
 	}
 	for _, n := range exclude {
-		out = append(out, ":(exclude,glob)**/"+n+"/**")
+		out = append(out, ":(exclude,glob,icase)**/"+n+"/**")
 	}
 	return out
 }
 
-// isExcluded reports whether the slash path rel is left out of a copy.
+// isExcluded reports whether the slash path of a file, rel, is left out of
+// a copy, ignoring case (.ENV and SERVER.KEY are excluded too: Windows and
+// macOS file systems do not tell them apart).
 func isExcluded(rel string, exclude []string) bool {
-	segs := strings.Split(rel, "/")
+	segs := strings.Split(strings.ToLower(rel), "/")
 	base := segs[len(segs)-1]
 	for _, p := range excludedFiles {
 		if ok, _ := path.Match(p, base); ok {
 			return true
 		}
 	}
-	for _, s := range segs[:len(segs)-1] {
-		if slices.Contains(exclude, s) {
-			return true
+	return inExcludedFolder(segs[:len(segs)-1], exclude)
+}
+
+// inExcludedFolder reports whether one of the folder names segs is an
+// excluded folder, ignoring case.
+func inExcludedFolder(segs, exclude []string) bool {
+	for _, s := range segs {
+		for _, n := range exclude {
+			if strings.EqualFold(s, n) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// checkTreeSize refuses a Base tree over the limits of a copy, before
+// anything is archived: git ls-tree -r -l of the mirror.
+func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string) error {
+	out, stderr, err := h.git(ctx, d, mirror, mirror, nil, nil, "ls-tree", "-r", "-l", "-z", "--full-tree", base)
+	if err != nil {
+		return gitErr("ls-tree", err, stderr)
+	}
+	if len(out) >= maxGitOutput {
+		return ErrCopyTooLarge
+	}
+	var files int
+	var total int64
+	for _, e := range strings.Split(string(out), "\x00") {
+		meta, _, ok := strings.Cut(e, "\t")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(meta) // mode type id size
+		if len(f) != 4 || f[1] != "blob" {
+			continue
+		}
+		size, err := strconv.ParseInt(f[3], 10, 64)
+		if err != nil {
+			return errors.New("git ls-tree returned an unexpected listing")
+		}
+		files++
+		total += size
+		if size > maxCopyFile || total > maxCopyTotal || files > maxCopyFiles {
+			return ErrCopyTooLarge
+		}
+	}
+	return nil
 }
 
 // validFolderName reports whether n is a plain folder name (project.Exclude
@@ -222,6 +272,9 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := writeAttributes(c.Mirror); err != nil {
 		return fail(err)
 	}
+	if err := h.checkTreeSize(ctx, d, c.Mirror, base); err != nil {
+		return fail(err)
+	}
 	if _, stderr, err := h.git(ctx, d, tmp, c.Mirror, nil, nil, "archive", "--format=tar", "-o", archive, base); err != nil {
 		return fail(gitErr("archive", err, stderr))
 	}
@@ -294,6 +347,9 @@ func extract(archive, dir string, exclude []string) (kept, excluded []string, er
 		}
 		full := filepath.Join(dir, filepath.FromSlash(rel))
 		if hdr.Typeflag == tar.TypeDir {
+			if inExcludedFolder(strings.Split(rel, "/"), exclude) {
+				continue
+			}
 			if err := os.MkdirAll(full, 0o755); err != nil {
 				return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
 			}
