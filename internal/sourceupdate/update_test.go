@@ -12,6 +12,7 @@ import (
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/egress"
+	"github.com/kvarot/michel/internal/enrich"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/store"
@@ -237,5 +238,29 @@ func TestRunOrderAndUnknownKey(t *testing.T) {
 	}
 	if _, err := Run(context.Background(), d, []string{"feed.nope"}, ""); !errors.Is(err, source.ErrNotFound) {
 		t.Errorf("unknown key: %v", err)
+	}
+}
+
+func TestRunKeepsAnOnDemandReadCutByTime(t *testing.T) {
+	r := &fakeReader{kinds: []source.Kind{source.KindFeed}, fn: func(ctx context.Context, e source.Entry, deps Deps) (Result, error) {
+		if e.Key == "feed.a" {
+			return Result{Items: 42}, enrich.ErrOutOfTime
+		}
+		return Result{Items: 7, Skipped: SkipPartial}, nil
+	}}
+	useReaders(t, r)
+	rules := []policy.AllowRule{{Host: "a.example.org", Purpose: policy.PurposeFeed}, {Host: "b.example.org", Purpose: policy.PurposeFeed}}
+	d := env(t, nil, rules, feedEntry("feed.a", "a.example.org"), feedEntry("feed.b", "b.example.org"))
+	rep, err := Run(context.Background(), d, nil, "")
+	if err != nil {
+		t.Fatalf("a read cut by time is not a failure: %v %+v", err, rep)
+	}
+	if !reflect.DeepEqual(rep.Skipped, []string{"feed.a", "feed.b"}) || rep.SkipReasons["feed.a"] != SkipPartial ||
+		rep.SkipReasons["feed.b"] != SkipPartial || rep.Items["feed.a"] != 42 || rep.Items["feed.b"] != 7 || len(rep.Failed) != 0 {
+		t.Fatalf("report = %+v", rep)
+	}
+	e, _ := d.Repo.Get(context.Background(), "feed.a")
+	if e.LastReadResult != ResultSkipped || e.LastReadError != SkipPartial || e.LastReadItems != 42 {
+		t.Errorf("entry = %q %q %d", e.LastReadResult, e.LastReadError, e.LastReadItems)
 	}
 }

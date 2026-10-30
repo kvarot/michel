@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kvarot/michel/internal/scan"
 )
@@ -364,3 +365,70 @@ type stubKey struct {
 }
 
 func (s *stubKey) Key() string { return s.key }
+
+// spacedStub is a stub asked at a given pace.
+type spacedStub struct {
+	*stub
+	gap time.Duration
+}
+
+func (s *spacedStub) Interval() time.Duration { return s.gap }
+
+func TestRunOnDemandStopsBeforeDeadline(t *testing.T) {
+	f := newFixture(t)
+	for _, c := range []string{"CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003", "CVE-2024-0004", "CVE-2024-0005"} {
+		f.seedFinding(t, "f"+c[9:], scan.StatusNew, "unknown", c)
+	}
+	base := time.Now()
+	fake := base
+	oc, op, om := clock, pause, requestMargin
+	t.Cleanup(func() { clock, pause, requestMargin = oc, op, om })
+	clock = func() time.Time { return fake }
+	pause = func(_ context.Context, d time.Duration) error { fake = fake.Add(d); return nil }
+	requestMargin = 30 * time.Second
+	// 50 s left: before the 2nd, 3rd and 4th requests 50, 44 and 38 s are
+	// left, at least the 6 s gap + 30 s margin; before the 5th only 32 s.
+	ctx, cancel := context.WithDeadline(context.Background(), base.Add(50*time.Second))
+	defer cancel()
+	s := &spacedStub{stub: &stub{reply: func(_ int, cve string) (CVERecord, error) {
+		return CVERecord{CVE: cve, CVSSScore: 5}, nil
+	}}, gap: 6 * time.Second}
+	fetched, notFound, failed, err := RunOnDemand(ctx, f.deps, s, 10)
+	if !errors.Is(err, ErrOutOfTime) || fetched != 4 || notFound != 0 || failed != 0 || len(s.calls) != 4 {
+		t.Fatalf("fetched %d notFound %d failed %d calls %v err %v", fetched, notFound, failed, s.calls, err)
+	}
+	if f.count(t, "cve_enrichment") != 4 {
+		t.Errorf("rows = %d, want the 4 fetched kept", f.count(t, "cve_enrichment"))
+	}
+}
+
+func TestRunOnDemandWithoutDeadlineAsksEveryCandidate(t *testing.T) {
+	f := newFixture(t)
+	for _, c := range []string{"CVE-2024-0001", "CVE-2024-0002"} {
+		f.seedFinding(t, "f"+c[9:], scan.StatusNew, "unknown", c)
+	}
+	op := pause
+	t.Cleanup(func() { pause = op })
+	pause = func(context.Context, time.Duration) error { return nil }
+	s := &spacedStub{stub: &stub{reply: func(_ int, cve string) (CVERecord, error) {
+		return CVERecord{CVE: cve, CVSSScore: 5}, nil
+	}}, gap: time.Hour}
+	if n, _, _, err := RunOnDemand(context.Background(), f.deps, s, 10); err != nil || n != 2 {
+		t.Fatalf("fetched %d err %v", n, err)
+	}
+}
+
+func TestPauseReturnsWhenTheContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := sleepCtx(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Error("the pause ignored the context")
+	}
+	if err := sleepCtx(context.Background(), time.Millisecond); err != nil {
+		t.Errorf("short pause: %v", err)
+	}
+}

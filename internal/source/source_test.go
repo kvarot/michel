@@ -558,3 +558,35 @@ func TestDeclaredTechMergesThreeOrigins(t *testing.T) {
 		t.Errorf("after remove = %v", got)
 	}
 }
+
+func TestEnableWritesNoRuleWhenOneOfTwoFails(t *testing.T) {
+	r, s := synced(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("sovereignty:\n  mode: strict_local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The second host is not a bare host name: its rule fails validation.
+	if _, err := r.Upsert(ctx, Entry{Key: "feed.two", Name: "two", Kind: KindFeed, Origin: OriginUser,
+		Hosts: []string{"a.example.org", "b.example.org/x"}, Purpose: policy.PurposeFeed}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := testDeps(t, r, s, path)
+	if _, _, err := Enable(ctx, d, "feed.two", true); err == nil {
+		t.Fatal("expected the invalid rule to fail")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("a rule stayed in the policy file:\n%s", after)
+	}
+	if get(t, r, "feed.two").Enabled || countAudit(t, s, "source.consent") != 0 {
+		t.Error("a failed consent changed the entry or the audit")
+	}
+}

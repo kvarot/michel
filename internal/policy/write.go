@@ -21,18 +21,38 @@ import (
 // created with only sovereignty.network.allow (Load merges it over the
 // defaults).
 func AddAllowRule(path string, r AllowRule) (bool, error) {
-	return editAllow(path, func(seq *yaml.Node) bool {
-		for _, item := range seq.Content {
-			if sameRule(ruleOf(item), r) {
-				return false
+	n, err := AddAllowRules(path, r)
+	return n > 0, err
+}
+
+// AddAllowRules writes the rules not already there in one edit of the file,
+// with the same care as AddAllowRule: either all of them are written, or
+// none (the file is left as it was). It returns how many it added.
+func AddAllowRules(path string, rules ...AllowRule) (int, error) {
+	added := 0
+	_, err := editAllow(path, func(seq *yaml.Node) bool {
+		added = 0
+	next:
+		for _, r := range rules {
+			for _, item := range seq.Content {
+				if sameRule(ruleOf(item), r) {
+					continue next
+				}
 			}
+			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+				scalar("host"), scalar(r.Host), scalar("purpose"), scalar(r.Purpose),
+			}})
+			added++
 		}
-		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-			scalar("host"), scalar(r.Host), scalar("purpose"), scalar(r.Purpose),
-		}})
-		seq.Style = 0 // a flow list ("allow: []") becomes a block list
-		return true
+		if added > 0 {
+			seq.Style = 0 // a flow list ("allow: []") becomes a block list
+		}
+		return added > 0
 	}, true)
+	if err != nil {
+		return 0, err
+	}
+	return added, nil
 }
 
 // RemoveAllowRule removes r from sovereignty.network.allow of the policy file

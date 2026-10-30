@@ -140,3 +140,29 @@ func TestAddAllowRuleRestoresOnInvalid(t *testing.T) {
 		t.Errorf("broken file rewritten: %q", raw)
 	}
 }
+
+func TestAddAllowRulesWritesAllOrNone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := "sovereignty:\n  mode: strict_local\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddAllowRules(path, AllowRule{Host: "a.example.org", Purpose: PurposeFeed}, AllowRule{Host: "b.example.org/x", Purpose: PurposeFeed}); err == nil {
+		t.Fatal("expected the invalid second rule to fail")
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != original {
+		t.Errorf("a rule stayed: %q", raw)
+	}
+	n, err := AddAllowRules(path, AllowRule{Host: "a.example.org", Purpose: PurposeFeed}, AllowRule{Host: "b.example.org", Purpose: PurposeFeed},
+		AllowRule{Host: "A.example.org", Purpose: PurposeFeed})
+	if err != nil || n != 2 {
+		t.Fatalf("n = %d err %v", n, err)
+	}
+	p, _, err := Load(path, t.TempDir())
+	if err != nil || len(p.Sovereignty.Network.Allow) != 2 {
+		t.Fatalf("allow = %+v err %v", p.Sovereignty.Network.Allow, err)
+	}
+	if n, err := AddAllowRules(path, AllowRule{Host: "b.example.org", Purpose: PurposeFeed}); err != nil || n != 0 {
+		t.Errorf("again: n = %d err %v", n, err)
+	}
+}

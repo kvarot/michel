@@ -399,6 +399,8 @@
   "cli.source.update.off": "· %[1]s est désactivée : michel source enable %[1]s",
   "cli.source.update.ok.one": "✓ %[2]s : %[1]d élément lu",
   "cli.source.update.ok.other": "✓ %[2]s : %[1]d éléments lus",
+  "cli.source.update.partial.one": "· %[2]s : %[1]d élément lu, le temps de cette mise à jour s'est écoulé avant la suite ; la prochaine mise à jour continuera",
+  "cli.source.update.partial.other": "· %[2]s : %[1]d éléments lus, le temps de cette mise à jour s'est écoulé avant la suite ; la prochaine mise à jour continuera",
   "cli.source.update.rate_budget": "· %s : pas lue aujourd'hui, Michel a atteint la limite de requêtes que GitHub autorise ; la prochaine mise à jour reprendra",
   "cli.source.update.rate_limited.one": "· %[2]s : la source a demandé à Michel de ralentir après %[1]d élément ; ce qui a été lu est gardé, la prochaine mise à jour reprendra",
   "cli.source.update.rate_limited.other": "· %[2]s : la source a demandé à Michel de ralentir après %[1]d éléments ; ce qui a été lu est gardé, la prochaine mise à jour reprendra",

@@ -36,13 +36,33 @@ var (
 	// ErrRateLimited means the source refused the request for want of quota
 	// (403 or 429): the run stops, the next update goes on.
 	ErrRateLimited = errors.New("the source is rate limiting Michel")
+	// ErrOutOfTime means the time given to the run would end before the
+	// next request: the run stops with what it read, the next update goes
+	// on. It is not a failure.
+	ErrOutOfTime = errors.New("the time given to this read is spent")
 )
 
-// maxOnDemandBytes and pause are what tests replace.
+// maxOnDemandBytes, pause, clock and requestMargin are what tests replace.
+// requestMargin is the time one request is given before the run's deadline:
+// the egress transport waits up to 30 s for the response headers.
 var (
 	maxOnDemandBytes = MaxOnDemandBytes
-	pause            = time.Sleep
+	pause            = sleepCtx
+	clock            = time.Now
+	requestMargin    = 30 * time.Second
 )
+
+// sleepCtx waits d, or less when ctx ends first (its error is returned).
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // CVERecord is what an on-demand source says about one CVE.
 type CVERecord struct {
@@ -214,7 +234,10 @@ var errStop = errors.New("stop")
 // CWE data fills the CVE's row only when it has no score yet; a row with a
 // score is never overwritten by one without. A failure stores nothing and
 // is retried. The run stops at the first rate limit and returns
-// ErrRateLimited with the counts so far.
+// ErrRateLimited with the counts so far. When ctx has a deadline that would
+// end before the next request (its pause plus requestMargin), the run stops
+// before that request and returns ErrOutOfTime with the counts so far: what
+// was read is kept and the next run asks about the rest.
 func RunOnDemand(ctx context.Context, deps Deps, src OnDemand, limit int) (fetched, notFound, failed int, err error) {
 	db := deps.Store.DB()
 	cves, err := Candidates(ctx, db, src.Key(), limit)
@@ -230,8 +253,17 @@ func RunOnDemand(ctx context.Context, deps Deps, src OnDemand, limit int) (fetch
 		if err := ctx.Err(); err != nil {
 			return fetched, notFound, failed, err
 		}
-		if i > 0 && gap > 0 {
-			pause(gap)
+		wait := time.Duration(0)
+		if i > 0 {
+			wait = gap
+		}
+		if dl, ok := ctx.Deadline(); ok && dl.Sub(clock()) < wait+requestMargin {
+			return fetched, notFound, failed, ErrOutOfTime
+		}
+		if wait > 0 {
+			if err := pause(ctx, wait); err != nil {
+				return fetched, notFound, failed, err
+			}
 		}
 		rec, ferr := src.Fetch(ctx, deps.Client, cve)
 		switch {

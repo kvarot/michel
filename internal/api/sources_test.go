@@ -1003,3 +1003,17 @@ func TestRefusalTextMapsEveryCode(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateContextBoundsOnlyOneEntry(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/sources/update", nil)
+	all, cancel := updateContext(r, nil)
+	defer cancel()
+	if dl, ok := all.Deadline(); ok {
+		t.Errorf("the update of every source has a deadline in %v: each entry keeps its own (OSV %v)", time.Until(dl), sourceupdate.OSVTimeout)
+	}
+	one, cancel1 := updateContext(r, []string{"osv.npm"})
+	defer cancel1()
+	if dl, ok := one.Deadline(); !ok || time.Until(dl) > longTimeout {
+		t.Errorf("the update of one source: deadline %v %v", dl, ok)
+	}
+}

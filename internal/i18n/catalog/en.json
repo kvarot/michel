@@ -399,6 +399,8 @@
   "cli.source.update.off": "· %[1]s is disabled: michel source enable %[1]s",
   "cli.source.update.ok.one": "✓ %[2]s: %[1]d item read",
   "cli.source.update.ok.other": "✓ %[2]s: %[1]d items read",
+  "cli.source.update.partial.one": "· %[2]s: %[1]d item read, the time of this update ran out before the rest; the next update goes on",
+  "cli.source.update.partial.other": "· %[2]s: %[1]d items read, the time of this update ran out before the rest; the next update goes on",
   "cli.source.update.rate_budget": "· %s: not read today, the GitHub request budget is spent; the next update goes on",
   "cli.source.update.rate_limited.one": "· %[2]s: the source asked Michel to slow down after %[1]d item; what was read is kept and the next update goes on",
   "cli.source.update.rate_limited.other": "· %[2]s: the source asked Michel to slow down after %[1]d items; what was read is kept and the next update goes on",

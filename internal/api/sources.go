@@ -632,6 +632,18 @@ func updateView(rep sourceupdate.Report) UpdateView {
 	return v
 }
 
+// updateContext is the context of an update: one entry is bounded by
+// longTimeout; the update of every source is not, so that each entry keeps
+// the bound sourceupdate gives it (OSVTimeout for an OSV database) and a
+// slow first download does not cut the entries after it. The request's own
+// context still ends it when the page goes away.
+func updateContext(r *http.Request, keys []string) (context.Context, context.CancelFunc) {
+	if len(keys) == 0 {
+		return context.WithCancel(r.Context())
+	}
+	return context.WithTimeout(r.Context(), longTimeout)
+}
+
 func (s *server) sourcesUpdate(w http.ResponseWriter, r *http.Request) {
 	lang, ok := s.requestLang(w, r)
 	if !ok {
@@ -650,8 +662,14 @@ func (s *server) sourcesUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.updating.Unlock()
-	extend(w)
-	ctx, cancel := context.WithTimeout(r.Context(), longTimeout)
+	if len(keys) == 0 {
+		// Each entry has its own bound (sourceupdate), up to OSVTimeout; the
+		// answer may only be written once all were read.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	} else {
+		extend(w)
+	}
+	ctx, cancel := updateContext(r, keys)
 	defer cancel()
 	repo := source.NewRepo(s.deps.Store)
 	rep, err := sourceupdate.Run(ctx, sourceupdate.Deps{Store: s.deps.Store, Repo: repo, Audit: s.deps.Audit, Gateway: s.deps.Sources.Gateway,

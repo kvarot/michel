@@ -42,6 +42,10 @@ const (
 	// SkipRateLimited: the source refused more requests for now; what was
 	// read before is kept.
 	SkipRateLimited = "rate limited"
+	// SkipPartial: the time given to the read ran out before every item
+	// was asked for (the NVD without a key); what was read is kept and the
+	// next update asks for the rest.
+	SkipPartial = "partial"
 	// SkipNoReader: this Michel cannot read that kind of source yet.
 	SkipNoReader = "no reader"
 	// SkipOff: the entry is disabled.
@@ -89,7 +93,7 @@ type Reader interface {
 
 // Result is what one read gave. Status, when not nil, replaces the entry's
 // status (repository readers). Skipped is "" for a read, else one of the
-// Skip* reasons. A rate-limited read may still carry Items.
+// Skip* reasons. A rate-limited or partial read may still carry Items.
 type Result struct {
 	Items   int
 	ETag    string
@@ -441,6 +445,8 @@ func readOne(ctx context.Context, deps Deps, e source.Entry, allowed func(host, 
 		res, rerr = Result{Skipped: SkipNotModified}, nil
 	case errors.Is(rerr, enrich.ErrRateLimited):
 		res.Skipped, rerr = SkipRateLimited, nil
+	case errors.Is(rerr, enrich.ErrOutOfTime):
+		res.Skipped, rerr = SkipPartial, nil
 	}
 	if rerr != nil {
 		result, msg := classify(rerr), bounded(rerr.Error())

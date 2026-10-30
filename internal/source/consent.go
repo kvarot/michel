@@ -110,7 +110,8 @@ func (d Deps) reload() error {
 
 // Enable turns the entry on. When some host has no allow rule and consent is
 // false, it changes nothing and returns ErrConsentRequired with the texts to
-// show. With consent, it writes the missing rules into the policy file,
+// show. With consent, it writes the missing rules into the policy file (in
+// one edit: all of them or none),
 // reloads the policy (the gateway learns the rules), records source.consent
 // and turns the entry on. A host already allowed (by another entry) asks
 // nothing, but the consent is still recorded. It returns the texts of the
@@ -128,10 +129,13 @@ func Enable(ctx context.Context, d Deps, key string, consent bool) (Entry, []Con
 		if d.PolicyPath == "" {
 			return e, need, errors.New("cannot write the network rule: the policy file path is unknown")
 		}
+		// One edit for every rule: a failure leaves the file as it was.
+		rules := make([]policy.AllowRule, 0, len(need))
 		for _, c := range need {
-			if _, err := policy.AddAllowRule(d.PolicyPath, policy.AllowRule{Host: c.Host, Purpose: c.Purpose}); err != nil {
-				return e, need, err
-			}
+			rules = append(rules, policy.AllowRule{Host: c.Host, Purpose: c.Purpose})
+		}
+		if _, err := policy.AddAllowRules(d.PolicyPath, rules...); err != nil {
+			return e, need, err
 		}
 		if err := d.reload(); err != nil {
 			return e, need, fmt.Errorf("the network rule was written but the policy cannot be reloaded: %w", err)

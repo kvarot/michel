@@ -71,13 +71,16 @@ func apiKey(e source.Entry, secrets secret.Store) (string, error) {
 	return strings.TrimSpace(string(v)), nil
 }
 
-// onDemand asks src about up to limit CVEs. A rate limit keeps what was read
-// and is not a failure; a run where every request failed is.
+// onDemand asks src about up to limit CVEs. A rate limit, or the read's time
+// running out, keeps what was read and is not a failure; a run where every
+// request failed is.
 func onDemand(ctx context.Context, ed enrich.Deps, src enrich.OnDemand, limit int) (sourceupdate.Result, error) {
 	fetched, notFound, failed, err := enrich.RunOnDemand(ctx, ed, src, limit)
 	switch {
 	case errors.Is(err, enrich.ErrRateLimited):
 		return sourceupdate.Result{Items: fetched, Skipped: sourceupdate.SkipRateLimited}, nil
+	case errors.Is(err, enrich.ErrOutOfTime):
+		return sourceupdate.Result{Items: fetched, Skipped: sourceupdate.SkipPartial}, nil
 	case err != nil:
 		return sourceupdate.Result{}, err
 	case failed > 0 && fetched+notFound == 0:

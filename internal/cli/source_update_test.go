@@ -1,14 +1,18 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/osvdb"
+	"github.com/kvarot/michel/internal/sourceupdate"
 	"github.com/kvarot/michel/internal/store"
 )
 
@@ -125,5 +129,20 @@ func TestSourceUpdateOK(t *testing.T) {
 	_, out, _, err := run(t, dir, "--lang", "fr", "source", "update", "--kind", "osv", "--osv-db", t.TempDir())
 	if err != nil || !strings.Contains(out, "✓ osv.npm") || strings.Contains(out, "enrich.") {
 		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+func TestPrintSourceUpdatePartial(t *testing.T) {
+	for lang, want := range map[i18n.Lang]string{
+		i18n.EN: "· enrich.nvd: 44 items read, the time of this update ran out before the rest; the next update goes on",
+		i18n.FR: "· enrich.nvd : 44 éléments lus, le temps de cette mise à jour s'est écoulé avant la suite ; la prochaine mise à jour continuera",
+	} {
+		var out bytes.Buffer
+		deps := &Deps{Stdout: &out, Stderr: &bytes.Buffer{}, Now: time.Now, Lang: lang}
+		printSourceUpdate(deps, sourceupdate.Report{Order: []string{"enrich.nvd"}, Skipped: []string{"enrich.nvd"},
+			SkipReasons: map[string]string{"enrich.nvd": sourceupdate.SkipPartial}, Items: map[string]int{"enrich.nvd": 44}})
+		if got := strings.TrimSpace(out.String()); got != want {
+			t.Errorf("%s: got %q", lang, got)
+		}
 	}
 }
