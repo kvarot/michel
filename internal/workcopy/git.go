@@ -210,6 +210,8 @@ var allowedGit = []string{"clone", "init", "archive", "add", "diff", "commit", "
 // git run a program or write on its own: hooks (an empty folder of Michel's
 // outside the subprocesses' home, as core.hooksPath), the file system monitor, automatic gc and
 // maintenance, credential helpers, commit signing and an attributes file.
+// core.longpaths lets git on Windows handle paths over 260 characters (a
+// data folder deep in the profile); other systems ignore it.
 // System and global
 // configuration are not read at all (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL).
 func (h home) safeConfig() []string {
@@ -221,6 +223,7 @@ func (h home) safeConfig() []string {
 		"-c", "credential.helper=",
 		"-c", "commit.gpgSign=false",
 		"-c", "core.attributesFile=",
+		"-c", "core.longpaths=true",
 	}
 }
 

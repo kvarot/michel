@@ -444,6 +444,11 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 			if !slices.Contains(r.args, "core.hooksPath="+filepath.Join(f.deps.DataDir, "fix-hooks")) || !slices.Contains(r.args, "core.fsmonitor=false") {
 				t.Errorf("git %v: hooks or fsmonitor not disabled", r.args)
 			}
+			// Long paths: a data folder deep in the profile must not make
+			// a clone fail on Windows ("Filename too long").
+			if !slices.Contains(r.args, "core.longpaths=true") {
+				t.Errorf("git %v: core.longpaths=true missing", r.args)
+			}
 			if !slices.Contains(allowedGit, gitSubcommand(r.args)) {
 				t.Errorf("git %v: subcommand outside the closed list", r.args)
 			}
