@@ -161,7 +161,7 @@
   "cli.findings.unknown_severity": "Gravité %q inconnue. Choisis parmi : %s.",
   "cli.findings.unknown_status": "Statut %q inconnu. Choisis parmi : %s.",
   "cli.mcp.bound": "michel mcp : session liée à la tentative de correction %s ; propose_fix est disponible.",
-  "cli.mcp.read_only": "michel mcp : session en lecture seule ; propose_fix n'est pas disponible.",
+  "cli.mcp.read_only": "michel mcp : session en lecture seule ; propose_fix n'est pas disponible. Pour l'utiliser, lance la correction avec le bouton « Corriger » dans la page de Michel.",
   "cli.notify.all_projects": "tous",
   "cli.notify.audit_failed": "Michel n'arrive pas à écrire dans son journal d'audit (la trace de ce qu'il fait) : %v. Vérifie que tu as le droit d'écrire dans le dossier de données, puis réessaie.",
   "cli.notify.channels_invalid": "Michel ne peut pas utiliser la section notify de ta politique : %v. Corrige-la dans la section notify.channels de ton fichier de politique (le fichier de réglages de Michel).",
