@@ -200,9 +200,10 @@ func (d Deps) record(ctx context.Context, action, target, result string, ev map[
 
 // Sessions is the registry of the agents running in this process.
 type Sessions struct {
-	mu   sync.Mutex
-	m    map[string]*running
-	lock map[string]*sync.Mutex
+	mu        sync.Mutex
+	m         map[string]*running
+	lock      map[string]*sync.Mutex
+	proposing map[string]*sync.Mutex
 }
 
 // running is one attempt's session: the agent, its proxy, its display
@@ -216,7 +217,21 @@ type running struct {
 
 // NewSessions returns an empty registry.
 func NewSessions() *Sessions {
-	return &Sessions{m: map[string]*running{}, lock: map[string]*sync.Mutex{}}
+	return &Sessions{m: map[string]*running{}, lock: map[string]*sync.Mutex{}, proposing: map[string]*sync.Mutex{}}
+}
+
+// proposeLock is the mutex held for a whole Propose of one attempt: two
+// proposals of the same attempt never run at the same time (one scratch
+// worktree, one commit at a time); the second waits for the first.
+func (s *Sessions) proposeLock(id string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.proposing[id]
+	if !ok {
+		m = &sync.Mutex{}
+		s.proposing[id] = m
+	}
+	return m
 }
 
 func (s *Sessions) add(id string, r *running) {
@@ -806,6 +821,9 @@ func auditDetail(d Deps, err error) string {
 // level 3 rules allow it and the committed tree is the one Michel's own
 // update left (Work.Tree0): the agent changed nothing.
 func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Proposal, error) {
+	pl := d.sessions().proposeLock(attemptID)
+	pl.Lock()
+	defer pl.Unlock()
 	repo := d.repo()
 	lang := d.lang()
 	a, err := repo.GetAttempt(ctx, attemptID)

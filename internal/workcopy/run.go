@@ -72,7 +72,7 @@ func RunTests(ctx context.Context, d Deps, c Copy, testCmd []string) (status, ou
 	if len(testCmd) == 0 || testCmd[0] == "" {
 		return TestsNotRun, "", nil
 	}
-	if err := copyDir(d, c); err != nil {
+	if err := runDir(d, c); err != nil {
 		return TestsNotRun, "", err
 	}
 	h, err := ensureHome(d)

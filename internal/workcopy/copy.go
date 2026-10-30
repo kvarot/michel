@@ -458,17 +458,36 @@ func inDataDir(d Deps, p string) error {
 	return nil
 }
 
-// copyDir checks that c.Dir is a folder Michel runs installs and tests in:
-// an agent copy, an absolute <data>/worktrees/<project id>/<attempt id>
-// folder holding a .git folder, or the scratch worktree of an attempt,
-// <data>/fix-tmp/<attempt id>/run (Materialize).
+// copyDir checks that c.Dir is an agent copy of the data folder: an
+// absolute <data>/worktrees/<project id>/<attempt id> folder holding a .git
+// folder. A scratch worktree is not one (see runDir): Diff, Commit, Apply
+// and Remove never take it.
 func copyDir(d Deps, c Copy) error {
 	dir := c.Dir
 	if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || inDataDir(d, dir) != nil {
 		return ErrNotACopy
 	}
 	attempt, projectDir := filepath.Base(dir), filepath.Dir(dir)
-	if !isScratch(d, dir) && (!idShape.MatchString(attempt) || !idShape.MatchString(filepath.Base(projectDir)) || filepath.Dir(projectDir) != filepath.Join(d.DataDir, "worktrees")) {
+	if !idShape.MatchString(attempt) || !idShape.MatchString(filepath.Base(projectDir)) || filepath.Dir(projectDir) != filepath.Join(d.DataDir, "worktrees") {
+		return ErrNotACopy
+	}
+	for _, f := range []string{dir, filepath.Join(dir, ".git")} {
+		if info, err := os.Lstat(f); err != nil || !info.IsDir() {
+			return ErrNotACopy
+		}
+	}
+	return nil
+}
+
+// runDir checks that c.Dir is a folder Michel runs installs and tests in:
+// an agent copy (copyDir) or the scratch worktree of an attempt,
+// <data>/fix-tmp/<attempt id>/run, holding a .git folder (Materialize).
+func runDir(d Deps, c Copy) error {
+	if err := copyDir(d, c); err == nil {
+		return nil
+	}
+	dir := c.Dir
+	if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || inDataDir(d, dir) != nil || !isScratch(d, dir) {
 		return ErrNotACopy
 	}
 	for _, f := range []string{dir, filepath.Join(dir, ".git")} {

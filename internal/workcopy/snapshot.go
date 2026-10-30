@@ -20,9 +20,10 @@ type Snapshot struct {
 }
 
 // Freeze takes the Snapshot of the copy: it stages the copy once (index
-// from Root, add -A with the excluded files left out), checks the change
-// like Diff and writes the index as a tree. The index holds the snapshot
-// until the next staging.
+// from Root, add -A with the excluded files left out), writes the index as
+// a tree, and computes the change from Root to that tree object, so that
+// Tree and Change come from one immutable object whatever happens to the
+// index or the working tree afterwards.
 func Freeze(ctx context.Context, d Deps, c Copy) (Snapshot, error) {
 	if err := checkCopy(d, c); err != nil {
 		return Snapshot{}, err
@@ -37,10 +38,6 @@ func Freeze(ctx context.Context, d Deps, c Copy) (Snapshot, error) {
 	if err := h.stage(ctx, d, c); err != nil {
 		return Snapshot{}, err
 	}
-	ch, err := h.indexChange(ctx, d, c)
-	if err != nil {
-		return Snapshot{}, err
-	}
 	out, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "write-tree")
 	if err != nil {
 		return Snapshot{}, gitErr("write-tree", err, stderr)
@@ -49,8 +46,15 @@ func Freeze(ctx context.Context, d Deps, c Copy) (Snapshot, error) {
 	if !shaShape.MatchString(tree) {
 		return Snapshot{}, errors.New("git write-tree returned an unexpected tree id")
 	}
+	ch, err := h.change(ctx, d, c, tree)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	return Snapshot{Tree: tree, Change: ch}, nil
 }
+
+// emptyTree is git's id of the tree with no entry.
+const emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 // scratchDir is the scratch worktree of an attempt, <data>/fix-tmp/<attempt
 // id>/run, where Michel installs and tests a snapshot: never the agent's
@@ -101,13 +105,14 @@ func Materialize(ctx context.Context, d Deps, c Copy, tree string) (run Copy, cl
 		cleanup()
 		return Copy{}, nil, err
 	}
+	if tree == emptyTree {
+		// Nothing to write: git archive would refuse the pathspec.
+		return Copy{Dir: dir}, cleanup, nil
+	}
+	// Any failure (an unknown or corrupt object included) fails closed:
+	// never an empty scratch folder taken for the snapshot.
 	if _, stderr, err := h.git(ctx, d, tmpPath(d, attemptID), c.Dir, nil, nil, "archive",
 		append([]string{"--format=tar", "-o", archive, tree, "--"}, excludePathspecs(c.Exclude)...)...); err != nil {
-		if exitCode(err) == 128 {
-			// An empty tree: git archive refuses the pathspec; the scratch
-			// folder starts empty.
-			return Copy{Dir: dir}, cleanup, nil
-		}
 		return fail(gitErr("archive", err, stderr))
 	}
 	if _, _, err := extract(archive, dir, c.Exclude); err != nil {
@@ -119,7 +124,9 @@ func Materialize(ctx context.Context, d Deps, c Copy, tree string) (run Copy, cl
 
 // CommitSnapshot builds the fix commit of a snapshot in the private mirror
 // (the tree of Base with the snapshot's change applied, parent Base,
-// author Michel) and returns its id and its tree. Nothing is read from the
+// author Michel), checks that the commit holds exactly the snapshot's
+// change (same paths, same blobs as the snapshot's tree: ErrInvalidCommit
+// otherwise) and returns its id and its tree. Nothing is read from the
 // copy's working tree.
 func CommitSnapshot(ctx context.Context, d Deps, c Copy, snap Snapshot, message string) (sha, commitTree string, err error) {
 	if len(snap.Change.Files) == 0 || len(snap.Change.Raw) == 0 {
@@ -138,6 +145,11 @@ func CommitSnapshot(ctx context.Context, d Deps, c Copy, snap Snapshot, message 
 	sha, err = h.commitPatch(ctx, d, c, snap.Change.Raw, message)
 	if err != nil {
 		return "", "", err
+	}
+	if ok, err := h.commitMatches(ctx, d, c, sha, snap); err != nil {
+		return "", "", err
+	} else if !ok {
+		return "", "", fmt.Errorf("%w: the commit does not hold the snapshot's change", ErrInvalidCommit)
 	}
 	out, stderr, err := h.git(ctx, d, c.Mirror, c.Mirror, nil, nil, "rev-parse", sha+"^{tree}")
 	if err != nil {

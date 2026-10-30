@@ -815,7 +815,7 @@ type prepared struct {
 // settings allowlists (composer.json / package.json, .npmrc), the lock
 // folders, and fresh output folders. The caller closes p.root.
 func prepareInstall(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string) (p prepared, err error) {
-	if err := copyDir(d, c); err != nil {
+	if err := runDir(d, c); err != nil {
 		return p, err
 	}
 	if manifestRel == "" || strings.Contains(manifestRel, `\`) || path.Clean(manifestRel) != manifestRel || !filepath.IsLocal(filepath.FromSlash(manifestRel)) {

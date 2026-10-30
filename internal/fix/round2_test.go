@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kvarot/michel/internal/workcopy"
 )
@@ -190,5 +192,60 @@ func TestNoAutoWhenMichelsUpdateFailed(t *testing.T) {
 	}
 	if got.ApprovedBy != "" || got.State == StateApplied || got.State == StateApproved {
 		t.Errorf("applied alone after a failed update: %+v", got)
+	}
+}
+
+func TestConcurrentProposeIsSerialized(t *testing.T) {
+	f := newFixture(t)
+	f.consent()
+	var inFlight, maxInFlight int32
+	var mu sync.Mutex
+	f.rec.onRun = func(name string, args []string, dir string) {
+		if name == "composer" && args[0] == "update" {
+			return
+		}
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+		time.Sleep(150 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+	}
+	var errs [2]error
+	f.agentAct = func(ctx context.Context, d Deps, id, dir string) {
+		writeFile(f.t, dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
+		var wg sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_, errs[i] = Propose(ctx, d, id, ProposeInput{Summary: "proposal " + string(rune('A'+i))})
+			}(i)
+		}
+		wg.Wait()
+	}
+	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.wait(a.ID)
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("Propose #%d: %v", i, err)
+		}
+	}
+	if maxInFlight != 1 {
+		t.Errorf("%d installs or tests ran at the same time for one attempt", maxInFlight)
+	}
+	props, _ := f.d.Repo.Proposals(context.Background(), a.ID)
+	if len(props) != 2 || !props[0].Superseded || props[1].Superseded {
+		t.Errorf("proposals = %+v", props)
+	}
+	if got := f.attempt(a.ID); got.State != StateProposed {
+		t.Errorf("state = %s", got.State)
 	}
 }

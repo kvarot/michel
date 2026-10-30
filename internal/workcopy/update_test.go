@@ -166,7 +166,7 @@ func TestSnapshotFreezesTheCopy(t *testing.T) {
 			t.Errorf("%s is in the scratch worktree", rel)
 		}
 	}
-	if err := copyDir(f.deps, run); err != nil {
+	if err := runDir(f.deps, run); err != nil {
 		t.Errorf("the scratch worktree is not accepted for installs: %v", err)
 	}
 	cleanup()
@@ -192,5 +192,118 @@ func TestSnapshotFreezesTheCopy(t *testing.T) {
 	}
 	if _, _, err := Materialize(context.Background(), f.deps, c, "nope"); !errors.Is(err, ErrInvalidCommit) {
 		t.Errorf("bad tree: %v", err)
+	}
+}
+
+func TestFreezeChangeComesFromTheTree(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
+	snap, err := Freeze(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The index and the working tree change after the tree was written.
+	writeFile(t, c.Dir, "composer.lock", "something else\n")
+	writeFile(t, c.Dir, "new.txt", "new\n")
+	gitT(t, f.env, c.Dir, "add", "-A")
+	h, err := ensureHome(f.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := h.change(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again.Raw) != string(snap.Change.Raw) || !slices.Equal(again.Files, snap.Change.Files) || again.Display != snap.Change.Display {
+		t.Errorf("the change of the tree moved with the index:\n%s\n---\n%s", snap.Change.Raw, again.Raw)
+	}
+	if idx, _ := h.indexChange(context.Background(), f.deps, c); slices.Equal(idx.Files, snap.Change.Files) {
+		t.Error("the index did not change: the test proves nothing")
+	}
+}
+
+func TestMaterializeFailsClosed(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	unknown := strings.Repeat("a", 40)
+	if _, _, err := Materialize(context.Background(), f.deps, c, unknown); err == nil {
+		t.Fatal("an unknown tree gave a scratch worktree")
+	}
+	if _, err := os.Lstat(scratchDir(f.deps, filepath.Base(c.Dir))); err == nil {
+		t.Error("the scratch folder of a failed materialize is left")
+	}
+	run, cleanup, err := Materialize(context.Background(), f.deps, c, emptyTree)
+	if err != nil {
+		t.Fatalf("empty tree: %v", err)
+	}
+	defer cleanup()
+	entries, _ := os.ReadDir(run.Dir)
+	if len(entries) != 1 || entries[0].Name() != ".git" {
+		t.Errorf("empty tree scratch holds %v", entries)
+	}
+}
+
+func TestCommitSnapshotChecksTheCommit(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
+	snap, err := Freeze(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha, _, err := CommitSnapshot(context.Background(), f.deps, c, snap, "fix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _ := ensureHome(f.deps)
+	if ok, err := h.commitMatches(context.Background(), f.deps, c, sha, snap); err != nil || !ok {
+		t.Errorf("the snapshot's own commit does not match: %v %v", ok, err)
+	}
+	// Another snapshot (other content, other file set) never matches it.
+	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.6"}]}`+"\n")
+	other, err := Freeze(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := h.commitMatches(context.Background(), f.deps, c, sha, other); ok {
+		t.Error("a commit matched a snapshot with another blob")
+	}
+	writeFile(t, c.Dir, "extra.txt", "x\n")
+	more, _ := Freeze(context.Background(), f.deps, c)
+	if ok, _ := h.commitMatches(context.Background(), f.deps, c, sha, more); ok {
+		t.Error("a commit matched a snapshot with another file set")
+	}
+	// A patch that does not produce the snapshot's tree is refused.
+	forged := snap
+	forged.Change = other.Change
+	if _, _, err := CommitSnapshot(context.Background(), f.deps, c, forged, "forged"); !errors.Is(err, ErrInvalidCommit) {
+		t.Errorf("forged snapshot: %v, want ErrInvalidCommit", err)
+	}
+}
+
+func TestRemoveRefusesScratch(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	snap, err := Freeze(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, cleanup, err := Materialize(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if err := runDir(f.deps, run); err != nil {
+		t.Errorf("the scratch worktree is refused for installs: %v", err)
+	}
+	if err := Remove(f.deps, run); !errors.Is(err, ErrNotACopy) {
+		t.Errorf("Remove of a scratch worktree: %v, want ErrNotACopy", err)
+	}
+	if _, err := Diff(context.Background(), f.deps, run); !errors.Is(err, ErrNotACopy) {
+		t.Errorf("Diff of a scratch worktree: %v, want ErrNotACopy", err)
+	}
+	if _, err := os.Lstat(run.Dir); err != nil {
+		t.Error("the scratch worktree was removed")
 	}
 }

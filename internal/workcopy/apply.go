@@ -238,12 +238,18 @@ func (h home) stage(ctx context.Context, d Deps, c Copy) error {
 	return nil
 }
 
-// indexChange is the change of the copy's index against Root, checked: a
-// path outside the copy, a symbolic link or a submodule is ErrOutsideCopy,
-// an excluded file ErrExcludedPath, a text file shown as binary
-// ErrBinaryChange.
+// indexChange is the change of the copy's index against Root (see change).
 func (h home) indexChange(ctx context.Context, d Deps, c Copy) (Change, error) {
-	entries, err := h.changedEntries(ctx, d, c.Dir, c.Root, "")
+	return h.change(ctx, d, c, "")
+}
+
+// change is the change of the copy against Root: of its index when to is
+// "", of the tree object to otherwise (one immutable object: the entries,
+// the patch and the text all come from it). It is checked: a path outside
+// the copy, a symbolic link or a submodule is ErrOutsideCopy, an excluded
+// file ErrExcludedPath, a text file shown as binary ErrBinaryChange.
+func (h home) change(ctx context.Context, d Deps, c Copy, to string) (Change, error) {
+	entries, err := h.changedEntries(ctx, d, c.Dir, c.Root, to)
 	if err != nil {
 		return Change{}, err
 	}
@@ -258,20 +264,29 @@ func (h home) indexChange(ctx context.Context, d Deps, c Copy) (Change, error) {
 	if err := checkExcluded(c, files); err != nil {
 		return Change{}, err
 	}
-	common := []string{"--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"}
-	numstat, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, "--numstat", "-z", c.Root, "--")...)
+	common := []string{"--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"}
+	span := []string{"--cached", c.Root, "--"}
+	if to != "" {
+		span = []string{c.Root, to, "--"}
+	}
+	numstat, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", slices.Concat(common, []string{"--numstat", "-z"}, span)...)
 	if err != nil {
 		return Change{}, gitErr("diff", err, stderr)
 	}
-	if err := checkBinary(c.Dir, binaryPaths(numstat), deleted); err != nil {
+	if to == "" {
+		err = checkBinary(c.Dir, binaryPaths(numstat), deleted)
+	} else {
+		err = h.checkBinaryTree(ctx, d, c, to, binaryPaths(numstat), deleted)
+	}
+	if err != nil {
 		return Change{}, err
 	}
-	raw, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, "--binary", c.Root, "--")...)
+	raw, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", slices.Concat(common, []string{"--binary"}, span)...)
 	if err != nil {
 		return Change{}, gitErr("diff", err, stderr)
 	}
 	// --text: whatever the attributes say, the text of every change is shown.
-	text, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, "--text", c.Root, "--")...)
+	text, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", slices.Concat(common, []string{"--text"}, span)...)
 	if err != nil {
 		return Change{}, gitErr("diff", err, stderr)
 	}
@@ -301,6 +316,70 @@ func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
 		return Change{}, err
 	}
 	return h.indexChange(ctx, d, c)
+}
+
+// checkBinaryTree is checkBinary for the content of a tree object: a
+// binary change whose new content in the tree is text is ErrBinaryChange.
+func (h home) checkBinaryTree(ctx context.Context, d Deps, c Copy, tree string, paths []string, deleted map[string]bool) error {
+	for _, p := range paths {
+		if deleted[p] {
+			continue
+		}
+		shown := scan.SanitizeText(strings.ToValidUTF8(p, ""))
+		b, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "show", tree+":"+p)
+		if err != nil {
+			return fmt.Errorf("%w: %s cannot be read in the snapshot (%v)", ErrOutsideCopy, shown, gitErr("show", err, stderr))
+		}
+		if len(b) >= maxGitOutput {
+			return fmt.Errorf("%w: %s", ErrDiffTooLarge, shown)
+		}
+		if utf8.Valid(b) && !bytes.Contains(b, []byte{0}) {
+			return fmt.Errorf("%w: %s", ErrBinaryChange, shown)
+		}
+	}
+	return nil
+}
+
+// commitMatches checks that the fix commit sha of the mirror holds exactly
+// the snapshot's change: the same changed paths as snap.Change.Files
+// (Base to sha), and for each of them the same blob as the snapshot's tree
+// (none on both sides for a deleted file).
+func (h home) commitMatches(ctx context.Context, d Deps, c Copy, sha string, snap Snapshot) (bool, error) {
+	files, err := h.checkRange(ctx, d, c.Mirror, c.Base, sha)
+	if err != nil {
+		return false, err
+	}
+	if !slices.Equal(files, snap.Change.Files) {
+		return false, nil
+	}
+	blob := func(repo, rev, path string) (string, error) {
+		out, stderr, err := h.git(ctx, d, repo, repo, nil, nil, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+":"+path)
+		if err != nil {
+			if exitCode(err) == 1 || exitCode(err) == 128 {
+				return "", nil // no such path in that tree
+			}
+			return "", gitErr("rev-parse", err, stderr)
+		}
+		id := strings.TrimSpace(string(out))
+		if !shaShape.MatchString(id) {
+			return "", errors.New("git rev-parse returned an unexpected object id")
+		}
+		return id, nil
+	}
+	for _, f := range files {
+		inCommit, err := blob(c.Mirror, sha, f)
+		if err != nil {
+			return false, err
+		}
+		inSnapshot, err := blob(c.Dir, snap.Tree, f)
+		if err != nil {
+			return false, err
+		}
+		if inCommit != inSnapshot {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // commitPatch builds one commit in the private mirror: the tree of Base
