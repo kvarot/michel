@@ -171,7 +171,7 @@ func (h home) env(proxyAddr string, extra ...string) []string {
 		// npm runs git for git dependencies: a program that does not exist,
 		// so they fail instead of running git with the project's settings.
 		"npm_config_git="+filepath.Join(h.dir, "no-git"),
-		// npm and pnpm go through the proxy whatever the project's .npmrc
+		// npm goes through the proxy whatever the project's .npmrc
 		// says (environment settings win over project files), with TLS
 		// checks on.
 		"npm_config_proxy="+proxy, "npm_config_https_proxy="+proxy, "npm_config_noproxy=", "npm_config_strict_ssl=true",
