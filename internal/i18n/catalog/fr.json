@@ -547,7 +547,7 @@
   "notify.type.email": "e-mail",
   "notify.type.toast": "notification sur le bureau",
   "notify.type.webhook": "webhook",
-  "source.consent.discover": "Michel va demander à %s quels sont les projets publics les plus suivis sur quelques sujets. Seuls les noms de ces sujets partent.",
+  "source.consent.discover": "Michel va demander à %s quels sont les projets publics les plus suivis sur quelques sujets. Seuls les noms de ces sujets partent, plus ton jeton GitHub si tu en as donné un (GitHub sait alors que c'est toi).",
   "source.consent.enrichment": "Michel va contacter %s pour télécharger une liste publique sur les failles. Rien de tes projets ne part : c'est un téléchargement.",
   "source.consent.enrichment_on_demand": "Michel enverra à %s les numéros CVE de tes failles (le code officiel de chaque faille). Rien d'autre ne part.",
   "source.consent.feed": "Michel va contacter %s pour lire une veille de sécurité. Rien de tes projets ne part : c'est un téléchargement.",

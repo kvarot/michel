@@ -45,7 +45,7 @@ Une source peut repasser d'elle-même en `waiting_consent`. C'est le cas quand u
 - un téléchargement (OSV, KEV, EPSS, flux) : « Rien de tes projets ne part : c'est un téléchargement. » ;
 - les sources qui interrogent un numéro de faille à la fois (Vulnrichment, NVD, CIRCL) : les numéros CVE de tes failles, rien d'autre ;
 - skills, serveurs MCP et état des plugins : le nom du dépôt public et la version choisie (et, si tu as donné un jeton GitHub, GitHub sait que c'est toi) ;
-- la découverte : le nom de quelques sujets.
+- la découverte : le nom de quelques sujets (et ton jeton GitHub si tu en as donné un).
 
 Dans un terminal, tu réponds `y` (oui) ou `N` (non) ; dans un script, `--yes` accepte. Sans terminal et sans `--yes`, Michel refuse et affiche le texte. Une fois ton accord donné, Michel :
 
@@ -68,7 +68,7 @@ Si un hôte est déjà autorisé pour une autre source, Michel ne te demande rie
 | `feed.*` (55 flux) | le site de l'éditeur (27 hôtes), ou `api.github.com` pour les 28 flux lus dans les avis GitHub | `source.feed` | Rien d'autre que la demande du flux ; les avis GitHub portent ton jeton si tu en as donné un. |
 | `skill.*`, `mcp.*` | `api.github.com`, `codeload.github.com` | `source.repo` | Le nom du dépôt et le commit choisi ; ton jeton GitHub si tu en as donné un. |
 | `plugin.*` | aucun hôte à lui | `plugin.<clé>` (jamais autorisée) | Rien (voir « Plugins »). L'état de leur dépôt n'est lu que si `api.github.com` est déjà autorisé pour `source.repo`. |
-| `discover.github` | `api.github.com` | `source.discover` | Le nom des sujets `mcp-security` et `claude-skills`. |
+| `discover.github` | `api.github.com` | `source.discover` | Le nom des sujets `mcp-security` et `claude-skills` ; ton jeton GitHub si tu en as donné un. |
 
 Chaque requête passe par la passerelle de sortie réseau et s'inscrit dans le journal d'audit (`egress.attempt`). L'inventaire complet, avec les plafonds et ce que les tests prouvent, est dans [network-egress.fr.md](security/network-egress.fr.md).
 
@@ -77,7 +77,7 @@ Chaque requête passe par la passerelle de sortie réseau et s'inscrit dans le j
 - **KEV** (`enrich.kev`) est la liste, tenue par l'agence américaine de cybersécurité (CISA), des failles que des pirates utilisent déjà. Une faille de cette liste porte `[KEV]` dans `michel findings`, `kev: yes` dans `michel finding`, une pastille rouge sur la page, et passe **en tête du digest** (« Failles que des pirates utilisent déjà, à corriger en premier »), tant qu'elle est ouverte ou que tu as décidé de la corriger. Celles que tu as reportées ou ignorées avec une raison ne sont comptées que sur une ligne, au lieu de revenir chaque matin. Un paquet malveillant (avis OSV `MAL-`) suit les mêmes règles.
 - KEV n'ajoute **pas** de points au score de risque : ce score dit à quel point la correction risque de casser quelque chose, pas à quel point elle est urgente. KEV, lui, marque la faille « à corriger en premier » et la place en tête de toutes les listes (voir [remediation-risk.fr.md](remediation-risk.fr.md)).
 - Si une faille que tu as choisi d'ignorer ou de reporter entre dans la liste KEV, Michel te redemande : ta décision est remplacée (raison `kev_changed`) et la faille revient dans « décisions à revoir ».
-- **EPSS** (`enrich.epss`) estime la probabilité qu'une faille soit attaquée dans les 30 jours. Michel n'affiche ce chiffre que si la faille est dans la moitié des failles connues dont la probabilité d'attaque est la plus haute (« Risque qu'elle soit attaquée dans les 30 prochains jours : 12 %, plus que pour 95 % des failles connues. ») ; en dessous, il préfère ne rien afficher plutôt qu'un petit chiffre qui rassurerait à tort.
+- **EPSS** (`enrich.epss`) estime la probabilité qu'une faille soit attaquée dans les 30 jours. Dans l'explication d'une faille (`michel finding`), Michel n'ajoute la phrase « Risque qu'elle soit attaquée dans les 30 prochains jours : 12 %, plus que pour 95 % des failles connues. » que si la faille est dans la moitié des failles connues dont la probabilité d'attaque est la plus haute ; en dessous, l'explication n'en dit rien plutôt que de donner un petit chiffre qui rassurerait à tort. La page, elle, affiche le chiffre EPSS d'une faille dès que Michel le connaît.
 
 ## « À lire » et tes technologies
 
@@ -127,7 +127,7 @@ Tu peux quand même ajouter le dépôt que tu veux : `michel source add --kind s
 
 ## À découvrir
 
-`discover.github` (désactivée au départ) cherche une fois par jour les sujets GitHub `mcp-security` et `claude-skills` et garde les dépôts que le registre ne connaît pas. Le digest et la page listent les nouveaux ; `michel source discover --add propriétaire/nom --kind skill --pin <sha>` en ajoute un (désactivé, à installer comme plus haut), `--ignore propriétaire/nom` le masque. Les listes « awesome » du catalogue sont de simples liens, jamais lus.
+`discover.github` (désactivée au départ) cherche les sujets GitHub `mcp-security` et `claude-skills` à chaque `source update` (donc une fois par jour avec la commande planifiée) et garde les dépôts que le registre ne connaît pas. Le digest et la page listent les nouveaux ; `michel source discover --add propriétaire/nom --kind skill --pin <sha>` en ajoute un (désactivé, à installer comme plus haut), `--ignore propriétaire/nom` le masque. Les listes « awesome » du catalogue sont de simples liens, jamais lus.
 
 ## Mise à jour quotidienne
 

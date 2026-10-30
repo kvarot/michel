@@ -63,7 +63,7 @@ Repris du design (`docs/superpowers/specs/2026-10-26-michel-plan4-sources-design
 - Revue round 2 (8d3acca, marqué *wip*) : renommage de skill montré et appliqué à la mise à niveau ; au moment du commit, suite de tests complète non lancée (binaires de test bloqués sur la machine), revue et relecture FR pas encore faites — reprises par 5304cf6 (FR) et af044e4.
 - Revue (af044e4) : sur un renommage qui ne change que la casse, le nouveau dossier est gardé et montré ; l'ancien dossier n'est retiré qu'une fois la configuration enregistrée, et seulement si son repère porte le sha précédemment installé.
 
-## Task 8 (d0a96a6, ee069bc, b5d6b89)
+## Task 8 (d0a96a6, ee069bc, b5d6b89, a817777)
 
 - Revue (b5d6b89) : identité d'une faille de plugin par fichier plus empreinte ; un rapport trop gros échoue sans rien fermer ; les erreurs d'audit remontent ; dossier de travail et dossier personnel de l'outil sous le dossier de données.
 

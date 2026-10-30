@@ -62,8 +62,9 @@ var (
 	ErrBadReport = errors.New("the report is not a SARIF or Trivy JSON file Michel can read")
 )
 
-// MaxReportSize is the most Michel reads of a report.
-const MaxReportSize = 50 << 20
+// MaxReportSize is the most bytes Michel reads of a report (a variable for
+// the tests).
+var MaxReportSize int64 = 50 << 20
 
 // MaxResults is the most results Michel reads from one report (a variable
 // for the tests).
@@ -196,7 +197,7 @@ func (t *tool) Ingest(ctx context.Context, reportPath string, p project.Project)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the report: %w", noPath(err))
 	}
-	if len(b) > MaxReportSize {
+	if int64(len(b)) > MaxReportSize {
 		return nil, ErrReportTooBig
 	}
 	var out []ExternalFinding

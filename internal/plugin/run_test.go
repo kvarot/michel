@@ -314,6 +314,38 @@ func TestOversizedReportFailsAndClosesNothing(t *testing.T) {
 	}
 }
 
+// TestReportOverTheSizeCapFailsAndClosesNothing: a report larger than
+// MaxReportSize is refused whole (ErrReportTooBig), the run is recorded as
+// failed and no finding of the earlier run is closed.
+func TestReportOverTheSizeCapFailsAndClosesNothing(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	entry := pluginEntry("plugin.codeql", "codeql", "sarif", false)
+	input := filepath.Join("testdata", "codeql.sarif")
+	if res, err := RunPlugin(ctx, e.deps, entry, e.proj, input); err != nil || res.New != 2 {
+		t.Fatalf("first ingest = %+v %v", res, err)
+	}
+	info, err := os.Stat(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := MaxReportSize
+	MaxReportSize = info.Size() - 1
+	t.Cleanup(func() { MaxReportSize = old })
+	if _, err := RunPlugin(ctx, e.deps, entry, e.proj, input); !errors.Is(err, ErrReportTooBig) {
+		t.Fatalf("err = %v, want ErrReportTooBig", err)
+	}
+	for k, s := range e.findings(t) {
+		if s == "gone" {
+			t.Errorf("%s closed by a report over the size cap", k)
+		}
+	}
+	var failed int
+	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM plugin_run WHERE status = 'failed'`).Scan(&failed); err != nil || failed != 1 {
+		t.Errorf("failed runs = %d %v", failed, err)
+	}
+}
+
 func TestPluginRunReportsAuditFailure(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()

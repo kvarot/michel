@@ -45,7 +45,7 @@ A source can go back to `waiting_consent` on its own. This happens when a new ve
 - a download (OSV, KEV, EPSS, feeds): "Nothing from your projects leaves: it is a download.";
 - on-demand enrichments (Vulnrichment, NVD, CIRCL): the CVE numbers of your findings, nothing else;
 - skills, MCP servers and plugin status: the name of the public repository and the chosen version (and, if you set a GitHub token, GitHub knows it is you);
-- discovery: the names of a few topics.
+- discovery: the names of a few topics (and your GitHub token if you set one).
 
 On a terminal you answer `y` or `N`; in a script `--yes` accepts. Without a terminal and without `--yes`, Michel refuses and prints the text. Once you accept, Michel:
 
@@ -68,7 +68,7 @@ A host already allowed by another source asks nothing (the consent is still reco
 | `feed.*` (55 feeds) | the vendor's site (27 hosts), or `api.github.com` for the 28 feeds read from GitHub advisories | `source.feed` | Nothing but the request for the feed; GitHub advisories carry your token if you set one. |
 | `skill.*`, `mcp.*` | `api.github.com`, `codeload.github.com` | `source.repo` | The repository name and the pinned commit; your GitHub token if set. |
 | `plugin.*` | none of its own | `plugin.<key>` (never allowed) | Nothing (see "Plugins"). Their repository state is read only if `api.github.com` is already allowed for `source.repo`. |
-| `discover.github` | `api.github.com` | `source.discover` | The topic names `mcp-security` and `claude-skills`. |
+| `discover.github` | `api.github.com` | `source.discover` | The topic names `mcp-security` and `claude-skills`; your GitHub token if set. |
 
 Every request goes through the egress gateway and is written to the audit log as `egress.attempt`. The full inventory, with caps and what the tests prove, is in [network-egress.md](security/network-egress.md).
 
@@ -77,7 +77,7 @@ Every request goes through the egress gateway and is written to the audit log as
 - **KEV** (`enrich.kev`) is CISA's list of vulnerabilities attackers already use. A finding on it shows `[KEV]` in `michel findings`, `kev: yes` in `michel finding`, a red chip on the page, and goes to the **head of the digest** ("Exploited in the wild, fix these first"), as long as it is open or decided "fix". The ones you deferred or ignored with a reason come back as one count line, not every morning. A malicious package (OSV `MAL-` advisory) follows the same rules.
 - KEV does **not** add points to the risk score: this score says how likely the fix is to break something, not how urgent it is. KEV marks the finding "fix this first" and puts it first in every list (see [remediation-risk.md](remediation-risk.md)).
 - If a finding you decided to ignore or defer appears on the KEV list, Michel asks you again: the decision is superseded (`kev_changed`) and the finding is back in "decisions to review".
-- **EPSS** (`enrich.epss`) estimates the chance a vulnerability is exploited within 30 days. Michel shows this figure only when the flaw is in the half of known flaws with the highest chance of exploitation ("Chance of exploitation within 30 days: 12%, higher than 95% of known flaws."); below that, it shows nothing rather than a small number that would wrongly reassure.
+- **EPSS** (`enrich.epss`) estimates the chance a vulnerability is exploited within 30 days. In the explanation of a finding (`michel finding`), Michel adds the sentence "Chance of exploitation within 30 days: 12%, higher than 95% of known flaws." only when the flaw is in the half of known flaws with the highest chance of exploitation; below that, the explanation says nothing rather than give a small number that would wrongly reassure. The page shows the EPSS figure of a finding whenever Michel has one.
 
 ## "To read" and your technologies
 
@@ -127,7 +127,7 @@ You can still add any repository yourself: `michel source add --kind skill --nam
 
 ## To discover
 
-`discover.github` (off by default) searches the GitHub topics `mcp-security` and `claude-skills` once a day and keeps the repositories the registry does not know. The digest and the page list the new ones; `michel source discover --add owner/name --kind skill --pin <sha>` adds one (off, to install as above), `--ignore owner/name` hides it. The "awesome" lists of the catalog are links only, never read.
+`discover.github` (off by default) searches the GitHub topics `mcp-security` and `claude-skills` at each `source update` (so once a day with the scheduled line) and keeps the repositories the registry does not know. The digest and the page list the new ones; `michel source discover --add owner/name --kind skill --pin <sha>` adds one (off, to install as above), `--ignore owner/name` hides it. The "awesome" lists of the catalog are links only, never read.
 
 ## Daily update
 
