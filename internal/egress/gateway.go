@@ -41,6 +41,8 @@ type Gateway struct {
 	mode  policy.Mode
 	sink  Sink
 	inner *http.Transport
+	// next carries the allowed requests: inner, or what a test set.
+	next http.RoundTripper
 
 	// mu guards rules (replaced by SetRules) and attempts.
 	mu       sync.Mutex
@@ -63,8 +65,15 @@ func New(p policy.Policy, sink Sink) *Gateway {
 		rules: append([]policy.AllowRule(nil), p.Sovereignty.Network.Allow...),
 		sink:  sink,
 		inner: inner,
+		next:  inner,
 	}
 }
+
+// SetTransportForTest makes the requests the gateway allows go through rt
+// instead of the network. The allowlist check and the Attempt are unchanged,
+// so a test sees the real hosts the readers ask for. Call it before the
+// gateway's first request. Tests only.
+func (g *Gateway) SetTransportForTest(rt http.RoundTripper) { g.next = rt }
 
 // Mode returns the sovereignty mode of the policy in force.
 func (g *Gateway) Mode() policy.Mode { return g.mode }

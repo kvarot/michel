@@ -28,5 +28,5 @@ func (t checkedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		return nil, fmt.Errorf("%w: host %s purpose %s: %s", ErrEgressDenied, host, t.purpose, reason)
 	}
-	return t.g.inner.RoundTrip(req)
+	return t.g.next.RoundTrip(req)
 }

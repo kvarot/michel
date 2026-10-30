@@ -93,6 +93,12 @@ Repris du design (`docs/superpowers/specs/2026-10-26-michel-plan4-sources-design
 - Run réel: minor (deferred): `scan --all` se termine avec le code 1 sans rien dire quand un projet est `partial` : conforme à la règle du plan 1, mais en `--json` rien sur stdout ne dit quel projet l'a rendu « pas propre », sauf son `status`.
 - Run réel: minor (deferred): l'ancienne règle de l'hôte EPSS reste dans un fichier de politique qui avait donné son accord avant le déménagement (voir Task 10).
 
+## Revue finale de la branche (corrections)
+
+- Ruling (revue finale, Important 1) : NVD sans clé s'arrête avant la requête suivante quand il reste moins que l'écart plus 30 s avant l'échéance de l'entrée ; `RunOnDemand` rend `enrich.ErrOutOfTime` avec les comptes, que `sourceupdate` traduit en `skipped: partial` (même modèle que `rate limited`), pas en `unreachable` ; la pause entre deux requêtes suit le contexte.
+- Ruling (revue finale, Important 3) : `POST /sources/update` (toutes les sources) n'a plus de borne globale de 5 min ; chaque entrée garde la sienne (15 min pour une base OSV). Le serveur HTTP a `ReadTimeout` 30 s (qui ne coupe pas le contexte d'une requête dont le corps est lu) et `WriteTimeout` 1 min, que la route lève (`SetWriteDeadline` à zéro) au lieu de passer en arrière-plan : la réponse reste synchrone comme le veut la page — coût si faux : une requête longue garde sa connexion ouverte jusqu'à la fin des lectures ou le départ de la page. `POST /sources/{key}/update` garde 5 min.
+- Ruling (revue finale, Minor 2) : `source.Enable` écrit toutes les règles d'une entrée en une seule édition du fichier de politique (`policy.AddAllowRules`) : tout ou rien.
+
 ## Risques résiduels
 
 - Proxy de refus contournable : il ne retient qu'un outil qui respecte `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`. Un outil, ou un programme qu'il lance, qui ouvre ses propres connexions n'est ni arrêté ni journalisé. C'est une clôture journalisée, pas une garantie ; le vrai proxy filtrant arrive avec l'exécution isolée.
@@ -101,7 +107,7 @@ Repris du design (`docs/superpowers/specs/2026-10-26-michel-plan4-sources-design
 - Découverte limitée aux sujets GitHub `mcp-security` et `claude-skills` : un dépôt utile sans ces sujets n'est jamais proposé.
 - Licence détectée par heuristique (mots-clés du fichier `LICENSE*` vers un identifiant SPDX) : une licence rare ou modifiée peut être mal reconnue ou dite « non trouvée » ; l'aperçu demande de vérifier.
 - Catalogue à commit fixe qui vieillit : les skills et serveurs MCP sont épinglés sur le commit relevé le 2026-10-28 ; la mise à jour quotidienne signale une nouvelle version mais n'installe rien, et les hôtes du catalogue peuvent changer (cas EPSS) jusqu'à la prochaine version du binaire.
-- Aucun test ne relie l'URL appelée par chaque lecteur aux hôtes de son entrée du catalogue : une divergence donne un refus journalisé (sens sûr), pas un envoi ailleurs.
-- Plafond EPSS après décompression présent dans le code mais non testé (celui de KEV l'est).
+- Hôtes des lecteurs : `TestUpdateContactsOnlyTheCatalogHosts` lit chaque entrée du catalogue avec les vraies URL et vérifie hôte, usage et événement d'audit de chaque tentative ; il ne voit que la première requête de chaque lecteur (le faux transport répond 404), et l'installation (codeload) n'est couverte que par la comparaison des adresses fixes (`TestBaseURLHostsAreInTheCatalog`). Une divergence restante donnerait un refus journalisé (sens sûr), pas un envoi ailleurs.
+- NVD sans clé : 6 s entre deux requêtes et 5 min par entrée, soit une quarantaine de failles par mise à jour ; au-delà, la lecture s'arrête avant l'échéance, garde ce qu'elle a lu et dit `partial` (la suite à la mise à jour suivante).
 - Le jeton GitHub, quand il est enregistré, part avec les lectures de flux GitHub, d'état des dépôts et de découverte : GitHub sait alors qui lit ; l'écran d'accord le dit.
 - Hygiène : le test par empreintes ne voit pas le sens ; ledgers et docs relus à la main (agrégats seulement, projets dits `refN`, aucun chemin, paquet ni version).

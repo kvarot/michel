@@ -1,14 +1,18 @@
 package enrich
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -363,5 +367,49 @@ func TestLookupFuncAnswersOnlyKnownCVEs(t *testing.T) {
 	}
 	if len(m) != 2 || !m["CVE-2024-0001"].KEV || m["CVE-2024-0003"].CVSS != 9.1 || m["CVE-2024-0003"].EPSS != 0.5 {
 		t.Errorf("lookup = %+v", m)
+	}
+}
+
+func TestReadEPSSCapsDecompressedText(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	body, err := os.ReadFile(filepath.Join("testdata", "epss.csv.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := serve(t, &body, "")
+	pointAt(t, "", srv.URL)
+	f.deps.Client = srv.Client()
+	if _, _, err := ReadEPSS(ctx, f.deps, ""); err != nil {
+		t.Fatal(err)
+	}
+	// A small download that inflates past the cap: the compressed body is
+	// within it, the decompressed text is not.
+	var csv strings.Builder
+	csv.WriteString("#model_version:v2025.03.14,score_date:2026-10-26T00:00:00+0000\ncve,epss,percentile\n")
+	for i := 0; i < 5000; i++ {
+		fmt.Fprintf(&csv, "CVE-2024-%05d,0.5,0.5\n", 10000+i)
+	}
+	var gz bytes.Buffer
+	w := gzip.NewWriter(&gz)
+	w.Write([]byte(csv.String()))
+	w.Close()
+	body = gz.Bytes()
+	old := maxEPSSBytes
+	t.Cleanup(func() { maxEPSSBytes = old })
+	maxEPSSBytes = int64(csv.Len()) - 1
+	if int64(len(body)) > maxEPSSBytes {
+		t.Fatalf("the compressed body (%d) must fit the cap (%d)", len(body), maxEPSSBytes)
+	}
+	_, _, err = ReadEPSS(ctx, f.deps, "")
+	if err == nil || !strings.Contains(err.Error(), "decompressed") {
+		t.Fatalf("a text over the cap once decompressed was accepted: %v", err)
+	}
+	if f.count(t, "epss") != 3 {
+		t.Errorf("table changed by a refused read: %d rows", f.count(t, "epss"))
+	}
+	maxEPSSBytes = int64(csv.Len())
+	if n, _, err := ReadEPSS(ctx, f.deps, ""); err != nil || n != 5000 {
+		t.Errorf("at the cap: %d %v", n, err)
 	}
 }
