@@ -249,3 +249,62 @@ func TestSetExternalProvidersRefusedInStrictLocalKeepsFile(t *testing.T) {
 		t.Errorf("file changed:\n%s", raw)
 	}
 }
+
+const strictPolicy = `# Michel policy.
+sovereignty:
+  mode: strict_local # nothing leaves
+  network:
+    default_egress: deny
+risk:
+  major_jump: 35
+`
+
+// TestSetModeSwitchesToStandardWithExternalAI: one atomic edit writes
+// sovereignty.mode and ai.external_providers_enabled together (strict_local
+// forbids the key, so two edits would fail), keeps comments, leaves a .bak.
+func TestSetModeSwitchesToStandardWithExternalAI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(strictPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := SetMode(path, ModeStandard, true)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	raw, _ := os.ReadFile(path)
+	for _, want := range []string{"# Michel policy.", "# nothing leaves", "major_jump: 35", "mode: standard"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("%q missing:\n%s", want, raw)
+		}
+	}
+	if bak, err := os.ReadFile(path + ".bak"); err != nil || string(bak) != strictPolicy {
+		t.Errorf(".bak = %q err %v", bak, err)
+	}
+	p, _, err := Load(path, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(p); err != nil || p.Sovereignty.Mode != ModeStandard || !p.Sovereignty.AI.ExternalProvidersEnabled {
+		t.Fatalf("validate %v, mode %s, external %v", err, p.Sovereignty.Mode, p.Sovereignty.AI.ExternalProvidersEnabled)
+	}
+	if changed, err := SetMode(path, ModeStandard, true); err != nil || changed {
+		t.Fatalf("second call: %v %v", changed, err)
+	}
+	// Back to strict_local with external AI on is invalid: the file stays.
+	before, _ := os.ReadFile(path)
+	if changed, err := SetMode(path, ModeStrictLocal, false); err == nil || changed {
+		t.Fatalf("strict_local with external AI on: %v %v", changed, err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Errorf("an invalid edit was kept:\n%s", after)
+	}
+	if _, err := SetMode(path, Mode("open_bar"), false); err == nil {
+		t.Error("an unknown mode was written")
+	}
+	// An absent file (strict_local by default) is created in standard mode.
+	fresh := filepath.Join(dir, "sub", "new.yaml")
+	if changed, err := SetMode(fresh, ModeStandard, true); err != nil || !changed {
+		t.Fatalf("absent file: %v %v", changed, err)
+	}
+}

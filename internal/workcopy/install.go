@@ -59,6 +59,21 @@ func installFor(name, npmrc string) install {
 	return install{"npm", []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund", "--userconfig", npmrc}, "node_modules"}
 }
 
+// InstallCommand is the closed install command Michel runs for the
+// lockfile manifestRel, for display: without the --userconfig path of npm.
+func InstallCommand(manifestRel string) []string {
+	in := installFor(path.Base(manifestRel), "")
+	out := []string{in.prog}
+	for i := 0; i < len(in.args); i++ {
+		if in.args[i] == "--userconfig" {
+			i++
+			continue
+		}
+		out = append(out, in.args[i])
+	}
+	return out
+}
+
 // ---- files of the copy, through its root
 
 // Every path below is a slash path relative to the copy ("." is the copy

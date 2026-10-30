@@ -88,6 +88,9 @@ type Work struct {
 	// Mirror repeats Copy.Mirror, which the copy leaves out of JSON.
 	Mirror string `json:"mirror"`
 	Plan   Plan   `json:"plan"`
+	// UpdateRan is true when Michel's update command ran (it may have
+	// failed), so a proposal lists it among the commands.
+	UpdateRan bool `json:"update_ran"`
 	// Tree0 is the tree of the copy right after Michel's own update, before
 	// the agent touched anything: a proposal applied without a click must
 	// commit that very tree (controller ruling 36).
@@ -105,6 +108,14 @@ type Plan struct {
 	// Update is the argv of the update command, empty when Michel has none
 	// for this lockfile (yarn, pnpm, unknown target).
 	Update []string `json:"update"`
+}
+
+// RanCommand is a command Michel ran for a proposal. What is update,
+// install or tests; Argv is Michel's closed argv joined by spaces, "" for
+// the tests (the project's declared command never leaves Michel).
+type RanCommand struct {
+	What string `json:"what"`
+	Argv string `json:"argv"`
 }
 
 // Proposal is what the agent proposes for an attempt. A newer proposal marks
@@ -132,10 +143,12 @@ type Proposal struct {
 	// ToVersion the one the fix commit's lockfile resolves, else the
 	// planned target ("" when unknown). Not covered by Hash: both follow
 	// from the patch.
-	FromVersion string    `json:"from_version"`
-	ToVersion   string    `json:"to_version"`
-	CreatedAt   time.Time `json:"created_at"`
-	Superseded  bool      `json:"superseded"`
+	// Commands are the commands Michel ran for the proposal, in order.
+	Commands    []RanCommand `json:"commands"`
+	FromVersion string       `json:"from_version"`
+	ToVersion   string       `json:"to_version"`
+	CreatedAt   time.Time    `json:"created_at"`
+	Superseded  bool         `json:"superseded"`
 }
 
 // ProposeInput is what the agent gives to the propose_fix tool. It lives

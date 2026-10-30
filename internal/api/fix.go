@@ -72,6 +72,13 @@ type FixFindingView struct {
 	Status           string   `json:"status"`
 }
 
+// CommandView is a command Michel ran for a proposal: what (update,
+// install, tests) and its argv ("" for the tests).
+type CommandView struct {
+	What string `json:"what"`
+	Argv string `json:"argv"`
+}
+
 // ProposalView is the current proposal of an attempt: what the user
 // approves (Hash), in clear. Diff and TestsOutput are left out of lists.
 type ProposalView struct {
@@ -85,8 +92,13 @@ type ProposalView struct {
 	Risk        int      `json:"risk"`
 	Hash        string   `json:"hash"`
 	StepsServer []string `json:"steps_server"`
+	// Commands are the commands Michel ran for the proposal (update,
+	// install, tests), Michel's own closed argv; the tests' argv, a
+	// declared project command, is never answered.
+	Commands []CommandView `json:"commands"`
 	// FromVersion and ToVersion are the package's versions before and
-	// after the fix ("" when unknown).
+	// after the fix: the installed one, and the one the fix commit's
+	// lockfile resolves, else the planned target ("" when unknown).
 	FromVersion string `json:"from_version"`
 	ToVersion   string `json:"to_version"`
 	CreatedAt   string `json:"created_at"`
@@ -155,6 +167,10 @@ type AIConsentView struct {
 	Lines       []ConsentLineView `json:"lines"`
 	Refusal     string            `json:"refusal,omitempty"`
 	RefusalCode string            `json:"refusal_code,omitempty"`
+	// SwitchMode is true when the policy is strict_local (and the project
+	// not health): the page may offer « Autoriser les IA externes (mode
+	// standard) », sent as switch_to_standard (controller ruling 41).
+	SwitchMode bool `json:"switch_mode"`
 }
 
 // AgentStatusView is GET /agent/status: whether Claude Code can be used
@@ -303,13 +319,26 @@ func messageView(m *mask.Masker, msg fix.Message) MessageView {
 func proposalView(m *mask.Masker, p fix.Proposal, full bool) *ProposalView {
 	v := &ProposalView{ID: p.ID, Summary: shown(m, p.Summary), Files: sanitizeAll(p.Files), TestsStatus: p.TestsStatus,
 		RescanClean: p.RescanClean, Risk: p.Risk, Hash: p.Hash, StepsServer: sanitizeAll(p.StepsServer),
-		FromVersion: scan.SanitizeText(p.FromVersion), ToVersion: scan.SanitizeText(p.ToVersion), CreatedAt: stamp(p.CreatedAt)}
+		Commands: commandViews(p.Commands), FromVersion: scan.SanitizeText(p.FromVersion), ToVersion: scan.SanitizeText(p.ToVersion), CreatedAt: stamp(p.CreatedAt)}
 	if full {
 		// The diff keeps its lines: only secrets and absolute paths go.
 		v.Diff = m.Mask(strings.ToValidUTF8(p.Diff, "�"))
 		v.TestsOutput = shown(m, p.TestsOutput)
 	}
 	return v
+}
+
+// commandViews renders the commands of a proposal, paths removed.
+func commandViews(list []fix.RanCommand) []CommandView {
+	out := []CommandView{}
+	for _, c := range list {
+		argv := ""
+		if c.What != "tests" {
+			argv = noPaths(c.Argv)
+		}
+		out = append(out, CommandView{What: scan.SanitizeText(c.What), Argv: argv})
+	}
+	return out
 }
 
 func stateView(m *mask.Masker, a fix.Attempt) StateView {
@@ -661,7 +690,7 @@ func (s *server) consentView(ctx context.Context, p project.Project, lang i18n.L
 		v.Ready, v.RefusalCode = false, fix.ErrorKey(fix.ErrHealthForbidden)
 		v.Refusal = fix.Explain(lang, fix.ErrHealthForbidden)
 	case pol.Sovereignty.Mode == policy.ModeStrictLocal:
-		v.Ready, v.RefusalCode = false, fix.ErrorKey(fix.ErrStrictLocal)
+		v.Ready, v.RefusalCode, v.SwitchMode = false, fix.ErrorKey(fix.ErrStrictLocal), true
 		v.Refusal = fix.Explain(lang, fix.ErrStrictLocal)
 	}
 	return v, nil
@@ -707,7 +736,12 @@ func (s *server) aiConsentGive(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var body struct{}
+	// switch_to_standard is the user's click on « Autoriser les IA
+	// externes (mode standard) »: only then does a strict_local policy
+	// change.
+	var body struct {
+		SwitchToStandard bool `json:"switch_to_standard"`
+	}
 	if !s.readBody(w, r, &body, true) {
 		return
 	}
@@ -721,7 +755,7 @@ func (s *server) aiConsentGive(w http.ResponseWriter, r *http.Request) {
 		s.policyMu.Unlock()
 		return
 	}
-	err := fix.GiveConsent(r.Context(), d, p.ID)
+	err := fix.GiveConsentWith(r.Context(), d, p.ID, fix.ConsentOptions{SwitchToStandard: body.SwitchToStandard})
 	s.policyMu.Unlock()
 	if err != nil {
 		s.fixRefused(w, r, lang, err, nil)

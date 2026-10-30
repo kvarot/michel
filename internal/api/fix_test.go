@@ -212,7 +212,8 @@ func (ff *fixFixture) seedProposed() (string, string) {
 	}
 	p, err := repo.AddProposal(ctx, fix.Proposal{AttemptID: a.ID, Summary: "Upgrade vuln-pkg to 1.2.5.", Diff: "--- a/package-lock.json\n+++ b/package-lock.json\n",
 		Files: []string{"package-lock.json"}, TestsStatus: "passed", RescanClean: true, Hash: "hash-one", CommitSHA: "abc",
-		FromVersion: "1.0.0", ToVersion: "1.2.5"})
+		FromVersion: "1.0.0", ToVersion: "1.2.5", Commands: []fix.RanCommand{{What: "update", Argv: "npm install vuln-pkg@1.2.5 --save-exact"},
+			{What: "install", Argv: `npm ci --ignore-scripts --userconfig D:\Home\demo\michel\fix-home\npmrc`}, {What: "tests", Argv: testCmdMarker}}})
 	if err != nil {
 		ff.t.Fatal(err)
 	}
@@ -702,6 +703,14 @@ func TestProposalViewCarriesVersions(t *testing.T) {
 	if v.Proposal.FromVersion != "1.0.0" || v.Proposal.ToVersion != "1.2.5" {
 		t.Errorf("versions = %q -> %q", v.Proposal.FromVersion, v.Proposal.ToVersion)
 	}
+	// The commands Michel ran: his own argv, without paths; the tests
+	// without the project's declared command.
+	cmds := v.Proposal.Commands
+	if len(cmds) != 3 || cmds[0] != (CommandView{What: "update", Argv: "npm install vuln-pkg@1.2.5 --save-exact"}) ||
+		cmds[1].What != "install" || strings.Contains(cmds[1].Argv, `Home\demo`) || !strings.HasPrefix(cmds[1].Argv, "npm ci --ignore-scripts") ||
+		cmds[2] != (CommandView{What: "tests"}) || strings.Contains(body, "phpunit-secret-marker") {
+		t.Errorf("commands = %+v", cmds)
+	}
 	resp, body = ff.do("GET", "/api/v1/fixes?state=proposed", testToken, "")
 	var list []AttemptView
 	if err := json.Unmarshal([]byte(body), &list); err != nil || resp.StatusCode != http.StatusOK || len(list) != 1 || list[0].Proposal == nil ||
@@ -721,7 +730,7 @@ func TestFailedCauseIsPlainWithDetailApart(t *testing.T) {
 	if err := repo.SetState(ctx, id, []fix.State{fix.StateProposed}, fix.StateFailed, cause); err != nil {
 		t.Fatal(err)
 	}
-	detail := `git clone failed: exit status 128 (fatal: failed to unlink 'C:\Users\demo\AppData\michel\worktrees\x': Filename too long) /home/demo/.local/michel/x`
+	detail := `git clone failed: exit status 128 (fatal: failed to unlink 'D:\Home\demo\AppData\michel\worktrees\x': Filename too long) /home/demo/.local/michel/x`
 	if err := repo.SetCauseDetail(ctx, id, detail); err != nil {
 		t.Fatal(err)
 	}
@@ -733,7 +742,49 @@ func TestFailedCauseIsPlainWithDetailApart(t *testing.T) {
 	if v.Cause != cause || strings.Contains(v.Cause, "git clone") {
 		t.Errorf("cause = %q", v.Cause)
 	}
-	if !strings.Contains(v.CauseDetail, "Filename too long") || strings.Contains(v.CauseDetail, `Users\demo`) || strings.Contains(v.CauseDetail, "/home/demo") {
+	if !strings.Contains(v.CauseDetail, "Filename too long") || strings.Contains(v.CauseDetail, `Home\demo`) || strings.Contains(v.CauseDetail, "/home/demo") {
 		t.Errorf("cause detail = %q", v.CauseDetail)
 	}
+}
+
+// TestConsentSwitchesStrictLocalOnTheClick (ruling 41): under strict_local
+// the consent screen offers the switch; a consent without it is refused and
+// changes nothing; with switch_to_standard the policy goes to standard with
+// external AI on, policy.mode is audited, and a fix can start.
+func TestConsentSwitchesStrictLocalOnTheClick(t *testing.T) {
+	strict := "sovereignty:\n  mode: strict_local\n  data_classification: sensitive\n  network:\n    default_egress: deny\n    allow: []\n"
+	ff := newFixFixture(t, func(ff *fixFixture) {
+		if err := os.WriteFile(ff.policyPath, []byte(strict), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		pol, err := ff.deps.Reload()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ff.deps.Policy, ff.fd.Policy = pol, pol
+	})
+	code, body := ff.send("GET", "/api/v1/projects/demo/ai-consent?lang=fr", "")
+	var v AIConsentView
+	if err := json.Unmarshal([]byte(body), &v); err != nil || code != http.StatusOK || !v.SwitchMode || v.Ready || v.RefusalCode != "fix.err.strict_local" {
+		t.Fatalf("consent screen = %d %s", code, body)
+	}
+	if code, body := ff.send("POST", "/api/v1/projects/demo/ai-consent", `{}`); code != http.StatusForbidden {
+		t.Fatalf("consent without the switch = %d %s", code, body)
+	}
+	if b, _ := os.ReadFile(ff.policyPath); string(b) != strict {
+		t.Fatalf("the policy changed without the click:\n%s", b)
+	}
+	code, body = ff.send("POST", "/api/v1/projects/demo/ai-consent", `{"switch_to_standard":true}`)
+	if err := json.Unmarshal([]byte(body), &v); err != nil || code != http.StatusOK || !v.Ready || v.SwitchMode {
+		t.Fatalf("consent with the switch = %d %s", code, body)
+	}
+	b, _ := os.ReadFile(ff.policyPath)
+	if !strings.Contains(string(b), "mode: standard") || !strings.Contains(string(b), "external_providers_enabled: true") {
+		t.Errorf("policy after the switch:\n%s", b)
+	}
+	var n int
+	if err := ff.st.DB().QueryRow(`SELECT COUNT(*) FROM audit_event WHERE action = 'policy.mode'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("policy.mode audits = %d %v", n, err)
+	}
+	ff.start()
 }

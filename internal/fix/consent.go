@@ -115,6 +115,25 @@ func (d Deps) consentOK(ctx context.Context, p project.Project) (bool, error) {
 // gateway learns the rules, stores the consent and records ai.consent with
 // the hosts and the classification.
 func GiveConsent(ctx context.Context, d Deps, projectID string) error {
+	return GiveConsentWith(ctx, d, projectID, ConsentOptions{})
+}
+
+// ConsentOptions are the choices the user made on the consent screen.
+type ConsentOptions struct {
+	// SwitchToStandard is the user's explicit click on « Autoriser les IA
+	// externes (mode standard) » (controller ruling 41): under strict_local
+	// the policy goes to standard with external providers on, then the
+	// consent is given. Without it, strict_local is refused and never
+	// changed.
+	SwitchToStandard bool
+}
+
+// GiveConsentWith is GiveConsent with the user's choices. Under
+// strict_local and with SwitchToStandard, it first writes
+// sovereignty.mode: standard and ai.external_providers_enabled: true in one
+// edit of the policy file (with its .bak), records policy.mode and reloads
+// the policy; a health project is refused before anything is written.
+func GiveConsentWith(ctx context.Context, d Deps, projectID string, opts ConsentOptions) error {
 	p, err := project.NewRepo(d.Store).Get(ctx, projectID)
 	if err != nil {
 		return err
@@ -123,7 +142,12 @@ func GiveConsent(ctx context.Context, d Deps, projectID string) error {
 		return ErrHealthForbidden
 	}
 	if d.Policy.Sovereignty.Mode == policy.ModeStrictLocal {
-		return ErrStrictLocal
+		if !opts.SwitchToStandard {
+			return ErrStrictLocal
+		}
+		if err := d.switchToStandard(ctx, p); err != nil {
+			return err
+		}
 	}
 	rules := missingRules(d.Policy)
 	enable := !d.Policy.Sovereignty.AI.ExternalProvidersEnabled
@@ -160,6 +184,38 @@ func GiveConsent(ctx context.Context, d Deps, projectID string) error {
 		}); err != nil {
 			return fmt.Errorf("the consent is recorded, but the audit log could not record it: %w", err)
 		}
+	}
+	return nil
+}
+
+// switchToStandard moves the policy from strict_local to standard with
+// external providers on, on the user's click, audits it as policy.mode and
+// reloads the policy.
+func (d *Deps) switchToStandard(ctx context.Context, p project.Project) error {
+	if d.PolicyPath == "" {
+		return errors.New("cannot change the policy mode: the policy file path is unknown")
+	}
+	if _, err := policy.SetMode(d.PolicyPath, policy.ModeStandard, true); err != nil {
+		return err
+	}
+	if d.Audit != nil {
+		if _, err := d.Audit.Record(ctx, audit.Event{
+			Actor: d.actor(), Action: "policy.mode", Target: p.Name, Result: "ok",
+			Evidence: map[string]any{
+				"from": string(policy.ModeStrictLocal), "to": string(policy.ModeStandard), "external_providers_enabled": true,
+				"project_id": p.ID, "author": d.actor(),
+			},
+		}); err != nil {
+			return fmt.Errorf("the policy mode changed, but the audit log could not record it: %w", err)
+		}
+	}
+	if d.Reload == nil {
+		d.Policy.Sovereignty.Mode = policy.ModeStandard
+		d.Policy.Sovereignty.AI.ExternalProvidersEnabled = true
+		return nil
+	}
+	if err := d.reload(); err != nil {
+		return fmt.Errorf("the policy mode changed but the policy cannot be reloaded: %w", err)
 	}
 	return nil
 }

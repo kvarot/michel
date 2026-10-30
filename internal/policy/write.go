@@ -255,6 +255,64 @@ func SetExternalProviders(path string, enabled bool) (changed bool, err error) {
 	})
 }
 
+// SetMode writes sovereignty.mode in the policy file at path and, when
+// externalAI is true, sovereignty.ai.external_providers_enabled: true, in
+// one edit (strict_local forbids the key, so the two must change together),
+// with the care of AddAllowRules: comments and order kept, the previous
+// content in <path>.bak, an atomic replace, read back and validated, put
+// back when invalid. It returns false, and leaves the file untouched, when
+// both values are already there. An absent file is created. Michel calls it
+// only on the user's explicit click (controller ruling 41).
+func SetMode(path string, mode Mode, externalAI bool) (changed bool, err error) {
+	if mode != ModeStrictLocal && mode != ModeStandard {
+		return false, fmt.Errorf("sovereignty.mode %q is unknown (use %q or %q)", mode, ModeStrictLocal, ModeStandard)
+	}
+	return editDoc(path, true, func(doc *yaml.Node) (bool, error) {
+		root, err := rootMap(doc, true)
+		if err != nil {
+			return false, err
+		}
+		sov, err := child(root, "sovereignty", true)
+		if err != nil {
+			return false, err
+		}
+		changed, err := setScalar(sov, "mode", "!!str", string(mode), true)
+		if err != nil || !externalAI {
+			return changed, err
+		}
+		ai, err := child(sov, "ai", true)
+		if err != nil {
+			return false, err
+		}
+		on, err := setScalar(ai, "external_providers_enabled", "!!bool", "true", true)
+		return changed || on, err
+	})
+}
+
+// setScalar sets key to value in the mapping m (adding it when add is
+// true and it is absent); changed is false when the value was already there.
+func setScalar(m *yaml.Node, key, tag, value string, add bool) (changed bool, err error) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value != key {
+			continue
+		}
+		v := m.Content[i+1]
+		if v.Kind != yaml.ScalarNode {
+			return false, errors.New(key + " is not a value")
+		}
+		if v.Value == value {
+			return false, nil
+		}
+		v.Tag, v.Value = tag, value
+		return true, nil
+	}
+	if !add {
+		return false, nil
+	}
+	m.Content = append(m.Content, scalar(key), &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value})
+	return true, nil
+}
+
 // editDoc parses the file at path, lets apply change the document and writes
 // the result when apply reports a modification.
 func editDoc(path string, create bool, apply func(doc *yaml.Node) (bool, error)) (bool, error) {

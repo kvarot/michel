@@ -474,10 +474,11 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		var text string
 		switch {
 		case err == nil:
+			w.UpdateRan = true
 			text = i18n.T(lang, "fix.msg.update_ran", strings.Join(w.Plan.Update, " "))
 		case errors.As(err, &cmdErr):
 			// No Tree0: nothing of this attempt is applied without a click.
-			updateFailed = true
+			updateFailed, w.UpdateRan = true, true
 			text = i18n.T(lang, "fix.msg.update_failed", shown(m, dirs, cmdErr.Output))
 		case changeRefused(err):
 			return fail("fix.cause.change_refused", err)
@@ -939,13 +940,21 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	plan := a.Work.Plan
 	testsStatus, testsOut := workcopy.TestsNotRun, ""
 	installed := false
+	// commands are the commands Michel ran, for the proposal's details.
+	commands := []RanCommand{}
+	if a.Work.UpdateRan && len(plan.Update) > 0 {
+		commands = append(commands, RanCommand{What: "update", Argv: strings.Join(plan.Update, " ")})
+	}
+	installRan := RanCommand{What: "install", Argv: strings.Join(workcopy.InstallCommand(plan.ManifestRel), " ")}
 	var cmdErr *workcopy.CmdError
 	switch err := workcopy.Install(ctx, wd, run, plan.Ecosystem, plan.ManifestRel); {
 	case err == nil:
 		installed = true
+		commands = append(commands, installRan)
 	case errors.Is(err, workcopy.ErrInstallUnsupported):
 		lines = append(lines, i18n.T(lang, "fix.msg.install_unsupported"))
 	case errors.As(err, &cmdErr):
+		commands = append(commands, installRan)
 		testsStatus, testsOut = workcopy.TestsFailed, cmdErr.Output
 		lines = append(lines, i18n.T(lang, "fix.msg.install_failed", tell(cmdErr.Output)))
 	case changeRefused(err):
@@ -962,6 +971,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 			lines = append(lines, i18n.T(lang, "fix.msg.tests_none"))
 		default:
 			var terr error
+			commands = append(commands, RanCommand{What: "tests"})
 			testsStatus, testsOut, terr = workcopy.RunTests(ctx, wd, run, argv)
 			switch {
 			case terr != nil && changeRefused(terr):
@@ -1014,7 +1024,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	prop := Proposal{
 		AttemptID: attemptID, Summary: summary, Diff: m.Mask(ch.Display), Files: ch.Files,
 		TestsStatus: testsStatus, TestsOutput: tell(testsOut), RescanClean: clean, Risk: risk,
-		CommitSHA: sha, DiffRaw: ch.Raw, StepsServer: []string{},
+		CommitSHA: sha, DiffRaw: ch.Raw, StepsServer: []string{}, Commands: commands,
 		FromVersion: cleanVersion(fi.InstalledVersion), ToVersion: committedVersion(ctx, wd, c, plan, sha),
 	}
 	prop.Hash = proposalHash(ch.Raw, sha, testsStatus, summary)

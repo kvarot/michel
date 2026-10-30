@@ -628,6 +628,13 @@ func TestProposeComputesDiffAndTestsItself(t *testing.T) {
 	if len(names) < 3 || names[0] != "composer" || names[1] != "composer" || names[2] != "vendor/bin/phpunit" {
 		t.Fatalf("commands run = %v, want composer update, composer install, the tests", names)
 	}
+	// The proposal lists the commands Michel ran: its update, its install,
+	// and the tests without their declared argv.
+	if len(p.Commands) != 3 || p.Commands[0].What != "update" || !strings.HasPrefix(p.Commands[0].Argv, "composer update acme/lib:^1.2.5") ||
+		p.Commands[1] != (RanCommand{What: "install", Argv: "composer install --no-scripts --no-interaction --no-plugins"}) ||
+		p.Commands[2] != (RanCommand{What: "tests"}) {
+		t.Errorf("commands = %+v", p.Commands)
+	}
 	upd := f.rec.runs[0]
 	if upd.args[0] != "update" || !contains(upd.args, "acme/lib:^1.2.5") || !contains(upd.args, "--no-scripts") || !contains(upd.args, "--no-plugins") {
 		t.Errorf("update argv = %v", upd.args)
@@ -1202,5 +1209,65 @@ func TestStartWritesNoSkill(t *testing.T) {
 	entries, err := os.ReadDir(f.skills)
 	if err == nil && len(entries) > 0 {
 		t.Errorf("the fix flow wrote under MICHEL_SKILLS_DIR: %v", entries)
+	}
+}
+
+// TestConsentSwitchesStrictLocalOnlyOnTheClick: under strict_local the
+// consent alone is refused and changes nothing; with the explicit switch
+// (the page's « Autoriser les IA externes (mode standard) »), the policy
+// goes to standard with external AI on in one edit (.bak kept), the change
+// is audited as policy.mode, the policy is reloaded, then the project's
+// consent is given and an attempt may start.
+func TestConsentSwitchesStrictLocalOnlyOnTheClick(t *testing.T) {
+	f := newFixture(t)
+	strict := "sovereignty:\n  mode: strict_local\n  network:\n    default_egress: deny\n"
+	f.policy = policyFile(t, filepath.Dir(f.policy), strict)
+	if _, err := f.d.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if err := GiveConsentWith(context.Background(), f.d, f.proj.ID, ConsentOptions{}); !errors.Is(err, ErrStrictLocal) {
+		t.Fatalf("consent without the switch: %v, want ErrStrictLocal", err)
+	}
+	if b, _ := os.ReadFile(f.policy); string(b) != strict {
+		t.Fatalf("the policy changed without the click:\n%s", b)
+	}
+	if err := GiveConsentWith(context.Background(), f.d, f.proj.ID, ConsentOptions{SwitchToStandard: true}); err != nil {
+		t.Fatalf("consent with the switch: %v", err)
+	}
+	b, _ := os.ReadFile(f.policy)
+	if !strings.Contains(string(b), "mode: standard") || !strings.Contains(string(b), "external_providers_enabled: true") {
+		t.Errorf("policy after the switch:\n%s", b)
+	}
+	if bak, err := os.ReadFile(f.policy + ".bak"); err != nil || len(bak) == 0 {
+		t.Errorf("no .bak of the policy: %v", err)
+	}
+	if f.d.Policy.Sovereignty.Mode != policy.ModeStandard {
+		t.Errorf("policy not reloaded: mode %s", f.d.Policy.Sovereignty.Mode)
+	}
+	ev := f.audits("policy.mode")
+	if len(ev) != 1 || ev[0].Evidence["from"] != "strict_local" || ev[0].Evidence["to"] != "standard" {
+		t.Errorf("policy.mode audit = %+v", ev)
+	}
+	if len(f.audits("ai.consent")) != 1 {
+		t.Error("no ai.consent audit")
+	}
+	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
+	if err != nil {
+		t.Fatalf("Start after the switch: %v", err)
+	}
+	f.wait(a.ID)
+	// A health project is refused even with the switch, and nothing changes.
+	p := f.proj
+	p.Classification = policy.ClassHealth
+	f.update(p)
+	f.policy = policyFile(t, filepath.Dir(f.policy), strict)
+	if _, err := f.d.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if err := GiveConsentWith(context.Background(), f.d, f.proj.ID, ConsentOptions{SwitchToStandard: true}); !errors.Is(err, ErrHealthForbidden) {
+		t.Fatalf("health with the switch: %v", err)
+	}
+	if b, _ := os.ReadFile(f.policy); string(b) != strict {
+		t.Errorf("the policy changed for a health project:\n%s", b)
 	}
 }

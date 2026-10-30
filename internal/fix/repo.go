@@ -249,7 +249,7 @@ func (r *Repo) SetRun(ctx context.Context, id, cloneDir, sessionID string) error
 	return nil
 }
 
-const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version`
+const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version, commands`
 
 // AddProposal stores p for its attempt and marks the attempt's previous
 // proposals Superseded, in one transaction that also checks the attempt is
@@ -268,6 +268,13 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	steps, err := json.Marshal(p.StepsServer)
+	if err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	if p.Commands == nil {
+		p.Commands = []RanCommand{}
+	}
+	cmds, err := json.Marshal(p.Commands)
 	if err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
@@ -294,9 +301,9 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
 		p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
-		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion); err != nil {
+		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds)); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -322,9 +329,9 @@ func b2i(b bool) int {
 func scanProposal(s scanner) (Proposal, error) {
 	var p Proposal
 	var err error
-	var files, steps, created, raw string
+	var files, steps, created, raw, cmds string
 	var rescan, superseded int
-	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion); err != nil {
+	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion, &cmds); err != nil {
 		return Proposal{}, err
 	}
 	if p.DiffRaw, err = base64.StdEncoding.DecodeString(raw); err != nil {
@@ -332,6 +339,12 @@ func scanProposal(s scanner) (Proposal, error) {
 	}
 	if err := json.Unmarshal([]byte(files), &p.Files); err != nil {
 		return Proposal{}, fmt.Errorf("proposal %s has an unreadable file list: %w", p.ID, err)
+	}
+	if err := json.Unmarshal([]byte(cmds), &p.Commands); err != nil {
+		return Proposal{}, fmt.Errorf("proposal %s has an unreadable list of commands: %w", p.ID, err)
+	}
+	if p.Commands == nil {
+		p.Commands = []RanCommand{}
 	}
 	if err := json.Unmarshal([]byte(steps), &p.StepsServer); err != nil {
 		return Proposal{}, fmt.Errorf("proposal %s has an unreadable list of server steps: %w", p.ID, err)
