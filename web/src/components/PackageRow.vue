@@ -3,6 +3,9 @@
     <div class="m-row__line">
       <span class="m-row__name m-code">{{ item.package }}</span>
       <span class="m-row__tags">
+        <span v-if="item.malicious" class="m-flag m-small">{{ $t('chip.malicious') }}</span>
+        <span v-else-if="item.kev" class="m-flag m-small">{{ $t('chip.kev') }}</span>
+        <span v-if="item.findingKind && item.findingKind !== 'dependency'" class="m-tag m-small">{{ $t(`kind.${item.findingKind}`) }}</span>
         <span v-if="item.decided" class="m-row__decided m-small">{{ $t('item.decided') }}</span>
         <span class="m-sev" :class="`m-sev--${item.severity}`">{{ $t(`severity.${item.severity}`) }}</span>
       </span>
@@ -10,6 +13,7 @@
     <p class="m-row__meta m-small m-muted">
       <span v-if="item.osvIds.length">{{ $t('item.advisories', { n: item.osvIds.length }) }}</span>
       <span v-if="item.kind === 'new' || item.kind === 'gone'">{{ upgrade }}</span>
+      <span v-if="item.epss > 0">{{ $t('item.epss', { p: percent(item.epss) }) }}</span>
     </p>
     <p v-if="item.kind === 'new' && item.text" class="m-row__what m-voice">{{ item.text }}</p>
     <p v-else-if="item.kind === 'superseded'" class="m-row__what">
@@ -40,7 +44,7 @@
 
 <script>
 import FindingSheet from './FindingSheet.vue'
-import { formatDate } from '../lib/digestView.js'
+import { formatDate, formatPercent } from '../lib/digestView.js'
 
 let seq = 0
 
@@ -66,6 +70,11 @@ export default {
     },
     dueDate() {
       return formatDate(this.item.text, this.$ui.lang)
+    },
+  },
+  methods: {
+    percent(share) {
+      return formatPercent(share, this.$ui.lang)
     },
   },
 }

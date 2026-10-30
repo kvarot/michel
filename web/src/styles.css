@@ -72,6 +72,27 @@ body, .v-application { font-family: var(--m-ui); }
 .m-sev--unknown { --m-sev: var(--v-theme-unknown); }
 .m-sev--unknown::before { background: transparent; border: 2px solid currentColor; }
 
+/* Exploited or malicious: a word on a strong color, never a color alone. */
+.m-flag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  font-weight: 700;
+  color: rgb(var(--v-theme-surface));
+  background: rgb(var(--v-theme-critical));
+  white-space: nowrap;
+}
+.m-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.5rem;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.25);
+  border-radius: 999px;
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  white-space: nowrap;
+}
+
 .m-term {
   text-decoration: underline dotted;
   text-underline-offset: 3px;

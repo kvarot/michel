@@ -33,6 +33,7 @@ const (
 	FixedVersionChanged Reason = scan.ReasonFixedVersionChanged
 	DueReached          Reason = scan.ReasonDueReached
 	ReappearedChanged   Reason = scan.ReasonReappearedChanged
+	KEVChanged          Reason = scan.ReasonKEVChanged
 )
 
 // Decision is one decision on a finding. The last one not superseded is in
@@ -45,10 +46,11 @@ type Decision struct {
 	DueAt     time.Time
 	Author    string
 	CreatedAt time.Time
-	// SeenSeverity and SeenFixedVersions are the snapshot of the finding
-	// when the decision was taken.
+	// SeenSeverity, SeenFixedVersions and SeenKEV are the snapshot of the
+	// finding when the decision was taken.
 	SeenSeverity      string
 	SeenFixedVersions []string
+	SeenKEV           bool
 	// SupersededAt is zero while the decision is in force.
 	SupersededAt     time.Time
 	SupersededReason Reason
@@ -97,10 +99,10 @@ func Validate(d *Decision, now time.Time) error {
 	return nil
 }
 
-// Changed tells whether the finding's severity or fixed versions differ from the snapshot (fixed versions compared as sorted sets).
-// The severity wins when both differ.
-func Changed(d Decision, severity string, fixed []string) (changed bool, reason Reason) {
-	changed, r := scan.SnapshotChanged(d.SeenSeverity, d.SeenFixedVersions, severity, fixed)
+// Changed tells whether the finding's severity, fixed versions or KEV mark differ from the snapshot (fixed versions compared as sorted sets).
+// The severity wins, then the fixed versions, then the KEV mark.
+func Changed(d Decision, severity string, fixed []string, kev bool) (changed bool, reason Reason) {
+	changed, r := scan.SnapshotChanged(d.SeenSeverity, d.SeenFixedVersions, d.SeenKEV, severity, fixed, kev)
 	return changed, Reason(r)
 }
 
@@ -129,8 +131,9 @@ func (d Decision) MarshalJSON() ([]byte, error) {
 		CreatedAt         string   `json:"created_at"`
 		SeenSeverity      string   `json:"seen_severity"`
 		SeenFixedVersions []string `json:"seen_fixed_versions"`
+		SeenKEV           bool     `json:"seen_kev"`
 		SupersededAt      string   `json:"superseded_at"`
 		SupersededReason  Reason   `json:"superseded_reason"`
 	}{d.ID, d.FindingID, d.ProjectID, d.Action, d.Justification, timeText(d.DueAt), d.Author, timeText(d.CreatedAt),
-		d.SeenSeverity, fixed, timeText(d.SupersededAt), d.SupersededReason})
+		d.SeenSeverity, fixed, d.SeenKEV, timeText(d.SupersededAt), d.SupersededReason})
 }

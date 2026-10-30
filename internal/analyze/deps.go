@@ -38,13 +38,21 @@ type DepPath struct {
 	Constraint string `json:"constraint"`
 }
 
-// LoadDepGraph reads the lockfile (required) and root manifest (optional) found
-// in manifestDir. ecosystem is "Packagist" or "npm".
-func LoadDepGraph(manifestDir, ecosystem string) (*DepGraph, error) {
+// LoadDepGraph reads the lockfile named lockfileName (required) and the root
+// manifest (optional) found in manifestDir. ecosystem is "Packagist" or
+// "npm"; an npm project's lockfile is package-lock.json, yarn.lock or
+// pnpm-lock.yaml.
+func LoadDepGraph(manifestDir, ecosystem, lockfileName string) (*DepGraph, error) {
 	switch ecosystem {
 	case "Packagist":
 		return loadComposer(manifestDir)
 	case "npm":
+		switch lockfileName {
+		case "yarn.lock":
+			return loadYarn(manifestDir)
+		case "pnpm-lock.yaml":
+			return loadPnpm(manifestDir)
+		}
 		return loadNpm(manifestDir)
 	}
 	return nil, fmt.Errorf("unsupported ecosystem %q for dependency graph", ecosystem)

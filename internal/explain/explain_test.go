@@ -184,3 +184,105 @@ func TestGlossaryBothLangs(t *testing.T) {
 		t.Error("unknown key must be empty")
 	}
 }
+
+func TestWhatSentenceForMaliciousPackage(t *testing.T) {
+	f := FactsFrom(scan.Finding{Package: "vuln-pkg", Ecosystem: "npm", OSVID: "MAL-2024-0001", SeverityLabel: "critical",
+		InstalledVersion: "1.0.0", Malicious: true}, analyze.Analysis{}, false)
+	if !f.Malicious {
+		t.Fatal("FactsFrom lost Malicious")
+	}
+	has(t, "fr what", mustRender(t, FR, f).What, "paquet malveillant", "vuln-pkg 1.0.0")
+	has(t, "en what", mustRender(t, EN, f).What, "malicious package", "vuln-pkg 1.0.0")
+	if w := mustRender(t, EN, sampleFacts()).What; strings.Contains(w, "malicious") {
+		t.Errorf("a plain flaw is called malicious: %s", w)
+	}
+}
+
+func TestImpactMentionsKEVAndEPSS(t *testing.T) {
+	fi := scan.Finding{Package: "acme/lib", Ecosystem: "Packagist", OSVID: "GHSA-1", SeverityLabel: "low", InstalledVersion: "1.0.0",
+		KEV: true, KEVAdded: "2026-03-12", EPSS: 0.123, EPSSPercentile: 0.951}
+	f := FactsFrom(fi, analyze.Analysis{}, false)
+	if !f.KEV || f.KEVAdded != "2026-03-12" || f.EPSSPercentile != 0.951 || !f.Urgent || f.Certainty != "high" {
+		t.Fatalf("facts = %+v", f)
+	}
+	has(t, "en impact", mustRender(t, EN, f).Impact, "exploited in the wild", "CISA KEV list since 2026-03-12",
+		"30 days: 12%", "95% of known flaws", "Michel is fairly sure it matters to you")
+	has(t, "fr impact", mustRender(t, FR, f).Impact, "Des pirates l'utilisent déjà", "agence américaine de cybersécurité, depuis le 12/03/2026",
+		"30 prochains jours : 12 %", "plus que pour 95 % des failles connues")
+	// Below the 50th percentile, no figure is given.
+	f.KEV, f.EPSSPercentile = false, 0.49
+	for _, l := range []Lang{EN, FR} {
+		if im := mustRender(t, l, f).Impact; strings.Contains(im, "30") || strings.Contains(im, "KEV") || strings.Contains(im, "CISA") {
+			t.Errorf("%s impact mentions KEV or EPSS: %s", l, im)
+		}
+	}
+}
+
+func TestCostSaysFixFirstWhenUrgent(t *testing.T) {
+	f := sampleFacts()
+	f.Urgent = true
+	has(t, "en cost", mustRender(t, EN, f).Cost, "Fix this first.")
+	has(t, "fr cost", mustRender(t, FR, f).Cost, "À corriger en premier.")
+	f.Urgent = false
+	if c := mustRender(t, EN, f).Cost; strings.Contains(c, "first") {
+		t.Errorf("cost without urgency: %s", c)
+	}
+	// The urgency of a stored analysis counts too.
+	fi := scan.Finding{Package: "acme/lib", SeverityLabel: "low", InstalledVersion: "1.0.0", FixedVersions: []string{"1.0.1"}}
+	a := analyze.Analysis{Risk: analyze.Risk{Urgency: analyze.UrgencyUrgent, Terms: map[string]int{"exploited": 1}}}
+	if g := FactsFrom(fi, a, true); !g.Urgent {
+		t.Error("an urgent analysis does not make the facts urgent")
+	}
+	if g := FactsFrom(scan.Finding{Package: "vuln-pkg", OSVID: "MAL-1", Malicious: true}, analyze.Analysis{}, false); !g.Urgent {
+		t.Error("a malicious package is not urgent")
+	}
+}
+
+func TestWhatForCodeFinding(t *testing.T) {
+	fi := scan.Finding{ID: "f1", Kind: "code", SourceKey: "plugin.semgrep", RuleID: "php.lang.security.exec-use",
+		Location: "src/a.php:12", SeverityLabel: "high", Summary: "Executing non-constant commands.", Aliases: []string{}}
+	f := FactsFrom(fi, analyze.Analysis{}, false)
+	if f.Kind != "code" || f.Tool != "semgrep" || f.RuleID != "php.lang.security.exec-use" || f.Location != "src/a.php:12" {
+		t.Fatalf("facts = %+v", f)
+	}
+	en := mustRender(t, EN, f)
+	if en.What != `semgrep flags the problem php.lang.security.exec-use in src/a.php:12. The report says: "Executing non-constant commands."` {
+		t.Errorf("EN what = %q", en.What)
+	}
+	if en.Cost != "Fixing it means changing your project (code or configuration), not a dependency." {
+		t.Errorf("EN cost = %q", en.Cost)
+	}
+	if en.Impact != "This flaw is serious." {
+		t.Errorf("EN impact = %q", en.Impact)
+	}
+	fr := mustRender(t, FR, f)
+	if fr.What != "semgrep signale le problème php.lang.security.exec-use dans src/a.php:12. Le rapport dit : « Executing non-constant commands. »" {
+		t.Errorf("FR what = %q", fr.What)
+	}
+	if fr.Cost != "Corriger = modifier ton projet (code ou configuration), pas une dépendance." {
+		t.Errorf("FR cost = %q", fr.Cost)
+	}
+	// Without its location (what the channels get), the sentence still reads.
+	f.Location = ""
+	if e := mustRender(t, EN, f); !strings.HasPrefix(e.What, "semgrep flags the problem php.lang.security.exec-use. ") {
+		t.Errorf("EN what without location = %q", e.What)
+	}
+	// A dependency finding keeps its sentences.
+	dep := mustRender(t, EN, sampleFacts())
+	if !strings.Contains(dep.What, "acme/lib 1.2.0 is used in 2 places") || strings.Contains(dep.Cost, "not a dependency") {
+		t.Errorf("dependency sentences changed: %+v", dep)
+	}
+}
+
+func TestWhatForTrivyVulnerability(t *testing.T) {
+	fi := scan.Finding{ID: "f2", Kind: "vulnerability", SourceKey: "plugin.trivy", RuleID: "CVE-2026-0002",
+		Location: "package-lock.json", SeverityLabel: "high"}
+	e := mustRender(t, EN, FactsFrom(fi, analyze.Analysis{}, false))
+	if e.What != "trivy flags the flaw CVE-2026-0002 in package-lock.json." || e.Cost != "Fixing it means updating the package the report names." {
+		t.Errorf("EN = %+v", e)
+	}
+	fr := mustRender(t, FR, FactsFrom(fi, analyze.Analysis{}, false))
+	if fr.What != "trivy signale la faille CVE-2026-0002 dans package-lock.json." || fr.Cost != "Corriger = mettre à jour le paquet que le rapport désigne." {
+		t.Errorf("FR = %+v", fr)
+	}
+}

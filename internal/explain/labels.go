@@ -54,7 +54,7 @@ func RiskTerms(lang Lang, terms map[string]int) string {
 			parts = append(parts, fmt.Sprintf("%s +%d", Label(lang, "risk_"+k), v))
 		}
 	}
-	for _, k := range []string{"jump_unknown_handoff", "thresholds_fallback"} {
+	for _, k := range []string{"exploited", "jump_unknown_handoff", "thresholds_fallback"} {
 		if terms[k] != 0 {
 			parts = append(parts, Label(lang, "risk_"+k))
 		}

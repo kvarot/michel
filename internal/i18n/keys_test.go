@@ -18,6 +18,7 @@ import (
 var dynamicPrefixes = []string{
 	"explain.label.risk_", "explain.label.rec_", "explain.label.jump_", "explain.label.quality_",
 	"explain.label.method_", "explain.label.term_", "explain.severity.", "glossary.", "digest.reason.", "notify.type.",
+	"source.note.", "source.state.", "source.kind.", "source.consent.",
 }
 
 // family says how a call names a catalog key: the prefix added to the

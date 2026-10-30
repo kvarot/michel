@@ -73,7 +73,7 @@ func TestDBUpdateOKAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, eco := range osvdb.Ecosystems {
+	for _, eco := range []string{"Packagist", "npm"} {
 		if !strings.Contains(out, "Updated "+eco+": ") || !strings.Contains(out, " bytes") {
 			t.Errorf("out = %q", out)
 		}

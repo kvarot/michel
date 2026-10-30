@@ -1,0 +1,22 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      vuln-pkg:
+        specifier: ^1.0.0
+        version: 1.0.0
+
+packages:
+
+  vuln-pkg@1.0.0:
+    resolution: {integrity: sha512-AAAA}
+
+snapshots:
+
+  vuln-pkg@1.0.0: {}

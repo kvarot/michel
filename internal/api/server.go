@@ -7,6 +7,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -18,9 +19,11 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kvarot/michel/internal/audit"
+	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/secret"
@@ -44,6 +47,27 @@ type Deps struct {
 	// AllowedHosts are the accepted Host headers ("127.0.0.1:7331"...);
 	// empty accepts localhost and loopback addresses on any port.
 	AllowedHosts []string
+	// PolicyPath is the policy file that receives the allow rules a consent
+	// on the Sources page gives; Reload reads it again and validates it (the
+	// server then keeps the new policy, and the gateway its rules).
+	PolicyPath string
+	Reload     func() (policy.Policy, error)
+	// Sources is what the source routes need.
+	Sources Sources
+}
+
+// Sources are the collaborators of the source routes: the egress gateway
+// in force (it decides which sources wait for consent and carries every
+// request), the data folder (downloads, plugin runs) and, for the tests, the
+// way a plugin's tool is run.
+type Sources struct {
+	// Gateway nil means a gateway of Policy, with no audit of the attempts.
+	Gateway *egress.Gateway
+	DataDir string
+	// PluginExec and PluginProxy replace the real tool run and deny proxy
+	// (tests); nil keeps the real ones.
+	PluginExec  func(ctx context.Context, name string, args, env []string, dir string) (stdout, stderr []byte, err error)
+	PluginProxy func() (addr string, close func())
 }
 
 // maxBody bounds a request body.
@@ -75,25 +99,82 @@ func LoadOrCreateToken(s secret.Store) (string, error) {
 	return tok, nil
 }
 
-// server is the handler's state.
+// server is the handler's state. policy is the policy in force: a consent
+// given on the page reloads it, so it is read under mu.
 type server struct {
-	deps  Deps
-	token []byte
-	mux   *http.ServeMux
+	deps   Deps
+	token  []byte
+	mux    *http.ServeMux
+	mu     sync.RWMutex
+	policy policy.Policy
+	// updating is held while a source update runs: one at a time.
+	updating sync.Mutex
+	// policyMu serializes the writes of the policy file (enable, disable).
+	policyMu sync.Mutex
+	// bg is the context of the work that outlives a request (a plugin run):
+	// Close cancels it, then waits for that work (runs) to end. bgMu guards
+	// closed, so that no work starts once Close began.
+	bg     context.Context
+	stop   context.CancelFunc
+	bgMu   sync.Mutex
+	closed bool
+	runs   sync.WaitGroup
+}
+
+// Handler is the API and page handler New builds. Close stops the work it
+// started in the background.
+type Handler struct{ s *server }
+
+// ServeHTTP serves one request.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.s.ServeHTTP(w, r) }
+
+// Close cancels the background work (plugin runs) and waits for it to end.
+// Call it after the HTTP server shut down; it may be called more than once.
+func (h *Handler) Close() {
+	s := h.s
+	s.bgMu.Lock()
+	s.closed = true
+	s.bgMu.Unlock()
+	s.stop()
+	s.runs.Wait()
+}
+
+// goBackground runs f in the background on the server's context, false
+// (f not run) once Close began.
+func (s *server) goBackground(f func(ctx context.Context)) bool {
+	s.bgMu.Lock()
+	defer s.bgMu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.runs.Go(func() { f(s.bg) })
+	return true
+}
+
+// currentPolicy is the policy in force.
+func (s *server) currentPolicy() policy.Policy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.policy
 }
 
 // New builds the handler. Token is required on every /api/v1 route
 // (Authorization: Bearer or, for the first page load only, ?token= on "/").
-func New(deps Deps, token string) http.Handler {
+// Close it after the HTTP server shut down.
+func New(deps Deps, token string) *Handler {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
 	if !deps.Lang.Valid() {
 		deps.Lang = i18n.EN
 	}
-	s := &server{deps: deps, token: []byte(token), mux: http.NewServeMux()}
+	if deps.Sources.Gateway == nil {
+		deps.Sources.Gateway = egress.New(deps.Policy, nil)
+	}
+	s := &server{deps: deps, token: []byte(token), mux: http.NewServeMux(), policy: deps.Policy}
+	s.bg, s.stop = context.WithCancel(context.Background())
 	s.routes()
-	return s
+	return &Handler{s: s}
 }
 
 func (s *server) routes() {
@@ -105,6 +186,7 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/v1/findings/{id}", s.finding)
 	m.HandleFunc("POST /api/v1/findings/{id}/decision", s.decision)
 	m.HandleFunc("GET /api/v1/digests", s.digests)
+	s.sourceRoutes()
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.not_found"), "")
 	})

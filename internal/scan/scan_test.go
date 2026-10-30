@@ -25,11 +25,14 @@ import (
 
 var osvRoot string
 
+// testEcos are the ecosystems of the test databases.
+var testEcos = []string{"Packagist", "npm"}
+
 // buildOSVDB zips testdata/advisories/<eco>/*.json into <root>/osv-scalibr/<eco>/all.zip,
 // one flat entry per advisory, the layout osv-scalibr's local matcher reads
 // (it loads every entry whose name ends in ".json").
 func buildOSVDB(root string) error {
-	for _, eco := range osvdb.Ecosystems {
+	for _, eco := range testEcos {
 		files, err := filepath.Glob(filepath.Join("testdata", "advisories", eco, "*.json"))
 		if err != nil || len(files) == 0 {
 			return fmt.Errorf("no advisories for %s: %v", eco, err)
@@ -338,7 +341,7 @@ func TestRunSkipsInstalledDependencies(t *testing.T) {
 	}
 }
 
-func TestRunNoManifestsKeepsFindingsAndFails(t *testing.T) {
+func TestRunEmptyIsNotAnError(t *testing.T) {
 	e := newEnv(t, "project-a")
 	e.run(t)
 	for _, f := range []string{"composer.lock", filepath.Join("web", "package-lock.json")} {
@@ -347,23 +350,23 @@ func TestRunNoManifestsKeepsFindingsAndFails(t *testing.T) {
 		}
 	}
 	r, err := Run(context.Background(), e.deps, e.proj, Options{OSVRoot: osvRoot})
-	if !errors.Is(err, ErrNoManifests) || r.Status != ScanFailed {
+	if err != nil || r.Status != ScanEmpty {
 		t.Fatalf("err %v status %s", err, r.Status)
 	}
+	// An empty or unmounted folder proves nothing about what was fixed.
 	for id, s := range e.statuses(t) {
 		if s != StatusNew {
 			t.Errorf("%s is %s, want it untouched", id, s)
 		}
 	}
-	var status, msg string
-	if err := e.st.DB().QueryRow(`SELECT status, error FROM scan WHERE id=?`, r.ScanID).Scan(&status, &msg); err != nil ||
-		status != "failed" || msg != "no composer.lock or package-lock.json found under "+e.proj.Path {
-		t.Errorf("scan row %q %q %v", status, msg, err)
+	var status string
+	if err := e.st.DB().QueryRow(`SELECT status FROM scan WHERE id=?`, r.ScanID).Scan(&status); err != nil || status != "empty" {
+		t.Errorf("scan row %q %v", status, err)
 	}
-	var ev string
-	if err := e.st.DB().QueryRow(`SELECT evidence FROM audit_event WHERE action='scan.finish' ORDER BY rowid DESC LIMIT 1`).Scan(&ev); err != nil ||
-		!strings.Contains(ev, `"reason":"no_manifests"`) {
-		t.Errorf("evidence %q %v", ev, err)
+	var ev, result string
+	if err := e.st.DB().QueryRow(`SELECT evidence, result FROM audit_event WHERE action='scan.finish' ORDER BY rowid DESC LIMIT 1`).Scan(&ev, &result); err != nil ||
+		!strings.Contains(ev, `"reason":"no_manifests"`) || result != ScanEmpty {
+		t.Errorf("evidence %q result %q %v", ev, result, err)
 	}
 }
 
@@ -577,7 +580,7 @@ func TestRunSkipsProjectExcludedFolders(t *testing.T) {
 func buildOSVDBWith(t *testing.T, replace map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, eco := range osvdb.Ecosystems {
+	for _, eco := range testEcos {
 		files, err := filepath.Glob(filepath.Join("testdata", "advisories", eco, "*.json"))
 		if err != nil || len(files) == 0 {
 			t.Fatalf("no advisories for %s: %v", eco, err)
@@ -879,5 +882,47 @@ func TestScanDoesNotExpireFutureDefer(t *testing.T) {
 	}
 	if at, reason := e.decisionState(t, "ACME-2026-0001"); at != "" || reason != "" {
 		t.Errorf("decision: %q %q", at, reason)
+	}
+}
+
+func TestScanWritesTechAuto(t *testing.T) {
+	e := newEnv(t, "project-a")
+	lock := `{"_readme": ["fixture"], "content-hash": "0000000000000000000000000000000b", "packages": [
+    {"name": "acme/vuln", "version": "1.0.0"}, {"name": "symfony/console", "version": "7.1.0"}], "packages-dev": []}`
+	if err := os.WriteFile(filepath.Join(e.proj.Path, "composer.lock"), []byte(lock), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := treeDigest(t, e.proj.Path)
+	e.run(t)
+	if after := treeDigest(t, e.proj.Path); after != before {
+		t.Error("the project folder changed during the scan")
+	}
+	techAuto := func() []string {
+		t.Helper()
+		p, err := project.NewRepo(e.st).Get(context.Background(), e.proj.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.TechAuto
+	}
+	if got := techAuto(); !slices.Equal(got, []string{"node", "php", "symfony"}) {
+		t.Errorf("tech_auto = %v", got)
+	}
+	// symfony is gone from the lockfile: the next scan forgets it.
+	if err := os.WriteFile(filepath.Join(e.proj.Path, "composer.lock"), []byte(strings.Replace(lock, "symfony/console", "acme/safe", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.run(t)
+	if got := techAuto(); !slices.Equal(got, []string{"node", "php"}) {
+		t.Errorf("tech_auto after the change = %v", got)
+	}
+	// A folder with nothing to scan proves nothing: tech_auto is kept.
+	os.Remove(filepath.Join(e.proj.Path, "composer.lock"))
+	os.RemoveAll(filepath.Join(e.proj.Path, "web"))
+	if r := e.run(t); r.Status != ScanEmpty {
+		t.Fatalf("status = %s", r.Status)
+	}
+	if got := techAuto(); !slices.Equal(got, []string{"node", "php"}) {
+		t.Errorf("tech_auto after an empty scan = %v", got)
 	}
 }

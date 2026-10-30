@@ -28,12 +28,39 @@ type Finding struct {
 	FixedVersions    []string `json:"fixed_versions"`
 	DepGroups        []string `json:"dep_groups"`
 	Summary          string   `json:"summary"`
+	// Kind is the sort of finding: KindDependency for a vulnerable package.
+	Kind string `json:"kind"`
+	// Malicious marks an OSV MAL- advisory: the package itself is malware.
+	Malicious bool `json:"malicious"`
+	// KEV is true when one of the finding's CVEs is on CISA's Known
+	// Exploited Vulnerabilities list, since KEVAdded (YYYY-MM-DD). EPSS and
+	// EPSSPercentile are FIRST's exploitation score; CVSSEnriched is a CVSS
+	// read from a CVE record (see EffectiveSeverity). All come from the
+	// enrichment sources, never from the OSV advisory.
+	KEV            bool    `json:"kev"`
+	KEVAdded       string  `json:"kev_added"`
+	EPSS           float64 `json:"epss"`
+	EPSSPercentile float64 `json:"epss_percentile"`
+	CVSSEnriched   float64 `json:"cvss_enriched"`
+	// SourceKey is the plugin source that reported the finding ("" for an
+	// OSV finding); RuleID, Location (a path relative to the project, with
+	// ":line" when known) and Fingerprint come from the tool's report.
+	SourceKey   string `json:"source_key"`
+	RuleID      string `json:"rule_id"`
+	Location    string `json:"location"`
+	Fingerprint string `json:"fingerprint"`
 
 	// Set when read back from the store.
 	Status      string `json:"status,omitempty"`
 	FirstSeenAt string `json:"first_seen_at,omitempty"`
 	LastSeenAt  string `json:"last_seen_at,omitempty"`
 }
+
+// KindDependency is the kind of a finding on a package of a lockfile.
+const KindDependency = "dependency"
+
+// IsMalicious tells whether an OSV id is a malicious-package advisory.
+func IsMalicious(osvID string) bool { return strings.HasPrefix(osvID, "MAL-") }
 
 // ManifestResult is the outcome for one lockfile.
 type ManifestResult struct {
@@ -133,6 +160,12 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 				}
 				seen[id] = true
 				label, score := severityOf(pv, v)
+				malicious := IsMalicious(v.GetId())
+				if malicious {
+					// A malicious package is never a minor matter, whatever
+					// the advisory scores (MAL- advisories usually have none).
+					label = "critical"
+				}
 				// Package names, ids and paths are lookup keys and stay as read;
 				// they are sanitized where they are printed. Free text is
 				// sanitized here, at the source.
@@ -145,6 +178,7 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 					InstalledVersion: pv.Package.Version,
 					FixedVersions:    FixedVersions(v, pv.Package.Ecosystem, pv.Package.Name),
 					DepGroups:        groups, Summary: SanitizeText(v.GetSummary()),
+					Kind: KindDependency, Malicious: malicious,
 				})
 				mr.Findings++
 			}
@@ -153,4 +187,14 @@ func Normalize(projectID, projectRoot string, r models.VulnerabilityResults) ([]
 	}
 	sort.SliceStable(manifests, func(i, j int) bool { return manifests[i].RelPath < manifests[j].RelPath })
 	return findings, manifests
+}
+
+// Ref names f for a listing: package, advisory id and manifest for a
+// dependency finding; for a plugin finding, the tool (its source key without
+// "plugin."), the rule and the location.
+func Ref(f Finding) (what, id, where string) {
+	if f.Kind == "" || f.Kind == KindDependency {
+		return f.Package, f.OSVID, f.ManifestRelPath
+	}
+	return strings.TrimPrefix(f.SourceKey, "plugin."), f.RuleID, f.Location
 }

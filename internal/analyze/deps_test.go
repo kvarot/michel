@@ -4,12 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func load(t *testing.T, dir, eco string) *DepGraph {
 	t.Helper()
-	g, err := LoadDepGraph(filepath.Join("testdata", "deps", dir), eco)
+	g, err := LoadDepGraph(filepath.Join("testdata", "deps", dir), eco, defaultLockfile[eco])
 	if err != nil {
 		t.Fatalf("LoadDepGraph: %v", err)
 	}
@@ -63,7 +64,7 @@ func TestNpmRootFallsBackToPackageJSON(t *testing.T) {
 	pj := `{"dependencies":{"a":"^1.0.0"}}`
 	os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(lock), 0o644)
 	os.WriteFile(filepath.Join(dir, "package.json"), []byte(pj), 0o644)
-	g, err := LoadDepGraph(dir, "npm")
+	g, err := LoadDepGraph(dir, "npm", "package-lock.json")
 	if err != nil || !g.HasRootManifest {
 		t.Fatalf("err=%v g=%+v", err, g)
 	}
@@ -75,7 +76,7 @@ func TestNpmRootFallsBackToPackageJSON(t *testing.T) {
 func TestNpmUnsupportedLockfileVersion(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(`{"lockfileVersion":1,"dependencies":{}}`), 0o644)
-	_, err := LoadDepGraph(dir, "npm")
+	_, err := LoadDepGraph(dir, "npm", "package-lock.json")
 	if err == nil || err.Error() != "unsupported package-lock.json lockfileVersion 1" {
 		t.Fatalf("got %v", err)
 	}
@@ -113,11 +114,11 @@ func TestUnknownPackageIsUnknown(t *testing.T) {
 
 func TestMissingLockfileIsError(t *testing.T) {
 	for _, eco := range []string{"Packagist", "npm"} {
-		if _, err := LoadDepGraph(t.TempDir(), eco); err == nil {
+		if _, err := LoadDepGraph(t.TempDir(), eco, defaultLockfile[eco]); err == nil {
 			t.Fatalf("%s: expected error", eco)
 		}
 	}
-	if _, err := LoadDepGraph(t.TempDir(), "PyPI"); err == nil {
+	if _, err := LoadDepGraph(t.TempDir(), "PyPI", "poetry.lock"); err == nil {
 		t.Fatal("expected unsupported ecosystem error")
 	}
 }
@@ -128,7 +129,7 @@ func writeNpm(t *testing.T, lock string) *DepGraph {
 	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(lock), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	g, err := LoadDepGraph(dir, "npm")
+	g, err := LoadDepGraph(dir, "npm", "package-lock.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,5 +200,83 @@ func TestNpmNamesAreCaseSensitive(t *testing.T) {
 	g := load(t, "npm", "npm")
 	if p := g.PathTo("App-Pkg"); p.Directness != "unknown" {
 		t.Fatalf("%+v", p)
+	}
+}
+
+// defaultLockfile is the lockfile name of each ecosystem's historical format.
+var defaultLockfile = map[string]string{"Packagist": "composer.lock", "npm": "package-lock.json"}
+
+// checkAcmeGraph holds the assertions shared by the yarn and pnpm fixtures:
+// acme-direct is direct, vuln-pkg is reached through it.
+func checkAcmeGraph(t *testing.T, dir, lockfile string) {
+	t.Helper()
+	g, err := LoadDepGraph(filepath.Join("testdata", "deps", dir), "npm", lockfile)
+	if err != nil {
+		t.Fatalf("LoadDepGraph: %v", err)
+	}
+	if !g.HasRootManifest {
+		t.Fatal("expected root manifest")
+	}
+	if d := g.PathTo("acme-direct"); d.Directness != Direct || d.Constraint != "^1.0.0" {
+		t.Fatalf("unexpected direct %+v", d)
+	}
+	if p := g.PathTo("vuln-pkg"); p.Directness != Transitive || !reflect.DeepEqual(p.Via, []string{"acme-direct"}) {
+		t.Fatalf("unexpected path %+v", p)
+	}
+}
+
+func TestYarnV1DirectAndTransitive(t *testing.T) { checkAcmeGraph(t, "yarn-v1", "yarn.lock") }
+
+func TestYarnBerryDirectAndTransitive(t *testing.T) { checkAcmeGraph(t, "yarn-berry", "yarn.lock") }
+
+func TestPnpmV9DirectAndTransitive(t *testing.T) { checkAcmeGraph(t, "pnpm-v9", "pnpm-lock.yaml") }
+
+func TestPnpmRootFallsBackToImporters(t *testing.T) {
+	dir := t.TempDir()
+	b, err := os.ReadFile(filepath.Join("testdata", "deps", "pnpm-v9", "pnpm-lock.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g, err := LoadDepGraph(dir, "npm", "pnpm-lock.yaml")
+	if err != nil || !g.HasRootManifest {
+		t.Fatalf("err=%v g=%+v", err, g)
+	}
+	if d := g.PathTo("acme-direct"); d.Directness != Direct || d.Constraint != "^1.0.0" {
+		t.Fatalf("unexpected direct %+v", d)
+	}
+}
+
+func TestPnpmV6Keys(t *testing.T) {
+	dir := t.TempDir()
+	lock := "lockfileVersion: '6.0'\n\ndependencies:\n  acme-direct:\n    specifier: ^1.0.0\n    version: 1.0.0\n\n" +
+		"packages:\n\n  /acme-direct@1.0.0:\n    resolution: {integrity: x}\n    dependencies:\n      '@acme/lib': 2.0.0\n\n" +
+		"  /@acme/lib@2.0.0(vuln-pkg@1.0.0):\n    resolution: {integrity: y}\n    dependencies:\n      vuln-pkg: 1.0.0\n\n" +
+		"  /vuln-pkg@1.0.0:\n    resolution: {integrity: z}\n"
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), []byte(lock), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"dependencies":{"acme-direct":"^1.0.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g, err := LoadDepGraph(dir, "npm", "pnpm-lock.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := g.PathTo("vuln-pkg"); p.Directness != Transitive || !reflect.DeepEqual(p.Via, []string{"acme-direct", "@acme/lib"}) {
+		t.Fatalf("unexpected path %+v", p)
+	}
+}
+
+func TestYarnGarbageIsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "yarn.lock"), []byte("{{{ this is not a lockfile"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g, err := LoadDepGraph(dir, "npm", "yarn.lock")
+	if err == nil || g != nil || !strings.Contains(err.Error(), "lockfile format not understood") {
+		t.Fatalf("g=%v err=%v", g, err)
 	}
 }

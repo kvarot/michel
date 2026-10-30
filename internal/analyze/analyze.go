@@ -93,7 +93,7 @@ func manifestDir(projectRoot, manifestRelPath string) string {
 // Analyze computes the analysis of one finding. It is pure: no database, no
 // audit. It loads the dependency graph itself; Run shares graphs instead.
 func Analyze(projectRoot string, p project.Project, f scan.Finding, cfg policy.RiskConfig, exclude []string) (Analysis, error) {
-	g, err := LoadDepGraph(manifestDir(projectRoot, f.ManifestRelPath), f.Ecosystem)
+	g, err := LoadDepGraph(manifestDir(projectRoot, f.ManifestRelPath), f.Ecosystem, filepath.Base(f.ManifestRelPath))
 	return AnalyzeWith(g, err, projectRoot, p, f, cfg, exclude)
 }
 
@@ -132,6 +132,8 @@ func AnalyzeWith(g *DepGraph, loadErr error, projectRoot string, p project.Proje
 		Jump: a.Upgrade.Jump, Breaking: a.Changelog.Breaking, Directness: a.Path.Directness,
 		CallSiteCount: a.Calls.Count, TestCount: a.Coverage.Count, TestMethod: a.Coverage.Method,
 		IsCore: core, HasFix: a.Upgrade.Target != "",
+		// Exploited in the wild (KEV) or malicious: a flag and the urgency, no point.
+		Exploited: scan.Urgent(f),
 	})
 	return a, nil
 }
@@ -202,7 +204,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 		key := f.Ecosystem + "\x00" + f.ManifestRelPath
 		ge, ok := graphs[key]
 		if !ok {
-			ge.g, ge.err = loadGraph(manifestDir(p.Path, f.ManifestRelPath), f.Ecosystem)
+			ge.g, ge.err = loadGraph(manifestDir(p.Path, f.ManifestRelPath), f.Ecosystem, filepath.Base(f.ManifestRelPath))
 			graphs[key] = ge
 		}
 		a, err := AnalyzeWith(ge.g, ge.err, p.Path, p, f, deps.Risk, exclude)
@@ -235,6 +237,11 @@ func Run(ctx context.Context, deps Deps, p project.Project, findings []scan.Find
 // that saw the finding.
 func fresh(a Analysis, f scan.Finding, version, inputsHash string) bool {
 	if a.MichelVersion != version || a.InputsHash != inputsHash {
+		return false
+	}
+	// The KEV mark can change without a scan (enrichment): the stored
+	// urgency must follow it.
+	if (a.Risk.Terms["exploited"] != 0) != scan.Urgent(f) {
 		return false
 	}
 	seen, err := time.Parse(time.RFC3339, f.LastSeenAt)

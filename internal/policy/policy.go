@@ -157,6 +157,16 @@ const (
 	PurposeWebhook = "notify.webhook"
 )
 
+// Purposes of the sources registry in network.allow rules. A plugin's
+// purpose is "plugin.<key>" and is never allowed.
+const (
+	PurposeOSV      = "osv.db"
+	PurposeEnrich   = "source.enrich"
+	PurposeFeed     = "source.feed"
+	PurposeRepo     = "source.repo"
+	PurposeDiscover = "source.discover"
+)
+
 // Channel types.
 const (
 	ChannelEmail   = "email"

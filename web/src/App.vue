@@ -7,8 +7,20 @@
           <img src="/icons/icon-192.png" alt="" width="28" height="28">
           <span>{{ assistant }}</span>
         </span>
+        <v-tabs
+          v-if="state === 'ready'"
+          :model-value="page"
+          density="compact"
+          color="primary"
+          class="m-top__tabs"
+          :aria-label="$t('nav.label')"
+          @update:model-value="go"
+        >
+          <v-tab value="today">{{ $t('nav.today') }}</v-tab>
+          <v-tab value="sources">{{ $t('nav.sources') }}</v-tab>
+        </v-tabs>
         <nav class="m-top__actions">
-          <v-btn v-if="state === 'ready'" variant="text" :loading="refreshing" @click="loadToday(true)">{{ $t('app.refresh') }}</v-btn>
+          <v-btn v-if="state === 'ready' && page === 'today'" variant="text" :loading="refreshing" @click="loadToday(true)">{{ $t('app.refresh') }}</v-btn>
           <v-btn variant="text" @click="settingsOpen = true">{{ $t('app.settings') }}</v-btn>
         </nav>
       </div>
@@ -52,6 +64,7 @@
           <v-btn color="primary" variant="tonal" @click="load">{{ $t('app.retry') }}</v-btn>
         </section>
 
+        <SourcesPage v-else-if="page === 'sources'" @changed="stale = true" />
         <TodayPage v-else :digest="digest" :meta="meta" @decided="loadToday(false)" />
       </div>
     </v-main>
@@ -72,13 +85,19 @@
 
 <script>
 import TodayPage from './components/TodayPage.vue'
+import SourcesPage from './components/SourcesPage.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import { api } from './api.js'
 import { keys, save } from './lib/storage.js'
 
+/** pageOf reads the page from the address hash. */
+function pageOf(hash) {
+  return hash === '#/sources' ? 'sources' : 'today'
+}
+
 export default {
   name: 'App',
-  components: { TodayPage, SettingsPanel },
+  components: { TodayPage, SourcesPage, SettingsPanel },
   data() {
     return {
       state: 'loading', // loading | unauthorized | offline | error | ready
@@ -91,6 +110,10 @@ export default {
       // rejected is true when the server refused the token this page holds.
       rejected: false,
       stopListening: null,
+      // page follows the address: #/sources, else today (no router).
+      page: pageOf(window.location.hash),
+      // stale is set when the Sources page changed something the Today page shows.
+      stale: false,
     }
   },
   computed: {
@@ -110,12 +133,25 @@ export default {
   created() {
     document.documentElement.lang = this.$ui.lang
     this.stopListening = api.on('unauthorized', this.onUnauthorized)
+    window.addEventListener('hashchange', this.onHash)
     this.load()
   },
   beforeUnmount() {
     if (this.stopListening) this.stopListening()
+    window.removeEventListener('hashchange', this.onHash)
   },
   methods: {
+    onHash() {
+      this.page = pageOf(window.location.hash)
+      if (this.page === 'today' && this.stale && this.state === 'ready') {
+        this.stale = false
+        this.loadToday(false)
+      }
+    },
+    /** go shows a page by changing the address, so the back button works. */
+    go(page) {
+      window.location.hash = page === 'sources' ? '#/sources' : '#/'
+    },
     onUnauthorized() {
       this.rejected = !!api.token
       this.state = 'unauthorized'
@@ -201,6 +237,7 @@ export default {
 }
 .m-brand img { border-radius: 7px; }
 .m-top__actions { display: flex; gap: 0.25rem; margin-right: -0.5rem; }
+.m-top__tabs { flex: 1 1 auto; min-width: 0; }
 .m-main { padding-top: 2.5rem; padding-bottom: 4rem; outline: none; }
 .m-state { max-width: 34rem; display: grid; gap: 0.9rem; justify-items: start; padding-top: 1rem; }
 .m-state p { margin: 0; line-height: 1.55; }

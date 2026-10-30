@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { decisionLabel, formatDate, groupAttention, validateDecision } from './digestView.js'
+import { decisionLabel, formatDate, formatPercent, groupAttention, validateDecision } from './digestView.js'
 import { translate } from '../i18n/index.js'
 
 const digest = {
@@ -66,6 +66,43 @@ describe('digestView', () => {
       }],
     })
     expect(groups[0].items.map((i) => [i.package, i.decided])).toEqual([['acme/lib', 'fix'], ['vuln-pkg', '']])
+  })
+
+  test('groupAttention takes kev, malicious, epss and kind from the package, exploited for the others', () => {
+    const groups = groupAttention({
+      exploited: [{ finding_id: 'f9', kev_added: '2026-03-12', malicious: false }],
+      projects: [{
+        name: 'demo',
+        new: [
+          { name: 'acme/lib', worst_severity: 'critical', finding_ids: ['f0', 'f1'], osv_ids: ['A-1'], kev: true, epss: 0.42 },
+          { name: 'vuln-pkg', worst_severity: 'high', finding_ids: ['f2'], osv_ids: ['A-2'], kind: 'code' },
+          { name: 'evil-pkg', worst_severity: 'critical', finding_ids: ['f3'], osv_ids: ['MAL-1'], malicious: true },
+        ],
+        superseded: [{ package: 'old-pkg', osv_id: 'A-9', finding_id: 'f9', reason: 'severity_changed', severity: 'low' }],
+      }],
+    })
+    expect(groups[0].items.map((i) => [i.package, i.kev, i.malicious, i.epss, i.findingKind])).toEqual([
+      ['acme/lib', true, false, 0.42, 'dependency'], ['evil-pkg', false, true, 0, 'dependency'], ['vuln-pkg', false, false, 0, 'code'],
+      ['old-pkg', true, false, 0, 'dependency'],
+    ])
+  })
+
+  test('formatPercent per lang', () => {
+    expect(formatPercent(0.425, 'fr')).toBe('42,5 %')
+    expect(formatPercent(0.425, 'en')).toBe('42.5%')
+    expect(formatPercent(0.42, 'fr')).toBe('42 %')
+    expect(formatPercent(0.0004, 'en')).toBe('0%')
+    expect(formatPercent(0.29, 'en', true)).toBe('29%')
+    expect(formatPercent(0.976, 'fr', true)).toBe('97 %')
+    expect(formatPercent(undefined, 'en')).toBe('0%')
+  })
+
+  test('the epss texts take the percentage with its sign', () => {
+    expect(translate('fr', 'item.epss', { p: formatPercent(0.425, 'fr') })).toBe("Risque d'attaque dans les 30 jours : 42,5 %")
+    expect(translate('en', 'item.epss', { p: formatPercent(0.425, 'en') })).toBe('Chance of an attack within 30 days: 42.5%')
+    expect(translate('fr', 'fact.epss_value', { p: formatPercent(0.425, 'fr'), pct: formatPercent(0.976, 'fr', true) }))
+      .toBe("42,5 % de chances d'être attaquée dans les 30 jours : c'est plus que pour 97 % des failles.")
+    expect(translate('en', 'fact.epss_value', { p: '42.5%', pct: '97%' })).toBe('42.5% chance of an attack within 30 days: more than for 97% of the flaws.')
   })
 
   test('formatDate per lang', () => {

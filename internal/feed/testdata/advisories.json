@@ -1,0 +1,19 @@
+[
+  {
+    "ghsa_id": "GHSA-aaaa-bbbb-cccc",
+    "summary": "Path traversal in the <b>static</b> handler",
+    "html_url": "https://github.com/example/lib/security/advisories/GHSA-aaaa-bbbb-cccc",
+    "published_at": "2026-10-26T12:00:00Z",
+    "severity": "high",
+    "description": "Long description.",
+    "vulnerabilities": [{"package": {"ecosystem": "npm", "name": "vuln-pkg"}}]
+  },
+  {
+    "ghsa_id": "GHSA-dddd-eeee-ffff",
+    "summary": "Denial of service",
+    "html_url": "https://github.com/example/lib/security/advisories/GHSA-dddd-eeee-ffff",
+    "published_at": "2026-10-20T12:00:00Z",
+    "severity": "medium",
+    "vulnerabilities": []
+  }
+]

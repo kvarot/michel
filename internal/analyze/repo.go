@@ -166,6 +166,10 @@ func (r *Repo) Get(ctx context.Context, findingID string) (Analysis, bool, error
 	for _, s := range st {
 		a.Calls.Sites = append(a.Calls.Sites, CallSite{File: s.File, Line: s.Line, IsTest: s.IsTest})
 	}
+	// The urgency is not a column: it follows from the "exploited" flag.
+	if a.Risk.Terms["exploited"] != 0 {
+		a.Risk.Urgency = UrgencyUrgent
+	}
 	// These lists come back nil when empty, as the analysis produces them, so
 	// a stored analysis reads the same as a fresh one.
 	for _, l := range []*[]string{&a.Notes, &a.Calls.UnreadablePaths, &a.Calls.TestFiles, &a.Calls.SourceFiles, &a.Coverage.Skipped} {

@@ -27,6 +27,15 @@ func analyzeProject(cmd *cobra.Command, deps *Deps, p project.Project, force boo
 	if err != nil {
 		return analyze.RunResult{}, err
 	}
+	// The analysis follows a package through the lockfiles: a plugin
+	// finding (code, configuration) has none.
+	kept := findings[:0]
+	for _, f := range findings {
+		if f.Kind == "" || f.Kind == scan.KindDependency {
+			kept = append(kept, f)
+		}
+	}
+	findings = kept
 	return analyze.Run(ctx, analyzeDeps(deps), p, findings, analyze.Options{Force: force})
 }
 

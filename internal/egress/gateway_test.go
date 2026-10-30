@@ -394,3 +394,26 @@ func TestDialContextRefusesNonTCPNetwork(t *testing.T) {
 		t.Fatalf("attempts = %+v", g.Attempts())
 	}
 }
+
+func TestGatewaySetRulesTakesEffect(t *testing.T) {
+	g := egress.New(pol(), nil)
+	if ok, _ := g.Allowed("www.cisa.gov", "source.enrich"); ok {
+		t.Fatal("allowed before SetRules")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			g.Allowed("www.cisa.gov", "source.enrich")
+		}
+	}()
+	g.SetRules([]policy.AllowRule{{Host: "www.cisa.gov", Purpose: "source.enrich"}})
+	<-done
+	if ok, reason := g.Allowed("www.cisa.gov", "source.enrich"); !ok {
+		t.Fatalf("still denied after SetRules: %s", reason)
+	}
+	g.SetRules(nil)
+	if ok, _ := g.Allowed("www.cisa.gov", "source.enrich"); ok {
+		t.Fatal("allowed after the rules were cleared")
+	}
+}

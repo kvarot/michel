@@ -1,3 +1,7 @@
+{{- if ne .Kind "dependency" -}}
+{{.Tool}} flags {{if eq .Kind "vulnerability"}}the flaw{{else}}the problem{{end}} {{.RuleID}}{{if .Location}} in {{.Location}}{{end}}.{{if .Summary}} The report says: "{{.Summary}}"{{end}}
+{{- else -}}
+{{- if .Malicious}}Warning: {{.Package}} {{.Installed}} is a malicious package, published on purpose to harm whoever installs it; it is not a mere flaw. {{end -}}
 {{- if not .HasAnalysis -}}
 {{.Package}} {{.Installed}} has not been searched for in your code yet.
 {{- else if eq .CallSitesQuality "low" -}}
@@ -12,3 +16,5 @@
 {{.Package}} {{.Installed}} was not found in your code.
 {{- end -}}
 {{- if .Summary}} The advisory says: "{{.Summary}}"{{end -}}
+
+{{- end -}}

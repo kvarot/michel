@@ -100,17 +100,17 @@ func TestChangedDetectsSeverityThenFix(t *testing.T) {
 		{"high", nil, true, FixedVersionChanged},
 	}
 	for _, c := range cases {
-		changed, reason := Changed(d, c.sev, c.fixed)
+		changed, reason := Changed(d, c.sev, c.fixed, false)
 		if changed != c.changed || reason != c.reason {
 			t.Errorf("Changed(%s, %v) = %v %q, want %v %q", c.sev, c.fixed, changed, reason, c.changed, c.reason)
 		}
 	}
 	two := Decision{SeenSeverity: "high", SeenFixedVersions: []string{"2.0.0", "1.2.5"}}
-	if changed, _ := Changed(two, "high", []string{"1.2.5", "2.0.0"}); changed {
+	if changed, _ := Changed(two, "high", []string{"1.2.5", "2.0.0"}, false); changed {
 		t.Error("a different order alone counts as a change")
 	}
 	none := Decision{SeenSeverity: "low"}
-	if changed, _ := Changed(none, "low", []string{}); changed {
+	if changed, _ := Changed(none, "low", []string{}, false); changed {
 		t.Error("no fixed version before and after counts as a change")
 	}
 }

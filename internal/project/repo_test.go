@@ -368,3 +368,36 @@ func TestPurgeDeletesDecisions(t *testing.T) {
 		t.Errorf("purge touched the decisions of another project: %d left", n)
 	}
 }
+
+func TestTechRoundTrip(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	p, err := r.Add(ctx, Project{Name: "demo", Path: t.TempDir(), Tech: []string{"b", "a", "a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Tech, []string{"a", "b"}) || !reflect.DeepEqual(p.Tech, []string{"a", "b"}) {
+		t.Errorf("tech = %v (returned %v)", got.Tech, p.Tech)
+	}
+	if got.TechAuto == nil || len(got.TechAuto) != 0 {
+		t.Errorf("tech_auto = %#v", got.TechAuto)
+	}
+	got.TechAuto = []string{"symfony", "php", "php"}
+	if err := r.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := r.Get(ctx, "demo"); !reflect.DeepEqual(again.TechAuto, []string{"php", "symfony"}) {
+		t.Errorf("tech_auto = %v", again.TechAuto)
+	}
+	got.Tech = []string{"Nginx!"}
+	if err := r.Update(ctx, got); !errors.Is(err, ErrInvalidTech) {
+		t.Errorf("update with an invalid tag: err = %v", err)
+	}
+	if _, err := r.Add(ctx, Project{Name: "other", Path: t.TempDir(), Tech: []string{"Nginx!"}}); !errors.Is(err, ErrInvalidTech) {
+		t.Errorf("add with an invalid tag: err = %v", err)
+	}
+}

@@ -22,7 +22,7 @@ type Repo struct{ s *store.Store }
 func NewRepo(s *store.Store) *Repo { return &Repo{s: s} }
 
 const columns = `id, finding_id, project_id, action, justification, due_at, author, created_at,
-	seen_severity, seen_fixed_versions, superseded_at, superseded_reason`
+	seen_severity, seen_fixed_versions, superseded_at, superseded_reason, seen_kev`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -37,10 +37,12 @@ func parseTime(s string) time.Time {
 func scanDecision(row scanner) (Decision, error) {
 	var d Decision
 	var action, due, created, fixed, supAt, reason string
+	var kev int
 	if err := row.Scan(&d.ID, &d.FindingID, &d.ProjectID, &action, &d.Justification, &due, &d.Author, &created,
-		&d.SeenSeverity, &fixed, &supAt, &reason); err != nil {
+		&d.SeenSeverity, &fixed, &supAt, &reason, &kev); err != nil {
 		return Decision{}, err
 	}
+	d.SeenKEV = kev != 0
 	d.Action, d.SupersededReason = Action(action), Reason(reason)
 	d.DueAt, d.CreatedAt, d.SupersededAt = parseTime(due), parseTime(created), parseTime(supAt)
 	_ = json.Unmarshal([]byte(fixed), &d.SeenFixedVersions)
@@ -89,8 +91,10 @@ func (r *Repo) Set(ctx context.Context, d Decision, now time.Time) (Decision, er
 	}
 	defer tx.Rollback()
 	var status, fixed string
-	err = tx.QueryRowContext(ctx, `SELECT project_id, status, severity_label, fixed_versions FROM finding WHERE id = ?`, d.FindingID).
-		Scan(&d.ProjectID, &status, &d.SeenSeverity, &fixed)
+	var kev int
+	err = tx.QueryRowContext(ctx, `SELECT project_id, status, severity_label, fixed_versions, kev FROM finding WHERE id = ?`, d.FindingID).
+		Scan(&d.ProjectID, &status, &d.SeenSeverity, &fixed, &kev)
+	d.SeenKEV = kev != 0
 	if errors.Is(err, sql.ErrNoRows) {
 		return Decision{}, ErrFindingNotFound
 	}
@@ -111,9 +115,13 @@ func (r *Repo) Set(ctx context.Context, d Decision, now time.Time) (Decision, er
 	}
 	d.ID = ulid.Make().String()
 	fx, _ := json.Marshal(d.SeenFixedVersions)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO decision (`+columns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+	seenKEV := 0
+	if d.SeenKEV {
+		seenKEV = 1
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO decision (`+columns+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		d.ID, d.FindingID, d.ProjectID, string(d.Action), d.Justification, timeText(d.DueAt), d.Author, ts,
-		d.SeenSeverity, string(fx), "", ""); err != nil {
+		d.SeenSeverity, string(fx), "", "", seenKEV); err != nil {
 		return Decision{}, fmt.Errorf("cannot save the decision: %w", err)
 	}
 	if err := setStatus(ctx, tx, d.FindingID, scan.StatusDecided, ts); err != nil {

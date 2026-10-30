@@ -6,14 +6,18 @@ import { keys, load, save } from './lib/storage.js'
 
 const base = '/api/v1'
 
-/** ApiError carries the server's {error, hint}, or offline when it could not be reached. */
+/**
+ * ApiError carries the server's {error, hint}, or offline when it could not
+ * be reached; data is the whole answer (a 409 for consent lists the hosts).
+ */
 export class ApiError extends Error {
-  constructor({ status = 0, error = '', hint = '', offline = false }) {
+  constructor({ status = 0, error = '', hint = '', offline = false, data = null }) {
     super(error || `HTTP ${status}`)
     this.status = status
     this.error = error
     this.hint = hint
     this.offline = offline
+    this.data = data
   }
 }
 
@@ -41,7 +45,7 @@ async function request(method, path, body) {
   }
   if (resp.status === 401) events.dispatchEvent(new Event('unauthorized'))
   if (!resp.ok) {
-    throw new ApiError({ status: resp.status, error: data?.error || '', hint: data?.hint || '' })
+    throw new ApiError({ status: resp.status, error: data?.error || '', hint: data?.hint || '', data })
   }
   return data
 }
@@ -63,6 +67,10 @@ export const api = {
   },
   post(path, body) {
     return request('POST', path, body)
+  },
+  /** del sends DELETE, with a JSON body when one is given. */
+  del(path, body) {
+    return request('DELETE', path, body)
   },
   /** on listens to "unauthorized"; it returns the function that stops listening. */
   on(name, fn) {

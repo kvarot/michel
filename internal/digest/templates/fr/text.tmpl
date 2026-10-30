@@ -6,8 +6,17 @@
 {{- .Title}}
 {{if .SinceLabel}}{{.SinceLabel}}
 {{end}}{{if .OSVStale}}{{stale}}
+{{end}}{{if .ShowEmpty}}{{empty}}
 {{end}}{{if .FailedScans}}Le dernier scan de {{.FailedScans}} {{if eq .FailedScans 1}}projet{{else}}projets{{end}} n'a pas pu se terminer.
-{{end}}
+{{end}}{{if not .Catalog.Silent}}{{catalogLine}}
+{{range .Catalog.NewVersions}}  {{.Name}} : {{.From}} → {{.To}}
+{{end}}{{if or .Catalog.Failed .Catalog.Unreachable}}{{previousData}}
+{{end}}{{end}}
+{{- if or .Exploited .ExploitedDecided}}
+Failles que des pirates utilisent déjà, à corriger en premier :
+{{range .Exploited}}  [{{if .Malicious}}paquet malveillant{{else}}faille déjà attaquée{{end}}] {{.Package}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · sur la liste des failles attaquées de la CISA depuis le {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · ta décision : à corriger{{end}}
+{{end}}{{if .ExploitedDecided}}  {{exploitedDecided}}
+{{end}}{{end}}
 {{- range .Projects}}
 == {{.Name}} ==
 failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevées {{index .Open "high"}}, moyennes {{index .Open "medium"}}, faibles {{index .Open "low"}}) · tes décisions : à corriger {{index .Decided "fix"}}, reportées {{index .Decided "defer"}}, ignorées {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if le .DaysWithoutCritical 1}}jour{{else}}jours{{end}} sans nouvelle faille critique{{if eq .CriticalOpen 0}} · 0 faille critique ouverte, à garder comme ça{{end}}
@@ -25,6 +34,11 @@ failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevée
 {{range .Due}}  {{.Package}} {{.OSVID}} : reportée jusqu'au {{day .DueAt}}{{if .Overdue}} (date dépassée){{end}}
 {{end}}{{end}}
 {{- end}}
+{{- if .Reading}}
+À lire, sur les technologies que tu utilises :
+{{range .Reading}}  {{.Source}} : {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}
+{{if .URL}}    {{.URL}}
+{{end}}{{end}}{{end}}
 {{- if .Word}}
 {{.Word}}
 {{end}}

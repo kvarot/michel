@@ -20,6 +20,7 @@ import (
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/source"
 )
 
 // decisionAuthor is the author and the audit actor of decisions taken on the page.
@@ -65,12 +66,18 @@ func (s *server) requestLang(w http.ResponseWriter, r *http.Request) (i18n.Lang,
 
 func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 	m := MetaView{Version: s.deps.Version, Lang: s.deps.Lang, Languages: []string{string(i18n.EN), string(i18n.FR)},
-		Assistant: s.deps.Policy.Assistant.Name}
+		Assistant: s.currentPolicy().Assistant.Name}
 	if m.Assistant == "" {
 		m.Assistant = digest.DefaultAssistant
 	}
 	if s.deps.OSVRoot != "" {
-		sts, err := osvdb.Statuses(s.deps.OSVRoot)
+		// Only the databases of the enabled ecosystems count.
+		ecos, err := osvdb.Enabled(r.Context(), source.NewRepo(s.deps.Store), nil)
+		if err != nil {
+			s.internal(w, r)
+			return
+		}
+		sts, err := osvdb.Statuses(s.deps.OSVRoot, ecos)
 		if err != nil {
 			s.internal(w, r)
 			return
@@ -96,7 +103,7 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 	}
 	// The page shows the last digest's window extended to now: after the
 	// morning digest, what it reported stays on the page all day.
-	opt := digest.Options{Assistant: s.deps.Policy.Assistant.Name, OSVRoot: s.deps.OSVRoot}
+	opt := digest.Options{Assistant: s.currentPolicy().Assistant.Name, OSVRoot: s.deps.OSVRoot, Allowed: s.allowed}
 	last, ok, err := digest.NewRepo(s.deps.Store).Last(r.Context())
 	if err != nil {
 		s.internal(w, r)
@@ -110,7 +117,7 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, http.StatusOK, todayView(d, lang))
 }
 
 func (s *server) projects(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +168,7 @@ func (s *server) projectView(ctx context.Context, p project.Project) (ProjectVie
 				continue
 			}
 		}
-		v.Open[severityOf(f.SeverityLabel)]++
+		v.Open[severityOf(effective(f))]++
 	}
 	var at, status string
 	err = s.deps.Store.DB().QueryRowContext(ctx, `SELECT started_at, status FROM scan WHERE project_id = ?
@@ -227,7 +234,7 @@ func (s *server) projectFindings(w http.ResponseWriter, r *http.Request) {
 	analyses := analyze.NewRepo(s.deps.Store)
 	out := []FindingView{}
 	for _, f := range findings {
-		if severity != "" && severityOf(f.SeverityLabel) != severity {
+		if severity != "" && severityOf(effective(f)) != severity {
 			continue
 		}
 		a, has, err := analyses.Get(ctx, f.ID)
@@ -327,6 +334,11 @@ func (s *server) finding(w http.ResponseWriter, r *http.Request) {
 // readJSON decodes the body of r into v: JSON only, at most maxBody bytes,
 // one document, no unknown field. It answers the error itself.
 func (s *server) readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	return s.readJSONHint(w, r, v, i18n.T(s.answerLang(r), "api.bad_json_hint"))
+}
+
+// readJSONHint is readJSON with hint as the hint of an unreadable body.
+func (s *server) readJSONHint(w http.ResponseWriter, r *http.Request, v any, hint string) bool {
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mt != "application/json" {
 		s.fail(w, http.StatusUnsupportedMediaType, i18n.T(s.answerLang(r), "api.need_json"), "")
@@ -346,7 +358,7 @@ func (s *server) readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		s.fail(w, http.StatusRequestEntityTooLarge, i18n.T(s.answerLang(r), "api.too_large"), "")
 		return false
 	case err != nil:
-		s.fail(w, http.StatusBadRequest, i18n.T(s.answerLang(r), "api.bad_json"), i18n.T(s.answerLang(r), "api.bad_json_hint"))
+		s.fail(w, http.StatusBadRequest, i18n.T(s.answerLang(r), "api.bad_json"), hint)
 		return false
 	}
 	return true
@@ -454,4 +466,10 @@ func (s *server) digests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, runs)
+}
+
+// effective is the effective severity label of f (scan.EffectiveSeverity).
+func effective(f scan.Finding) string {
+	l, _ := scan.EffectiveSeverity(f)
+	return l
 }

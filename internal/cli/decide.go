@@ -136,7 +136,7 @@ func decidedSentence(deps *Deps, d decide.Decision, replaced *decide.Decision, f
 
 func newDecideCmd(deps *Deps) *cobra.Command {
 	var projectName, pkg, why, until, forDays string
-	var force bool
+	var force, verbose bool
 	c := &cobra.Command{
 		Use:   "decide <id-or-prefix> <fix|defer|ignore>",
 		Short: "Decide what to do about a finding: fix, defer or ignore",
@@ -176,7 +176,7 @@ func newDecideCmd(deps *Deps) *cobra.Command {
 			}
 			repo := decide.NewRepo(deps.Store)
 			if byPackage {
-				return decidePackage(ctx, deps, repo, d, projectName, strings.TrimSpace(pkg), force, defaulted)
+				return decidePackage(ctx, deps, repo, d, projectName, strings.TrimSpace(pkg), force, defaulted, verbose)
 			}
 			fi, p, err := resolveFinding(ctx, deps, args[0])
 			if err != nil {
@@ -198,12 +198,13 @@ func newDecideCmd(deps *Deps) *cobra.Command {
 	f.StringVar(&projectName, "project", "", "with --package: the project whose findings to decide on")
 	f.StringVar(&pkg, "package", "", "decide on every finding of this package in --project that waits for a decision")
 	f.BoolVar(&force, "force", false, "with --package: also decide again on findings already decided")
+	f.BoolVar(&verbose, "verbose", false, "with --package: print one line per finding with its audit event instead of the summary")
 	return c
 }
 
 // decidePackage applies d to every finding of pkg in the project that waits
 // for a decision (new or pending), and to decided ones with force.
-func decidePackage(ctx context.Context, deps *Deps, repo *decide.Repo, d decide.Decision, projectName, pkg string, force, defaulted bool) error {
+func decidePackage(ctx context.Context, deps *Deps, repo *decide.Repo, d decide.Decision, projectName, pkg string, force, defaulted, verbose bool) error {
 	p, err := projectRepo(deps).Get(ctx, projectName)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -238,14 +239,34 @@ func decidePackage(ctx context.Context, deps *Deps, repo *decide.Repo, d decide.
 		last = stored
 		items = append(items, done{safe(f.OSVID), evID})
 	}
-	s := deps.N("cli.decide.package_done", len(items), string(d.Action), safe(pkg), p.Name)
-	if d.Action == decide.Defer {
-		s += " " + dueSentence(deps, last, defaulted, len(items) > 1)
+	if verbose {
+		s := deps.N("cli.decide.package_done", len(items), string(d.Action), safe(pkg), p.Name)
+		if d.Action == decide.Defer {
+			s += " " + dueSentence(deps, last, defaulted, len(items) > 1)
+		}
+		fmt.Fprintln(deps.Stdout, s)
+		for _, it := range items {
+			fmt.Fprintln(deps.Stdout, deps.T("cli.decide.package_item", it.osv, it.event))
+		}
+		return nil
 	}
-	fmt.Fprintln(deps.Stdout, s)
-	for _, it := range items {
-		fmt.Fprintln(deps.Stdout, deps.T("cli.decide.package_item", it.osv, it.event))
+	n := len(items)
+	var action string
+	switch {
+	case d.Action == decide.Fix:
+		action = deps.N("cli.decide.package_action.fix", n)
+	case d.Action == decide.Defer && defaulted:
+		action = deps.N("cli.decide.package_action.defer_default", n, dayText(last.DueAt))
+	case d.Action == decide.Defer:
+		action = deps.N("cli.decide.package_action.defer", n, dayText(last.DueAt))
+	default:
+		action = deps.N("cli.decide.package_action.ignore", n)
 	}
+	events := items[0].event
+	if n > 1 {
+		events += " → " + items[n-1].event
+	}
+	fmt.Fprintln(deps.Stdout, deps.N("cli.decide.package_summary", n, safe(pkg), action, p.Name, events))
 	return nil
 }
 

@@ -4,6 +4,7 @@ package project
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -33,7 +34,12 @@ type Project struct {
 	RiskOverrides map[string]int `json:"risk_overrides"`
 	// Exclude lists folder names (not paths) that scans and analyses skip,
 	// on top of the defaults; sorted and unique.
-	Exclude   []string  `json:"exclude"`
+	Exclude []string `json:"exclude"`
+	// Tech lists the technologies the user declares for this project
+	// (nginx, postgresql...); TechAuto those Michel infers from the
+	// manifests at each scan. Both sorted and unique.
+	Tech      []string  `json:"tech"`
+	TechAuto  []string  `json:"tech_auto"`
 	CreatedAt time.Time `json:"created_at"`
 
 	// FixLevelSet marks FixLevel as explicit, so that 0 (no automatic fix) is
@@ -51,10 +57,30 @@ var (
 	ErrNotFound              = errors.New("project not found")
 	ErrInvalidRiskOverride   = errors.New("invalid risk override")
 	ErrInvalidExclude        = errors.New("invalid excluded folder")
+	ErrInvalidTech           = errors.New("invalid technology tag")
 )
 
-// normalizeExtras validates RiskOverrides and Exclude, makes the extras
-// non-nil, and sorts and deduplicates Exclude.
+// techTag is the shape of a technology tag: lowercase letters, digits and
+// . + -, 1 to 32 characters, starting with a letter or a digit.
+var techTag = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]{0,31}$`)
+
+// ValidTech reports whether tag is a valid technology tag.
+func ValidTech(tag string) bool { return techTag.MatchString(tag) }
+
+// NormalizeTech checks every tag and returns them sorted and unique, never nil.
+func NormalizeTech(tags []string) ([]string, error) {
+	for _, t := range tags {
+		if !ValidTech(t) {
+			return nil, fmt.Errorf("%w %q: use lowercase letters, digits, dots, plus or hyphens, 32 characters at most (for example nginx or postgresql)", ErrInvalidTech, t)
+		}
+	}
+	out := append([]string{}, tags...)
+	slices.Sort(out)
+	return slices.Compact(out), nil
+}
+
+// normalizeExtras validates RiskOverrides, Exclude and the technology tags,
+// makes the extras non-nil, and sorts and deduplicates the lists.
 func normalizeExtras(p *Project) error {
 	if p.CorePackages == nil {
 		p.CorePackages = []string{}
@@ -84,5 +110,14 @@ func normalizeExtras(p *Project) error {
 			return fmt.Errorf("%w: %s=%d must be between 0 and 100", ErrInvalidRiskOverride, k, v)
 		}
 	}
+	tech, err := NormalizeTech(p.Tech)
+	if err != nil {
+		return err
+	}
+	auto, err := NormalizeTech(p.TechAuto)
+	if err != nil {
+		return err
+	}
+	p.Tech, p.TechAuto = tech, auto
 	return nil
 }

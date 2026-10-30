@@ -5,7 +5,19 @@
 {{- define "body"}}<h1>{{.Title}}</h1>
 {{if .SinceLabel}}<p class="since">{{.SinceLabel}}</p>
 {{end}}{{if .OSVStale}}<p class="banner">{{stale}}</p>
+{{end}}{{if .ShowEmpty}}<p class="since">{{empty}}</p>
 {{end}}{{if .FailedScans}}<p class="banner">The last scan of {{.FailedScans}} {{if eq .FailedScans 1}}project{{else}}projects{{end}} did not finish.</p>
+{{end}}{{if not .Catalog.Silent}}<p class="since">{{catalogLine}}</p>
+{{if .Catalog.NewVersions}}<ul>
+{{range .Catalog.NewVersions}}<li><strong>{{.Name}}</strong>: {{.From}} → {{.To}}</li>
+{{end}}</ul>
+{{end}}{{if or .Catalog.Failed .Catalog.Unreachable}}<p class="banner">{{previousData}}</p>
+{{end}}{{end}}
+{{- if or .Exploited .ExploitedDecided}}<h2 class="exploited">Exploited in the wild, fix these first</h2>
+<ul>
+{{range .Exploited}}<li><span class="sev sev-critical">{{if .Malicious}}malicious package{{else}}KEV{{end}}</span> <strong>{{.Package}}</strong> {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · on the KEV list since {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · decided: fix{{end}}</li>
+{{end}}{{if .ExploitedDecided}}<li>{{exploitedDecided}}</li>
+{{end}}</ul>
 {{end}}
 {{- range .Projects}}<h2>{{.Name}}</h2>
 <p class="counters">open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "high"}}, medium {{index .Open "medium"}}, low {{index .Open "low"}}) · decided: fix {{index .Decided "fix"}}, defer {{index .Decided "defer"}}, ignore {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if eq .DaysWithoutCritical 1}}day{{else}}days{{end}} without a new critical{{if eq .CriticalOpen 0}} · <strong>0 critical open</strong>{{end}}</p>
@@ -31,6 +43,11 @@
 {{end}}</ul>
 {{end}}
 {{- end}}
+{{- if .Reading}}<h2>To read</h2>
+<ul>
+{{range .Reading}}<li><strong>{{.Source}}</strong>: {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}{{if .URL}}<br><span class="since">{{.URL}}</span>{{end}}</li>
+{{end}}</ul>
+{{end}}
 {{- if .Word}}<p class="word">{{.Word}}</p>
 {{end}}
 {{- if .PageURL}}<p>Page: <a href="{{.PageURL}}">{{.PageURL}}</a></p>

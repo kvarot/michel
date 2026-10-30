@@ -115,13 +115,20 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			defer ln.Close()
 			bound := ln.Addr().String()
 			port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+			// The Sources page gives its consents like michel source enable:
+			// the rules go into the policy file of --config, and a reload
+			// hands them to the gateway at once.
+			sd := sourceDeps(cmd, deps)
+			dataDir, _ := cmd.Flags().GetString("data-dir")
 			d := api.Deps{Store: deps.Store, Audit: deps.Audit, Policy: deps.Policy, Secrets: secrets, Now: deps.Now,
 				Version: buildinfo.Version, OSVRoot: dbRoot(cmd, deps), Lang: deps.Lang,
-				AllowedHosts: []string{bound, net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("localhost", port), net.JoinHostPort("::1", port)}}
+				AllowedHosts: []string{bound, net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("localhost", port), net.JoinHostPort("::1", port)},
+				PolicyPath:   sd.PolicyPath, Reload: sd.Reload, Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir}}
 			if fsys, ok := web.Dist(); ok {
 				d.Web = fsys
 			}
-			srv := &http.Server{Handler: api.New(d, token), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+			h := api.New(d, token)
+			srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 				WriteTimeout: time.Minute, IdleTimeout: 2 * time.Minute}
 			if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "serve", Action: "api.start", Target: bound, Result: "ok",
 				Evidence: map[string]any{"listen": bound}}); err != nil {
@@ -147,6 +154,8 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			shutdown, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
+			// The plugin runs the page started are cancelled and waited for.
+			h.Close()
 			if _, err := deps.Audit.Record(context.Background(), audit.Event{Actor: "serve", Action: "api.stop", Target: bound, Result: "ok",
 				Evidence: map[string]any{"listen": bound}}); err != nil {
 				return deps.Wrapf("cli.serve.audit_failed", err)

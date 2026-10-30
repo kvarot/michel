@@ -74,20 +74,29 @@ func loadNpm(dir string) (*DepGraph, error) {
 		g.HasRootManifest = true
 		return g, nil
 	}
+	if err := rootFromPackageJSON(dir, g); err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+// rootFromPackageJSON fills g.Root from dir/package.json and sets
+// HasRootManifest. A missing package.json leaves g as it is.
+func rootFromPackageJSON(dir string, g *DepGraph) error {
 	pj, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return g, nil
+			return nil
 		}
-		return nil, fmt.Errorf("read package.json: %w", err)
+		return fmt.Errorf("read package.json: %w", err)
 	}
 	var root npmEntry
 	if err := json.Unmarshal(pj, &root); err != nil {
-		return nil, fmt.Errorf("parse package.json: %w", err)
+		return fmt.Errorf("parse package.json: %w", err)
 	}
 	addAll(g.Root, root.Dependencies, root.DevDependencies, root.OptionalDependencies, root.PeerDependencies)
 	g.HasRootManifest = true
-	return g, nil
+	return nil
 }
 
 // addAll copies the root constraints; the first source that names a package

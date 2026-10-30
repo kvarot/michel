@@ -19,10 +19,12 @@ import (
 
 	"github.com/kvarot/michel/internal/analyze"
 	"github.com/kvarot/michel/internal/audit"
+	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/secret"
+	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/store"
 )
 
@@ -43,9 +45,15 @@ type fixture struct {
 	proj   project.Project
 	deps   Deps
 	srv    *httptest.Server
+	h      *Handler
 	ids    map[string]string // osv id -> finding id
 	gone   string
 	nItems int
+	// dir is the data folder; policyPath the policy file enable writes to;
+	// gw the gateway the server checks the network rules with.
+	dir        string
+	policyPath string
+	gw         *egress.Gateway
 }
 
 func ts(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -61,8 +69,12 @@ func newFixture(t *testing.T, web fs.FS) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	f := &fixture{t: t, st: st, ids: map[string]string{}}
+	f := &fixture{t: t, st: st, ids: map[string]string{}, dir: dir, policyPath: filepath.Join(dir, "config.yaml")}
 	f.log = audit.NewLogger(st, func() time.Time { return now })
+	if _, _, err := source.Sync(context.Background(), source.NewRepo(st)); err != nil {
+		t.Fatal(err)
+	}
+	f.gw = egress.New(policy.Defaults(), f.log.EgressSink())
 	projDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(projDir, "composer.lock"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
@@ -92,8 +104,20 @@ func newFixture(t *testing.T, web fs.FS) *fixture {
 		t.Fatal(err)
 	}
 	f.deps = Deps{Store: st, Audit: f.log, Policy: policy.Defaults(), Secrets: sec, Now: func() time.Time { return now },
-		Version: "test-version", Lang: i18n.EN, Web: web}
-	f.srv = httptest.NewServer(New(f.deps, testToken))
+		Version: "test-version", Lang: i18n.EN, Web: web, PolicyPath: f.policyPath,
+		Reload: func() (policy.Policy, error) {
+			p, _, err := policy.Load(f.policyPath, dir)
+			if err == nil {
+				err = policy.Validate(p)
+			}
+			return p, err
+		},
+		Sources: Sources{Gateway: f.gw, DataDir: dir}}
+	f.h = New(f.deps, testToken)
+	f.srv = httptest.NewServer(f.h)
+	// The handler's background work (plugin runs) ends before the store
+	// closes and the folders go: cleanups run last registered first.
+	t.Cleanup(f.h.Close)
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -180,7 +204,8 @@ func (f *fixture) get(path string, v any) string {
 func apiRoutes(f *fixture) []string {
 	id := f.ids["ACME-2026-0001"]
 	return []string{"/api/v1/meta", "/api/v1/today", "/api/v1/projects", "/api/v1/projects/demo/findings",
-		"/api/v1/findings/" + id, "/api/v1/digests", "/api/v1/nowhere"}
+		"/api/v1/findings/" + id, "/api/v1/digests", "/api/v1/sources", "/api/v1/sources?all=1", "/api/v1/sources/osv.npm",
+		"/api/v1/sources/items", "/api/v1/sources/discoveries", "/api/v1/tech", "/api/v1/plugin-runs/nope", "/api/v1/nowhere"}
 }
 
 func TestAPIRejectsMissingToken(t *testing.T) {

@@ -108,6 +108,7 @@ func TestNoDirectHTTPOutsideEgress(t *testing.T) {
 	egressDir := filepath.Join(root, "internal", "egress")
 	fset := token.NewFileSet()
 	checked := 0
+	seen := map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -124,6 +125,7 @@ func TestNoDirectHTTPOutsideEgress(t *testing.T) {
 			return nil
 		}
 		checked++
+		seen[filepath.ToSlash(filepath.Dir(path))] = true
 		v, err := boundaryViolations(fset, path, nil)
 		if err != nil {
 			return err
@@ -138,6 +140,12 @@ func TestNoDirectHTTPOutsideEgress(t *testing.T) {
 	}
 	if checked < 10 {
 		t.Fatalf("only %d Go files checked under %s: the walk is not seeing the module", checked, root)
+	}
+	// The packages that read the sources must be among those checked.
+	for _, dir := range []string{"internal/sourceupdate", "internal/sourceupdate/readers", "internal/enrich", "internal/osvdb", "internal/feed", "internal/gitrepo"} {
+		if !seen[filepath.ToSlash(filepath.Join(root, dir))] {
+			t.Errorf("the boundary walk did not check %s", dir)
+		}
 	}
 }
 

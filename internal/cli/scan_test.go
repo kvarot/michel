@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/osvdb"
 )
 
@@ -17,7 +18,7 @@ const scanTestdata = "../scan/testdata"
 func buildTestOSVDB(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, eco := range osvdb.Ecosystems {
+	for _, eco := range []string{"Packagist", "npm"} {
 		files, err := filepath.Glob(filepath.Join(scanTestdata, "advisories", eco, "*.json"))
 		if err != nil || len(files) == 0 {
 			t.Fatalf("no advisories for %s", eco)
@@ -143,14 +144,92 @@ func TestScanCorruptManifestExitsOne(t *testing.T) {
 	}
 }
 
+// addVanished registers a folder under name, then deletes the folder: its
+// scan fails.
+func addVanished(t *testing.T, dir, name string) {
+	t.Helper()
+	gone := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "project", "add", gone, "--name", name); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScanAllEmptyProjectExitZero(t *testing.T) {
+	dir, db := t.TempDir(), buildTestOSVDB(t)
+	empty := t.TempDir()
+	if _, _, _, err := run(t, dir, "project", "add", empty, "--name", "acme-empty"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, errOut, err := run(t, dir, "scan", "--all", "--osv-db", db)
+	if err != nil {
+		t.Fatalf("scan --all: %v\n%s\n%s", err, out, errOut)
+	}
+	if want := i18n.T(i18n.EN, "cli.scan.empty", "acme-empty", empty); !strings.Contains(out, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, out)
+	}
+	if !strings.Contains(out, "Michel found 3 new findings in demo") || strings.Contains(errOut, "error:") {
+		t.Errorf("stdout %q stderr %q", out, errOut)
+	}
+	if rows := auditRows(t, dir, "scan.finish"); len(rows) != 2 {
+		t.Errorf("scan.finish = %+v", rows)
+	}
+	_, out, _, err = run(t, dir, "scan", "--all", "--osv-db", db, "--json")
+	if err != nil || !strings.Contains(out, `"status":"empty"`) || !strings.Contains(out, `"failures":[]`) {
+		t.Errorf("json: %v\n%s", err, out)
+	}
+}
+
+func TestScanAllDisabledEcosystemExitZero(t *testing.T) {
+	dir, db := t.TempDir(), buildTestOSVDB(t)
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "source", "disable", "osv.npm"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, errOut, err := run(t, dir, "scan", "--all", "--osv-db", db)
+	if err != nil {
+		t.Fatalf("scan --all: %v\n%s\n%s", err, out, errOut)
+	}
+	if strings.Contains(errOut, "ecosystem disabled") || !strings.Contains(out, "Michel found 2 new findings in demo") {
+		t.Errorf("stdout %q stderr %q", out, errOut)
+	}
+	if rows := auditRows(t, dir, "scan.finish"); len(rows) != 1 || rows[0].result != "partial" {
+		t.Errorf("scan.finish = %+v", rows)
+	}
+}
+
+func TestScanProjectEmptyExitOne(t *testing.T) {
+	dir, db := t.TempDir(), buildTestOSVDB(t)
+	empty := t.TempDir()
+	if _, _, _, err := run(t, dir, "project", "add", empty, "--name", "acme-empty"); err != nil {
+		t.Fatal(err)
+	}
+	// The user aimed at this folder: nothing to scan there is worth an exit 1.
+	_, out, _, err := run(t, dir, "scan", "--project", "acme-empty", "--osv-db", db)
+	if ExitCode(err) != 1 {
+		t.Fatalf("err = %v", err)
+	}
+	if want := i18n.T(i18n.EN, "cli.scan.empty", "acme-empty", empty); !strings.Contains(out, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, out)
+	}
+}
+
 func TestScanJSONReportsPerProjectFailures(t *testing.T) {
 	dir, db := t.TempDir(), buildTestOSVDB(t)
 	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "good"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := run(t, dir, "project", "add", t.TempDir(), "--name", "empty"); err != nil {
-		t.Fatal(err)
-	}
+	addVanished(t, dir, "vanished")
 	_, out, _, err := run(t, dir, "scan", "--all", "--osv-db", db, "--json")
 	if ExitCode(err) != 1 || err == nil {
 		t.Fatalf("err = %v", err)
@@ -162,8 +241,8 @@ func TestScanJSONReportsPerProjectFailures(t *testing.T) {
 	if jerr := json.Unmarshal([]byte(out), &doc); jerr != nil {
 		t.Fatal(jerr, out)
 	}
-	if len(doc.Results) != 1 || len(doc.Failures) != 1 || doc.Failures[0]["project"] != "empty" ||
-		!strings.Contains(doc.Failures[0]["error"], "michel project list") {
+	if len(doc.Results) != 1 || len(doc.Failures) != 1 || doc.Failures[0]["project"] != "vanished" ||
+		!strings.Contains(doc.Failures[0]["error"], "cannot read the folder") {
 		t.Errorf("doc = %+v", doc)
 	}
 }
@@ -198,14 +277,12 @@ func TestScanWarnsAboutProjectScannerConfig(t *testing.T) {
 
 func TestScanTextReportsFailuresPlainly(t *testing.T) {
 	dir, db := t.TempDir(), buildTestOSVDB(t)
-	if _, _, _, err := run(t, dir, "project", "add", t.TempDir(), "--name", "empty"); err != nil {
-		t.Fatal(err)
-	}
+	addVanished(t, dir, "vanished")
 	_, out, errOut, err := run(t, dir, "scan", "--all", "--osv-db", db)
 	if ExitCode(err) != 1 {
 		t.Fatalf("err = %v", err)
 	}
-	if !strings.Contains(errOut, "error: empty: Michel found no composer.lock") || strings.Contains(errOut, "{empty") {
+	if !strings.Contains(errOut, "error: vanished: Michel cannot read the folder") || strings.Contains(errOut, "{vanished") {
 		t.Errorf("stderr = %q", errOut)
 	}
 	if strings.Contains(out, "critical/high") || !strings.HasSuffix(out, "Michel could not scan any project. Read the errors above, fix them, then run the scan again.\n") {

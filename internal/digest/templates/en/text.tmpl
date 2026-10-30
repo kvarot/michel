@@ -6,8 +6,17 @@
 {{- .Title}}
 {{if .SinceLabel}}{{.SinceLabel}}
 {{end}}{{if .OSVStale}}{{stale}}
+{{end}}{{if .ShowEmpty}}{{empty}}
 {{end}}{{if .FailedScans}}The last scan of {{.FailedScans}} {{if eq .FailedScans 1}}project{{else}}projects{{end}} did not finish.
-{{end}}
+{{end}}{{if not .Catalog.Silent}}{{catalogLine}}
+{{range .Catalog.NewVersions}}  {{.Name}}: {{.From}} → {{.To}}
+{{end}}{{if or .Catalog.Failed .Catalog.Unreachable}}{{previousData}}
+{{end}}{{end}}
+{{- if or .Exploited .ExploitedDecided}}
+Exploited in the wild, fix these first:
+{{range .Exploited}}  [{{if .Malicious}}malicious package{{else}}KEV{{end}}] {{.Package}} {{.Installed}}{{if .Target}} → {{.Target}}{{end}} ({{.OSVID}}) · {{.Project}}{{if .KEVAdded}} · on the KEV list since {{day .KEVAdded}}{{end}}{{if eq .Status "decided"}} · decided: fix{{end}}
+{{end}}{{if .ExploitedDecided}}  {{exploitedDecided}}
+{{end}}{{end}}
 {{- range .Projects}}
 == {{.Name}} ==
 open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "high"}}, medium {{index .Open "medium"}}, low {{index .Open "low"}}) · decided: fix {{index .Decided "fix"}}, defer {{index .Decided "defer"}}, ignore {{index .Decided "ignore"}} · {{.DaysWithoutCritical}} {{if eq .DaysWithoutCritical 1}}day{{else}}days{{end}} without a new critical{{if eq .CriticalOpen 0}} · 0 critical open{{end}}
@@ -25,6 +34,11 @@ open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "hi
 {{range .Due}}  {{.Package}} {{.OSVID}}: deferred until {{day .DueAt}}{{if .Overdue}} (overdue){{end}}
 {{end}}{{end}}
 {{- end}}
+{{- if .Reading}}
+To read:
+{{range .Reading}}  {{.Source}}: {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}
+{{if .URL}}    {{.URL}}
+{{end}}{{end}}{{end}}
 {{- if .Word}}
 {{.Word}}
 {{end}}

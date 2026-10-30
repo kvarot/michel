@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,8 +14,11 @@ import (
 	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/digest"
 	"github.com/kvarot/michel/internal/explain"
+	"github.com/kvarot/michel/internal/feed"
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/source"
 )
 
 func TestTodayReturnsDigestInRequestedLang(t *testing.T) {
@@ -350,10 +354,108 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 	if err := digest.NewRepo(f.st).Save(context.Background(), digest.RunOf(d, now)); err != nil {
 		t.Fatal(err)
 	}
+	// Sources whose stored errors name folders, a plugin with a report file,
+	// an installed skill: their paths never leave either.
+	ctx := context.Background()
+	r := source.NewRepo(f.st)
+	pathErr := "open " + filepath.Join(f.proj.Path, "composer.lock") + ": denied; open " + filepath.Join(f.dir, "osv", "npm.zip") +
+		": denied; open " + winPathMarker + ": denied; open " + posixPathMarker + ": denied"
+	for _, key := range []string{"osv.npm", "enrich.kev", "feed.nginx"} {
+		if err := r.RecordRead(ctx, key, now, "error", pathErr, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report := filepath.Join(f.proj.Path, "report.sarif")
+	if err := os.WriteFile(report, []byte(demoSARIF), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Upsert(ctx, source.Entry{Key: "skill.other", Kind: source.KindSkill, Origin: source.OriginUser, Name: "other",
+		URL: "https://github.com/example/skill", Hosts: []string{"api.github.com", "codeload.github.com"}, Purpose: policy.PurposeRepo,
+		Config: source.Config{User: map[string]any{"repo": "example/skill", "pinned": demoPin, "installed_sha": demoPin,
+			"install_dir": filepath.Join(f.dir, "skills", "demo")}}}); err != nil {
+		t.Fatal(err)
+	}
 	var bodies []string
+	keep := func(_ int, b string) { bodies = append(bodies, b) }
+	addPlugin, _ := json.Marshal(map[string]any{"kind": "plugin", "name": "Demo SARIF", "format": "sarif", "input": report})
+	keep(f.send("POST", "/api/v1/sources", string(addPlugin)))
+	keep(f.send("POST", "/api/v1/sources/plugin.demo-sarif/enable", `{}`))
+	code, b := f.send("POST", "/api/v1/sources/plugin.demo-sarif/run", `{"project":"demo"}`)
+	bodies = append(bodies, b)
+	var started struct {
+		RunID string `json:"run_id"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal([]byte(b), &started) != nil {
+		t.Fatalf("run = %d %s", code, b)
+	}
+	_, runBody := f.waitRun(started.RunID)
+	bodies = append(bodies, runBody)
+	keep(f.send("POST", "/api/v1/sources/enrich.kev/enable", `{}`))
+	keep(f.send("POST", "/api/v1/sources/enrich.kev/enable?lang=fr", `{}`))
+	keep(f.send("POST", "/api/v1/sources/enrich.kev/enable", `{"consent":true}`))
+	keep(f.send("POST", "/api/v1/sources/enrich.kev/disable", `{"forget":true}`))
+	keep(f.send("POST", "/api/v1/sources/skill.other/enable", `{"consent":true}`))
+	keep(f.send("GET", "/api/v1/sources/skill.other", ""))
+	keep(f.send("DELETE", "/api/v1/sources/skill.other", ""))
+	keep(f.send("POST", "/api/v1/sources", `{"kind":"feed","name":"Mine","url":"https://example.org/feed"}`))
+	keep(f.send("POST", "/api/v1/sources", `{"kind":"feed","name":"Mine","url":"http://example.org/feed"}`))
+	keep(f.send("DELETE", "/api/v1/sources/feed.mine", ""))
+	keep(f.send("POST", "/api/v1/sources/reset", `{"key":"feed.nginx"}`))
+	keep(f.send("POST", "/api/v1/sources/feed.apple/run", `{"project":"demo"}`))
+	keep(f.send("GET", "/api/v1/sources/feed.apple/preview", ""))
+	// Install, then upgrade, a skill of the page (the skills folder is the
+	// user's own: the preview may name it, nothing else may).
+	f.serveSkill()
+	keep(f.send("POST", "/api/v1/sources/skill.demo/enable", `{}`))
+	keep(f.send("GET", "/api/v1/sources/skill.demo/preview", ""))
+	keep(f.send("POST", "/api/v1/sources/skill.demo/install", `{"sha":"`+otherPin+`"}`))
+	keep(f.send("POST", "/api/v1/sources/skill.demo/install", `{"sha":"`+demoPin+`"}`))
+	keep(f.send("POST", "/api/v1/sources/skill.demo/upgrade", `{"sha":"`+newPin+`"}`))
+	f.markNewVersion()
+	keep(f.send("GET", "/api/v1/sources/skill.demo/preview?lang=fr", ""))
+	keep(f.send("POST", "/api/v1/sources/skill.demo/upgrade", `{"sha":"`+newPin+`"}`))
+	keep(f.send("DELETE", "/api/v1/sources/skill.demo", ""))
+	keep(f.send("DELETE", "/api/v1/sources/skill.demo", `{"confirm":true}`))
+	// Updates (sources waiting for consent: no network), items, discoveries, technologies.
+	keep(f.send("POST", "/api/v1/sources/osv.npm/update", ""))
+	keep(f.send("POST", "/api/v1/sources/update?lang=fr", `{}`))
+	nginx, err := r.Get(ctx, "feed.nginx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AddTech(ctx, f.st, "nginx"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := feed.NewRepo(f.st).Insert(ctx, []feed.Item{{SourceID: nginx.ID, GUID: "g1", Title: "nginx fixes a flaw", URL: "https://nginx.org/a",
+		PublishedAt: ts(now.Add(-time.Hour)), SeenAt: ts(now.Add(-time.Hour))}}); err != nil {
+		t.Fatal(err)
+	}
+	var items []ReadingView
+	f.get("/api/v1/sources/items", &items)
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	keep(f.send("POST", "/api/v1/sources/items/"+items[0].ID+"/read", ""))
+	keep(f.send("POST", "/api/v1/sources/items/nope/read", ""))
+	if _, err := f.st.DB().Exec(`INSERT INTO discovery (repo, topic, stars, description, html_url, first_seen_at, state) VALUES
+		('example/mcp', 'mcp-security', 7, 'an MCP server', 'https://github.com/example/mcp', '2026-10-28T00:00:00Z', 'new'),
+		('example/other', 'claude-skills', 3, 'other', '', '2026-10-28T00:00:00Z', 'new')`); err != nil {
+		t.Fatal(err)
+	}
+	keep(f.send("GET", "/api/v1/sources/discoveries", ""))
+	keep(f.send("POST", "/api/v1/sources/discoveries/example/mcp", `{"action":"add","kind":"mcp","pin":"main"}`))
+	keep(f.send("POST", "/api/v1/sources/discoveries/example/mcp", `{"action":"add","kind":"mcp","pin":"`+demoPin+`"}`))
+	keep(f.send("POST", "/api/v1/sources/discoveries/example/other", `{"action":"ignore"}`))
+	keep(f.send("POST", "/api/v1/sources/discoveries/example/none", `{"action":"ignore"}`))
+	keep(f.send("POST", "/api/v1/tech", `{"tag":"postgresql"}`))
+	keep(f.send("POST", "/api/v1/tech", `{"tag":"Not A Tag"}`))
+	keep(f.send("DELETE", "/api/v1/tech/postgresql", ""))
 	for _, lang := range []string{"en", "fr"} {
 		for _, path := range apiRoutes(f) {
 			sep := "?"
+			if strings.Contains(path, "?") {
+				sep = "&"
+			}
 			_, body := f.do("GET", path+sep+"lang="+lang, testToken, "")
 			bodies = append(bodies, body)
 			_, body = f.do("GET", path, "", "")
@@ -372,7 +474,7 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 		_, b := f.do("POST", "/api/v1/findings/"+f.ids["ACME-2026-0001"]+"/decision", testToken, body)
 		bodies = append(bodies, b)
 	}
-	_, b := f.do("POST", "/api/v1/findings/"+f.gone+"/decision", testToken, `{"action":"fix"}`)
+	_, b = f.do("POST", "/api/v1/findings/"+f.gone+"/decision", testToken, `{"action":"fix"}`)
 	bodies = append(bodies, b)
 	var digests []digest.Run
 	f.get("/api/v1/digests", &digests)
@@ -381,6 +483,7 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 	}
 
 	banned := []string{f.proj.Path, filepath.ToSlash(f.proj.Path), strings.ReplaceAll(f.proj.Path, `\`, `\\`),
+		f.dir, filepath.ToSlash(f.dir), strings.ReplaceAll(f.dir, `\`, `\\`), `D:\\Data`, "/home/demo", "report_path", "install_dir",
 		testCmdMarker, installCmdMarker, "phpunit-secret-marker", "test_cmd", "install_cmd", testToken}
 	for _, body := range bodies {
 		for _, s := range banned {
@@ -389,7 +492,7 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 			}
 		}
 	}
-	if len(bodies) < 30 {
+	if len(bodies) < 80 {
 		t.Errorf("only %d responses checked", len(bodies))
 	}
 }
@@ -439,5 +542,35 @@ func TestTodayKeepsTheLastDigestWindow(t *testing.T) {
 	f.get("/api/v1/today", &d)
 	if !d.Since.Equal(run.Since) || !d.Until.Equal(now) || d.NewTotal != 2 || len(d.Projects) != 1 || len(d.Projects[0].New) != 2 {
 		t.Errorf("since %v until %v new %d projects %+v", d.Since, d.Until, d.NewTotal, d.Projects)
+	}
+}
+
+func TestFindingViewCarriesKEVAndEPSS(t *testing.T) {
+	f := newFixture(t, nil)
+	id := f.seed("acme/lib", "GHSA-kev", "unknown", "pending", now.Add(-time.Hour))
+	if _, err := f.st.DB().Exec(`UPDATE finding SET kev = 1, kev_added = '2026-03-12', epss = 0.12, epss_percentile = 0.95,
+		cvss_enriched = 9.1 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	var v FindingView
+	body := f.get("/api/v1/findings/"+id, &v)
+	if !v.KEV || v.KEVAdded != "2026-03-12" || v.EPSS != 0.12 || v.EPSSPercentile != 0.95 || v.Malicious || v.Kind != "dependency" {
+		t.Errorf("view = %+v", v)
+	}
+	if v.Severity != "critical" || v.SeveritySource != "enrichment" {
+		t.Errorf("severity = %s from %s", v.Severity, v.SeveritySource)
+	}
+	for _, k := range []string{`"kev":true`, `"epss":0.12`, `"malicious":false`, `"kind":"dependency"`, `"severity_source":"enrichment"`} {
+		if !strings.Contains(body, k) {
+			t.Errorf("body lacks %s: %s", k, body)
+		}
+	}
+	mal := f.seed("vuln-pkg", "MAL-2026-1", "critical", "new", now.Add(-time.Hour))
+	if _, err := f.st.DB().Exec(`UPDATE finding SET malicious = 1 WHERE id = ?`, mal); err != nil {
+		t.Fatal(err)
+	}
+	f.get("/api/v1/findings/"+mal, &v)
+	if !v.Malicious || v.SeveritySource != "malicious" || v.KEV {
+		t.Errorf("malicious view = %+v", v)
 	}
 }

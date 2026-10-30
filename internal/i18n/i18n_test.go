@@ -171,6 +171,8 @@ func TestTemplateIsCachedPerLanguage(t *testing.T) {
 		"plural":       func(int, string, string) string { return "" },
 		"join":         strings.Join,
 		"severityWord": func(string) string { return "" },
+		"day":          func(string) string { return "" },
+		"pct":          func(float64) int { return 0 },
 	}
 	for _, l := range []Lang{EN, FR} {
 		for _, name := range []string{"what", "impact", "cost"} {

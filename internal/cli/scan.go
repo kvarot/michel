@@ -11,20 +11,28 @@ import (
 	"text/tabwriter"
 
 	"github.com/kvarot/michel/internal/buildinfo"
+	"github.com/kvarot/michel/internal/enrich"
 	"github.com/kvarot/michel/internal/osvdb"
+	"github.com/kvarot/michel/internal/plugin"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/sourceupdate"
 	"github.com/spf13/cobra"
 )
 
 func newScanCmd(deps *Deps) *cobra.Command {
 	var name string
-	var all, noAnalyze, digestToo bool
+	var all, noAnalyze, digestToo, update bool
 	c := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan a project's lockfiles against the offline databases",
-		Long: "Scan reads composer.lock and package-lock.json files under the project folder and compares them " +
-			"with the offline OSV databases. It never uses the network; run 'michel db update' to refresh the databases.",
+		Long: "Scan reads composer.lock, package-lock.json, yarn.lock and pnpm-lock.yaml files under the project folder " +
+			"and compares them with the offline OSV databases of the enabled ecosystems ('michel source list --kind osv'). " +
+			"The scan itself never uses the network; run 'michel db update' to refresh the databases, or add --update to read every " +
+			"enabled source first (as 'michel source update'; a source that cannot be read does not stop the scan). A folder without any lockfile " +
+			"is reported as having nothing to scan: an error with --project, not with --all. After the scan and the analysis of a project, every enabled plugin " +
+			"set to run (michel source list --kind plugin) runs on it, as michel source run does; a plugin that fails is a warning.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -62,60 +70,123 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				}
 				targets = []project.Project{p}
 			}
+			asJSON, _ := cmd.Flags().GetBool("json")
+			problems := false
+			// The sources are read before the scans, so they use fresh
+			// data; a failed read keeps the previous data and the scans go on.
+			var updated *sourceupdate.Report
+			if update {
+				rep, err := sourceUpdate(cmd, deps, nil, "")
+				if err != nil && !errors.Is(err, sourceupdate.ErrSomeFailed) {
+					return err
+				}
+				updated = &rep
+				if !asJSON {
+					printSourceUpdate(deps, rep)
+				}
+				if err != nil {
+					problems = true
+					if !asJSON {
+						fmt.Fprintln(deps.Stdout, deps.T("cli.scan.update_continues"))
+					}
+				}
+				if !asJSON {
+					fmt.Fprintln(deps.Stdout)
+				}
+			}
 			root := dbRoot(cmd, deps)
+			ecos, err := osvdb.Enabled(ctx, source.NewRepo(deps.Store), deps.allowed)
+			if err != nil {
+				return err
+			}
 			dataDir, _ := cmd.Flags().GetString("data-dir")
 			sdeps := scan.Deps{Store: deps.Store, Audit: deps.Audit, Gateway: deps.Gateway, Now: deps.Now,
 				Version: buildinfo.Version, DataDir: dataDir,
 				// Scanner warnings (unknown config keys, unused ignores) reach the user.
 				LogHandler: scannerLogHandler(deps.Stderr)}
-			asJSON, _ := cmd.Flags().GetBool("json")
 
 			results := []scan.Result{}
 			analysis := map[string]string{} // project name -> summary suffix
+			empties := map[string]string{}  // project name -> folder, for the scans with nothing to scan
 			type failure struct {
 				Project string `json:"project"`
 				Error   string `json:"error"`
 			}
 			failures := []failure{}
-			problems := false
+			// The plugins run after each project's scan and analysis; a
+			// plugin that fails is a warning, as the analysis.
+			pluginEntries, err := source.NewRepo(deps.Store).List(ctx, source.KindPlugin, false)
+			if err != nil {
+				return err
+			}
+			plugins := []pluginRunView{}
+			pluginLines := []string{}
+			runPlugins := func(p project.Project) {
+				for _, e := range scanPlugins(pluginEntries, deps.allowed, p.Name) {
+					res, err := plugin.RunPlugin(ctx, pluginDeps(cmd, deps), e, p, "")
+					if err != nil {
+						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_plugin_failed", p.Name, pluginErr(deps, e, p.Name, err), e.Key, p.Name))
+						if !errors.Is(err, plugin.ErrAudit) {
+							continue
+						}
+					}
+					plugins = append(plugins, pluginRunView{Project: p.Name, Key: e.Key, RunResult: res})
+					pluginLines = append(pluginLines, pluginSummary(deps, e, p.Name, res))
+				}
+			}
 			for _, p := range targets {
-				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root, Exclude: scan.EffectiveExclude(p)})
+				// The enrichment (KEV, EPSS) is read from the store for the CVEs of
+				// each scan only.
+				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root, Exclude: scan.EffectiveExclude(p), Ecosystems: ecos,
+					Lookup: enrich.LookupFunc(deps.Store.DB())})
 				if err != nil {
 					if errors.Is(err, osvdb.ErrDatabaseMissing) && !all {
 						return err
 					}
-					msg := err.Error()
-					if errors.Is(err, scan.ErrNoManifests) {
-						msg = deps.T("cli.scan.no_manifests", p.Path, p.Name)
-					}
-					failures = append(failures, failure{Project: p.Name, Error: msg})
+					failures = append(failures, failure{Project: p.Name, Error: err.Error()})
 					problems = true
 					continue
 				}
 				results = append(results, r)
-				if len(r.Errors) > 0 {
+				if r.Status == scan.ScanEmpty {
+					// Not a failure with --all: the project may have no
+					// dependencies yet. With --project the user aimed at it.
+					empties[p.Name] = p.Path
+					if !all {
+						problems = true
+					}
+					// A folder without lockfile still has code and settings to check.
+					runPlugins(p)
+					continue
+				}
+				// A lockfile left out because its ecosystem is disabled is the
+				// user's choice, not a problem: it keeps the scan partial in
+				// the store but neither warns nor changes the exit code.
+				if len(manifestProblems(r)) > 0 {
 					problems = true
 				}
 				analysis[p.Name] = deps.T("cli.scan.summary.analysis_skipped")
-				if noAnalyze || (r.Status != scan.ScanOK && r.Status != scan.ScanPartial) {
-					continue
+				if !noAnalyze && (r.Status == scan.ScanOK || r.Status == scan.ScanPartial) {
+					// Analysis problems are warnings: they never change the scan's exit code.
+					ar, aerr := analyzeProject(cmd, deps, p, false)
+					if aerr != nil {
+						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_failed", p.Name, aerr, p.Name))
+					} else {
+						for _, e := range ar.Errors {
+							fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_error", p.Name, e, p.Name))
+						}
+						analysis[p.Name] = deps.N("cli.scan.summary.analyzed", ar.Analyzed+ar.Skipped)
+					}
 				}
-				// Analysis problems are warnings: they never change the scan's exit code.
-				ar, aerr := analyzeProject(cmd, deps, p, false)
-				if aerr != nil {
-					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_failed", p.Name, aerr, p.Name))
-					continue
-				}
-				for _, e := range ar.Errors {
-					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_error", p.Name, e, p.Name))
-				}
-				analysis[p.Name] = deps.N("cli.scan.summary.analyzed", ar.Analyzed+ar.Skipped)
+				runPlugins(p)
 			}
 			if asJSON {
 				if err := json.NewEncoder(deps.Stdout).Encode(struct {
-					Results  []scan.Result `json:"results"`
-					Failures []failure     `json:"failures"`
-				}{results, failures}); err != nil {
+					Results  []scan.Result        `json:"results"`
+					Failures []failure            `json:"failures"`
+					Plugins  []pluginRunView      `json:"plugins"`
+					Update   *sourceupdate.Report `json:"update,omitempty"`
+				}{results, failures, plugins, updated}); err != nil {
 					return err
 				}
 			} else {
@@ -123,14 +194,25 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					for _, w := range r.Warnings {
 						fmt.Fprintln(deps.Stderr, ignoredConfigWarning(deps, targets, r.Project, w))
 					}
-					for _, e := range r.Errors {
+					for _, e := range manifestProblems(r) {
 						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_manifest_error", r.Project, e))
 					}
 				}
 				for _, f := range failures {
 					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.error_line", f.Project, f.Error))
 				}
-				printScan(deps, results, analysis)
+				scanned := []scan.Result{}
+				for _, r := range results {
+					if r.Status == scan.ScanEmpty {
+						fmt.Fprintln(deps.Stdout, deps.T("cli.scan.empty", r.Project, empties[r.Project]))
+						continue
+					}
+					scanned = append(scanned, r)
+				}
+				printScan(deps, scanned, analysis)
+				for _, l := range pluginLines {
+					fmt.Fprintln(deps.Stdout, l)
+				}
 				switch {
 				case len(results) == 0:
 					fmt.Fprintln(deps.Stdout, deps.T("cli.scan.none_scanned"))
@@ -170,8 +252,21 @@ func newScanCmd(deps *Deps) *cobra.Command {
 	f.BoolVar(&all, "all", false, "scan every active project")
 	f.BoolVar(&noAnalyze, "no-analyze", false, "do not analyze the findings after the scan")
 	f.BoolVar(&digestToo, "digest", false, "with --all, send the digest after the scan (as 'michel digest --send')")
+	f.BoolVar(&update, "update", false, "read every enabled source before scanning (as 'michel source update')")
 	f.String("osv-db", "", "directory of the offline databases (default: from the policy)")
 	return c
+}
+
+// manifestProblems are the errors of r except the lockfiles left out because
+// their ecosystem is disabled.
+func manifestProblems(r scan.Result) []error {
+	var out []error
+	for _, e := range r.Errors {
+		if !errors.Is(e, scan.ErrEcosystemDisabled) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // printScan prints the results table and one summary sentence per project.

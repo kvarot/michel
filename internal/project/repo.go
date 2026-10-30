@@ -35,7 +35,7 @@ func NewRepo(s *store.Store) *Repo {
 	return &Repo{s: s, entropy: ulid.Monotonic(rand.Reader, 0)}
 }
 
-const cols = `id, name, source_type, path, classification, fix_level, test_cmd, install_cmd, active, created_at, core_packages, risk_overrides, exclude`
+const cols = `id, name, source_type, path, classification, fix_level, test_cmd, install_cmd, active, created_at, core_packages, risk_overrides, exclude, tech, tech_auto`
 
 func validClassification(c policy.Classification) bool {
 	switch c {
@@ -124,9 +124,14 @@ func (r *Repo) insert(ctx context.Context, p Project) error {
 	if err != nil {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}
-	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO project (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	tech, techAuto, err := marshalTech(p)
+	if err != nil {
+		return err
+	}
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO project (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.SourceType, p.Path, string(p.Classification), p.FixLevel,
-		p.TestCmd, p.InstallCmd, active, p.CreatedAt.UTC().Format(time.RFC3339), string(core), string(over), string(exclude))
+		p.TestCmd, p.InstallCmd, active, p.CreatedAt.UTC().Format(time.RFC3339), string(core), string(over), string(exclude),
+		tech, techAuto)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return fmt.Errorf("%w: %s", ErrDuplicateName, p.Name)
@@ -136,13 +141,26 @@ func (r *Repo) insert(ctx context.Context, p Project) error {
 	return nil
 }
 
+// marshalTech encodes the two technology lists as JSON text.
+func marshalTech(p Project) (string, string, error) {
+	tech, err := json.Marshal(p.Tech)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot save the project: %w", err)
+	}
+	auto, err := json.Marshal(p.TechAuto)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot save the project: %w", err)
+	}
+	return string(tech), string(auto), nil
+}
+
 type scanner interface{ Scan(...any) error }
 
 func scan(s scanner) (Project, error) {
 	var p Project
-	var class, created, core, over, exclude string
+	var class, created, core, over, exclude, tech, techAuto string
 	var active int
-	if err := s.Scan(&p.ID, &p.Name, &p.SourceType, &p.Path, &class, &p.FixLevel, &p.TestCmd, &p.InstallCmd, &active, &created, &core, &over, &exclude); err != nil {
+	if err := s.Scan(&p.ID, &p.Name, &p.SourceType, &p.Path, &class, &p.FixLevel, &p.TestCmd, &p.InstallCmd, &active, &created, &core, &over, &exclude, &tech, &techAuto); err != nil {
 		return Project{}, err
 	}
 	p.Classification = policy.Classification(class)
@@ -156,6 +174,18 @@ func scan(s scanner) (Project, error) {
 	p.Exclude = []string{}
 	if err := json.Unmarshal([]byte(exclude), &p.Exclude); err != nil {
 		return Project{}, fmt.Errorf("project %s has an unreadable list of excluded folders %q: %w", p.Name, exclude, err)
+	}
+	if err := json.Unmarshal([]byte(tech), &p.Tech); err != nil {
+		return Project{}, fmt.Errorf("project %s has an unreadable list of technologies %q: %w", p.Name, tech, err)
+	}
+	if err := json.Unmarshal([]byte(techAuto), &p.TechAuto); err != nil {
+		return Project{}, fmt.Errorf("project %s has an unreadable list of detected technologies %q: %w", p.Name, techAuto, err)
+	}
+	if p.Tech == nil {
+		p.Tech = []string{}
+	}
+	if p.TechAuto == nil {
+		p.TechAuto = []string{}
 	}
 	_ = normalizeExtras(&p) // a stored JSON null becomes an empty value; unknown stored keys are left as they are
 	p.Active = active != 0
@@ -246,8 +276,8 @@ func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
 }
 
 // Update rewrites the editable fields of p (found by ID): classification,
-// fix level, commands, core packages, risk overrides and excluded folders. Values are validated
-// like in Add.
+// fix level, commands, core packages, risk overrides, excluded folders and
+// technologies (declared and detected). Values are validated like in Add.
 func (r *Repo) Update(ctx context.Context, p Project) error {
 	if !validClassification(p.Classification) {
 		return fmt.Errorf("%w %q", ErrInvalidClassification, p.Classification)
@@ -270,14 +300,40 @@ func (r *Repo) Update(ctx context.Context, p Project) error {
 	if err != nil {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}
+	tech, techAuto, err := marshalTech(p)
+	if err != nil {
+		return err
+	}
 	res, err := r.s.DB().ExecContext(ctx, `UPDATE project SET classification = ?, fix_level = ?, test_cmd = ?, install_cmd = ?,
-		core_packages = ?, risk_overrides = ?, exclude = ? WHERE id = ?`,
-		string(p.Classification), p.FixLevel, p.TestCmd, p.InstallCmd, string(core), string(over), string(exclude), p.ID)
+		core_packages = ?, risk_overrides = ?, exclude = ?, tech = ?, tech_auto = ? WHERE id = ?`,
+		string(p.Classification), p.FixLevel, p.TestCmd, p.InstallCmd, string(core), string(over), string(exclude), tech, techAuto, p.ID)
 	if err != nil {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("%w: %s", ErrNotFound, p.ID)
+	}
+	return nil
+}
+
+// UpdateTechAuto replaces the technologies Michel detected in the project's
+// manifests (written by the scan, never by the user). The tags are checked,
+// sorted and deduplicated.
+func (r *Repo) UpdateTechAuto(ctx context.Context, id string, tags []string) error {
+	auto, err := NormalizeTech(tags)
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(auto)
+	if err != nil {
+		return fmt.Errorf("cannot save the project: %w", err)
+	}
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE project SET tech_auto = ? WHERE id = ?`, string(b), id)
+	if err != nil {
+		return fmt.Errorf("cannot save the detected technologies: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	return nil
 }

@@ -21,6 +21,12 @@ Each term adds points when its condition is true. The points are summed and capp
 
 When the size of the jump cannot be determined (`unknown`), `major_jump` adds 0 and the analysis records `major_jump_unknown: 0`, so the gap is visible instead of silently counted as safe. An unknown jump is also never an automatic fix: whatever the score, the recommendation is `handoff` (or `report_only` without a fixed version), and the analysis records `jump_unknown_handoff: 1`. This flag, like `thresholds_fallback`, is not points: the score is unchanged.
 
+## Exploited in the wild: urgency, not points
+
+KEV does not change the score: it marks the urgency. When a finding is on CISA's list of vulnerabilities exploited in the wild (KEV), or the package itself is malicious, the analysis records the flag `exploited: 1` (always present, at 0 otherwise) and `urgency: urgent`. Like `jump_unknown_handoff`, this flag adds no points. The score measures the risk of the *fix* (how likely the update is to break something); a flaw being exploited makes the fix more urgent, not riskier. Adding points would also make `auto_fix` rarer for exactly the flaws that need fixing first.
+
+What the urgency changes: the explanation says "Fix this first", the finding is listed first (`michel findings`, the API), and the digest lists it at the top, under "Exploited in the wild", every day until it is fixed or deferred or ignored with a decision. The EPSS score (FIRST's probability of exploitation within 30 days) is shown in the explanation from the 50th percentile; it changes neither the score nor the urgency.
+
 ## Thresholds
 
 | Score | Recommendation |

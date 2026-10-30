@@ -16,6 +16,7 @@ import (
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
+	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -146,6 +147,12 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 				// so they write nothing, not even app.start.
 				return nil
 			}
+			// The registry follows the embedded catalog: new entries appear,
+			// the user's choices stay.
+			if _, _, err := source.Sync(cmd.Context(), source.NewRepo(st)); err != nil {
+				deps.Close()
+				return deps.Wrapf("cli.root.sources_sync", err)
+			}
 			if _, err := deps.Audit.Record(context.Background(), audit.Event{
 				Actor: "cli", Action: "app.start", Target: buildinfo.Version, Result: "ok",
 				Evidence: map[string]any{
@@ -187,6 +194,8 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newSecretCmd(deps))
 	root.AddCommand(newNotifyCmd(deps))
 	root.AddCommand(newServeCmd(deps))
+	root.AddCommand(newSourceCmd(deps))
+	root.AddCommand(newTechCmd(deps))
 	return root
 }
 

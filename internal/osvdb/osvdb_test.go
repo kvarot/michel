@@ -16,7 +16,12 @@ import (
 
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/policy"
+	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/store"
 )
+
+// testEcos are the ecosystems enabled by default in the catalog.
+var testEcos = []string{"Packagist", "npm"}
 
 func makeZip(t *testing.T) []byte {
 	t.Helper()
@@ -58,7 +63,7 @@ func TestUpdateWritesZipViaGateway(t *testing.T) {
 	defer srv.Close()
 	setBase(t, srv.URL)
 	root := t.TempDir()
-	st, err := Update(context.Background(), root, gateway(t, srv.URL, true).Client("osv.db"), Ecosystems, fixed)
+	st, err := Update(context.Background(), root, gateway(t, srv.URL, true).Client("osv.db"), testEcos, fixed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +73,7 @@ func TestUpdateWritesZipViaGateway(t *testing.T) {
 	if paths[0] != "/Packagist/all.zip" || paths[1] != "/npm/all.zip" {
 		t.Errorf("paths = %v", paths)
 	}
-	for _, eco := range Ecosystems {
+	for _, eco := range testEcos {
 		if _, err := os.Stat(ZipPath(root, eco)); err != nil {
 			t.Error(err)
 		}
@@ -93,7 +98,7 @@ func TestUpdateDeniedWhenNotAllowlisted(t *testing.T) {
 	defer srv.Close()
 	setBase(t, srv.URL)
 	root := t.TempDir()
-	_, err := Update(context.Background(), root, gateway(t, srv.URL, false).Client("osv.db"), Ecosystems, fixed)
+	_, err := Update(context.Background(), root, gateway(t, srv.URL, false).Client("osv.db"), testEcos, fixed)
 	if !errors.Is(err, egress.ErrEgressDenied) {
 		t.Fatalf("err = %v", err)
 	}
@@ -145,7 +150,7 @@ func TestRequireNamesMissingEcosystem(t *testing.T) {
 	zp := ZipPath(root, "Packagist")
 	os.MkdirAll(filepath.Dir(zp), 0o750)
 	os.WriteFile(zp, makeZip(t), 0o640)
-	err := Require(root, Ecosystems)
+	err := Require(root, testEcos)
 	if !errors.Is(err, ErrDatabaseMissing) {
 		t.Fatalf("err = %v", err)
 	}
@@ -158,7 +163,7 @@ func TestRequireNamesMissingEcosystem(t *testing.T) {
 	// An empty file does not count.
 	os.MkdirAll(filepath.Dir(ZipPath(root, "npm")), 0o750)
 	os.WriteFile(ZipPath(root, "npm"), nil, 0o640)
-	if Require(root, Ecosystems) == nil {
+	if Require(root, testEcos) == nil {
 		t.Error("empty file accepted")
 	}
 }
@@ -169,7 +174,7 @@ func TestStatusesReportsFetchedAt(t *testing.T) {
 	os.MkdirAll(filepath.Dir(zp), 0o750)
 	os.WriteFile(zp, []byte("12345"), 0o640)
 	os.WriteFile(filepath.Join(filepath.Dir(zp), "fetched_at"), []byte("2026-10-01T10:00:00Z\n"), 0o640)
-	st, err := Statuses(root)
+	st, err := Statuses(root, testEcos)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,5 +269,70 @@ func TestInstallKeepsOldFileWhenReplaceFails(t *testing.T) {
 	}
 	if _, err := os.Stat(dst + ".old"); err == nil {
 		t.Error(".old left")
+	}
+}
+
+func TestEnabledFollowsSourceEntries(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	r := source.NewRepo(st)
+	if _, _, err := source.Sync(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	// No allow rule at all: an enabled entry waiting for consent still counts.
+	none := func(host, purpose string) bool { return false }
+	check := func(want ...string) {
+		t.Helper()
+		got, err := Enabled(ctx, r, none)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("Enabled = %v, want %v", got, want)
+		}
+	}
+	check("Packagist", "npm") // catalog order, as the fixed list was
+	if err := r.SetEnabled(ctx, "osv.pypi", true); err != nil {
+		t.Fatal(err)
+	}
+	check("Packagist", "npm", "PyPI")
+	if err := r.SetEnabled(ctx, "osv.npm", false); err != nil {
+		t.Fatal(err)
+	}
+	check("Packagist", "PyPI")
+}
+
+func TestUpdateSendsIfModifiedSinceAndKeepsOnNotModified(t *testing.T) {
+	body := makeZip(t)
+	var since []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		since = append(since, r.Header.Get("If-Modified-Since"))
+		if r.Header.Get("If-Modified-Since") != "" {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Write(body)
+	}))
+	defer srv.Close()
+	setBase(t, srv.URL)
+	root, client := t.TempDir(), gateway(t, srv.URL, true).Client("osv.db")
+	if _, n, err := UpdateEcosystem(context.Background(), root, client, "npm", fixed); err != nil || n != 1 {
+		t.Fatalf("first: %d %v", n, err)
+	}
+	later := func() time.Time { return fixed().Add(24 * time.Hour) }
+	st, _, err := UpdateEcosystem(context.Background(), root, client, "npm", later)
+	if !errors.Is(err, ErrNotModified) || !st.Present || !st.FetchedAt.Equal(later()) {
+		t.Fatalf("second: %+v %v", st, err)
+	}
+	if since[0] != "" || since[1] != "Thu, 22 Oct 2026 08:00:00 GMT" {
+		t.Errorf("If-Modified-Since = %q", since)
+	}
+	// Update (michel db update) counts an unchanged database as updated.
+	if sts, err := Update(context.Background(), root, client, []string{"npm"}, later); err != nil || len(sts) != 1 || !sts[0].Present {
+		t.Errorf("Update after 304: %+v %v", sts, err)
 	}
 }

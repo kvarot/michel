@@ -93,3 +93,32 @@ func TestNormalizeRelPathSlash(t *testing.T) {
 		t.Error("id does not follow FindingID")
 	}
 }
+
+func TestNormalizeFlagsMaliciousAsCritical(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "proj")
+	mal := loadAdvisory(t, `{"id":"MAL-2024-0001","modified":"2026-10-01T00:00:00Z","summary":"Malicious code in vuln-pkg","affected":[
+	 {"package":{"ecosystem":"npm","name":"vuln-pkg"},"versions":["1.0.0"]}]}`)
+	plain := loadAdvisory(t, `{"id":"X-2","modified":"2026-10-01T00:00:00Z","affected":[
+	 {"package":{"ecosystem":"npm","name":"vuln-pkg"},"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"1.0.1"}]}]}]}`)
+	r := models.VulnerabilityResults{Results: []models.PackageSource{{
+		Source: models.SourceInfo{Path: filepath.Join(root, "package-lock.json")},
+		Packages: []models.PackageVulns{{
+			Package:         models.PackageInfo{Name: "vuln-pkg", Version: "1.0.0", Ecosystem: "npm"},
+			Vulnerabilities: []*osvschema.Vulnerability{mal, plain},
+			Groups:          []models.GroupInfo{{IDs: []string{"MAL-2024-0001"}}, {IDs: []string{"X-2"}, MaxSeverity: "5.0"}},
+		}},
+	}}}
+	fs, _ := Normalize("p1", root, r)
+	if len(fs) != 2 {
+		t.Fatalf("findings = %+v", fs)
+	}
+	for _, f := range fs {
+		if f.Kind != KindDependency {
+			t.Errorf("%s kind %q", f.OSVID, f.Kind)
+		}
+		mal := f.OSVID == "MAL-2024-0001"
+		if f.Malicious != mal || (mal && f.SeverityLabel != "critical") || (!mal && f.SeverityLabel != "medium") {
+			t.Errorf("finding = %+v", f)
+		}
+	}
+}

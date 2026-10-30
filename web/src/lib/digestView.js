@@ -27,10 +27,20 @@ export function severityOf(s) {
  * (older server) falls back to a new package of the same name, then "unknown". text is the "what" sentence for new packages,
  * the reason code for decisions to review and the due date for deferrals.
  * decided is the action already taken on a new package ("" when not decided).
- * @returns {{project: string, items: {kind: string, package: string, severity: string, text: string, findingIds: string[]}[]}[]}
+ * kev and malicious mark a line one of whose findings is exploited in the
+ * wild or a malicious package: a new package carries them (with epss, its
+ * highest exploitation score, and findingKind, the sort of its findings); a
+ * decision to review or a deferral takes them from digest.exploited.
+ * @returns {{project: string, items: {kind: string, package: string, severity: string, text: string, findingIds: string[], kev: boolean, malicious: boolean, epss: number, findingKind: string}[]}[]}
  */
 export function groupAttention(digest) {
   if (!digest || !Array.isArray(digest.projects)) return []
+  const exploited = {}
+  for (const e of digest.exploited || []) exploited[e.finding_id] = e
+  const marks = (ids) => ({
+    kev: ids.some((id) => exploited[id] && !!exploited[id].kev_added),
+    malicious: ids.some((id) => exploited[id] && !!exploited[id].malicious),
+  })
   return digest.projects.map((p) => {
     const fresh = p.new || []
     const severityByName = {}
@@ -44,7 +54,8 @@ export function groupAttention(digest) {
       items.push({
         kind: 'new', package: pkg.name, severity: severityOf(pkg.worst_severity), text: pkg.what || '',
         findingIds: pkg.finding_ids || [], osvIds: pkg.osv_ids || [], installed: pkg.installed || '', target: pkg.target || '',
-        decided: pkg.decided || '',
+        decided: pkg.decided || '', kev: !!pkg.kev, malicious: !!pkg.malicious, epss: pkg.epss || 0,
+        findingKind: pkg.kind || 'dependency',
       })
     }
     for (const s of p.superseded || []) {
@@ -58,6 +69,9 @@ export function groupAttention(digest) {
         kind: 'due', package: d.package, severity: d.severity ? severityOf(d.severity) : severityByName[d.package] || 'unknown', text: d.due_at || '',
         findingIds: d.finding_id ? [d.finding_id] : [], osvIds: d.osv_id ? [d.osv_id] : [], overdue: !!d.overdue,
       })
+    }
+    for (const item of items) {
+      if (item.kind !== 'new') Object.assign(item, marks(item.findingIds), { epss: 0, findingKind: 'dependency' })
     }
     const order = items.map((item, i) => ({ item, i }))
     order.sort((a, b) =>
@@ -82,6 +96,23 @@ export function formatDate(iso, lang) {
   const mo = String(t.getUTCMonth() + 1).padStart(2, '0')
   const d = String(t.getUTCDate()).padStart(2, '0')
   return lang === 'fr' ? `${d}/${mo}/${y}` : `${y}-${mo}-${d}`
+}
+
+/**
+ * formatPercent writes a share (0 to 1) as a percentage in lang, with one
+ * decimal at most: "42,5 %" in French (decimal comma, a space before the
+ * sign, as the French texts write it), "42.5%" in English. whole rounds
+ * down to a whole number, for a percentile ("more than 97%").
+ * @param {number} share
+ * @param {string} lang
+ * @param {boolean} [whole]
+ */
+export function formatPercent(share, lang, whole = false) {
+  const x = Number(share) || 0
+  // The epsilon keeps 0.29 at 29: 0.29 * 100 is 28.999999999999996.
+  const n = whole ? Math.floor(x * 100 + 1e-9) : Math.round(x * 1000) / 10
+  const s = String(n)
+  return lang === 'fr' ? `${s.replace('.', ',')} %` : `${s}%`
 }
 
 /** decisionLabel names a decision in force in lang; "" for none. */

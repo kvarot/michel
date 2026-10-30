@@ -28,7 +28,7 @@ michel findings --project demo --status decided
   - les versions qui corrigent la faille changent ;
   - la date d'un report est atteinte ;
   - une faille qui avait disparu revient différente.
-- `--project` avec `--package` décide pour toutes les failles de ce paquet dans ce projet qui attendent une décision. Ajoute `--force` pour remplacer aussi les décisions déjà prises. Un paquet a souvent plusieurs avis de sécurité : c'est le moyen rapide de trier un premier scan qui trouve des centaines de failles.
+- `--project` avec `--package` décide pour toutes les failles de ce paquet dans ce projet qui attendent une décision. Ajoute `--force` pour remplacer aussi les décisions déjà prises. Un paquet a souvent plusieurs avis de sécurité : c'est le moyen rapide de trier un premier scan qui trouve des centaines de failles. Michel l'écrit en une ligne de résumé (combien de failles, la décision, le premier et le dernier événement d'audit) ; `--verbose` affiche plutôt une ligne par faille.
 - `--why` est facultatif pour `fix` et `defer`, obligatoire pour `ignore`, 1 000 caractères au plus. Il est gardé dans le journal d'audit : n'y mets jamais de code ni de mot de passe.
 - Une faille qui n'est plus vue (statut `gone`) ne peut pas être décidée : si elle revient, Michel ne te redemande que si quelque chose a changé.
 - Chaque décision est notée dans le journal d'audit (événement `decision.set`). Une décision ne touche jamais au dossier du projet.
@@ -44,9 +44,12 @@ michel digest --html > digest.html  # la version HTML de l'e-mail
 michel digest --json                # JSON versionné {"michel_digest": 1, ...}
 michel digest --send                # envoie sur chaque canal activé, puis l'enregistre
 michel scan --all --digest          # scanne tous les projets actifs, puis fait digest --send
+michel scan --all --update --digest # lit d'abord les sources activées (comme michel source update)
 ```
 
 **Période couverte.** Un digest couvre tout ce qui s'est passé depuis la fin du dernier digest envoyé avec `--send`, que ses canaux aient réussi ou non. La première fois, il couvre les 24 dernières heures. La période n'est pas plafonnée : après trois semaines d'absence, le digest dit « Tout ce qui a changé depuis le <date> » et liste tout. `--since AAAA-MM-JJ` impose le début, par exemple pour renvoyer après l'échec d'un canal.
+
+**Failles que des pirates utilisent déjà** passe en premier, avant les projets, dès que la source `enrich.kev` est activée : toutes les failles de la liste KEV de la CISA (l'agence américaine de cybersécurité), ainsi que les paquets malveillants, tant qu'elles sont ouvertes ou que tu as décidé de les corriger, quelles que soient leur date et leur gravité. Celles que tu as reportées ou ignorées avec une raison ne sont comptées que sur une ligne. **À lire** vient après les projets : au plus 10 avis d'éditeurs non lus, publiés pendant la période et qui parlent des technologies que tu utilises. Les deux sont expliqués dans [sources.fr.md](../sources.fr.md).
 
 **Rubriques**, pour chaque projet actif :
 
@@ -56,7 +59,7 @@ michel scan --all --digest          # scanne tous les projets actifs, puis fait 
 - **Décisions à revoir** : les décisions que Michel a mises de côté, avec la raison (gravité changée, version corrigée changée, date atteinte, faille revenue différente) ;
 - **Reports qui arrivent à échéance** : les reports dont la date tombe dans les 3 prochains jours, marqués « date dépassée » une fois passée.
 
-Les failles sont regroupées par paquet : une ligne par paquet avec la gravité la plus haute, la version installée, la version à viser et les identifiants des avis. En haut du digest, un bandeau t'avertit quand la base de vulnérabilités hors ligne date de plus de 7 jours, ou quand le dernier scan d'un projet a échoué ou s'est arrêté avant la fin. Quand il n'y a rien de nouveau et aucune échéance, Michel le dit en une phrase. La dernière ligne donne le lien vers la page « Aujourd'hui » (`notify.page_url`, jamais avec le jeton d'accès).
+Les failles sont regroupées par paquet : une ligne par paquet avec la gravité la plus haute, la version installée, la version à viser et les identifiants des avis. En haut du digest, un bandeau t'avertit quand la base de vulnérabilités hors ligne date de plus de 7 jours, ou quand le dernier scan d'un projet a échoué ou s'est arrêté avant la fin. Après `michel source update` (ou `scan --update`), une ligne **catalogue** dit combien de sources sont à jour et nomme celles que Michel n'a pas pu lire, celles qui attendent ton accord et celles qui ont une nouvelle version (« Catalogue : 6 sources à jour, feed.nginx injoignable. ») ; elle ne dit rien quand tout est à jour. Quand il n'y a rien de nouveau et aucune échéance, Michel le dit en une phrase. La dernière ligne donne le lien vers la page « Aujourd'hui » (`notify.page_url`, jamais avec le jeton d'accès).
 
 **`--send`** commence par mettre fin aux reports dont la date est atteinte (ils deviennent des décisions à revoir), envoie le digest sur chaque canal activé, puis enregistre l'envoi (événement d'audit `digest.run`, plus un `notify.send` par canal). Un canal en échec n'empêche pas les autres ; la commande se termine alors avec le code 1. L'envoi est enregistré même sans aucun canal configuré : c'est le repère « depuis la dernière fois ».
 
@@ -187,17 +190,17 @@ michel serve --listen 127.0.0.1:8080
 `michel schedule` n'existe pas encore. En attendant, crée toi-même la tâche planifiée. La ligne à lancer chaque matin est :
 
 ```
-michel scan --all --digest
+michel scan --all --update --digest
 ```
 
-Elle scanne tous les projets actifs, puis envoie le digest. Lance-la **avec ton propre compte utilisateur** : les secrets sont chiffrés pour ce compte (Windows) ou lisibles par lui seul, et la notification sur le bureau a besoin de ta session ouverte. Si l'ordinateur est éteint à cette heure-là, rien n'est perdu : le digest suivant couvre tout depuis le précédent.
+Elle lit d'abord chaque source activée (les bases de failles OSV, les listes KEV et EPSS qui disent quelles failles sont attaquées ou probablement attaquées, et les autres informations complémentaires ; une source qui attend encore ton accord n'est pas contactée), puis scanne tous les projets actifs, puis envoie le digest. Une source illisible n'arrête pas le scan : Michel se sert des données précédentes, le digest le dit et la commande se termine avec le code 1. Lance-la **avec ton propre compte utilisateur** : les secrets sont chiffrés pour ce compte (Windows) ou lisibles par lui seul, et la notification sur le bureau a besoin de ta session ouverte. Si l'ordinateur est éteint à cette heure-là, rien n'est perdu : le digest suivant couvre tout depuis le précédent.
 
 ### Windows (Planificateur de tâches)
 
 Dans un terminal (pas besoin de droits administrateur), avec le chemin de ton `michel.exe` :
 
 ```
-schtasks /Create /TN "Michel daily digest" /SC DAILY /ST 06:30 /TR "\"C:\Tools\michel\michel.exe\" scan --all --digest"
+schtasks /Create /TN "Michel daily digest" /SC DAILY /ST 06:30 /TR "\"C:\Tools\michel\michel.exe\" scan --all --update --digest"
 schtasks /Run /TN "Michel daily digest"       # pour l'essayer tout de suite
 schtasks /Query /TN "Michel daily digest" /V /FO LIST
 schtasks /Delete /TN "Michel daily digest"    # pour la supprimer
@@ -210,7 +213,7 @@ La tâche ne tourne que quand ta session est ouverte, ce qui est nécessaire pou
 Lance `crontab -e`, puis ajoute la ligne :
 
 ```
-30 6 * * * $HOME/bin/michel scan --all --digest >> $HOME/.local/state/michel-digest.log 2>&1
+30 6 * * * $HOME/bin/michel scan --all --update --digest >> $HOME/.local/state/michel-digest.log 2>&1
 ```
 
 Crée d'abord le dossier du fichier de suivi (`mkdir -p ~/.local/state`). cron ne voit pas ta session de bureau : sous Linux, le canal `toast` (notification sur le bureau) échoue en général depuis cron ; utilise plutôt l'e-mail ou un webhook, ou le minuteur systemd ci-dessous (Linux seulement).
@@ -225,7 +228,7 @@ Description=Michel daily scan and digest
 
 [Service]
 Type=oneshot
-ExecStart=%h/bin/michel scan --all --digest
+ExecStart=%h/bin/michel scan --all --update --digest
 ```
 
 `~/.config/systemd/user/michel-digest.timer` :

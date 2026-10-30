@@ -14,7 +14,12 @@
     <template v-else-if="f">
       <div class="m-sheet__head">
         <span class="m-code m-sheet__id">{{ f.osv_id }}</span>
-        <span class="m-sev" :class="`m-sev--${severity}`">{{ $t(`severity.${severity}`) }}</span>
+        <span class="m-sheet__chips">
+          <span v-if="f.malicious" class="m-flag m-small">{{ $t('chip.malicious') }}</span>
+          <span v-else-if="f.kev" class="m-flag m-small">{{ $t('chip.kev') }}</span>
+          <span v-if="kind !== 'dependency'" class="m-tag m-small">{{ $t(`kind.${kind}`) }}</span>
+          <span class="m-sev" :class="`m-sev--${severity}`">{{ $t(`severity.${severity}`) }}</span>
+        </span>
       </div>
 
       <div class="m-sheet__sentences">
@@ -26,7 +31,12 @@
 
       <h4 class="m-sheet__sub">{{ $t('sheet.facts') }}</h4>
       <dl class="m-facts">
-        <div><dt>{{ $t('fact.manifest') }}</dt><dd class="m-code">{{ f.manifest_rel_path }}</dd></div>
+        <div v-if="f.kev"><dt>{{ $t('fact.kev') }}</dt><dd>{{ $t('fact.kev_value', { date: kevDate }) }}</dd></div>
+        <div v-if="f.epss > 0"><dt>{{ $t('fact.epss') }}</dt><dd>{{ $t('fact.epss_value', epss) }}</dd></div>
+        <div v-if="f.rule_id"><dt>{{ $t('fact.rule') }}</dt><dd class="m-code">{{ f.rule_id }}</dd></div>
+        <div v-if="f.location"><dt>{{ $t('fact.location') }}</dt><dd class="m-code">{{ f.location }}</dd></div>
+        <div v-if="f.source_key"><dt>{{ $t('fact.source') }}</dt><dd class="m-code">{{ f.source_key }}</dd></div>
+        <div v-if="f.manifest_rel_path"><dt>{{ $t('fact.manifest') }}</dt><dd class="m-code">{{ f.manifest_rel_path }}</dd></div>
         <div><dt>{{ $t('fact.installed') }}</dt><dd class="m-code">{{ f.installed_version }}</dd></div>
         <div>
           <dt>{{ $t('fact.fixed') }}</dt>
@@ -142,7 +152,9 @@
 <script>
 import DecisionPanel from './DecisionPanel.vue'
 import { api } from '../api.js'
-import { severityOf } from '../lib/digestView.js'
+import { formatDate, formatPercent, severityOf } from '../lib/digestView.js'
+
+const kinds = ['dependency', 'code', 'misconfig', 'web', 'vulnerability']
 
 export default {
   name: 'FindingSheet',
@@ -160,6 +172,16 @@ export default {
     },
     severity() {
       return severityOf(this.f?.severity)
+    },
+    kind() {
+      return kinds.includes(this.f?.kind) ? this.f.kind : 'dependency'
+    },
+    kevDate() {
+      return formatDate(this.f?.kev_added, this.$ui.lang) || '?'
+    },
+    epss() {
+      const lang = this.$ui.lang
+      return { p: formatPercent(this.f?.epss, lang), pct: formatPercent(this.f?.epss_percentile, lang, true) }
     },
     glossary() {
       return this.f?.glossary || {}
@@ -227,6 +249,7 @@ export default {
 .m-sheet__failure p { margin: 0 0 0.5rem; }
 .m-sheet__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
 .m-sheet__id { font-weight: 600; }
+.m-sheet__chips { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
 .m-sheet__sentences { display: grid; gap: 0.9rem; margin: 1rem 0 1.25rem; }
 .m-sentence__label { font-size: 0.85rem; font-weight: 650; margin: 0 0 0.15rem; color: rgba(var(--v-theme-on-surface), 0.72); }
 .m-sentence__text { margin: 0; font-size: 1.08rem; line-height: 1.6; max-width: 62ch; }
