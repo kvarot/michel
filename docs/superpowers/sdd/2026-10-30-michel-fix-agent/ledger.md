@@ -121,3 +121,13 @@ Task 5: STOP — security-sensitive design question for Kévin: Michel/agent run
 Ruling 30 (Kévin, 2026-10-30): install + tests kept (hardened as in Task 5); the project consent screen (T8/T10) must say plainly: « Michel lance composer/npm et tes tests sur une copie, avec tes droits Windows ; le code écrit par l'agent s'exécute » ; Docker sandbox deferred to a later plan; documented in T11 as residual risk — cost if wrong: agent-written code runs with the user's rights during tests.
 Task 5: minor (deferred): orphan node_modules not reset; wildcard workspace folders checked via keys only; root composer.json custom type / uppercase require keys refused; install cwd TOCTOU; mask.ScanFiles uses EvalSymlinks; Apply branch-exists race; composer source over ssh; Linux symlink variants untested on this PC.
 Task 5: complete (commits 145b220..eec6f9a, breaker at cap: 1 load-bearing carried to T8 (ruling 29))
+Task 6: BASE 3cb02fc
+Task 6: implementer DONE 67b9cee (Gateway.RecordRefused added; IP rule check depends on reason text format)
+Task 6: review Needs fixes — I1 raw port echoed into audit reason (unbounded attacker text); I2 exact Host check likely refuses undici ProxyAgent (Host without :443). ⚠️ network-egress.md row for allowproxy/fix.install/agent.claude → T11 (planned).
+Ruling 31: Task 6 round 1 also takes minors: per-proxy random token checked against Proxy-Authorization (proxy URL http://michel:<token>@127.0.0.1:port), one final "N further refusals not recorded" attempt at the cap, 503 over-cap recorded once, checkIP via a structured matched-rule helper instead of reason text — cheap hardening, allowproxy grants real egress — cost if wrong: callers must pass the tokenized URL (T5/T7/T8 wiring).
+Task 6: minor (deferred): DialAddrForTest exported mutable var (plan-mandated); plain-HTTP host extraction naive for userinfo with '/'.
+Task 6: fix round 1 BASE 67b9cee
+Task 6: fix round 1/5 (5 addressed, 0 open — fixed reasons, undici host, proxy token, cap record, MatchRule; commits 67b9cee..0b10a96)
+Task 6: note for T5/T7/T8 — allowproxy.Listen returns http://michel:<token>@127.0.0.1:port; the URL goes in env only (HTTPS_PROXY/HTTP_PROXY/npm_config_*), never argv, audit, logs or errors. workcopy.Deps.ProxyAddr must carry the full URL.
+Task 6: minor (deferred): 200-record cap shared with 407s (a local process can fill it); gateway 403 refusals via the proxy uncapped.
+Task 6: complete (commits 3cb02fc..0b10a96, review clean)
