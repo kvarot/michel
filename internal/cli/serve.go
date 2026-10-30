@@ -108,14 +108,14 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return deps.Wrapf("cli.serve.token_failed", err)
 			}
-			// The fix service: stale agent files and copies are cleaned, the
-			// old conversations purged, then the level 2 queue is worked.
+			// The fix service: stale agent files and copies are cleaned and the
+			// old conversations purged; the handler then works the level 2
+			// queue in the background and runs the agents of the page.
 			fd := fixDeps(cmd, deps, secrets, "serve")
 			fd.Sessions = fix.NewSessions()
 			if err := fix.Sweep(ctx, fd); err != nil {
 				return deps.Wrapf("cli.serve.fix_sweep_failed", err)
 			}
-			go fix.Worker(ctx, fd)
 			defer fd.Sessions.CloseAll()
 			var lc net.ListenConfig
 			ln, err := lc.Listen(ctx, "tcp", addr)
@@ -133,13 +133,17 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			d := api.Deps{Store: deps.Store, Audit: deps.Audit, Policy: deps.Policy, Secrets: secrets, Now: deps.Now,
 				Version: buildinfo.Version, OSVRoot: dbRoot(cmd, deps), Lang: deps.Lang,
 				AllowedHosts: []string{bound, net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("localhost", port), net.JoinHostPort("::1", port)},
-				PolicyPath:   sd.PolicyPath, Reload: sd.Reload, Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir}}
+				PolicyPath:   sd.PolicyPath, Reload: sd.Reload, Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir},
+				Fix: &fd, FixWorker: true}
 			if fsys, ok := web.Dist(); ok {
 				d.Web = fsys
 			}
 			h := api.New(d, token)
 			srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 				WriteTimeout: time.Minute, IdleTimeout: 2 * time.Minute}
+			// The event streams of the page end as soon as the shutdown starts,
+			// so that they do not hold it.
+			srv.RegisterOnShutdown(h.Close)
 			if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "serve", Action: "api.start", Target: bound, Result: "ok",
 				Evidence: map[string]any{"listen": bound}}); err != nil {
 				return deps.Wrapf("cli.serve.audit_failed", err)
@@ -164,7 +168,8 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			shutdown, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
-			// The plugin runs the page started are cancelled and waited for.
+			// The plugin runs the page started, the fix queue and the agents
+			// are stopped and waited for.
 			h.Close()
 			if _, err := deps.Audit.Record(context.Background(), audit.Event{Actor: "serve", Action: "api.stop", Target: bound, Result: "ok",
 				Evidence: map[string]any{"listen": bound}}); err != nil {

@@ -63,6 +63,13 @@ func ts(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 // means no front was built.
 func newFixture(t *testing.T, web fs.FS) *fixture {
 	t.Helper()
+	return newFixtureWith(t, web, nil)
+}
+
+// newFixtureWith is newFixture with before called on the fixture just
+// before the handler is built (it may change f.deps).
+func newFixtureWith(t *testing.T, web fs.FS, before func(f *fixture)) *fixture {
+	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "michel.db"))
 	if err != nil {
@@ -113,6 +120,9 @@ func newFixture(t *testing.T, web fs.FS) *fixture {
 			return p, err
 		},
 		Sources: Sources{Gateway: f.gw, DataDir: dir}}
+	if before != nil {
+		before(f)
+	}
 	f.h = New(f.deps, testToken)
 	f.srv = httptest.NewServer(f.h)
 	// The handler's background work (plugin runs) ends before the store
@@ -205,7 +215,8 @@ func apiRoutes(f *fixture) []string {
 	id := f.ids["ACME-2026-0001"]
 	return []string{"/api/v1/meta", "/api/v1/today", "/api/v1/projects", "/api/v1/projects/demo/findings",
 		"/api/v1/findings/" + id, "/api/v1/digests", "/api/v1/sources", "/api/v1/sources?all=1", "/api/v1/sources/osv.npm",
-		"/api/v1/sources/items", "/api/v1/sources/discoveries", "/api/v1/tech", "/api/v1/plugin-runs/nope", "/api/v1/nowhere"}
+		"/api/v1/sources/items", "/api/v1/sources/discoveries", "/api/v1/tech", "/api/v1/plugin-runs/nope",
+		"/api/v1/fixes", "/api/v1/agent/status", "/api/v1/projects/demo/ai-consent", "/api/v1/fix/nope", "/api/v1/nowhere"}
 }
 
 func TestAPIRejectsMissingToken(t *testing.T) {

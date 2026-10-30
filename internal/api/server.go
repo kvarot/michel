@@ -24,6 +24,7 @@ import (
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/egress"
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/secret"
@@ -54,6 +55,12 @@ type Deps struct {
 	Reload     func() (policy.Policy, error)
 	// Sources is what the source routes need.
 	Sources Sources
+	// Fix is the fix service of michel serve (its Sessions run the agents
+	// of this process); nil answers 503 on the routes that need it.
+	// FixWorker starts the level 2 queue (fix.Worker) in the background;
+	// Close stops it.
+	Fix       *fix.Deps
+	FixWorker bool
 }
 
 // Sources are the collaborators of the source routes: the egress gateway
@@ -119,6 +126,8 @@ type server struct {
 	bgMu   sync.Mutex
 	closed bool
 	runs   sync.WaitGroup
+	// agentSt keeps the last detection of Claude Code.
+	agentSt agentCache
 }
 
 // Handler is the API and page handler New builds. Close stops the work it
@@ -128,14 +137,19 @@ type Handler struct{ s *server }
 // ServeHTTP serves one request.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.s.ServeHTTP(w, r) }
 
-// Close cancels the background work (plugin runs) and waits for it to end.
-// Call it after the HTTP server shut down; it may be called more than once.
+// Close cancels the background work (plugin runs, the fix queue), ends the
+// event streams and the agents of this process, and waits for that work to
+// end. It may be called more than once, and from http.Server's
+// RegisterOnShutdown so that the streams do not hold the shutdown.
 func (h *Handler) Close() {
 	s := h.s
 	s.bgMu.Lock()
 	s.closed = true
 	s.bgMu.Unlock()
 	s.stop()
+	if s.deps.Fix != nil && s.deps.Fix.Sessions != nil {
+		s.deps.Fix.Sessions.CloseAll()
+	}
 	s.runs.Wait()
 }
 
@@ -174,6 +188,9 @@ func New(deps Deps, token string) *Handler {
 	s := &server{deps: deps, token: []byte(token), mux: http.NewServeMux(), policy: deps.Policy}
 	s.bg, s.stop = context.WithCancel(context.Background())
 	s.routes()
+	if deps.Fix != nil && deps.FixWorker {
+		s.goBackground(s.fixWorker)
+	}
 	return &Handler{s: s}
 }
 
@@ -188,6 +205,7 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/v1/findings/{id}/decision", s.decision)
 	m.HandleFunc("GET /api/v1/digests", s.digests)
 	s.sourceRoutes()
+	s.fixRoutes()
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.not_found"), "")
 	})

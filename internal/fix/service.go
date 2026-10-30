@@ -1367,17 +1367,23 @@ func Refuse(ctx context.Context, d Deps, attemptID, reason string) error {
 			reason = m.Mask(reason)
 		}
 	}
-	d.sessions().Close(attemptID)
-	lock := d.sessions().attemptLock(attemptID)
-	lock.Lock()
-	defer lock.Unlock()
 	cause := reason
 	if cause == "" {
 		cause = i18n.T(d.lang(), "fix.cause.refused")
 	}
-	if err := repo.SetState(ctx, attemptID, []State{StatePreparing, StateProposed, StateApproved}, StateRefused, cause); err != nil {
+	// The state first, under the attempt's lock: the end of a session that
+	// is still running then finds the attempt refused and leaves it so
+	// (closing the session first would let it fail the attempt). The lock
+	// is released before the session is closed, since the session's end
+	// takes it.
+	lock := d.sessions().attemptLock(attemptID)
+	lock.Lock()
+	err = repo.SetState(ctx, attemptID, []State{StatePreparing, StateProposed, StateApproved}, StateRefused, cause)
+	lock.Unlock()
+	if err != nil {
 		return err
 	}
+	d.sessions().Close(attemptID)
 	d.cleanup(ctx, a, true)
 	return d.record(ctx, "fix.refuse", attemptID, "ok", map[string]any{
 		"attempt_id": attemptID, "finding_id": a.FindingID, "project_id": a.ProjectID, "has_reason": reason != "", "author": d.actor(),
