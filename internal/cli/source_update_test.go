@@ -135,7 +135,7 @@ func TestSourceUpdateOK(t *testing.T) {
 func TestPrintSourceUpdatePartial(t *testing.T) {
 	for lang, want := range map[i18n.Lang]string{
 		i18n.EN: "· enrich.nvd: 44 items read, the time of this update ran out before the rest; the next update goes on",
-		i18n.FR: "· enrich.nvd : 44 éléments lus, le temps de cette mise à jour s'est écoulé avant la suite ; la prochaine mise à jour continuera",
+		i18n.FR: "· enrich.nvd : 44 éléments lus ; le temps prévu pour cette mise à jour est écoulé, la suite sera lue à la prochaine mise à jour",
 	} {
 		var out bytes.Buffer
 		deps := &Deps{Stdout: &out, Stderr: &bytes.Buffer{}, Now: time.Now, Lang: lang}
