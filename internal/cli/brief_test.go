@@ -32,7 +32,7 @@ func TestBriefCommandPrints(t *testing.T) {
 	}
 
 	_, out, _, err = run(t, dir, "brief", list[0].ID, "--write-skill", "--lang", "fr")
-	if err != nil || !strings.Contains(out, "Skill écrit") {
+	if err != nil || !strings.Contains(out, "Skill créé") {
 		t.Fatalf("write-skill: %v\n%s", err, out)
 	}
 	matches, _ := filepath.Glob(filepath.Join(skills, "michel-fix-*", "SKILL.md"))
