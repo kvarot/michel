@@ -31,6 +31,29 @@ var (
 	ErrInvalidCommit = errors.New("invalid fix commit")
 )
 
+// gitShortName is the 8.3 short name of .git (GIT~1, GIT~2...).
+var gitShortName = regexp.MustCompile(`^git~[0-9]+$`)
+
+// reservedName is a Windows device name, with or without extension.
+var reservedName = regexp.MustCompile(`^(?:con|prn|aux|nul|com[0-9]|lpt[0-9]|conin\$|conout\$)$`)
+
+// safeSegment reports whether one path segment is a plain name on every
+// file system, read the way NTFS reads it (trailing dots and spaces
+// dropped): not empty, ".", "..", .git (any case) or its short name, not a
+// Windows device name (CON, NUL.txt...), without a backslash, a colon (an
+// alternate data stream), a control character or <>"|?*.
+func safeSegment(seg string) bool {
+	if strings.ContainsAny(seg, "\\:<>\"|?*") || strings.ContainsFunc(seg, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return false
+	}
+	n := strings.ToLower(strings.TrimRight(seg, ". "))
+	if n == "" || n == ".git" || gitShortName.MatchString(n) {
+		return false
+	}
+	stem, _, _ := strings.Cut(n, ".")
+	return !reservedName.MatchString(strings.TrimRight(stem, " "))
+}
+
 // branchShape is the only branch name Apply creates.
 var branchShape = regexp.MustCompile(`^michel/fix-[0-9a-z]{8,26}$`)
 
@@ -62,9 +85,9 @@ func parseRaw(out []byte) ([]rawEntry, error) {
 // symbolic link (120000) or submodule (160000).
 func checkEntry(e rawEntry) error {
 	p := e.path
-	bad := p == "" || strings.ContainsAny(p, "\\:\x00") || strings.HasPrefix(p, "/") || !filepath.IsLocal(filepath.FromSlash(p))
+	bad := p == "" || strings.HasPrefix(p, "/") || !filepath.IsLocal(filepath.FromSlash(p))
 	for _, seg := range strings.Split(p, "/") {
-		if seg == "" || seg == "." || seg == ".." || strings.EqualFold(seg, ".git") || strings.EqualFold(seg, "git~1") {
+		if !safeSegment(seg) {
 			bad = true
 		}
 	}
@@ -183,11 +206,13 @@ func Commit(ctx context.Context, d Deps, c Copy, message string) (string, error)
 	if message == "" {
 		message = "fix: Michel"
 	}
-	index, patch := c.Dir+".index", c.Dir+".patch"
-	defer os.Remove(index)
-	defer os.Remove(patch)
-	_ = os.Remove(index)
-	_ = os.Remove(patch)
+	tmp := tmpPath(d, filepath.Base(c.Dir))
+	_ = os.RemoveAll(tmp)
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return "", fmt.Errorf("Michel cannot prepare the fix commit: %w", noPath(err))
+	}
+	defer os.RemoveAll(tmp)
+	index, patch := filepath.Join(tmp, "fix.index"), filepath.Join(tmp, "fix.patch")
 	if err := os.WriteFile(patch, ch.Raw, 0o600); err != nil {
 		return "", fmt.Errorf("Michel cannot prepare the fix commit: %w", noPath(err))
 	}

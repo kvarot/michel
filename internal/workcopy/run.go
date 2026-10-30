@@ -176,28 +176,108 @@ func checkYarn(root, dir string) error {
 	}
 }
 
-// checkPackageManager refuses an install when package.json (next to the
-// lockfile) names another package manager than prog in packageManager:
-// corepack would fetch and run that one instead.
-func checkPackageManager(dir, prog string) error {
-	b, err := os.ReadFile(filepath.Join(dir, "package.json"))
-	if err != nil {
+// packageManagerShape is the only packageManager value Michel accepts: a
+// package manager name and an exact version, optionally with its hash. A
+// URL, a path, a tag (latest) or anything else would make corepack fetch
+// and run code chosen by the repository.
+var packageManagerShape = regexp.MustCompile(`^(npm|pnpm|yarn)@[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?(?:\+sha(?:1|224|256|512)\.[0-9a-f]+)?$`)
+
+// upTo calls f on dir and every folder above it up to root (both included).
+func upTo(root, dir string, f func(string) error) error {
+	for d := dir; ; d = filepath.Dir(d) {
+		if err := f(d); err != nil {
+			return err
+		}
+		if d == root || filepath.Dir(d) == d {
+			return nil
+		}
+	}
+}
+
+// checkPackageManager refuses an install when a package.json, from the
+// folder of the lockfile up to the copy root (corepack uses the nearest one
+// with the field; all are checked), sets packageManager to anything but
+// packageManagerShape naming prog.
+func checkPackageManager(root, dir, prog string) error {
+	return upTo(root, dir, func(d string) error {
+		b, err := os.ReadFile(filepath.Join(d, "package.json"))
+		if err != nil {
+			return nil
+		}
+		var pkg map[string]json.RawMessage
+		if json.Unmarshal(b, &pkg) != nil {
+			return fmt.Errorf("%w: package.json cannot be read", ErrUnsafeInstall)
+		}
+		raw, ok := pkg["packageManager"]
+		if !ok {
+			return nil
+		}
+		var pm string
+		if json.Unmarshal(raw, &pm) != nil {
+			return fmt.Errorf("%w: packageManager is not a name and version", ErrUnsafeInstall)
+		}
+		m := packageManagerShape.FindStringSubmatch(pm)
+		if m == nil {
+			return fmt.Errorf("%w: packageManager is not an exact version of npm, pnpm or yarn", ErrUnsafeInstall)
+		}
+		if m[1] != prog {
+			return fmt.Errorf("%w: package.json asks for %s, the lockfile is %s's", ErrUnsafeInstall, m[1], prog)
+		}
 		return nil
-	}
-	var pkg struct {
-		PackageManager string `json:"packageManager"`
-	}
-	if json.Unmarshal(b, &pkg) != nil {
-		return fmt.Errorf("%w: package.json cannot be read", ErrUnsafeInstall)
-	}
-	if pkg.PackageManager == "" {
+	})
+}
+
+// execKeys are the npm and pnpm settings that choose a program to run, or
+// move npm's configuration, cache or prefix out of Michel's folder (keys
+// compared lowercase, without - and _). Registry and auth settings are
+// allowed: the traffic goes through the egress proxy.
+var execKeys = map[string]bool{
+	"git": true, "scriptshell": true, "nodeoptions": true, "shell": true, "prefix": true,
+	"globalconfig": true, "userconfig": true, "cache": true, "pnpmfile": true, "globalpnpmfile": true,
+	"npmpath": true, "nodeversion": true, "usenodeversion": true, "shellemulator": true,
+}
+
+func execKey(k string) bool {
+	k = strings.ToLower(strings.TrimSpace(k))
+	k = strings.TrimSuffix(k, "[]")
+	k = strings.NewReplacer("-", "", "_", "").Replace(k)
+	return execKeys[k]
+}
+
+// checkNpmrc refuses an install when a .npmrc (or .pnpmrc) from the folder
+// of the lockfile up to the copy root, or a pnpm-workspace.yaml, sets one
+// of execKeys.
+func checkNpmrc(root, dir string) error {
+	return upTo(root, dir, func(d string) error {
+		for _, name := range []string{".npmrc", ".pnpmrc"} {
+			b, err := os.ReadFile(filepath.Join(d, name))
+			if err != nil {
+				continue
+			}
+			for _, line := range strings.Split(string(b), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || line[0] == '#' || line[0] == ';' {
+					continue
+				}
+				k, _, _ := strings.Cut(line, "=")
+				if execKey(k) {
+					return fmt.Errorf("%w: %s sets %s", ErrUnsafeInstall, name, scan.SanitizeText(strings.TrimSpace(k)))
+				}
+			}
+		}
+		if b, err := os.ReadFile(filepath.Join(d, "pnpm-workspace.yaml")); err == nil {
+			var cfg map[string]any
+			if yaml.Unmarshal(b, &cfg) != nil {
+				return fmt.Errorf("%w: pnpm-workspace.yaml cannot be read", ErrUnsafeInstall)
+			}
+			for k := range cfg {
+				if execKey(k) {
+					return fmt.Errorf("%w: pnpm-workspace.yaml sets %s", ErrUnsafeInstall, scan.SanitizeText(k))
+				}
+			}
+		}
 		return nil
-	}
-	name, _, _ := strings.Cut(pkg.PackageManager, "@")
-	if strings.TrimSpace(name) != prog {
-		return fmt.Errorf("%w: package.json asks for %s, the lockfile is %s's", ErrUnsafeInstall, scan.SanitizeText(name), prog)
-	}
-	return nil
+	})
 }
 
 // Install installs the dependencies of the lockfile manifestRel (a slash
@@ -245,7 +325,10 @@ func Install(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string)
 		}
 	}
 	if eco == "npm" {
-		if err := checkPackageManager(dir, prog); err != nil {
+		if err := checkPackageManager(c.Dir, dir, prog); err != nil {
+			return err
+		}
+		if err := checkNpmrc(c.Dir, dir); err != nil {
 			return err
 		}
 	}

@@ -1,6 +1,7 @@
 package workcopy
 
 import (
+	"archive/tar"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -407,7 +409,8 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 		for _, want := range []string{"HOME=" + home, "USERPROFILE=" + home, "COMPOSER_HOME=" + filepath.Join(home, "composer"),
 			"npm_config_cache=" + filepath.Join(home, "npm"), "HTTPS_PROXY=http://127.0.0.1:1", "HTTP_PROXY=http://127.0.0.1:1",
 			"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + filepath.Join(home, "gitconfig"), "GIT_TERMINAL_PROMPT=0",
-			"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0"} {
+			"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0", "COREPACK_ENABLE_NETWORK=0",
+			"npm_config_git=" + filepath.Join(home, "no-git")} {
 			if !slices.Contains(r.env, want) {
 				t.Errorf("%s %v: %s missing from the environment", r.name, r.args, want)
 			}
@@ -896,5 +899,238 @@ func TestInstallRefusesSymlinkedManifestDir(t *testing.T) {
 	}
 	if len(rec.runs) != 0 {
 		t.Errorf("the install ran %v", rec.runs)
+	}
+}
+
+func TestMirrorIsOutsideCopyTree(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	tree := filepath.Dir(c.Dir)
+	under := func(p string) bool {
+		rel, err := filepath.Rel(tree, p)
+		return err == nil && (rel == "." || filepath.IsLocal(rel))
+	}
+	want := filepath.Join(f.deps.DataDir, "fix-mirrors", f.proj.ID, "01JATTEMPT0000000000000000.git")
+	if c.Mirror != want || under(c.Mirror) {
+		t.Errorf("mirror at %s, want %s outside the copies", c.Mirror, want)
+	}
+	// Temporary files appear only in <data>/fix-tmp while Michel works,
+	// and are gone afterwards.
+	var seen []string
+	f.deps.Exec = func(ctx context.Context, name string, args, env []string, dir string) ([]byte, []byte, error) {
+		for _, a := range append(append([]string{dir}, args...), env...) {
+			if _, v, ok := strings.Cut(a, "="); ok && filepath.IsAbs(v) {
+				a = v
+			}
+			if filepath.IsAbs(a) {
+				seen = append(seen, a)
+			}
+		}
+		return defaultExec(ctx, name, args, env, dir)
+	}
+	writeFile(t, c.Dir, "README.md", "fixed\n")
+	if _, err := Commit(context.Background(), f.deps, c, "fix"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	for _, p := range seen {
+		if strings.Contains(p, "fix.index") || strings.Contains(p, "fix.patch") || strings.HasSuffix(p, ".git") && p != filepath.Join(c.Dir, ".git") {
+			if under(p) {
+				t.Errorf("%s is under the copies' folder", p)
+			}
+		}
+	}
+	entries, err := os.ReadDir(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != filepath.Base(c.Dir) {
+			t.Errorf("%s sits next to the copy", e.Name())
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.deps.DataDir, "fix-tmp")); len(entries) != 0 {
+		t.Errorf("temporary files left: %d", len(entries))
+	}
+	if err := Remove(f.deps, c); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	for _, p := range []string{c.Dir, c.Mirror, filepath.Join(f.deps.DataDir, "fix-tmp", filepath.Base(c.Dir))} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s left after Remove", p)
+		}
+	}
+}
+
+func TestInstallRefusesPackageManagerURL(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	writeFile(t, c.Dir, "y/yarn.lock", "# yarn lockfile v1\n")
+	writeFile(t, c.Dir, "p/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+	for _, tc := range []struct{ rel, pm string }{
+		{"y/yarn.lock", "yarn@https://evil.example/x.tgz"},
+		{"p/pnpm-lock.yaml", "pnpm@file:../x"},
+		{"y/yarn.lock", "yarn@git+ssh://git@evil.example/x.git"},
+		{"y/yarn.lock", "yarn@latest"},
+		{"y/yarn.lock", "yarn"},
+		{"y/yarn.lock", "yarn@1.22.0 extra"},
+		{"y/yarn.lock", "yarn@1.22.0+sha256.abc/../x"},
+		{"p/pnpm-lock.yaml", "pnpm@9.0.0:x"},
+	} {
+		writeFile(t, c.Dir, filepath.Dir(tc.rel)+"/package.json", `{"packageManager":`+strconv.Quote(tc.pm)+`}`)
+		if err := Install(context.Background(), d, c, "npm", tc.rel); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("packageManager %q: %v, want ErrUnsafeInstall", tc.pm, err)
+		}
+	}
+	writeFile(t, c.Dir, "y/package.json", `{"packageManager":{"name":"yarn"}}`)
+	if err := Install(context.Background(), d, c, "npm", "y/yarn.lock"); !errors.Is(err, ErrUnsafeInstall) {
+		t.Errorf("packageManager object: %v, want ErrUnsafeInstall", err)
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("an unsafe install ran %d commands", len(rec.runs))
+	}
+	// The nearest package.json is clean, a parent one is hostile.
+	writeFile(t, c.Dir, "top/package.json", `{"packageManager":"yarn@https://evil.example/x.tgz"}`)
+	writeFile(t, c.Dir, "top/app/package.json", `{"name":"acme-lib"}`)
+	writeFile(t, c.Dir, "top/app/yarn.lock", "# yarn lockfile v1\n")
+	if err := Install(context.Background(), d, c, "npm", "top/app/yarn.lock"); !errors.Is(err, ErrUnsafeInstall) {
+		t.Errorf("hostile packageManager in a parent folder: %v, want ErrUnsafeInstall", err)
+	}
+}
+
+func TestInstallAcceptsPinnedPackageManager(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	writeFile(t, c.Dir, "y/yarn.lock", "# yarn lockfile v1\n")
+	writeFile(t, c.Dir, "p/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+	writeFile(t, c.Dir, "n/package-lock.json", "{}")
+	for _, tc := range []struct{ rel, pm string }{
+		{"y/yarn.lock", "yarn@1.22.22"},
+		{"y/yarn.lock", "yarn@4.5.0-rc.1+sha512.0123abcdef"},
+		{"p/pnpm-lock.yaml", "pnpm@9.12.3+sha256.deadbeef"},
+		{"n/package-lock.json", "npm@10.8.2"},
+	} {
+		writeFile(t, c.Dir, filepath.Dir(tc.rel)+"/package.json", `{"packageManager":`+strconv.Quote(tc.pm)+`}`)
+		rec.runs = nil
+		if err := Install(context.Background(), d, c, "npm", tc.rel); err != nil {
+			t.Errorf("packageManager %q refused: %v", tc.pm, err)
+			continue
+		}
+		if len(rec.runs) != 1 || !slices.Contains(rec.runs[0].env, "COREPACK_ENABLE_NETWORK=0") {
+			t.Errorf("packageManager %q: corepack may download", tc.pm)
+		}
+	}
+	writeFile(t, c.Dir, "p/package.json", `{"packageManager":"yarn@1.22.22"}`)
+	if err := Install(context.Background(), d, c, "npm", "p/pnpm-lock.yaml"); !errors.Is(err, ErrUnsafeInstall) {
+		t.Errorf("another manager than the lockfile's: %v, want ErrUnsafeInstall", err)
+	}
+}
+
+func TestInstallRefusesExecutingNpmSettings(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	cases := map[string][2]string{
+		"a": {".npmrc", "registry=https://registry.example\nscript-shell=/tmp/x.sh\n"},
+		"b": {".npmrc", "  node-options = --require ./evil.js\n"},
+		"c": {".npmrc", "git=./evil\n"},
+		"d": {".npmrc", "userconfig=../x\n"},
+		"e": {".npmrc", "globalconfig=../x\n"},
+		"f": {".npmrc", "prefix=../x\n"},
+		"g": {".npmrc", "cache=../x\n"},
+		"h": {".npmrc", "shell=./evil\n"},
+		"i": {"pnpm-workspace.yaml", "scriptShell: ./evil.sh\n"},
+		"j": {".pnpmrc", "global-pnpmfile=./evil.cjs\n"},
+	}
+	for dir, f := range cases {
+		writeFile(t, c.Dir, dir+"/package-lock.json", "{}")
+		writeFile(t, c.Dir, dir+"/"+f[0], f[1])
+		if err := Install(context.Background(), d, c, "npm", dir+"/package-lock.json"); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("%s with %q: %v, want ErrUnsafeInstall", f[0], f[1], err)
+		}
+	}
+	// A setting in a parent folder of the lockfile counts too.
+	writeFile(t, c.Dir, "up/.npmrc", "script-shell=./evil.sh\n")
+	writeFile(t, c.Dir, "up/web/package-lock.json", "{}")
+	if err := Install(context.Background(), d, c, "npm", "up/web/package-lock.json"); !errors.Is(err, ErrUnsafeInstall) {
+		t.Errorf(".npmrc in a parent folder: %v, want ErrUnsafeInstall", err)
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("an unsafe install ran %d commands", len(rec.runs))
+	}
+	// Registry and scoped auth settings are allowed.
+	writeFile(t, c.Dir, "ok/package-lock.json", "{}")
+	writeFile(t, c.Dir, "ok/.npmrc", "# comment\nregistry=https://registry.example/\n@acme:registry=https://npm.example/\n//npm.example/:_authToken=${NPM_TOKEN}\n")
+	if err := Install(context.Background(), d, c, "npm", "ok/package-lock.json"); err != nil {
+		t.Errorf("registry settings refused: %v", err)
+	}
+}
+
+func TestSafeSegmentNormalizesLikeNTFS(t *testing.T) {
+	for _, p := range []string{".git./hooks/x", ".GIT /x", "git~1/x", "GIT~2/config", "a:b", "nul.txt", "sub/CON", "lpt1.log", "com9", "aux .txt",
+		"a/<b", "a/b|c", "x\x01y", "a/../b", "./a", "a/./b", ". ./x", ".git"} {
+		if err := checkEntry(rawEntry{path: p, mode: "100644"}); !errors.Is(err, ErrOutsideCopy) {
+			t.Errorf("%q: %v, want ErrOutsideCopy", p, err)
+		}
+	}
+	for _, p := range []string{"src/app.php", ".gitignore", ".github/workflows/ci.yml", "git~x/a", "console.txt", "nullable.php", "com10.txt", "a.git/x", ".env.example"} {
+		if err := checkEntry(rawEntry{path: p, mode: "100644"}); err != nil {
+			t.Errorf("%q refused: %v", p, err)
+		}
+	}
+}
+
+func TestExtractSkipsUnsafeTarEntries(t *testing.T) {
+	tmp := t.TempDir()
+	archive := filepath.Join(tmp, "a.tar")
+	out, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(out)
+	add := func(name string, typ byte, body string) {
+		hdr := &tar.Header{Name: name, Typeflag: typ, Mode: 0o644, Size: int64(len(body))}
+		if typ == tar.TypeSymlink {
+			hdr.Linkname, hdr.Size = "../../outside", 0
+			body = ""
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("ok.txt", tar.TypeReg, "ok")
+	for _, bad := range []string{".git./hooks/x", ".GIT /x", "git~1/x", "a:b", "nul.txt", "../escape.txt"} {
+		add(bad, tar.TypeReg, "bad")
+	}
+	add("link", tar.TypeSymlink, "")
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out.Close()
+	dir := filepath.Join(tmp, "copy")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kept, _, err := extract(archive, dir, nil)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if !slices.Equal(kept, []string{"ok.txt"}) {
+		t.Errorf("kept %v, want only ok.txt", kept)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		names := []string{}
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the copy holds %v", names)
+	}
+	if _, err := os.Lstat(filepath.Join(tmp, "escape.txt")); err == nil {
+		t.Error("an entry was written outside the copy")
 	}
 }

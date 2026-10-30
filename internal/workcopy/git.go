@@ -165,8 +165,12 @@ func (h home) env(proxyAddr string, extra ...string) []string {
 	}
 	env = append(env, "NO_PROXY=", "no_proxy=",
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+h.gitconfig(), "GIT_TERMINAL_PROMPT=0",
-		// Corepack never downloads a package manager nor pins one in package.json.
-		"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0")
+		// Corepack never downloads a package manager (a pinned version must
+		// already be on this machine) nor pins one in package.json.
+		"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0", "COREPACK_ENABLE_NETWORK=0",
+		// npm runs git for git dependencies: a program that does not exist,
+		// so they fail instead of running git with the project's settings.
+		"npm_config_git="+filepath.Join(h.dir, "no-git"))
 	return append(env, extra...)
 }
 

@@ -196,27 +196,33 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return Copy{}, fmt.Errorf("Michel cannot create the fix copy: %w", noPath(err))
 	}
-	c := Copy{Dir: filepath.Join(parent, attemptID), Mirror: filepath.Join(parent, attemptID+".git"), Base: base, Exclude: exclude}
-	for _, f := range []string{c.Dir, c.Mirror} {
+	c := Copy{Dir: filepath.Join(parent, attemptID), Mirror: mirrorPath(d, p.ID, attemptID), Base: base, Exclude: exclude}
+	tmp := tmpPath(d, attemptID)
+	for _, f := range []string{c.Dir, c.Mirror, tmp} {
 		if _, err := os.Lstat(f); err == nil {
 			return Copy{}, ErrCopyExists
 		}
 	}
-	archive := c.Dir + ".tar"
-	defer os.Remove(archive)
+	for _, f := range []string{filepath.Dir(c.Mirror), tmp} {
+		if err := os.MkdirAll(f, 0o700); err != nil {
+			return Copy{}, fmt.Errorf("Michel cannot create the fix copy: %w", noPath(err))
+		}
+	}
+	archive := filepath.Join(tmp, "base.tar")
+	defer os.RemoveAll(tmp)
 	fail := func(err error) (Copy, error) {
 		_ = os.RemoveAll(c.Dir)
 		_ = os.RemoveAll(c.Mirror)
 		return Copy{}, err
 	}
-	if _, stderr, err := h.git(ctx, d, parent, "", localTransport, nil,
+	if _, stderr, err := h.git(ctx, d, filepath.Dir(c.Mirror), "", localTransport, nil,
 		"clone", "--bare", "--local", "--no-hardlinks", "--quiet", "--", p.Path, c.Mirror); err != nil {
 		return fail(gitErr("clone", err, stderr))
 	}
 	if err := writeAttributes(c.Mirror); err != nil {
 		return fail(err)
 	}
-	if _, stderr, err := h.git(ctx, d, parent, c.Mirror, nil, nil, "archive", "--format=tar", "-o", archive, base); err != nil {
+	if _, stderr, err := h.git(ctx, d, tmp, c.Mirror, nil, nil, "archive", "--format=tar", "-o", archive, base); err != nil {
 		return fail(gitErr("archive", err, stderr))
 	}
 	if _, stderr, err := h.git(ctx, d, parent, "", nil, nil, "init", "--quiet", "--template=", "--initial-branch=main", c.Dir); err != nil {
@@ -354,15 +360,15 @@ func inDataDir(d Deps, p string) error {
 }
 
 // copyDir checks that c.Dir is an agent copy of the data folder: an
-// absolute <data>/.../worktrees/<project id>/<attempt id> folder holding a
-// .git folder.
+// absolute <data>/worktrees/<project id>/<attempt id> folder holding a .git
+// folder.
 func copyDir(d Deps, c Copy) error {
 	dir := c.Dir
 	if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || inDataDir(d, dir) != nil {
 		return ErrNotACopy
 	}
 	attempt, projectDir := filepath.Base(dir), filepath.Dir(dir)
-	if !idShape.MatchString(attempt) || !idShape.MatchString(filepath.Base(projectDir)) || filepath.Base(filepath.Dir(projectDir)) != "worktrees" {
+	if !idShape.MatchString(attempt) || !idShape.MatchString(filepath.Base(projectDir)) || filepath.Dir(projectDir) != filepath.Join(d.DataDir, "worktrees") {
 		return ErrNotACopy
 	}
 	for _, f := range []string{dir, filepath.Join(dir, ".git")} {
@@ -379,7 +385,7 @@ func checkCopy(d Deps, c Copy) error {
 	if err := copyDir(d, c); err != nil {
 		return err
 	}
-	if c.Mirror != c.Dir+".git" {
+	if c.Mirror != mirrorOf(d, c) {
 		return ErrNotACopy
 	}
 	if info, err := os.Lstat(c.Mirror); err != nil || !info.IsDir() {
@@ -401,15 +407,36 @@ func Remove(d Deps, c Copy) error {
 	if err := copyDir(d, c); err != nil {
 		return err
 	}
-	if c.Mirror != "" && c.Mirror != c.Dir+".git" {
+	mirror := mirrorOf(d, c)
+	if c.Mirror != "" && c.Mirror != mirror {
 		return ErrNotACopy
 	}
-	for _, p := range []string{c.Dir, c.Dir + ".git", c.Dir + ".tar", c.Dir + ".index", c.Dir + ".patch"} {
+	for _, p := range []string{c.Dir, mirror, tmpPath(d, filepath.Base(c.Dir))} {
 		if err := os.RemoveAll(p); err != nil {
 			return fmt.Errorf("Michel cannot delete the fix copy: %w", noPath(err))
 		}
 	}
-	// The project's folder of copies goes when it is empty.
+	// The project's folders of copies and mirrors go when they are empty.
 	_ = os.Remove(filepath.Dir(c.Dir))
+	_ = os.Remove(filepath.Dir(mirror))
 	return nil
+}
+
+// mirrorPath is the private mirror of an attempt,
+// <data>/fix-mirrors/<project id>/<attempt id>.git: a tree apart from the
+// copies (it holds every blob of the project, the excluded ones too), never
+// inside or next to the agent's copy.
+func mirrorPath(d Deps, projectID, attemptID string) string {
+	return filepath.Join(d.DataDir, "fix-mirrors", projectID, attemptID+".git")
+}
+
+// mirrorOf is the mirror of the copy c.
+func mirrorOf(d Deps, c Copy) string {
+	return mirrorPath(d, filepath.Base(filepath.Dir(c.Dir)), filepath.Base(c.Dir))
+}
+
+// tmpPath is the folder of an attempt's temporary files (archive, index,
+// patch), <data>/fix-tmp/<attempt id>, apart from the copies.
+func tmpPath(d Deps, attemptID string) string {
+	return filepath.Join(d.DataDir, "fix-tmp", attemptID)
 }
