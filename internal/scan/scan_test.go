@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -924,5 +925,50 @@ func TestScanWritesTechAuto(t *testing.T) {
 	}
 	if got := techAuto(); !slices.Equal(got, []string{"node", "php"}) {
 		t.Errorf("tech_auto after an empty scan = %v", got)
+	}
+}
+
+func TestScanDirWritesNothing(t *testing.T) {
+	e := newEnv(t, "project-a")
+	count := func(table string) int {
+		var n int
+		if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	e.run(t)
+	scans, findings, manifests := count("scan"), count("finding"), count("scan_manifest")
+	statuses := e.statuses(t)
+	before := treeDigest(t, e.proj.Path)
+	got, err := ScanDir(context.Background(), e.deps, e.proj.Path, nil, Options{OSVRoot: osvRoot})
+	if err != nil {
+		t.Fatalf("ScanDir: %v", err)
+	}
+	if len(got) == 0 || len(got) != findings {
+		t.Errorf("ScanDir found %d findings, the stored scan %d", len(got), findings)
+	}
+	for _, f := range got {
+		if _, ok := statuses[f.OSVID]; !ok {
+			t.Errorf("ScanDir found %s, unknown to the stored scan", f.OSVID)
+		}
+	}
+	if count("scan") != scans || count("finding") != findings || count("scan_manifest") != manifests {
+		t.Error("ScanDir wrote scan, finding or manifest rows")
+	}
+	if !maps.Equal(e.statuses(t), statuses) {
+		t.Error("ScanDir changed finding statuses")
+	}
+	if treeDigest(t, e.proj.Path) != before {
+		t.Error("ScanDir wrote under the scanned folder")
+	}
+
+	// Without a database for an ecosystem it needs, nothing runs.
+	if _, err := ScanDir(context.Background(), e.deps, e.proj.Path, nil, Options{OSVRoot: t.TempDir()}); err == nil {
+		t.Error("ScanDir ran without the databases")
+	}
+	// A folder with no lockfile proves nothing.
+	if _, err := ScanDir(context.Background(), e.deps, t.TempDir(), nil, Options{OSVRoot: osvRoot}); !errors.Is(err, ErrNoManifests) {
+		t.Errorf("ScanDir of an empty folder: %v, want ErrNoManifests", err)
 	}
 }
