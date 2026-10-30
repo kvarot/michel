@@ -75,7 +75,7 @@ func (m *Masker) token(n int) string { return m.prefix + strconv.Itoa(n) + "]" }
 func (m *Masker) Mask(s string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	found := find(s)
+	found := find(s, m.prefix)
 	if len(found) == 0 {
 		return s
 	}

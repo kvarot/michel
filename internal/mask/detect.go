@@ -19,61 +19,97 @@ const (
 	KindGitHubToken Kind = "github_token"
 	KindEnvValue    Kind = "env_value"
 	KindAssignment  Kind = "assignment"
+	KindURLPassword Kind = "url_password"
 	KindAbsPath     Kind = "abs_path"
 )
 
-// detector finds the secret part of a text. When the expression has
-// capturing groups, the secret is the first group that took part in the
-// match (a quoted value is captured without its quotes); otherwise it is the
+// detector finds the secret part of a text. The secret is the first
+// capturing group, after skip leading groups, that took part in the match
+// (a quoted value is captured without its quotes); with no group it is the
 // whole match.
 type detector struct {
 	kind Kind
 	re   *regexp.Regexp
+	skip int
 }
 
 const (
-	// value is a quoted string (up to the closing quote on the same line)
-	// or, unquoted, everything up to whitespace.
-	valueExpr = `(?:"([^"\n]*)"|'([^'\n]*)'|([^\s]\S*))`
-	// keywordExpr are the names that make an assignment a secret.
-	keywordExpr = `(?:password|passwd|pwd|secret|token|api_?key|access_?key|private_?key)`
+	// valueExpr is a quoted value (double, single or backtick quote, with
+	// backslash escapes, up to the closing quote on the same line), a value
+	// whose quote is never closed (up to the end of the line), or an
+	// unquoted value (up to whitespace). Five groups.
+	valueExpr = `(?:"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|` + "`((?:[^`\\\\\\n]|\\\\.)*)`|[\"'`]([^\\n]*)|([^\\s\"'`]\\S*))"
+	// keywordExpr are the names that make an assignment a secret. "pass" must
+	// not be inside a word (compass, bypass); "key" only after a qualifier.
+	keywordExpr = `(?:password|passwd|pwd|secret_?key|secret|token|api_?key|access_?key|private_?key|app_?key|(?:^|[^A-Za-z0-9])pass)`
 )
 
 var detectors = []detector{
-	{KindPrivateKey, regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|.*$)`)},
-	{KindAWSKey, regexp.MustCompile(`AKIA[0-9A-Z]{16}`)},
-	{KindGitHubToken, regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}`)},
-	{KindEnvValue, regexp.MustCompile(`(?im)^[ \t]*(?:export[ \t]+)?(?:[A-Z0-9_]*_)?(?:PASSWORD|SECRET|TOKEN|KEY)[ \t]*=[ \t]*` + valueExpr)},
-	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?[ \t]*(?:=>|:|=)[ \t]*` + valueExpr)},
+	{KindPrivateKey, regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|.*$)`), 0},
+	{KindAWSKey, regexp.MustCompile(`AKIA[0-9A-Z]{16}`), 0},
+	{KindGitHubToken, regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}`), 0},
+	// The name holds a keyword, followed only by "_..." (SECRET_KEY_BASE) or
+	// nothing; the keyword may stick to what precedes it (DBPASSWORD).
+	{KindEnvValue, regexp.MustCompile(`(?im)^[ 	]*(?:export[ 	]+)?([A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)(?:_[A-Z0-9_]*)?)[ 	]*=[ 	]*` + valueExpr), 1},
+	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?[ 	]*(?:=>|:|=)[ 	]*` + valueExpr), 0},
+	// scheme://user:password@host: only the password.
+	{KindURLPassword, regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'<>]*:([^\s/@"'<>]+)@`), 0},
 	{KindAbsPath, regexp.MustCompile(
 		// Windows: directories may hold spaces, the last segment may not.
 		`(?m)(?:^|[^A-Za-z0-9])([A-Za-z]:[\\/](?:[^\\/\r\n"'<>|*?:]+[\\/])*[^\s\\/"'<>|*?:]*)` +
 			// POSIX: at least two segments, after a separator, so URLs stay out;
 			// a ":" separates the entries of a list.
-			`|(?:^|[\s"'(=:])(/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._@+-]+)+)`)},
+			`|(?:^|[\s"'(=:])(/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._@+-]+)+)`), 0},
 }
+
+// notSecretNames are variable names that hold a keyword by accident or hold a
+// public value: monkey, donkey, turkey, hotkey, compass, bypass, surpass, and
+// public keys. Keep this list short.
+var notSecretNames = regexp.MustCompile(`(?i)^(?:MONKEY|DONKEY|TURKEY|HOTKEY|COMPASS|BYPASS|SURPASS|.*PUBLIC_?KEY.*)$`)
 
 // tokenShape is any "[secret-...]" string, whatever its nonce.
 var tokenShape = regexp.MustCompile(`\[secret-[0-9A-Za-z-]+\]`)
-
-var wholeTokenShape = regexp.MustCompile(`^\[secret-[0-9A-Za-z-]+\]$`)
 
 // HasToken reports whether s contains anything shaped like a mask token,
 // whoever made it. It is the check that no token lands in a commit.
 func HasToken(s string) bool { return tokenShape.MatchString(s) }
 
-// isPlaceholder reports whether v is exactly one token or "<path>": only
-// those are left alone, a value that merely starts with one is still masked.
-func isPlaceholder(v string) bool { return v == pathPlaceholder || wholeTokenShape.MatchString(v) }
+// isPlaceholder reports whether v is exactly "<path>" or exactly one token of
+// the Masker whose token prefix is prefix: only those are left alone. A value
+// that merely starts with one, or any other token-shaped value, is masked.
+func isPlaceholder(v, prefix string) bool {
+	if v == pathPlaceholder {
+		return true
+	}
+	if prefix == "" || !strings.HasPrefix(v, prefix) || !strings.HasSuffix(v, "]") {
+		return false
+	}
+	digits := v[len(prefix) : len(v)-1]
+	if digits == "" {
+		return false
+	}
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
 
-// isNonValue reports whether v is not a secret: empty, a literal or a
-// reference to another variable.
+var (
+	braceRef = regexp.MustCompile(`^\$\{[A-Za-z_][A-Za-z0-9_]*\}$`)
+	envRef   = regexp.MustCompile(`^%env\([A-Za-z_][A-Za-z0-9_]*\)%$`)
+)
+
+// isNonValue reports whether v is not a secret: empty, a literal, or exactly
+// one reference to another variable. "${X:-default}" is not a bare reference:
+// the default is a value.
 func isNonValue(v string) bool {
 	switch strings.ToLower(v) {
 	case "", "null", "true", "false":
 		return true
 	}
-	return strings.HasPrefix(v, "${") || strings.HasPrefix(v, "%env(")
+	return braceRef.MatchString(v) || envRef.MatchString(v)
 }
 
 type match struct {
@@ -93,21 +129,24 @@ func rank(k Kind) int {
 // find returns the secret spans of s, ordered by position. Overlapping or
 // touching spans are merged into one, so nothing of a value is left around a
 // smaller match inside it.
-func find(s string) []match {
+func find(s, tokenPrefix string) []match {
 	var all []match
 	for _, d := range detectors {
 		for _, loc := range d.re.FindAllStringSubmatchIndex(s, -1) {
 			a, b := loc[0], loc[1]
 			if len(loc) > 2 {
 				a, b = -1, -1
-				for g := 1; 2*g+1 < len(loc); g++ {
+				for g := 1 + d.skip; 2*g+1 < len(loc); g++ {
 					if loc[2*g] >= 0 {
 						a, b = loc[2*g], loc[2*g+1]
 						break
 					}
 				}
 			}
-			if a < 0 || b <= a || isPlaceholder(s[a:b]) {
+			if a < 0 || b <= a || isPlaceholder(s[a:b], tokenPrefix) {
+				continue
+			}
+			if d.kind == KindEnvValue && notSecretNames.MatchString(s[loc[2]:loc[3]]) {
 				continue
 			}
 			if (d.kind == KindEnvValue || d.kind == KindAssignment) && isNonValue(s[a:b]) {
@@ -171,7 +210,7 @@ func ScanFiles(root string, rel []string) []Hit {
 			continue
 		}
 		text := string(data)
-		for _, m := range find(text) {
+		for _, m := range find(text, "") {
 			if m.kind == KindAbsPath {
 				continue
 			}
