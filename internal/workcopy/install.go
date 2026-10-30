@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/kvarot/michel/internal/scan"
 )
 
 // lockfileEcosystem is the OSV ecosystem of each lockfile Michel knows.
@@ -231,9 +234,10 @@ func checkSpecs(v any) error {
 // checkPackageJSON refuses an npm install when a package.json from the
 // folder of the lockfile up to the copy root sets packageManager to anything
 // but an exact npm version, depends on a local path (file:, link:, a
-// relative or absolute path) or lists workspaces outside its folder.
-func checkPackageJSON(root *os.Root, dir string) error {
-	return upTo(dir, func(d string) error {
+// relative or absolute path) or lists workspaces outside its folder. It
+// returns the workspace patterns of the lockfile's own package.json.
+func checkPackageJSON(root *os.Root, dir string) (workspaces []string, err error) {
+	return workspaces, upTo(dir, func(d string) error {
 		b, err := settings(root, path.Join(d, "package.json"))
 		if err != nil || b == nil {
 			return err
@@ -273,10 +277,63 @@ func checkPackageJSON(root *os.Root, dir string) error {
 				if !ok || escapes(s) {
 					return fmt.Errorf("%w: a workspace is outside the project", ErrUnsafeInstall)
 				}
+				if d == dir {
+					workspaces = append(workspaces, s)
+				}
 			}
 		}
 		return nil
 	})
+}
+
+// folderPrefixes lists the folders a slash path goes through, the path
+// itself included: a/b/c gives a, a/b, a/b/c. For a workspace pattern,
+// only the segments before the first wildcard count.
+func folderPrefixes(p string) []string {
+	var out []string
+	segs := strings.Split(p, "/")
+	for i, s := range segs {
+		if strings.ContainsAny(s, "*?[{!") {
+			break
+		}
+		out = append(out, strings.Join(segs[:i+1], "/"))
+	}
+	return out
+}
+
+// checkLockFolders refuses, through the root of the copy, a link or a
+// junction at any folder a package-lock.json key or a workspace goes
+// through (npm would write through it, outside the copy). A folder that
+// does not exist yet is fine: npm creates it.
+func checkLockFolders(root *os.Root, dir string, keys, workspaces []string) error {
+	for _, p := range slices.Concat(keys, workspaces) {
+		for _, prefix := range folderPrefixes(p) {
+			info, err := root.Lstat(path.Join(dir, prefix))
+			if errors.Is(err, fs.ErrNotExist) {
+				break
+			}
+			if err != nil || !info.IsDir() {
+				return fmt.Errorf("%w: %s leads outside the copy", ErrOutsideCopy, scan.SanitizeText(prefix))
+			}
+		}
+	}
+	return nil
+}
+
+// nodeModulesFolders lists every node_modules folder the lock keys name
+// (packages/w/node_modules for packages/w/node_modules/x), sorted, so that
+// each starts fresh before the install, not only the top one.
+func nodeModulesFolders(keys []string) []string {
+	set := map[string]bool{}
+	for _, k := range keys {
+		for _, prefix := range folderPrefixes(k) {
+			if path.Base(prefix) == "node_modules" {
+				set[prefix] = true
+			}
+		}
+	}
+	out := slices.Sorted(maps.Keys(set))
+	return out
 }
 
 // validLockKey reports whether a package-lock.json packages key names a
@@ -294,14 +351,35 @@ func validLockKey(k string) bool {
 	return true
 }
 
+// lockEntry is what Michel reads of a package-lock.json packages entry.
+type lockEntry struct {
+	link, bundled                bool
+	resolved, version, integrity string
+	bundles                      any // bundleDependencies: a list of names, or true
+}
+
+// bundlingParent splits an installed package key into the key of the
+// package that holds its node_modules and its own name:
+// node_modules/a/node_modules/@s/b gives node_modules/a and @s/b. ok is
+// false for a top-level package (the project is not a tarball).
+func bundlingParent(key string) (parent, name string, ok bool) {
+	i := strings.LastIndex(key, "/node_modules/")
+	if i < 0 {
+		return "", "", false
+	}
+	return key[:i], key[i+len("/node_modules/"):], true
+}
+
 // checkPackageLock refuses a package-lock.json that npm ci would not read
 // exactly as Michel does, or that installs anything but https registry
 // tarballs and the project's own workspaces: lockfileVersion 2 or 3 with a
 // packages object; every key a folder of the project; a linked package
 // resolved to a folder of the project; an installed package resolved from
-// https with an integrity and an exact version (a bundled one needs only
-// the version); a workspace folder entry without a resolved.
-func checkPackageLock(lock []byte) error {
+// https with an integrity and an exact version; a bundled package (inside
+// its parent's tarball) with a version and a parent that lists it in
+// bundleDependencies; a workspace folder entry without a resolved. It
+// returns the keys (folders of the project), sorted.
+func checkPackageLock(lock []byte) ([]string, error) {
 	fail := func(format string, a ...any) error {
 		return fmt.Errorf("%w: package-lock.json %s", ErrUnsafeInstall, fmt.Sprintf(format, a...))
 	}
@@ -310,78 +388,99 @@ func checkPackageLock(lock []byte) error {
 		err = exactKeys(doc, "lockfileVersion", "packages")
 	}
 	if err != nil {
-		return fail("cannot be read: %v", err)
+		return nil, fail("cannot be read: %v", err)
 	}
 	version, ok := doc["lockfileVersion"].(json.Number)
 	if n, err := version.Int64(); !ok || err != nil || n < 2 {
-		return fail("must be a version 2 or 3 lockfile")
+		return nil, fail("must be a version 2 or 3 lockfile")
 	}
 	packages, ok := asObject(doc["packages"])
 	if !ok {
-		return fail("has no packages object")
+		return nil, fail("has no packages object")
 	}
+	entries := map[string]lockEntry{}
 	for key, v := range packages {
 		if key == "" {
 			continue // the project itself: its package.json is checked
 		}
 		if !validLockKey(key) {
-			return fail("names a package outside the project")
+			return nil, fail("names a package outside the project")
 		}
-		entry, ok := asObject(v)
+		obj, ok := asObject(v)
 		if !ok {
-			return fail("has a package that is not an object")
+			return nil, fail("has a package that is not an object")
 		}
-		if err := exactKeys(entry, "link", "inBundle", "resolved", "version", "integrity"); err != nil {
-			return fail("%s: %v", key, err)
+		if err := exactKeys(obj, "link", "inBundle", "resolved", "version", "integrity", "bundleDependencies"); err != nil {
+			return nil, fail("%s: %v", key, err)
 		}
-		link, err := optBool(entry, "link")
-		if err != nil {
-			return fail("%s: %v", key, err)
+		var e lockEntry
+		var errs []error
+		e.link, err = optBool(obj, "link")
+		errs = append(errs, err)
+		e.bundled, err = optBool(obj, "inBundle")
+		errs = append(errs, err)
+		e.resolved, err = optString(obj, "resolved")
+		errs = append(errs, err)
+		e.version, err = optString(obj, "version")
+		errs = append(errs, err)
+		e.integrity, err = optString(obj, "integrity")
+		errs = append(errs, err)
+		if err := errors.Join(errs...); err != nil {
+			return nil, fail("%s: %v", key, err)
 		}
-		bundled, err := optBool(entry, "inBundle")
-		if err != nil {
-			return fail("%s: %v", key, err)
-		}
-		resolved, err := optString(entry, "resolved")
-		if err != nil {
-			return fail("%s: %v", key, err)
-		}
-		pkgVersion, err := optString(entry, "version")
-		if err != nil {
-			return fail("%s: %v", key, err)
-		}
-		integrity, err := optString(entry, "integrity")
-		if err != nil {
-			return fail("%s: %v", key, err)
-		}
-		if pkgVersion != "" && !semver.MatchString(pkgVersion) {
-			return fail("locks a package at something other than an exact version")
+		e.bundles = obj["bundleDependencies"]
+		entries[key] = e
+	}
+	for key, e := range entries {
+		if e.version != "" && !semver.MatchString(e.version) {
+			return nil, fail("locks a package at something other than an exact version")
 		}
 		installed := slices.Contains(strings.Split(key, "/"), "node_modules")
+		if e.resolved != "" && !e.link && !strings.HasPrefix(e.resolved, "https://") {
+			return nil, fail("resolves a package from elsewhere than an https registry")
+		}
 		switch {
-		case link:
-			if resolved == "" || escapes(resolved) || strings.Contains(resolved, ":") || strings.Contains(resolved, `\`) {
-				return fail("links a package outside the project")
+		case e.link:
+			if e.resolved == "" || escapes(e.resolved) || strings.Contains(e.resolved, ":") || strings.Contains(e.resolved, `\`) {
+				return nil, fail("links a package outside the project")
 			}
 		case !installed:
 			// A workspace folder of the project: nothing is fetched for it.
-			if resolved != "" {
-				return fail("resolves a folder of the project from elsewhere")
+			if e.resolved != "" {
+				return nil, fail("resolves a folder of the project from elsewhere")
 			}
-		case bundled:
-			if pkgVersion == "" {
-				return fail("has a bundled package without a version")
+		case e.bundled:
+			if e.version == "" {
+				return nil, fail("has a bundled package without a version")
+			}
+			parentKey, name, ok := bundlingParent(key)
+			parent, found := entries[parentKey]
+			if !ok || !found || !bundles(parent.bundles, name) {
+				return nil, fail("has a bundled package that no parent package bundles")
 			}
 		default:
-			if !strings.HasPrefix(resolved, "https://") {
-				return fail("resolves a package from elsewhere than an https registry")
+			if e.resolved == "" {
+				return nil, fail("resolves a package from elsewhere than an https registry")
 			}
-			if integrity == "" || pkgVersion == "" {
-				return fail("has a package without an integrity or a version")
+			if e.integrity == "" || e.version == "" {
+				return nil, fail("has a package without an integrity or a version")
 			}
 		}
 	}
-	return nil
+	return slices.Sorted(maps.Keys(entries)), nil
+}
+
+// bundles reports whether a bundleDependencies value (true, or a list of
+// names) names the package name.
+func bundles(v any, name string) bool {
+	if all, ok := v.(bool); ok {
+		return all
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(list, func(x any) bool { s, ok := asString(x); return ok && s == name })
 }
 
 // ---- composer
@@ -398,6 +497,40 @@ var composerDistTypes = []string{"zip", "tar", "phar", "rar", "gzip", "xz", "fil
 // composerSourceTypes are the version control sources composer knows.
 var composerSourceTypes = []string{"git", "hg", "svn", "fossil"}
 
+// composerPackageTypes are the installer types composer handles itself,
+// into vendor/<name>: any other type names a custom installer (a plugin,
+// which could install anywhere) and is refused.
+var composerPackageTypes = []string{"library", "metapackage", "project", "composer-plugin"}
+
+// composerName is a composer package name, vendor/name, as composer
+// validates it: composer installs the package into vendor/<name>, so a
+// name is never a path.
+var composerName = regexp.MustCompile(`^[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]|-{1,2})?[a-z0-9]+)*$`)
+
+// composerPlatform is a platform package of composer.json (php, an
+// extension, a library, composer itself): never installed into vendor.
+var composerPlatform = regexp.MustCompile(`^(?:php(?:-64bit|-ipv6|-zts|-debug)?|hhvm|composer(?:-plugin-api|-runtime-api)?|(?:ext|lib)-[a-z0-9_.-]+)$`)
+
+// originMembers are the only members of a dist or source: a mirrors list
+// (composer tries a preferred mirror, a local path included, before url)
+// or transport-options are refused.
+var originMembers = []string{"type", "url", "reference", "shasum"}
+
+// checkComposerPackage refuses a package (of composer.lock, or
+// composer.json itself) with a type outside composerPackageTypes or a
+// target-dir (which moves the install folder).
+func checkComposerPackage(pkg map[string]any, where string) error {
+	if _, ok := pkg["target-dir"]; ok {
+		return fmt.Errorf("%w: %s sets target-dir", ErrUnsafeInstall, where)
+	}
+	if v, ok := pkg["type"]; ok {
+		if typ, ok := asString(v); !ok || !slices.Contains(composerPackageTypes, typ) {
+			return fmt.Errorf("%w: %s has a package type that needs a custom installer", ErrUnsafeInstall, where)
+		}
+	}
+	return nil
+}
+
 // checkComposerJSON refuses a composer.json whose config holds a setting
 // outside composerConfigKeys, or whose repositories are anything but
 // composer repositories over https (false, which turns packagist off, is
@@ -410,10 +543,28 @@ func checkComposerJSON(root *os.Root, dir string) error {
 	}
 	doc, err := strictObject(b)
 	if err == nil {
-		err = exactKeys(doc, "config", "repositories")
+		err = exactKeys(doc, "config", "repositories", "type", "target-dir", "require", "require-dev")
 	}
 	if err != nil {
 		return fmt.Errorf("%w: composer.json cannot be read: %v", ErrUnsafeInstall, err)
+	}
+	if err := checkComposerPackage(doc, "composer.json"); err != nil {
+		return err
+	}
+	for _, k := range []string{"require", "require-dev"} {
+		v, ok := doc[k]
+		if !ok {
+			continue
+		}
+		req, ok := asObject(v)
+		if !ok {
+			return fmt.Errorf("%w: composer.json %s is not an object", ErrUnsafeInstall, k)
+		}
+		for name := range req {
+			if !composerName.MatchString(name) && !composerPlatform.MatchString(name) {
+				return fmt.Errorf("%w: composer.json %s names a package that is not vendor/name", ErrUnsafeInstall, k)
+			}
+		}
 	}
 	if v, ok := doc["config"]; ok {
 		cfg, ok := asObject(v)
@@ -486,8 +637,10 @@ func disablesOnly(repo map[string]any) bool {
 // checkComposerLock refuses a composer.lock with a package installed from
 // anything but an https dist of a known type (zip, tar...) or a version
 // control source at a remote URL: no path, artifact or file dist, no
-// local source. Keys are read exactly (strictObject): a duplicate or a
-// case variant, which PHP and Go would read differently, is refused.
+// local source, no mirrors. Every package needs a vendor/name name (its
+// install folder), a type composer installs itself and no target-dir.
+// Keys are read exactly (strictObject): a duplicate or a case variant,
+// which PHP and Go would read differently, is refused.
 func checkComposerLock(lock []byte) error {
 	doc, err := strictObject(lock)
 	if err == nil {
@@ -510,8 +663,14 @@ func checkComposerLock(lock []byte) error {
 			if !ok {
 				return fmt.Errorf("%w: composer.lock has a package that is not an object", ErrUnsafeInstall)
 			}
-			if err := exactKeys(pkg, "dist", "source"); err != nil {
+			if err := exactKeys(pkg, "name", "type", "target-dir", "dist", "source"); err != nil {
 				return fmt.Errorf("%w: composer.lock cannot be read: %v", ErrUnsafeInstall, err)
+			}
+			if name, ok := asString(pkg["name"]); !ok || !composerName.MatchString(name) {
+				return fmt.Errorf("%w: composer.lock has a package whose name is not vendor/name", ErrUnsafeInstall)
+			}
+			if err := checkComposerPackage(pkg, "composer.lock"); err != nil {
+				return err
 			}
 			if v, ok := pkg["dist"]; ok {
 				typ, url, err := origin(v)
@@ -538,8 +697,10 @@ func origin(v any) (typ, url string, err error) {
 	if !ok {
 		return "", "", errors.New("not an object")
 	}
-	if err := exactKeys(obj, "type", "url"); err != nil {
-		return "", "", err
+	for k := range obj {
+		if !slices.Contains(originMembers, k) {
+			return "", "", fmt.Errorf("unexpected member %q", k)
+		}
 	}
 	if typ, err = optString(obj, "type"); err != nil {
 		return "", "", err
@@ -645,14 +806,25 @@ func Install(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string)
 			return err
 		}
 	} else {
-		if err := checkPackageJSON(root, dir); err != nil {
+		workspaces, err := checkPackageJSON(root, dir)
+		if err != nil {
 			return err
 		}
-		if err := checkPackageLock(lock); err != nil {
+		keys, err := checkPackageLock(lock)
+		if err != nil {
 			return err
 		}
 		if err := checkNpmrc(root, dir); err != nil {
 			return err
+		}
+		if err := checkLockFolders(root, dir, keys, workspaces); err != nil {
+			return err
+		}
+		// Every node_modules the lock names starts fresh (workspaces too).
+		for _, nm := range nodeModulesFolders(keys) {
+			if err := freshFolder(root, path.Join(dir, path.Dir(nm)), "node_modules"); err != nil {
+				return err
+			}
 		}
 	}
 	if err := freshFolder(root, dir, in.folder); err != nil {

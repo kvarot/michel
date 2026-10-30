@@ -176,18 +176,17 @@ func inExcludedFolder(segs, exclude []string) bool {
 // checkTreeSize refuses a Base tree over the limits of a copy, before
 // anything is archived: git ls-tree -r -l of the mirror. It returns the
 // excluded files of the tree (slash paths, sorted), which the archive will
-// not hold.
-func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, exclude []string) ([]string, error) {
+// not hold, and the number of files the copy will hold.
+func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, exclude []string) (excluded []string, files int, err error) {
 	out, stderr, err := h.git(ctx, d, mirror, mirror, nil, nil, "ls-tree", "-r", "-l", "-z", "--full-tree", base)
 	if err != nil {
-		return nil, gitErr("ls-tree", err, stderr)
+		return nil, 0, gitErr("ls-tree", err, stderr)
 	}
 	if len(out) >= maxGitOutput || len(out) > listingCap() {
-		return nil, ErrCopyTooLarge
+		return nil, 0, ErrCopyTooLarge
 	}
-	var files int
 	var total int64
-	excluded := []string{}
+	excluded = []string{}
 	for _, e := range strings.Split(string(out), "\x00") {
 		meta, name, ok := strings.Cut(e, "\t")
 		if !ok {
@@ -203,16 +202,16 @@ func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, ex
 		}
 		size, err := strconv.ParseInt(f[3], 10, 64)
 		if err != nil {
-			return nil, errors.New("git ls-tree returned an unexpected listing")
+			return nil, 0, errors.New("git ls-tree returned an unexpected listing")
 		}
 		files++
 		total += size
 		if size > maxCopyFile || total > maxCopyTotal || files > maxCopyFiles {
-			return nil, ErrCopyTooLarge
+			return nil, 0, ErrCopyTooLarge
 		}
 	}
 	slices.Sort(excluded)
-	return excluded, nil
+	return excluded, files, nil
 }
 
 // validFolderName reports whether n is a plain folder name (project.Exclude
@@ -291,16 +290,19 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := writeAttributes(c.Mirror); err != nil {
 		return fail(err)
 	}
-	excluded, err := h.checkTreeSize(ctx, d, c.Mirror, base, exclude)
+	excluded, files, err := h.checkTreeSize(ctx, d, c.Mirror, base, exclude)
 	if err != nil {
 		return fail(err)
 	}
 	// The archive holds only the counted files: the excluded ones are left
 	// out by pathspec (extract leaves them out again, should one slip
-	// through).
-	if _, stderr, err := h.git(ctx, d, tmp, c.Mirror, nil, nil, "archive",
-		append([]string{"--format=tar", "-o", archive, base, "--"}, excludePathspecs(exclude)...)...); err != nil {
-		return fail(gitErr("archive", err, stderr))
+	// through). With no file to copy (an empty tree, or only excluded
+	// files) git archive would fail on the pathspec: the copy starts empty.
+	if files > 0 {
+		if _, stderr, err := h.git(ctx, d, tmp, c.Mirror, nil, nil, "archive",
+			append([]string{"--format=tar", "-o", archive, base, "--"}, excludePathspecs(exclude)...)...); err != nil {
+			return fail(gitErr("archive", err, stderr))
+		}
 	}
 	if _, stderr, err := h.git(ctx, d, parent, "", nil, nil, "init", "--quiet", "--template=", "--initial-branch=main", c.Dir); err != nil {
 		return fail(gitErr("init", err, stderr))
@@ -308,9 +310,11 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := writeAttributes(filepath.Join(c.Dir, ".git")); err != nil {
 		return fail(err)
 	}
-	kept, slipped, err := extract(archive, c.Dir, exclude)
-	if err != nil {
-		return fail(err)
+	var kept, slipped []string
+	if files > 0 {
+		if kept, slipped, err = extract(archive, c.Dir, exclude); err != nil {
+			return fail(err)
+		}
 	}
 	excluded = append(excluded, slipped...)
 	slices.Sort(excluded)

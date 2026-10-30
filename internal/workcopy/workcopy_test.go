@@ -1038,10 +1038,10 @@ func TestCheckBinaryRefusesTextContent(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.txt", "plain text\n")
 	writeFile(t, dir, "b.bin", "\x00\x01\x02")
-	if err := checkBinary(dir, []string{"a.txt"}); !errors.Is(err, ErrBinaryChange) {
+	if err := checkBinary(dir, []string{"a.txt"}, nil); !errors.Is(err, ErrBinaryChange) {
 		t.Errorf("text shown as binary: %v, want ErrBinaryChange", err)
 	}
-	if err := checkBinary(dir, []string{"b.bin", "deleted.txt"}); err != nil {
+	if err := checkBinary(dir, []string{"b.bin", "deleted.txt"}, map[string]bool{"deleted.txt": true}); err != nil {
 		t.Errorf("a real binary or a deletion refused: %v", err)
 	}
 }

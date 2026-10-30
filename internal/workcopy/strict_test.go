@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kvarot/michel/internal/project"
 )
 
 func TestComposerLockIsReadStrictly(t *testing.T) {
@@ -104,7 +106,7 @@ func TestPackageLockIsReadStrictly(t *testing.T) {
 	for i, lock := range []string{
 		`{"name":"demo","lockfileVersion":3,"requires":true,"packages":{` +
 			`"":{"name":"demo","version":"1.0.0","workspaces":["packages/*"],"dependencies":{"a":"^1.2.3"}},` +
-			`"node_modules/a":{"version":"1.2.3","resolved":"https://registry.npmjs.org/a/-/a-1.2.3.tgz","integrity":"sha512-abc","dependencies":{"b":"^2.0.0"},"engines":{"node":">=18"}},` +
+			`"node_modules/a":{"version":"1.2.3","resolved":"https://registry.npmjs.org/a/-/a-1.2.3.tgz","integrity":"sha512-abc","dependencies":{"b":"^2.0.0"},"bundleDependencies":["c"],"engines":{"node":">=18"}},` +
 			`"node_modules/a/node_modules/b":{"version":"2.0.0-beta.1+build.5","resolved":"https://registry.npmjs.org/b/-/b-2.0.0-beta.1.tgz","integrity":"sha512-def","dev":true},` +
 			`"node_modules/a/node_modules/c":{"version":"1.0.0","inBundle":true},` +
 			`"node_modules/w":{"resolved":"packages/w","link":true},` +
@@ -238,6 +240,228 @@ func TestArchiveHoldsNoExcludedFiles(t *testing.T) {
 	want := []string{".env", "config/.env.local", "config/server.key", "private/notes.txt"}
 	if !slices.Equal(c.Excluded, want) {
 		t.Errorf("Excluded %v, want %v", c.Excluded, want)
+	}
+}
+
+func TestComposerPackageNamesAreChecked(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	dist := `"dist":{"type":"zip","url":"https://r.example/x.zip","reference":"abc","shasum":""}`
+	for i, lock := range []string{
+		// The reproduced probe: composer installs into vendor/<name>.
+		`{"packages":[{"name":"c/x/../../../../../outside/victim",` + dist + `}]}`,
+		`{"packages":[{"name":"../outside",` + dist + `}]}`,
+		`{"packages":[{"name":"Acme/Lib",` + dist + `}]}`,
+		`{"packages":[{"name":"acme",` + dist + `}]}`,
+		`{"packages":[{"name":"acme/lib/x",` + dist + `}]}`,
+		`{"packages":[{"name":"acme/.lib",` + dist + `}]}`,
+		`{"packages":[{"name":"acme/lib---x",` + dist + `}]}`,
+		`{"packages":[{"name":"acme/lib ",` + dist + `}]}`,
+		`{"packages":[{` + dist + `}]}`,
+		`{"packages":[{"name":1,` + dist + `}]}`,
+		`{"packages-dev":[{"name":"acme/lib","target-dir":"../../x",` + dist + `}]}`,
+		`{"packages":[{"name":"acme/lib","type":"wordpress-plugin",` + dist + `}]}`,
+		`{"packages":[{"name":"acme/lib","type":"custom-installer",` + dist + `}]}`,
+		`{"packages":[{"name":"acme/lib","Type":"library",` + dist + `}]}`,
+		// dist and source members: only type, url, reference, shasum.
+		`{"packages":[{"name":"acme/lib","dist":{"type":"zip","url":"https://r.example/x.zip","mirrors":[{"url":"file:///outside/secret.zip","preferred":true}]}}]}`,
+		`{"packages":[{"name":"acme/lib","dist":{"type":"zip","url":"https://r.example/x.zip","transport-options":{"ssl":{"verify_peer":false}}}}]}`,
+		`{"packages":[{"name":"acme/lib","source":{"type":"git","url":"https://r.example/x.git","mirrors":[{"url":"/outside/%package%","preferred":true}]}}]}`,
+		`{"packages":[{"name":"acme/lib","dist":{"type":"zip","url":"https://r.example/x.zip","Mirrors":[]}}]}`,
+	} {
+		if err := installCase(t, d, c, fmt.Sprintf("l%d", i), map[string]string{"composer.lock": lock}); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("composer.lock %s: %v, want ErrUnsafeInstall", lock, err)
+		}
+	}
+	for i, cj := range []string{
+		`{"require":{"../outside":"*"}}`,
+		`{"require":{"c/x/../../../../../outside/victim":"*"}}`,
+		`{"require-dev":{"Acme/Lib":"^1"}}`,
+		`{"require":"acme/lib"}`,
+		`{"target-dir":"../x"}`,
+		`{"type":"wordpress-plugin"}`,
+		`{"Type":"library"}`,
+		`{"Require":{"../x":"*"}}`,
+	} {
+		if err := installCase(t, d, c, fmt.Sprintf("j%d", i), map[string]string{"composer.lock": "{}", "composer.json": cj}); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("composer.json %s: %v, want ErrUnsafeInstall", cj, err)
+		}
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("a refused install ran %d commands", len(rec.runs))
+	}
+	lock := `{"packages":[{"name":"acme/lib-x",` + dist + `,"type":"library"},{"name":"a1/b_c.d","type":"metapackage"},{"name":"acme/plug","type":"composer-plugin",` + dist + `}],` +
+		`"packages-dev":[{"name":"acme/tpl","type":"project","source":{"type":"git","url":"https://r.example/x.git","reference":"abc"}}]}`
+	cj := `{"name":"acme/app","type":"project","require":{"php":">=8.2","ext-json":"*","ext-pdo_mysql":"*","lib-curl":"*","composer-runtime-api":"^2","acme/lib-x":"^1"},"require-dev":{"a1/b_c.d":"*"}}`
+	if err := installCase(t, d, c, "ok", map[string]string{"composer.lock": lock, "composer.json": cj}); err != nil {
+		t.Errorf("a plain composer project refused: %v", err)
+	}
+}
+
+func TestNpmWorkspaceFoldersStayInTheCopy(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	outside := t.TempDir()
+	writeFile(t, outside, "node_modules/keep.txt", "keep\n")
+	reg := `"version":"1.0.0","integrity":"sha512-x","resolved":"https://r.example/x.tgz"`
+	// The reproduced probe: a lock key under src, src being a junction.
+	writeFile(t, c.Dir, "a/package-lock.json", `{"lockfileVersion":3,"packages":{"":{},"src/node_modules/x":{`+reg+`}}}`)
+	if !junction(t, filepath.Join(c.Dir, "a", "src"), outside) {
+		t.Skip("no junction or symbolic link available")
+	}
+	if err := Install(context.Background(), d, c, "npm", "a/package-lock.json"); !errors.Is(err, ErrOutsideCopy) {
+		t.Errorf("lock key through a junction: %v, want ErrOutsideCopy", err)
+	}
+	// A deeper junction, and a workspace folder of package.json.
+	writeFile(t, c.Dir, "b/package-lock.json", `{"lockfileVersion":3,"packages":{"":{},"packages/w/node_modules/x":{`+reg+`}}}`)
+	writeFile(t, c.Dir, "b/packages/.keep", "")
+	if !junction(t, filepath.Join(c.Dir, "b", "packages", "w"), outside) {
+		t.Fatal("junction")
+	}
+	if err := Install(context.Background(), d, c, "npm", "b/package-lock.json"); !errors.Is(err, ErrOutsideCopy) {
+		t.Errorf("lock key through a deeper junction: %v, want ErrOutsideCopy", err)
+	}
+	writeFile(t, c.Dir, "w/package-lock.json", minLock)
+	writeFile(t, c.Dir, "w/package.json", `{"workspaces":["apps/web","packages/*"]}`)
+	writeFile(t, c.Dir, "w/apps/.keep", "")
+	if !junction(t, filepath.Join(c.Dir, "w", "apps", "web"), outside) {
+		t.Fatal("junction")
+	}
+	if err := Install(context.Background(), d, c, "npm", "w/package-lock.json"); !errors.Is(err, ErrOutsideCopy) {
+		t.Errorf("workspace folder through a junction: %v, want ErrOutsideCopy", err)
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("an install ran %d commands", len(rec.runs))
+	}
+	if b, err := os.ReadFile(filepath.Join(outside, "node_modules", "keep.txt")); err != nil || string(b) != "keep\n" {
+		t.Errorf("the outside folder was touched: %v", err)
+	}
+	// Every node_modules named by the lock starts fresh, not only the top one.
+	writeFile(t, c.Dir, "e/package-lock.json", `{"lockfileVersion":3,"packages":{"":{},"node_modules/w":{"link":true,"resolved":"packages/w"},"packages/w":{"version":"1.0.0"},"packages/w/node_modules/x":{`+reg+`}}}`)
+	writeFile(t, c.Dir, "e/node_modules/old/index.js", "x\n")
+	writeFile(t, c.Dir, "e/packages/w/node_modules/evil/index.js", "x\n")
+	writeFile(t, c.Dir, "e/packages/w/package.json", `{"name":"w"}`)
+	if junction(t, filepath.Join(c.Dir, "e", "packages", "w", "node_modules", "link"), outside) {
+		t.Log("junction planted inside the workspace's node_modules")
+	}
+	if err := Install(context.Background(), d, c, "npm", "e/package-lock.json"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	for _, rel := range []string{"e/node_modules", "e/packages/w/node_modules"} {
+		if _, err := os.Lstat(filepath.Join(c.Dir, filepath.FromSlash(rel))); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was not reset", rel)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir, "e", "packages", "w", "package.json")); err != nil {
+		t.Error("the workspace itself was deleted")
+	}
+	if b, err := os.ReadFile(filepath.Join(outside, "node_modules", "keep.txt")); err != nil || string(b) != "keep\n" {
+		t.Errorf("the outside folder was touched by the reset: %v", err)
+	}
+}
+
+func TestBundledEntriesNeedABundlingParent(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	reg := `"version":"1.0.0","integrity":"sha512-x","resolved":"https://r.example/a.tgz"`
+	lock := func(entries string) string { return `{"lockfileVersion":3,"packages":{"":{},` + entries + `}}` }
+	for i, l := range []string{
+		lock(`"node_modules/a":{` + reg + `,"inBundle":true,"resolved":"file:../x"}`),
+		lock(`"node_modules/a":{"version":"1.0.0","inBundle":true,"resolved":"file:../../outside"}`),
+		lock(`"node_modules/a":{"version":"1.0.0","inBundle":true,"resolved":"git+ssh://git@evil.example/x.git"}`),
+		lock(`"node_modules/a":{"version":"1.0.0","inBundle":true}`),                                               // no parent
+		lock(`"node_modules/a":{` + reg + `},"node_modules/a/node_modules/b":{"version":"1.0.0","inBundle":true}`), // parent does not bundle b
+		lock(`"node_modules/a":{` + reg + `,"bundleDependencies":["c"]},"node_modules/a/node_modules/b":{"version":"1.0.0","inBundle":true}`),
+		lock(`"node_modules/a":{` + reg + `,"bundleDependencies":"b"},"node_modules/a/node_modules/b":{"version":"1.0.0","inBundle":true}`),
+		lock(`"node_modules/a":{` + reg + `,"BundleDependencies":["b"]},"node_modules/a/node_modules/b":{"version":"1.0.0","inBundle":true}`),
+		lock(`"node_modules/a":{` + reg + `,"bundleDependencies":["b"]},"node_modules/a/node_modules/b":{"inBundle":true}`), // no version
+	} {
+		if err := installCase(t, d, c, fmt.Sprintf("l%d", i), map[string]string{"package-lock.json": l}); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("package-lock.json %s: %v, want ErrUnsafeInstall", l, err)
+		}
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("a refused install ran %d commands", len(rec.runs))
+	}
+	for i, l := range []string{
+		lock(`"node_modules/a":{` + reg + `,"bundleDependencies":["b","@s/c"]},"node_modules/a/node_modules/b":{"version":"1.0.0","inBundle":true},"node_modules/a/node_modules/@s/c":{"version":"2.0.0","inBundle":true}`),
+		lock(`"node_modules/a":{` + reg + `,"bundleDependencies":true},"node_modules/a/node_modules/b":{"version":"1.0.0","inBundle":true,"resolved":"https://r.example/b.tgz"}`),
+	} {
+		if err := installCase(t, d, c, fmt.Sprintf("ok%d", i), map[string]string{"package-lock.json": l}); err != nil {
+			t.Errorf("bundled dependencies refused: %v", err)
+		}
+	}
+}
+
+func TestPrepareOfTreeWithOnlyExcludedFiles(t *testing.T) {
+	needGit(t)
+	env := testGitEnv(t)
+	for name, files := range map[string][]string{"only-excluded": {".env", "private/notes.txt"}, "empty": nil} {
+		root := t.TempDir()
+		gitT(t, env, root, "init", "-q", "-b", "main")
+		for _, f := range files {
+			writeFile(t, root, f, "x\n")
+		}
+		gitT(t, env, root, "add", "-A")
+		gitT(t, env, root, "commit", "-q", "--allow-empty", "-m", "init")
+		p := project.Project{ID: "01JDEMO0000000000000000000", Name: "demo", Path: root, Exclude: []string{"private"}}
+		d := Deps{DataDir: t.TempDir(), ProxyAddr: "127.0.0.1:1"}
+		c, err := Prepare(context.Background(), d, p, "01JATTEMPT0000000000000000")
+		if err != nil {
+			t.Errorf("%s: Prepare: %v", name, err)
+			continue
+		}
+		entries, _ := os.ReadDir(c.Dir)
+		if len(entries) != 1 || entries[0].Name() != ".git" {
+			t.Errorf("%s: the copy holds %d entries, want only .git", name, len(entries))
+		}
+		want := []string{}
+		if files != nil {
+			want = []string{".env", "private/notes.txt"}
+		}
+		if !slices.Equal(c.Excluded, want) {
+			t.Errorf("%s: Excluded %v, want %v", name, c.Excluded, want)
+		}
+		writeFile(t, c.Dir, "README.md", "new\n")
+		sha, err := Commit(context.Background(), d, c, "fix")
+		if err != nil {
+			t.Errorf("%s: Commit: %v", name, err)
+			continue
+		}
+		if got := gitT(t, env, c.Mirror, "diff", "--name-only", c.Base, sha); got != "README.md" {
+			t.Errorf("%s: the fix commit changes %q", name, got)
+		}
+		if err := Remove(d, c); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+func TestCheckBinaryRefusesUnreadableFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "b.bin", "\x00\x01\x02")
+	// A changed file that is not on disk and not deleted.
+	if err := checkBinary(dir, []string{"missing.bin"}, nil); err == nil {
+		t.Error("a missing file was skipped")
+	}
+	old := maxCopyFile
+	maxCopyFile = 2
+	if err := checkBinary(dir, []string{"b.bin"}, nil); !errors.Is(err, ErrDiffTooLarge) {
+		t.Errorf("a file over the cap: %v, want ErrDiffTooLarge", err)
+	}
+	maxCopyFile = old
+	outside := t.TempDir()
+	writeFile(t, outside, "x.bin", "\x00\x01")
+	if junction(t, filepath.Join(dir, "j"), outside) {
+		if err := checkBinary(dir, []string{"j/x.bin"}, nil); !errors.Is(err, ErrOutsideCopy) {
+			t.Errorf("a file through a junction: %v, want ErrOutsideCopy", err)
+		}
+	}
+	if err := checkBinary(dir, []string{"b.bin"}, nil); err != nil {
+		t.Errorf("a real binary refused: %v", err)
 	}
 }
 

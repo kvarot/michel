@@ -111,6 +111,21 @@ func checkEntry(e rawEntry) error {
 // checkRange checks every path changed between two revisions of repo (to
 // "" means the index) and returns them, sorted.
 func (h home) checkRange(ctx context.Context, d Deps, repo, from, to string) ([]string, error) {
+	entries, err := h.changedEntries(ctx, d, repo, from, to)
+	if err != nil {
+		return nil, err
+	}
+	files := []string{}
+	for _, e := range entries {
+		files = append(files, e.path)
+	}
+	slices.Sort(files)
+	return files, nil
+}
+
+// changedEntries lists the entries changed between two revisions of repo
+// (to "" means the index), each checked by checkEntry.
+func (h home) changedEntries(ctx context.Context, d Deps, repo, from, to string) ([]rawEntry, error) {
 	args := []string{"--raw", "-z", "--no-renames", "--no-ext-diff", "--no-textconv"}
 	if to == "" {
 		args = append(args, "--cached", from)
@@ -128,15 +143,12 @@ func (h home) checkRange(ctx context.Context, d Deps, repo, from, to string) ([]
 	if err != nil {
 		return nil, err
 	}
-	files := []string{}
 	for _, e := range entries {
 		if err := checkEntry(e); err != nil {
 			return nil, err
 		}
-		files = append(files, e.path)
 	}
-	slices.Sort(files)
-	return files, nil
+	return entries, nil
 }
 
 // shortName is a segment shaped like an 8.3 short name (PRIVAT~1,
@@ -162,17 +174,26 @@ func checkExcluded(c Copy, files []string) error {
 
 // checkBinary refuses a binary change of a file whose new content (in dir,
 // read through an os.Root of it) is text: valid UTF-8 without a NUL byte.
-// A deleted file is not checked.
-func checkBinary(dir string, paths []string) error {
+// A deleted file (deleted[p]) is not checked; any other file that cannot
+// be read as a plain file of the copy is ErrOutsideCopy, one over
+// maxCopyFile is ErrDiffTooLarge.
+func checkBinary(dir string, paths []string, deleted map[string]bool) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return ErrNotACopy
 	}
 	defer root.Close()
 	for _, p := range paths {
+		if deleted[p] {
+			continue
+		}
+		shown := scan.SanitizeText(strings.ToValidUTF8(p, ""))
+		if info, err := root.Lstat(p); err == nil && info.Mode().IsRegular() && info.Size() > maxCopyFile {
+			return fmt.Errorf("%w: %s", ErrDiffTooLarge, shown)
+		}
 		b, err := readIn(root, p, maxCopyFile)
 		if err != nil {
-			continue
+			return fmt.Errorf("%w: %s cannot be read in the copy", ErrOutsideCopy, shown)
 		}
 		if utf8.Valid(b) && !bytes.Contains(b, []byte{0}) {
 			return fmt.Errorf("%w: %s", ErrBinaryChange, scan.SanitizeText(strings.ToValidUTF8(p, "")))
@@ -229,10 +250,18 @@ func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(c.Exclude)...)...); err != nil {
 		return Change{}, gitErr("add", err, stderr)
 	}
-	files, err := h.checkRange(ctx, d, c.Dir, c.Root, "")
+	entries, err := h.changedEntries(ctx, d, c.Dir, c.Root, "")
 	if err != nil {
 		return Change{}, err
 	}
+	files, deleted := []string{}, map[string]bool{}
+	for _, e := range entries {
+		files = append(files, e.path)
+		if e.mode == "000000" {
+			deleted[e.path] = true
+		}
+	}
+	slices.Sort(files)
 	if err := checkExcluded(c, files); err != nil {
 		return Change{}, err
 	}
@@ -241,7 +270,7 @@ func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
 	if err != nil {
 		return Change{}, gitErr("diff", err, stderr)
 	}
-	if err := checkBinary(c.Dir, binaryPaths(numstat)); err != nil {
+	if err := checkBinary(c.Dir, binaryPaths(numstat), deleted); err != nil {
 		return Change{}, err
 	}
 	raw, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, "--binary", c.Root, "--")...)
