@@ -226,30 +226,23 @@ type Change struct {
 	Files []string
 }
 
-// Diff stages every change of the agent's copy (git add -A, the excluded
-// files left out) and returns it against the copy's base commit c.Root:
-// whatever the agent committed in the copy, the change is its working
-// tree. A path outside the copy, a symbolic link or a submodule is
-// ErrOutsideCopy.
-func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
-	if err := checkCopy(d, c); err != nil {
-		return Change{}, err
-	}
-	if !shaShape.MatchString(c.Root) {
-		return Change{}, ErrInvalidCommit
-	}
-	h, err := ensureHome(d)
-	if err != nil {
-		return Change{}, err
-	}
-	// The index starts again from Root: nothing the agent staged itself
-	// (git add -f of an excluded file) survives.
+// stage restarts the copy's index from Root and adds every file (the
+// excluded files left out): nothing the agent staged itself survives.
+func (h home) stage(ctx context.Context, d Deps, c Copy) error {
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "read-tree", c.Root); err != nil {
-		return Change{}, gitErr("read-tree", err, stderr)
+		return gitErr("read-tree", err, stderr)
 	}
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(c.Exclude)...)...); err != nil {
-		return Change{}, gitErr("add", err, stderr)
+		return gitErr("add", err, stderr)
 	}
+	return nil
+}
+
+// indexChange is the change of the copy's index against Root, checked: a
+// path outside the copy, a symbolic link or a submodule is ErrOutsideCopy,
+// an excluded file ErrExcludedPath, a text file shown as binary
+// ErrBinaryChange.
+func (h home) indexChange(ctx context.Context, d Deps, c Copy) (Change, error) {
 	entries, err := h.changedEntries(ctx, d, c.Dir, c.Root, "")
 	if err != nil {
 		return Change{}, err
@@ -288,38 +281,48 @@ func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
 	return Change{Raw: raw, Display: scan.SanitizeText(strings.ToValidUTF8(string(text), "\uFFFD")), Files: files}, nil
 }
 
-// Commit computes the change of the copy (as Diff) and builds one commit
-// in the private mirror: the tree of Base with the change applied (a
-// temporary index in the data folder, git apply --cached), parent Base,
-// author and committer Michel. It returns that commit's id. Commits the
-// agent made in its copy are ignored: nothing of them reaches the mirror.
-func Commit(ctx context.Context, d Deps, c Copy, message string) (string, error) {
-	ch, err := Diff(ctx, d, c)
-	if err != nil {
-		return "", err
+// Diff stages every change of the agent's copy (git add -A, the excluded
+// files left out) and returns it against the copy's base commit c.Root:
+// whatever the agent committed in the copy, the change is its working
+// tree. A path outside the copy, a symbolic link or a submodule is
+// ErrOutsideCopy.
+func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
+	if err := checkCopy(d, c); err != nil {
+		return Change{}, err
 	}
-	if len(ch.Files) == 0 {
-		return "", ErrNothingToCommit
-	}
-	if !shaShape.MatchString(c.Base) {
-		return "", ErrInvalidCommit
+	if !shaShape.MatchString(c.Root) {
+		return Change{}, ErrInvalidCommit
 	}
 	h, err := ensureHome(d)
 	if err != nil {
-		return "", err
+		return Change{}, err
 	}
+	if err := h.stage(ctx, d, c); err != nil {
+		return Change{}, err
+	}
+	return h.indexChange(ctx, d, c)
+}
+
+// commitPatch builds one commit in the private mirror: the tree of Base
+// with the raw patch applied (a temporary index in the data folder, git
+// apply --cached), parent Base, author and committer Michel. It returns
+// that commit's id, checked by checkFixCommit.
+func (h home) commitPatch(ctx context.Context, d Deps, c Copy, raw []byte, message string) (string, error) {
 	message = strings.TrimSpace(scan.SanitizeText(strings.ToValidUTF8(message, "")))
 	if message == "" {
 		message = "fix: Michel"
 	}
 	tmp := tmpPath(d, filepath.Base(c.Dir))
-	_ = os.RemoveAll(tmp)
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
 		return "", fmt.Errorf("Michel cannot prepare the fix commit: %w", noPath(err))
 	}
-	defer os.RemoveAll(tmp)
 	index, patch := filepath.Join(tmp, "fix.index"), filepath.Join(tmp, "fix.patch")
-	if err := os.WriteFile(patch, ch.Raw, 0o600); err != nil {
+	defer func() {
+		_ = os.Remove(index)
+		_ = os.Remove(patch)
+		_ = os.Remove(tmp) // only when nothing else is left in it
+	}()
+	if err := os.WriteFile(patch, raw, 0o600); err != nil {
 		return "", fmt.Errorf("Michel cannot prepare the fix commit: %w", noPath(err))
 	}
 	withIndex := []string{"GIT_INDEX_FILE=" + index}
@@ -349,6 +352,27 @@ func Commit(ctx context.Context, d Deps, c Copy, message string) (string, error)
 		return "", err
 	}
 	return sha, nil
+}
+
+// Commit computes the change of the copy (as Diff) and builds one commit
+// in the private mirror from it (commitPatch). Commits the agent made in
+// its copy are ignored: nothing of them reaches the mirror.
+func Commit(ctx context.Context, d Deps, c Copy, message string) (string, error) {
+	ch, err := Diff(ctx, d, c)
+	if err != nil {
+		return "", err
+	}
+	if len(ch.Files) == 0 {
+		return "", ErrNothingToCommit
+	}
+	if !shaShape.MatchString(c.Base) {
+		return "", ErrInvalidCommit
+	}
+	h, err := ensureHome(d)
+	if err != nil {
+		return "", err
+	}
+	return h.commitPatch(ctx, d, c, ch.Raw, message)
 }
 
 // checkFixCommit checks that sha is a commit of the mirror with exactly one

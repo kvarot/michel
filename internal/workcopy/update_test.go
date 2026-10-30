@@ -3,6 +3,7 @@ package workcopy
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -136,5 +137,60 @@ func TestTreeHashAndCommitFile(t *testing.T) {
 	}
 	if _, _, err := CommitFile(context.Background(), f.deps, c, sha, "../x"); !errors.Is(err, ErrOutsideCopy) {
 		t.Errorf("path outside: %v", err)
+	}
+}
+
+func TestSnapshotFreezesTheCopy(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
+	snap, err := Freeze(context.Background(), f.deps, c)
+	if err != nil || len(snap.Tree) != 40 || len(snap.Change.Files) != 1 {
+		t.Fatalf("Snapshot = %+v %v", snap, err)
+	}
+	// The copy moves on after the snapshot.
+	writeFile(t, c.Dir, "composer.lock", "changed later\n")
+	writeFile(t, c.Dir, "late.txt", "late\n")
+	run, cleanup, err := Materialize(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Dir != filepath.Join(f.deps.DataDir, "fix-tmp", filepath.Base(c.Dir), "run") {
+		t.Errorf("scratch dir = %s", run.Dir)
+	}
+	if b, err := os.ReadFile(filepath.Join(run.Dir, "composer.lock")); err != nil || !strings.Contains(string(b), "1.2.5") {
+		t.Errorf("scratch lockfile = %q %v", b, err)
+	}
+	for _, rel := range []string{"late.txt", ".env", "config/server.key", "private/notes.txt"} {
+		if _, err := os.Lstat(filepath.Join(run.Dir, rel)); err == nil {
+			t.Errorf("%s is in the scratch worktree", rel)
+		}
+	}
+	if err := copyDir(f.deps, run); err != nil {
+		t.Errorf("the scratch worktree is not accepted for installs: %v", err)
+	}
+	cleanup()
+	if _, err := os.Lstat(run.Dir); err == nil {
+		t.Error("cleanup left the scratch worktree")
+	}
+	sha, tree, err := CommitSnapshot(context.Background(), f.deps, c, snap, "fix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, f.env, c.Mirror, "rev-parse", sha+"^{tree}"); got != tree {
+		t.Errorf("commit tree = %s, want %s", got, tree)
+	}
+	b, ok, err := CommitFile(context.Background(), f.deps, c, sha, "composer.lock")
+	if err != nil || !ok || !strings.Contains(string(b), "1.2.5") {
+		t.Errorf("committed lockfile = %q %v %v", b, ok, err)
+	}
+	if _, ok, _ := CommitFile(context.Background(), f.deps, c, sha, "late.txt"); ok {
+		t.Error("a file written after the snapshot is in the commit")
+	}
+	if _, _, err := CommitSnapshot(context.Background(), f.deps, c, Snapshot{Tree: snap.Tree}, "x"); !errors.Is(err, ErrNothingToCommit) {
+		t.Errorf("empty snapshot: %v", err)
+	}
+	if _, _, err := Materialize(context.Background(), f.deps, c, "nope"); !errors.Is(err, ErrInvalidCommit) {
+		t.Errorf("bad tree: %v", err)
 	}
 }

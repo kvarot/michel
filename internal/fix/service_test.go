@@ -637,7 +637,10 @@ func TestProposeComputesDiffAndTestsItself(t *testing.T) {
 		if !strings.HasSuffix(home, filepath.Join("fix-home")) {
 			t.Errorf("%s ran with %q, want the fix home", r.name, home)
 		}
-		if r.dir != a.Work.Copy.Dir && !strings.HasPrefix(r.dir, f.attempt(a.ID).Work.Copy.Dir) {
+		// Michel's update runs in the pristine copy; the install and the
+		// tests in the scratch worktree of the snapshot.
+		scratch := filepath.Join(f.d.DataDir, "fix-tmp", a.ID, "run")
+		if r.dir != f.attempt(a.ID).Work.Copy.Dir && r.dir != scratch {
 			t.Errorf("%s ran in %s", r.name, r.dir)
 		}
 	}

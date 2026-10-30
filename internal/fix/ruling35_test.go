@@ -203,8 +203,9 @@ func TestAutoRefusedWhenTestsRewriteLockfile(t *testing.T) {
 	f.consent()
 	level3(t, f)
 	proposeOnly(f)
-	// The project's test command rewrites the lockfile: the committed tree
-	// is no longer the one Michel's update left.
+	// The project's test command rewrites the lockfile where it runs: the
+	// scratch worktree (ruling 37), never the snapshot. The proposal stays
+	// Michel's own update and nothing of the test's write is committed.
 	base := f.rec.onRun
 	f.rec.onRun = func(name string, args []string, dir string) {
 		base(name, args, dir)
@@ -217,8 +218,16 @@ func TestAutoRefusedWhenTestsRewriteLockfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.wait(a.ID)
-	if got := f.attempt(a.ID); got.State != StateProposed || got.ApprovedBy != "" {
-		t.Errorf("a tree changed by the tests was applied alone: %+v", got)
+	got := f.attempt(a.ID)
+	if got.State != StateApplied || got.ApprovedBy != ActorAuto {
+		t.Errorf("Michel's own update was not applied: %+v", got)
+	}
+	p, _, _ := f.d.Repo.CurrentProposal(context.Background(), a.ID)
+	if strings.Contains(string(p.DiffRaw), "evil/pkg") {
+		t.Errorf("the test's write reached the proposal: %s", p.DiffRaw)
+	}
+	if b, _ := os.ReadFile(filepath.Join(f.proj.Path, "composer.lock")); strings.Contains(string(b), "evil") {
+		t.Error("the test's write reached the project")
 	}
 }
 
