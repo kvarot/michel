@@ -35,7 +35,7 @@
   "api.project.patch.bad_json_hint": "Send one JSON object with only the fields fix_level, server_fix_level and auto_fix_minor.",
   "api.project.patch.bad_level": "A fix level must be a whole number from 0 to 3.",
   "api.project.patch.bad_level_hint": "Send fix_level and server_fix_level as 0, 1, 2 or 3.",
-  "api.project.patch.nothing": "There is nothing to change.",
+  "api.project.patch.nothing": "There is nothing to change: send at least one of the fields fix_level, server_fix_level or auto_fix_minor.",
   "api.project_not_found": "No active project has this name.",
   "api.source.add.bad_input": "Give the full path of the report on this computer.",
   "api.source.add.exists": "A source with the key %s already exists. Pick another name.",
