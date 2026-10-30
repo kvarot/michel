@@ -166,3 +166,86 @@ func TestAddAllowRulesWritesAllOrNone(t *testing.T) {
 		t.Errorf("again: n = %d err %v", n, err)
 	}
 }
+
+const standardPolicy = `# Michel policy.
+sovereignty:
+  mode: standard # external services allowed
+  ai:
+    provider_policy: local_first # keep
+  network:
+    allow: []
+risk:
+  major_jump: 35
+`
+
+func TestSetExternalProvidersCreatesFileWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sub", "config.yaml")
+	// strict_local (the default) forbids the key: the new file is not kept.
+	changed, err := SetExternalProviders(path, true)
+	if err == nil || changed || !strings.Contains(err.Error(), "strict_local forbids ai.external_providers_enabled") {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the invalid new file is still there: %v", err)
+	}
+	// Disabling what is already off creates nothing.
+	if changed, err := SetExternalProviders(path, false); err != nil || changed {
+		t.Fatalf("disable on absent: %v %v", changed, err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a file was created: %v", err)
+	}
+}
+
+func TestSetExternalProvidersEditsInPlaceWithBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(standardPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := SetExternalProviders(path, true)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	raw, _ := os.ReadFile(path)
+	for _, want := range []string{"# Michel policy.", "# external services allowed", "# keep", "major_jump: 35"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("%q lost:\n%s", want, raw)
+		}
+	}
+	if bak, err := os.ReadFile(path + ".bak"); err != nil || string(bak) != standardPolicy {
+		t.Errorf(".bak = %q err %v", bak, err)
+	}
+	p, _, err := Load(path, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(p); err != nil || !p.Sovereignty.AI.ExternalProvidersEnabled {
+		t.Fatalf("validate %v, enabled %v", err, p.Sovereignty.AI.ExternalProvidersEnabled)
+	}
+	if changed, err := SetExternalProviders(path, true); err != nil || changed {
+		t.Fatalf("second call: %v %v", changed, err)
+	}
+	if changed, err := SetExternalProviders(path, false); err != nil || !changed {
+		t.Fatalf("disable: %v %v", changed, err)
+	}
+	p, _, _ = Load(path, dir)
+	if p.Sovereignty.AI.ExternalProvidersEnabled {
+		t.Error("still enabled")
+	}
+}
+
+func TestSetExternalProvidersRefusedInStrictLocalKeepsFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(commented), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetExternalProviders(path, true); err == nil {
+		t.Fatal("strict_local accepted external providers")
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != commented {
+		t.Errorf("file changed:\n%s", raw)
+	}
+}

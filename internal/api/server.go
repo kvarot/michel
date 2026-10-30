@@ -182,6 +182,7 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/v1/meta", s.meta)
 	m.HandleFunc("GET /api/v1/today", s.today)
 	m.HandleFunc("GET /api/v1/projects", s.projects)
+	m.HandleFunc("PATCH /api/v1/projects/{name}", s.patchProject)
 	m.HandleFunc("GET /api/v1/projects/{name}/findings", s.projectFindings)
 	m.HandleFunc("GET /api/v1/findings/{id}", s.finding)
 	m.HandleFunc("POST /api/v1/findings/{id}/decision", s.decision)

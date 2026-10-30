@@ -54,7 +54,8 @@ func addDenialMessage(lang i18n.Lang, path, name string, err error) string {
 func newProjectAddCmd(deps *Deps) *cobra.Command {
 	var name, class, testCmd, installCmd string
 	var corePkgs, exclude, tech []string
-	var fixLevel int
+	var fixLevel, serverFixLevel int
+	var autoFixMinor bool
 	c := &cobra.Command{
 		Use:   "add <path>",
 		Short: "Register a local project folder",
@@ -69,7 +70,9 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 			p := project.Project{
 				Name: name, Path: path, Classification: policy.Classification(class),
 				FixLevel: fixLevel, FixLevelSet: cmd.Flags().Changed("fix-level"),
-				TestCmd: testCmd, InstallCmd: installCmd,
+				ServerFixLevel: serverFixLevel, ServerFixLevelSet: cmd.Flags().Changed("server-fix-level"),
+				AutoFixMinor: autoFixMinor,
+				TestCmd:      testCmd, InstallCmd: installCmd,
 				CorePackages: cleanList(corePkgs), Exclude: cleanList(exclude), Tech: cleanList(tech),
 			}
 			added, err := projectRepo(deps).Add(ctx, p)
@@ -114,6 +117,8 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 	f.StringVar(&name, "name", "", "unique name of the project (required)")
 	f.StringVar(&class, "classification", "", "data classification: public, internal, confidential, sensitive, health (default: from the policy)")
 	f.IntVar(&fixLevel, "fix-level", 1, "how far Michel may go to fix a finding, 0 to 3")
+	f.IntVar(&serverFixLevel, "server-fix-level", 1, "how far Michel may go on the server steps of a fix, 0 to 3")
+	f.BoolVar(&autoFixMinor, "auto-fix-minor", false, "let Michel start fixes alone for minor and patch updates (needs --fix-level 2)")
 	f.StringVar(&testCmd, "test-cmd", "", "command that runs the project's tests")
 	f.StringVar(&installCmd, "install-cmd", "", "command that installs the project's dependencies")
 	f.StringArrayVar(&corePkgs, "core-package", nil, "package whose upgrade is riskier for this project (repeatable)")
@@ -236,7 +241,8 @@ func cleanList(in []string) []string {
 func newProjectSetCmd(deps *Deps) *cobra.Command {
 	var corePkgs, risk, exclude, tech []string
 	var class, testCmd, installCmd string
-	var fixLevel int
+	var fixLevel, serverFixLevel int
+	var autoFixMinor bool
 	c := &cobra.Command{
 		Use:   "set <name>",
 		Short: "Change the settings of a registered project",
@@ -261,7 +267,7 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			}
 			fl := cmd.Flags()
 			var fields []string
-			for _, f := range []string{"core-package", "exclude", "tech", "risk", "fix-level", "classification", "test-cmd", "install-cmd"} {
+			for _, f := range []string{"core-package", "exclude", "tech", "risk", "fix-level", "server-fix-level", "auto-fix-minor", "classification", "test-cmd", "install-cmd"} {
 				if fl.Changed(f) {
 					fields = append(fields, f)
 				}
@@ -299,6 +305,12 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			}
 			if fl.Changed("fix-level") {
 				p.FixLevel = fixLevel
+			}
+			if fl.Changed("server-fix-level") {
+				p.ServerFixLevel, ev["server_fix_level"] = serverFixLevel, serverFixLevel
+			}
+			if fl.Changed("auto-fix-minor") {
+				p.AutoFixMinor, ev["auto_fix_minor"] = autoFixMinor, autoFixMinor
 			}
 			if fl.Changed("classification") {
 				p.Classification = policy.Classification(class)
@@ -338,6 +350,8 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 	f.StringArrayVar(&tech, "tech", nil, "technology the project runs on, for example nginx (repeatable; replaces the list)")
 	f.StringArrayVar(&risk, "risk", nil, "risk-score override key=value (repeatable), see docs/remediation-risk.md")
 	f.IntVar(&fixLevel, "fix-level", 1, "how far Michel may go to fix a finding, 0 to 3")
+	f.IntVar(&serverFixLevel, "server-fix-level", 1, "how far Michel may go on the server steps of a fix, 0 to 3")
+	f.BoolVar(&autoFixMinor, "auto-fix-minor", false, "let Michel start fixes alone for minor and patch updates (needs fix level 2)")
 	f.StringVar(&class, "classification", "", "data classification: public, internal, confidential, sensitive, health")
 	f.StringVar(&testCmd, "test-cmd", "", "command that runs the project's tests")
 	f.StringVar(&installCmd, "install-cmd", "", "command that installs the project's dependencies")

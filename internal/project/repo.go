@@ -35,7 +35,7 @@ func NewRepo(s *store.Store) *Repo {
 	return &Repo{s: s, entropy: ulid.Monotonic(rand.Reader, 0)}
 }
 
-const cols = `id, name, source_type, path, classification, fix_level, test_cmd, install_cmd, active, created_at, core_packages, risk_overrides, exclude, tech, tech_auto`
+const cols = `id, name, source_type, path, classification, fix_level, test_cmd, install_cmd, active, created_at, core_packages, risk_overrides, exclude, tech, tech_auto, server_fix_level, auto_fix_minor`
 
 func validClassification(c policy.Classification) bool {
 	switch c {
@@ -71,6 +71,12 @@ func (r *Repo) Add(ctx context.Context, p Project) (Project, error) {
 	}
 	if p.FixLevel < 0 || p.FixLevel > 3 {
 		return Project{}, fmt.Errorf("%w (got %d)", ErrInvalidFixLevel, p.FixLevel)
+	}
+	if p.ServerFixLevel == 0 && !p.ServerFixLevelSet {
+		p.ServerFixLevel = 1
+	}
+	if p.ServerFixLevel < 0 || p.ServerFixLevel > 3 {
+		return Project{}, fmt.Errorf("%w (got %d)", ErrInvalidFixLevel, p.ServerFixLevel)
 	}
 	if !filepath.IsAbs(p.Path) {
 		return Project{}, fmt.Errorf("%w: %s", ErrNotADirectory, p.Path)
@@ -128,10 +134,10 @@ func (r *Repo) insert(ctx context.Context, p Project) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO project (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO project (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.SourceType, p.Path, string(p.Classification), p.FixLevel,
 		p.TestCmd, p.InstallCmd, active, p.CreatedAt.UTC().Format(time.RFC3339), string(core), string(over), string(exclude),
-		tech, techAuto)
+		tech, techAuto, p.ServerFixLevel, boolInt(p.AutoFixMinor))
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return fmt.Errorf("%w: %s", ErrDuplicateName, p.Name)
@@ -139,6 +145,13 @@ func (r *Repo) insert(ctx context.Context, p Project) error {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}
 	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // marshalTech encodes the two technology lists as JSON text.
@@ -159,8 +172,8 @@ type scanner interface{ Scan(...any) error }
 func scan(s scanner) (Project, error) {
 	var p Project
 	var class, created, core, over, exclude, tech, techAuto string
-	var active int
-	if err := s.Scan(&p.ID, &p.Name, &p.SourceType, &p.Path, &class, &p.FixLevel, &p.TestCmd, &p.InstallCmd, &active, &created, &core, &over, &exclude, &tech, &techAuto); err != nil {
+	var active, autoMinor int
+	if err := s.Scan(&p.ID, &p.Name, &p.SourceType, &p.Path, &class, &p.FixLevel, &p.TestCmd, &p.InstallCmd, &active, &created, &core, &over, &exclude, &tech, &techAuto, &p.ServerFixLevel, &autoMinor); err != nil {
 		return Project{}, err
 	}
 	p.Classification = policy.Classification(class)
@@ -188,7 +201,7 @@ func scan(s scanner) (Project, error) {
 		p.TechAuto = []string{}
 	}
 	_ = normalizeExtras(&p) // a stored JSON null becomes an empty value; unknown stored keys are left as they are
-	p.Active = active != 0
+	p.Active, p.AutoFixMinor = active != 0, autoMinor != 0
 	t, err := time.Parse(time.RFC3339, created)
 	if err != nil {
 		return Project{}, fmt.Errorf("project %s has an unreadable creation date %q: %w", p.Name, created, err)
@@ -276,7 +289,7 @@ func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
 }
 
 // Update rewrites the editable fields of p (found by ID): classification,
-// fix level, commands, core packages, risk overrides, excluded folders and
+// fix levels, automatic minor fixes, commands, core packages, risk overrides, excluded folders and
 // technologies (declared and detected). Values are validated like in Add.
 func (r *Repo) Update(ctx context.Context, p Project) error {
 	if !validClassification(p.Classification) {
@@ -284,6 +297,9 @@ func (r *Repo) Update(ctx context.Context, p Project) error {
 	}
 	if p.FixLevel < 0 || p.FixLevel > 3 {
 		return fmt.Errorf("%w (got %d)", ErrInvalidFixLevel, p.FixLevel)
+	}
+	if p.ServerFixLevel < 0 || p.ServerFixLevel > 3 {
+		return fmt.Errorf("%w (got %d)", ErrInvalidFixLevel, p.ServerFixLevel)
 	}
 	if err := normalizeExtras(&p); err != nil {
 		return err
@@ -305,8 +321,9 @@ func (r *Repo) Update(ctx context.Context, p Project) error {
 		return err
 	}
 	res, err := r.s.DB().ExecContext(ctx, `UPDATE project SET classification = ?, fix_level = ?, test_cmd = ?, install_cmd = ?,
-		core_packages = ?, risk_overrides = ?, exclude = ?, tech = ?, tech_auto = ? WHERE id = ?`,
-		string(p.Classification), p.FixLevel, p.TestCmd, p.InstallCmd, string(core), string(over), string(exclude), tech, techAuto, p.ID)
+		core_packages = ?, risk_overrides = ?, exclude = ?, tech = ?, tech_auto = ?, server_fix_level = ?, auto_fix_minor = ? WHERE id = ?`,
+		string(p.Classification), p.FixLevel, p.TestCmd, p.InstallCmd, string(core), string(over), string(exclude), tech, techAuto,
+		p.ServerFixLevel, boolInt(p.AutoFixMinor), p.ID)
 	if err != nil {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}

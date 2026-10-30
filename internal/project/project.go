@@ -22,10 +22,16 @@ type Project struct {
 	SourceType     string                `json:"source_type"`
 	Path           string                `json:"path"`
 	Classification policy.Classification `json:"classification"`
-	FixLevel       int                   `json:"fix_level"`
-	TestCmd        string                `json:"test_cmd"`
-	InstallCmd     string                `json:"install_cmd"`
-	Active         bool                  `json:"active"`
+	// FixLevel is how far Michel may go on the dependency files (0 to 3);
+	// ServerFixLevel the same for the steps to run on the server (0 to 3).
+	FixLevel       int `json:"fix_level"`
+	ServerFixLevel int `json:"server_fix_level"`
+	// AutoFixMinor lets Michel start a fix alone for minor and patch updates
+	// when FixLevel is 2.
+	AutoFixMinor bool   `json:"auto_fix_minor"`
+	TestCmd      string `json:"test_cmd"`
+	InstallCmd   string `json:"install_cmd"`
+	Active       bool   `json:"active"`
 	// CorePackages are the packages whose upgrade is riskier for this project
 	// (stored as typed; matching is done per ecosystem).
 	CorePackages []string `json:"core_packages"`
@@ -43,8 +49,10 @@ type Project struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// FixLevelSet marks FixLevel as explicit, so that 0 (no automatic fix) is
-	// not replaced by the default of 1. It is not stored.
-	FixLevelSet bool `json:"-"`
+	// not replaced by the default of 1. It is not stored. ServerFixLevelSet
+	// does the same for ServerFixLevel.
+	FixLevelSet       bool `json:"-"`
+	ServerFixLevelSet bool `json:"-"`
 }
 
 var (

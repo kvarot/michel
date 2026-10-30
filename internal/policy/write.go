@@ -124,13 +124,12 @@ func child(m *yaml.Node, key string, create bool) (*yaml.Node, error) {
 	return v, nil
 }
 
-// allowSeq finds (or, with create, builds) the sovereignty.network.allow
-// sequence of the document doc, with its key node. It returns nil when it is
-// absent and create is false.
-func allowSeq(doc *yaml.Node, create bool) (key, seq *yaml.Node, err error) {
+// rootMap returns the top-level mapping of the document doc, creating it
+// when create is true; nil when it is absent and create is false.
+func rootMap(doc *yaml.Node, create bool) (*yaml.Node, error) {
 	if len(doc.Content) == 0 {
 		if !create {
-			return nil, nil, nil
+			return nil, nil
 		}
 		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}
 	}
@@ -139,7 +138,18 @@ func allowSeq(doc *yaml.Node, create bool) (key, seq *yaml.Node, err error) {
 		*root = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", HeadComment: root.HeadComment}
 	}
 	if root.Kind != yaml.MappingNode {
-		return nil, nil, errors.New("the policy file is not a mapping")
+		return nil, errors.New("the policy file is not a mapping")
+	}
+	return root, nil
+}
+
+// allowSeq finds (or, with create, builds) the sovereignty.network.allow
+// sequence of the document doc, with its key node. It returns nil when it is
+// absent and create is false.
+func allowSeq(doc *yaml.Node, create bool) (key, seq *yaml.Node, err error) {
+	root, err := rootMap(doc, create)
+	if err != nil || root == nil {
+		return nil, nil, err
 	}
 	m := root
 	for _, name := range []string{"sovereignty", "network"} {
@@ -189,6 +199,65 @@ func placeComment(key, seq *yaml.Node) {
 // editAllow applies change to the allow list of the file at path and writes
 // the result when change reports a modification.
 func editAllow(path string, change func(seq *yaml.Node) bool, create bool) (bool, error) {
+	return editDoc(path, create, func(doc *yaml.Node) (bool, error) {
+		key, seq, err := allowSeq(doc, create)
+		if err != nil || seq == nil || !change(seq) {
+			return false, err
+		}
+		placeComment(key, seq)
+		return true, nil
+	})
+}
+
+// SetExternalProviders writes sovereignty.ai.external_providers_enabled in
+// the policy file at path, with the same care as AddAllowRules: comments and
+// order are kept, the previous content is copied to <path>.bak, the file is
+// replaced atomically, read back and validated, and put back when it is
+// invalid (strict_local forbids enabling external providers: the mode is
+// never changed here). It returns false, and leaves the file untouched, when
+// the value is already there. An absent file is created with only this key.
+func SetExternalProviders(path string, enabled bool) (changed bool, err error) {
+	want := "false"
+	if enabled {
+		want = "true"
+	}
+	return editDoc(path, true, func(doc *yaml.Node) (bool, error) {
+		root, err := rootMap(doc, true)
+		if err != nil {
+			return false, err
+		}
+		m := root
+		for _, name := range []string{"sovereignty", "ai"} {
+			if m, err = child(m, name, true); err != nil {
+				return false, err
+			}
+		}
+		const key = "external_providers_enabled"
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if m.Content[i].Value != key {
+				continue
+			}
+			v := m.Content[i+1]
+			if v.Kind == yaml.ScalarNode && v.Value == want {
+				return false, nil
+			}
+			if v.Kind != yaml.ScalarNode {
+				return false, errors.New("sovereignty.ai." + key + " is not a value")
+			}
+			v.Tag, v.Value = "!!bool", want
+			return true, nil
+		}
+		if !enabled {
+			return false, nil // absent means false
+		}
+		m.Content = append(m.Content, scalar(key), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: want})
+		return true, nil
+	})
+}
+
+// editDoc parses the file at path, lets apply change the document and writes
+// the result when apply reports a modification.
+func editDoc(path string, create bool, apply func(doc *yaml.Node) (bool, error)) (bool, error) {
 	original, err := os.ReadFile(path)
 	absent := errors.Is(err, fs.ErrNotExist)
 	if err != nil && !absent {
@@ -204,14 +273,11 @@ func editAllow(path string, change func(seq *yaml.Node) bool, create bool) (bool
 	if doc.Kind == 0 {
 		doc = yaml.Node{Kind: yaml.DocumentNode}
 	}
-	key, seq, err := allowSeq(&doc, create)
-	if err != nil {
+	if changed, err := apply(&doc); err != nil {
 		return false, fmt.Errorf("cannot edit policy file %s: %w", path, err)
-	}
-	if seq == nil || !change(seq) {
+	} else if !changed {
 		return false, nil
 	}
-	placeComment(key, seq)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)

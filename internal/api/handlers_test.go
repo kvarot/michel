@@ -17,6 +17,7 @@ import (
 	"github.com/kvarot/michel/internal/feed"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
+	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/source"
 )
@@ -572,5 +573,47 @@ func TestFindingViewCarriesKEVAndEPSS(t *testing.T) {
 	f.get("/api/v1/findings/"+mal, &v)
 	if !v.Malicious || v.SeveritySource != "malicious" || v.KEV {
 		t.Errorf("malicious view = %+v", v)
+	}
+}
+
+func TestPatchProjectLevels(t *testing.T) {
+	f := newFixture(t, nil)
+	resp, body := f.do("PATCH", "/api/v1/projects/demo", testToken, `{"fix_level":3,"server_fix_level":2,"auto_fix_minor":true}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var pv ProjectView
+	if err := json.Unmarshal([]byte(body), &pv); err != nil || pv.FixLevel != 3 || pv.ServerFixLevel != 2 || !pv.AutoFixMinor {
+		t.Fatalf("view = %+v, %v", pv, err)
+	}
+	if strings.Contains(body, f.proj.Path) || strings.Contains(body, testCmdMarker) || strings.Contains(body, installCmdMarker) {
+		t.Errorf("the answer leaks a path or a command: %s", body)
+	}
+	got, err := project.NewRepo(f.st).Get(context.Background(), "demo")
+	if err != nil || got.FixLevel != 3 || got.ServerFixLevel != 2 || !got.AutoFixMinor || got.TestCmd != testCmdMarker {
+		t.Fatalf("stored = %+v, %v", got, err)
+	}
+	var n int
+	if err := f.st.DB().QueryRow(`SELECT COUNT(*) FROM audit_event WHERE action = 'project.update'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("audit rows = %d, %v", n, err)
+	}
+	// Only the fields sent change.
+	if resp, body = f.do("PATCH", "/api/v1/projects/demo", testToken, `{"auto_fix_minor":false}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	if got, _ = project.NewRepo(f.st).Get(context.Background(), "demo"); got.FixLevel != 3 || got.AutoFixMinor {
+		t.Errorf("stored = %+v", got)
+	}
+	for _, bad := range []string{`{"fix_level":4}`, `{"server_fix_level":-1}`, `{}`, `{"path":"/etc"}`} {
+		resp, body := f.do("PATCH", "/api/v1/projects/demo", testToken, bad)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: status %d: %s", bad, resp.StatusCode, body)
+		}
+	}
+	if resp, _ := f.do("PATCH", "/api/v1/projects/nope", testToken, `{"fix_level":1}`); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown project: %d", resp.StatusCode)
+	}
+	if resp, _ := f.do("PATCH", "/api/v1/projects/demo", "", `{"fix_level":1}`); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("no token: %d", resp.StatusCode)
 	}
 }

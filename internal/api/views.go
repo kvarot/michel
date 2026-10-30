@@ -25,6 +25,8 @@ type ProjectView struct {
 	Name           string         `json:"name"`
 	Classification string         `json:"classification"`
 	FixLevel       int            `json:"fix_level"`
+	ServerFixLevel int            `json:"server_fix_level"`
+	AutoFixMinor   bool           `json:"auto_fix_minor"`
 	Open           map[string]int `json:"open"`
 	Decided        map[string]int `json:"decided"`
 	Total          int            `json:"total"`
