@@ -73,3 +73,15 @@ Task 3: fix round 1 BASE 624af9b
 Task 3: fix round 1/5 (7 addressed, 0 open — mask before cut, sink validation, pkg/dir patterns, composer require on major, Path ids, invisible chars; commits 624af9b..fc52bd4)
 Task 3: minor (deferred): snippet window may shift a few lines when the cited line sits inside a multi-line secret (content still masked); lone \r not normalized; tests written after fixes (reviewer confirmed each would fail on old code).
 Task 3: complete (commits 57e1b73..fc52bd4, review clean)
+Task 4: BASE cf962fa
+Ruling 16: attempt MCP token stored as SHA-256 in the secret store under `fix-token-<attempt id lowercased>` (Task 4 adds fix.SetAttemptToken/CheckAttemptToken; Task 8 creates it at Start) — no migration change — cost if wrong: token lookup through the secret store instead of SQL.
+Ruling 17: in Task 4 `michel mcp` wires Deps.Propose to a func returning "not available until the fix service exists"; Task 8 replaces it with fix.Propose — cost if wrong: none.
+Task 4: implementer DONE d7611b4 (env names fix.EnvAttempt/EnvToken; bad token still scopes reads to the attempt's project; arg `notes` per plan vs spec `details`)
+Task 4: note for T8 — MCP process masks with its own in-memory table entries; harmless under ruling 7 (no unmask into commits; any token in diff ⇒ refuse); display unmask in serve only knows serve-side entries.
+Task 4: minor (deferred): each michel mcp launch runs root setup (source.Sync + app.start audit event).
+Task 4: FR applied be14cec
+Task 4: review Approved. ⚠️ carried to T8: (a) MCP-created tokens share the stored prefix/numbering ⇒ display could resolve a wrong value; (b) Propose must refuse non-proposable attempt states and the token must be deleted when the attempt ends; (c) spec § 6 `details` vs plan `notes`.
+Ruling 18: the MCP process masks with its own fresh Masker (own nonce, never saved), so tokens it creates are never resolved by the page's display unmasker (they show as tokens) — T8 must not pass the stored table to `michel mcp` — cost if wrong: agent text quoting a secret it saw via MCP shows a token on the page instead of the value.
+Ruling 19: propose_fix argument stays `notes` (plan + fix.ProposeInput); spec § 6 `details` is the same field — cost if wrong: none.
+Task 4: minor (deferred): cli/mcp_test.go:151 no-op ReplaceAll (escaped Windows path never checked); test_cmd may carry an absolute path to the agent; MCP version list stops at 2025-06-18 (add 2025-11-25); ctx only checked between lines (T7/T8 must close stdin/kill on timeout); notification with bad jsonrpc gets an error reply; Set/DeleteAttemptToken panic on nil store.
+Task 4: complete (commits cf962fa..be14cec, review clean)
