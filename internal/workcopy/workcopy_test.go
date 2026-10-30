@@ -24,6 +24,25 @@ import (
 
 func fakeAWS() string { return "AKIA" + "ABCDEFGHIJKLMNOP" }
 
+// minLock is the smallest package-lock.json Michel installs from: version
+// 3 with a root entry.
+const minLock = `{"lockfileVersion":3,"packages":{"":{}}}`
+
+// junction makes link point at target: a junction on Windows (mklink /J,
+// which needs no privilege), a symbolic link elsewhere. It reports whether
+// the link exists.
+func junction(t *testing.T, link, target string) bool {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return os.Symlink(target, link) == nil
+	}
+	out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+	if err != nil {
+		t.Logf("mklink /J: %v %s", err, out)
+	}
+	return err == nil
+}
+
 // needGit skips the test when git is not installed, like internal/hygiene.
 func needGit(t *testing.T) {
 	t.Helper()
@@ -1082,7 +1101,7 @@ func TestInstallArgvByLockfile(t *testing.T) {
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
 	writeFile(t, c.Dir, "composer.lock", "{}")
-	writeFile(t, c.Dir, "web/package-lock.json", "{}")
+	writeFile(t, c.Dir, "web/package-lock.json", minLock)
 	writeFile(t, c.Dir, "pn/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
 	writeFile(t, c.Dir, "y1/yarn.lock", "# yarn lockfile v1\n")
 	npmrc := filepath.Join(d.DataDir, "fix-home", "npmrc")
@@ -1161,18 +1180,18 @@ func TestNpmrcIsAllowlisted(t *testing.T) {
 		"  node-options = --require ./evil.js\n", "git=./evil\n", "userconfig=../x\n", "prefix=../x\n",
 		"registry=https://r.example/\rvirtual-store-dir=../../../outside\rstore-dir=C:/x\n",
 	} {
-		if err := installCase(t, d, c, fmt.Sprintf("r%d", i), map[string]string{"package-lock.json": "{}", ".npmrc": body}); !errors.Is(err, ErrUnsafeInstall) {
+		if err := installCase(t, d, c, fmt.Sprintf("r%d", i), map[string]string{"package-lock.json": minLock, ".npmrc": body}); !errors.Is(err, ErrUnsafeInstall) {
 			t.Errorf(".npmrc %q: %v, want ErrUnsafeInstall", body, err)
 		}
 	}
 	// A setting in a parent folder of the lockfile counts too.
-	if err := installCase(t, d, c, "up", map[string]string{".npmrc": "script-shell=./evil.sh\n", "web/package-lock.json": "{}"}); !errors.Is(err, ErrUnsafeInstall) {
+	if err := installCase(t, d, c, "up", map[string]string{".npmrc": "script-shell=./evil.sh\n", "web/package-lock.json": minLock}); !errors.Is(err, ErrUnsafeInstall) {
 		t.Errorf(".npmrc in a parent folder: %v, want ErrUnsafeInstall", err)
 	}
 	if len(rec.runs) != 0 {
 		t.Errorf("a refused install ran %d commands", len(rec.runs))
 	}
-	if err := installCase(t, d, c, "ok", map[string]string{"package-lock.json": "{}", ".npmrc": "# c\r\n; c\r\nregistry=https://r.example/\r\n@acme:registry=https://npm.example/\n" +
+	if err := installCase(t, d, c, "ok", map[string]string{"package-lock.json": minLock, ".npmrc": "# c\r\n; c\r\nregistry=https://r.example/\r\n@acme:registry=https://npm.example/\n" +
 		"//npm.example/:_authToken=${NPM_TOKEN}\n//npm.example/path/:_auth=abc\n//npm.example/:username=u\n//npm.example/:_password=p\nalways-auth=true\n"}); err != nil {
 		t.Errorf("registry and auth settings refused: %v", err)
 	}
@@ -1202,19 +1221,19 @@ func TestPackageJSONIsChecked(t *testing.T) {
 		`{"dependencies":{"a":"^1.0.0"},"dependencies":{"a":"file:../x"}}`,
 	}
 	for i, pkg := range refused {
-		if err := installCase(t, d, c, fmt.Sprintf("r%d", i), map[string]string{"package-lock.json": "{}", "package.json": pkg}); !errors.Is(err, ErrUnsafeInstall) {
+		if err := installCase(t, d, c, fmt.Sprintf("r%d", i), map[string]string{"package-lock.json": minLock, "package.json": pkg}); !errors.Is(err, ErrUnsafeInstall) {
 			t.Errorf("package.json %s: %v, want ErrUnsafeInstall", pkg, err)
 		}
 	}
 	// The nearest package.json is clean, a parent one is hostile.
 	if err := installCase(t, d, c, "top", map[string]string{"package.json": `{"packageManager":"yarn@https://evil.example/x.tgz"}`,
-		"app/package.json": `{"name":"acme-lib"}`, "app/package-lock.json": "{}"}); !errors.Is(err, ErrUnsafeInstall) {
+		"app/package.json": `{"name":"acme-lib"}`, "app/package-lock.json": minLock}); !errors.Is(err, ErrUnsafeInstall) {
 		t.Errorf("hostile packageManager in a parent folder: %v, want ErrUnsafeInstall", err)
 	}
 	for i, lock := range []string{
-		`{"packages":{"node_modules/a":{"resolved":"../../outside","link":true}}}`,
-		`{"packages":{"node_modules/a":{"resolved":"file:../x.tgz"}}}`,
-		`{"packages":{"node_modules/a":{"resolved":"git+ssh://git@evil.example/x.git"}}}`,
+		`{"lockfileVersion":3,"packages":{"node_modules/a":{"resolved":"../../outside","link":true}}}`,
+		`{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.0.0","integrity":"sha512-x","resolved":"file:../x.tgz"}}}`,
+		`{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.0.0","integrity":"sha512-x","resolved":"git+ssh://git@evil.example/x.git"}}}`,
 	} {
 		if err := installCase(t, d, c, fmt.Sprintf("l%d", i), map[string]string{"package-lock.json": lock}); !errors.Is(err, ErrUnsafeInstall) {
 			t.Errorf("package-lock.json %s: %v, want ErrUnsafeInstall", lock, err)
@@ -1226,7 +1245,7 @@ func TestPackageJSONIsChecked(t *testing.T) {
 	for i, pm := range []string{"npm@10.8.2", "npm@11.0.0-pre.1+sha512.0123abcdef"} {
 		rec.runs = nil
 		pkg := `{"packageManager":` + strconv.Quote(pm) + `,"dependencies":{"a":"^1.2.3","b":"npm:c@1"},"workspaces":["packages/*"]}`
-		lock := `{"packages":{"":{},"node_modules/a":{"resolved":"https://registry.npmjs.org/a/-/a-1.2.3.tgz"},"node_modules/w":{"resolved":"packages/w","link":true}}}`
+		lock := `{"lockfileVersion":3,"packages":{"":{},"node_modules/a":{"version":"1.2.3","resolved":"https://registry.npmjs.org/a/-/a-1.2.3.tgz","integrity":"sha512-abc"},"node_modules/w":{"resolved":"packages/w","link":true}}}`
 		if err := installCase(t, d, c, fmt.Sprintf("ok%d", i), map[string]string{"package-lock.json": lock, "package.json": pkg}); err != nil {
 			t.Errorf("packageManager %q refused: %v", pm, err)
 			continue
@@ -1309,20 +1328,10 @@ func TestInstallStartsFromFreshFolders(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(c.Dir, "a", "vendor")); !errors.Is(err, os.ErrNotExist) {
 		t.Error("vendor was not deleted before the install")
 	}
-	junction := func(link, target string) bool {
-		if runtime.GOOS != "windows" {
-			return os.Symlink(target, link) == nil
-		}
-		out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
-		if err != nil {
-			t.Logf("mklink /J: %v %s", err, out)
-		}
-		return err == nil
-	}
 	// node_modules itself a link (junction on Windows): the link goes, the
 	// target stays.
-	writeFile(t, c.Dir, "b/package-lock.json", "{}")
-	if junction(filepath.Join(c.Dir, "b", "node_modules"), outside) {
+	writeFile(t, c.Dir, "b/package-lock.json", minLock)
+	if junction(t, filepath.Join(c.Dir, "b", "node_modules"), outside) {
 		if err := Install(context.Background(), d, c, "npm", "b/package-lock.json"); err != nil {
 			t.Fatalf("Install: %v", err)
 		}
@@ -1331,9 +1340,9 @@ func TestInstallStartsFromFreshFolders(t *testing.T) {
 		}
 	}
 	// A junction inside node_modules: removed with it, never followed.
-	writeFile(t, c.Dir, "e/package-lock.json", "{}")
+	writeFile(t, c.Dir, "e/package-lock.json", minLock)
 	writeFile(t, c.Dir, "e/node_modules/x/index.js", "x\n")
-	if junction(filepath.Join(c.Dir, "e", "node_modules", "inner"), outside) {
+	if junction(t, filepath.Join(c.Dir, "e", "node_modules", "inner"), outside) {
 		if err := Install(context.Background(), d, c, "npm", "e/package-lock.json"); err != nil {
 			t.Fatalf("Install: %v", err)
 		}
@@ -1342,8 +1351,8 @@ func TestInstallStartsFromFreshFolders(t *testing.T) {
 		t.Errorf("a file outside the copy was touched: %v", err)
 	}
 	// bin stays checked: a link there is refused.
-	writeFile(t, c.Dir, "f/package-lock.json", "{}")
-	if junction(filepath.Join(c.Dir, "f", "bin"), outside) {
+	writeFile(t, c.Dir, "f/package-lock.json", minLock)
+	if junction(t, filepath.Join(c.Dir, "f", "bin"), outside) {
 		if err := Install(context.Background(), d, c, "npm", "f/package-lock.json"); !errors.Is(err, ErrOutsideCopy) {
 			t.Errorf("linked bin: %v, want ErrOutsideCopy", err)
 		}

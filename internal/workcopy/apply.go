@@ -160,11 +160,17 @@ func checkExcluded(c Copy, files []string) error {
 	return nil
 }
 
-// checkBinary refuses a binary change of a file whose new content (in dir)
-// is text: valid UTF-8 without a NUL byte. A deleted file is not checked.
+// checkBinary refuses a binary change of a file whose new content (in dir,
+// read through an os.Root of it) is text: valid UTF-8 without a NUL byte.
+// A deleted file is not checked.
 func checkBinary(dir string, paths []string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return ErrNotACopy
+	}
+	defer root.Close()
 	for _, p := range paths {
-		b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p)))
+		b, err := readIn(root, p, maxCopyFile)
 		if err != nil {
 			continue
 		}

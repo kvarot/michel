@@ -82,15 +82,19 @@ var excludedFiles = []string{".env*", "*.pem", "*.key", "id_*"}
 
 // Limits of a copy: per file, in all, and in number of files (excluded
 // files not counted). They are checked on the tree of Base (git ls-tree)
-// before anything is archived, and again while extracting. 30,000 files
-// keeps the ls-tree listing (about 60 bytes plus the path per file, 256
-// bytes allowed per file) under maxGitOutput; a longer listing is
-// ErrCopyTooLarge. Variables so that tests can lower them.
+// before anything is archived, and again while extracting. Variables so
+// that tests can lower them.
 var (
 	maxCopyFile  int64 = 256 << 20
 	maxCopyTotal int64 = 4 << 30
 	maxCopyFiles       = 30000
 )
+
+// listingCap is the longest ls-tree listing read: 256 bytes per allowed
+// file (about 60 bytes plus the path each). With 30,000 files it is 7.5
+// MiB, below maxGitOutput (8 MiB), so a longer listing is refused as
+// ErrCopyTooLarge before the output cap cuts it.
+func listingCap() int { return maxCopyFiles * 256 }
 
 // plainAttributes turn off, for every path, what git would otherwise do
 // to a file's bytes or presence between the repository and the disk:
@@ -170,37 +174,45 @@ func inExcludedFolder(segs, exclude []string) bool {
 }
 
 // checkTreeSize refuses a Base tree over the limits of a copy, before
-// anything is archived: git ls-tree -r -l of the mirror.
-func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, exclude []string) error {
+// anything is archived: git ls-tree -r -l of the mirror. It returns the
+// excluded files of the tree (slash paths, sorted), which the archive will
+// not hold.
+func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, exclude []string) ([]string, error) {
 	out, stderr, err := h.git(ctx, d, mirror, mirror, nil, nil, "ls-tree", "-r", "-l", "-z", "--full-tree", base)
 	if err != nil {
-		return gitErr("ls-tree", err, stderr)
+		return nil, gitErr("ls-tree", err, stderr)
 	}
-	if len(out) >= maxGitOutput || len(out) > maxCopyFiles*256+(1<<20) {
-		return ErrCopyTooLarge
+	if len(out) >= maxGitOutput || len(out) > listingCap() {
+		return nil, ErrCopyTooLarge
 	}
 	var files int
 	var total int64
+	excluded := []string{}
 	for _, e := range strings.Split(string(out), "\x00") {
 		meta, name, ok := strings.Cut(e, "\t")
-		if !ok || isExcluded(name, exclude) {
+		if !ok {
 			continue
 		}
 		f := strings.Fields(meta) // mode type id size
 		if len(f) != 4 || f[1] != "blob" {
 			continue
 		}
+		if isExcluded(name, exclude) {
+			excluded = append(excluded, name)
+			continue
+		}
 		size, err := strconv.ParseInt(f[3], 10, 64)
 		if err != nil {
-			return errors.New("git ls-tree returned an unexpected listing")
+			return nil, errors.New("git ls-tree returned an unexpected listing")
 		}
 		files++
 		total += size
 		if size > maxCopyFile || total > maxCopyTotal || files > maxCopyFiles {
-			return ErrCopyTooLarge
+			return nil, ErrCopyTooLarge
 		}
 	}
-	return nil
+	slices.Sort(excluded)
+	return excluded, nil
 }
 
 // validFolderName reports whether n is a plain folder name (project.Exclude
@@ -279,10 +291,15 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := writeAttributes(c.Mirror); err != nil {
 		return fail(err)
 	}
-	if err := h.checkTreeSize(ctx, d, c.Mirror, base, exclude); err != nil {
+	excluded, err := h.checkTreeSize(ctx, d, c.Mirror, base, exclude)
+	if err != nil {
 		return fail(err)
 	}
-	if _, stderr, err := h.git(ctx, d, tmp, c.Mirror, nil, nil, "archive", "--format=tar", "-o", archive, base); err != nil {
+	// The archive holds only the counted files: the excluded ones are left
+	// out by pathspec (extract leaves them out again, should one slip
+	// through).
+	if _, stderr, err := h.git(ctx, d, tmp, c.Mirror, nil, nil, "archive",
+		append([]string{"--format=tar", "-o", archive, base, "--"}, excludePathspecs(exclude)...)...); err != nil {
 		return fail(gitErr("archive", err, stderr))
 	}
 	if _, stderr, err := h.git(ctx, d, parent, "", nil, nil, "init", "--quiet", "--template=", "--initial-branch=main", c.Dir); err != nil {
@@ -291,11 +308,13 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := writeAttributes(filepath.Join(c.Dir, ".git")); err != nil {
 		return fail(err)
 	}
-	kept, excluded, err := extract(archive, c.Dir, exclude)
+	kept, slipped, err := extract(archive, c.Dir, exclude)
 	if err != nil {
 		return fail(err)
 	}
-	c.Excluded = excluded
+	excluded = append(excluded, slipped...)
+	slices.Sort(excluded)
+	c.Excluded = slices.Compact(excluded)
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(exclude)...)...); err != nil {
 		return fail(gitErr("add", err, stderr))
 	}
@@ -327,14 +346,20 @@ func writeAttributes(gitDir string) error {
 
 // extract writes the regular files and folders of the tar archive under
 // dir, Michel's own reader: no symbolic or hard link, no special file, no
-// path outside dir or under a .git folder, sizes capped. It returns the
-// files written and the excluded files left out (slash paths, sorted).
+// path outside dir or under a .git folder, sizes capped. Every write goes
+// through an os.Root of dir, so nothing can land outside it. It returns
+// the files written and the excluded files left out (slash paths, sorted).
 func extract(archive, dir string, exclude []string) (kept, excluded []string, err error) {
 	f, err := os.Open(archive)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Michel cannot read the project's files: %w", noPath(err))
 	}
 	defer f.Close()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
+	}
+	defer root.Close()
 	tr := tar.NewReader(f)
 	var total int64
 	for {
@@ -352,12 +377,12 @@ func extract(archive, dir string, exclude []string) (kept, excluded []string, er
 		if rel == "" || checkEntry(rawEntry{path: rel, mode: "100644"}) != nil {
 			continue
 		}
-		full := filepath.Join(dir, filepath.FromSlash(rel))
+		full := filepath.FromSlash(rel)
 		if hdr.Typeflag == tar.TypeDir {
 			if inExcludedFolder(strings.Split(rel, "/"), exclude) {
 				continue
 			}
-			if err := os.MkdirAll(full, 0o755); err != nil {
+			if err := root.MkdirAll(full, 0o755); err != nil {
 				return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
 			}
 			continue
@@ -370,14 +395,16 @@ func extract(archive, dir string, exclude []string) (kept, excluded []string, er
 		if hdr.Size > maxCopyFile || total > maxCopyTotal || len(kept) >= maxCopyFiles {
 			return nil, nil, ErrCopyTooLarge
 		}
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
+		if parent := filepath.Dir(full); parent != "." {
+			if err := root.MkdirAll(parent, 0o755); err != nil {
+				return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
+			}
 		}
 		mode := os.FileMode(0o644)
 		if hdr.Mode&0o111 != 0 {
 			mode = 0o755
 		}
-		out, err := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		out, err := root.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if err != nil {
 			return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
 		}
@@ -395,12 +422,17 @@ func extract(archive, dir string, exclude []string) (kept, excluded []string, er
 // .git/info/attributes. A .git/commondir (which would make git read
 // another configuration) is refused.
 func configSHA(dir string) (string, error) {
-	if _, err := os.Lstat(filepath.Join(dir, ".git", "commondir")); err == nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", ErrNotACopy
+	}
+	defer root.Close()
+	if _, err := root.Lstat(".git/commondir"); err == nil {
 		return "", ErrCopyTampered
 	}
 	h := sha256.New()
-	for _, f := range []string{"config", filepath.Join("info", "attributes")} {
-		b, err := os.ReadFile(filepath.Join(dir, ".git", f))
+	for _, f := range []string{".git/config", ".git/info/attributes"} {
+		b, err := readIn(root, f, maxSettingsFile)
 		if err != nil {
 			return "", fmt.Errorf("Michel cannot read the git configuration of the fix copy: %w", noPath(err))
 		}
