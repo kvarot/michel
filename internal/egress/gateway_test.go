@@ -417,3 +417,18 @@ func TestGatewaySetRulesTakesEffect(t *testing.T) {
 		t.Fatal("allowed after the rules were cleared")
 	}
 }
+
+func TestRecordRefusedRecordsDeniedAttempt(t *testing.T) {
+	sink := &captureSink{}
+	g := egress.New(pol(policy.AllowRule{Host: "example.com", Purpose: "fix.install"}), sink)
+	if err := g.RecordRefused("example.com", "fix.install", "plain HTTP refused: HTTPS only"); err != nil {
+		t.Fatal(err)
+	}
+	a := g.Attempts()
+	if len(a) != 1 || a[0].Allowed || a[0].Host != "example.com" || a[0].Purpose != "fix.install" || a[0].Reason != "plain HTTP refused: HTTPS only" || a[0].At.IsZero() {
+		t.Fatalf("attempts = %+v", a)
+	}
+	if len(sink.got) != 1 {
+		t.Fatalf("sink got %+v", sink.got)
+	}
+}

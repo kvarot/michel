@@ -135,6 +135,17 @@ func (g *Gateway) Attempts() []Attempt {
 	return append([]Attempt(nil), g.attempts...)
 }
 
+// RecordRefused records a refused Attempt for host and purpose that never
+// reached the allowlist check: a request a proxy turns down by itself
+// (plain HTTP, a port other than 443, a malformed target). It dials nothing
+// and returns the sink error. It panics if purpose is empty, like Client.
+func (g *Gateway) RecordRefused(host, purpose, reason string) error {
+	if purpose == "" {
+		panic("egress: RecordRefused requires a non-empty purpose")
+	}
+	return g.record(Attempt{Host: host, Purpose: purpose, Allowed: false, At: time.Now(), Reason: reason})
+}
+
 // record keeps a in memory and hands it to the sink, returning the sink error.
 func (g *Gateway) record(a Attempt) error {
 	g.mu.Lock()
