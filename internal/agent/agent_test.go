@@ -94,12 +94,11 @@ func newFixture(t *testing.T, cfg fakeConfig) *fixture {
 
 func (f *fixture) spec() Spec {
 	return Spec{
-		Dir:             f.copy,
-		Prompt:          "Fix acme/lib in composer.lock.",
-		MCPCommand:      []string{"michel", "mcp"},
-		MCPEnv:          map[string]string{"MICHEL_FIX_ATTEMPT": "01ATTEMPT", "MICHEL_FIX_TOKEN": "test-token-not-secret"},
-		AllowedCommands: []string{"vendor/bin/phpunit"},
-		Timeout:         time.Minute,
+		Dir:        f.copy,
+		Prompt:     "Fix acme/lib in composer.lock.",
+		MCPCommand: []string{"michel", "mcp"},
+		MCPEnv:     map[string]string{"MICHEL_FIX_ATTEMPT": "01ATTEMPT", "MICHEL_FIX_TOKEN": "test-token-not-secret"},
+		Timeout:    time.Minute,
 	}
 }
 
@@ -179,8 +178,8 @@ func TestLaunchArgvIsClosedAndIsolated(t *testing.T) {
 			t.Errorf("argv lacks %s: %q", w, r.Args)
 		}
 	}
-	for flag, v := range map[string]string{"--setting-sources": "", "--disallowedTools": "WebFetch,WebSearch", "--permission-mode": "dontAsk",
-		"--permission-prompts": "none", "--tools": "Read,Edit,Write,Glob,Grep,Bash", "--max-turns": "30"} {
+	for flag, v := range map[string]string{"--setting-sources": "", "--disallowedTools": "Bash,WebFetch,WebSearch", "--permission-mode": "dontAsk",
+		"--permission-prompts": "none", "--tools": "Read,Edit,Write,Glob,Grep", "--max-turns": "30"} {
 		if got, ok := argAfter(r.Args, flag); !ok || got != v {
 			t.Errorf("argv %s = %q (%t), want %q", flag, got, ok, v)
 		}
@@ -253,13 +252,10 @@ func TestGeneratedSettingsAndMCPConfig(t *testing.T) {
 		settings.EnableAllProjectMcpServers == nil || *settings.EnableAllProjectMcpServers {
 		t.Errorf("settings = %s", set)
 	}
-	for _, w := range []string{"Edit(./**)", "Write(./**)", "Read(./**)", "Bash(composer update --no-scripts --no-plugins:*)",
-		"Bash(npm install --ignore-scripts:*)", "Bash(git diff:*)", "Bash(git status:*)", "Bash(vendor/bin/phpunit)", "mcp__michel"} {
-		if !slices.Contains(settings.Permissions.Allow, w) {
-			t.Errorf("allow lacks %s: %v", w, settings.Permissions.Allow)
-		}
+	if want := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob", "Grep", "mcp__michel__*"}; !slices.Equal(settings.Permissions.Allow, want) {
+		t.Errorf("allow = %v, want %v", settings.Permissions.Allow, want)
 	}
-	for _, w := range []string{"WebFetch", "WebSearch", "Edit(./.git/**)"} {
+	for _, w := range []string{"Bash", "WebFetch", "WebSearch", "Edit(./.git/**)"} {
 		if !slices.Contains(settings.Permissions.Deny, w) {
 			t.Errorf("deny lacks %s: %v", w, settings.Permissions.Deny)
 		}
@@ -280,11 +276,83 @@ func TestGeneratedSettingsAndMCPConfig(t *testing.T) {
 		m.Env["MICHEL_FIX_ATTEMPT"] != "01ATTEMPT" {
 		t.Errorf("mcp config = %s", mcp)
 	}
-	// A test command that is not a plain argv is refused.
-	for _, bad := range []string{"phpunit; rm -rf /", "phpunit $(x)", "phpunit *", "phpunit (x)", "php,unit", ""} {
-		spec.AllowedCommands = []string{bad}
-		if _, _, err := generated(spec); err == nil {
-			t.Errorf("AllowedCommands %q accepted", bad)
+}
+
+// launchRecord starts a session on the fake and returns the generated
+// settings (as read before Close removes them) and the recorded argv.
+func launchRecord(t *testing.T) (allow, deny, args []string) {
+	t.Helper()
+	f := newFixture(t, fakeConfig{Turns: [][]string{{initLine, resultLine}}})
+	s, err := Start(context.Background(), f.d, f.spec())
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Close()
+	// The files exist while the session runs: read them after its first turn.
+	if e := <-s.Events(); e.Kind != KindDone {
+		t.Fatalf("first event %v, want done", e)
+	}
+	r := f.record(t)
+	setPath, _ := argAfter(r.Args, "--settings")
+	b, err := os.ReadFile(setPath)
+	s.CloseInput()
+	drain(t, s)
+	if err != nil {
+		t.Fatalf("settings file: %v", err)
+	}
+	var set struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+			Deny  []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(b, &set); err != nil {
+		t.Fatal(err)
+	}
+	return set.Permissions.Allow, set.Permissions.Deny, r.Args
+}
+
+// Ruling 33: the agent has no Bash tool at all, in the settings and argv.
+func TestLaunchDeniesBash(t *testing.T) {
+	allow, deny, args := launchRecord(t)
+	if !slices.Contains(deny, "Bash") {
+		t.Errorf("settings deny lacks Bash: %v", deny)
+	}
+	for _, r := range allow {
+		if strings.HasPrefix(r, "Bash") {
+			t.Errorf("settings allow %s", r)
+		}
+	}
+	if v, _ := argAfter(args, "--disallowedTools"); !slices.Contains(strings.Split(v, ","), "Bash") {
+		t.Errorf("--disallowedTools = %q, want Bash in it", v)
+	}
+	if v, _ := argAfter(args, "--tools"); slices.Contains(strings.Split(v, ","), "Bash") {
+		t.Errorf("--tools = %q names Bash", v)
+	}
+	// --allowedTools lists exactly the settings allow list: no Bash rule.
+	i := slices.Index(args, "--allowedTools")
+	j := slices.Index(args, "--disallowedTools")
+	if i < 0 || j < i || !slices.Equal(args[i+1:j], allow) {
+		t.Errorf("--allowedTools %q, want %q", args[i+1:max(i+1, j)], allow)
+	}
+	for _, a := range args {
+		if strings.Contains(a, "Bash(") || strings.Contains(a, "PowerShell") {
+			t.Errorf("argv allows a command tool: %q", a)
+		}
+	}
+}
+
+// Ruling 33: no write to install folders, git's folder, Claude Code's
+// project settings or MCP file, at the root of the copy or deeper.
+func TestLaunchDeniesWritesToInstallFolders(t *testing.T) {
+	_, deny, _ := launchRecord(t)
+	for _, tool := range []string{"Edit", "Write"} {
+		for _, p := range []string{"vendor/**", "node_modules/**", ".git/**", ".claude/**", ".mcp.json"} {
+			for _, rule := range []string{tool + "(./" + p + ")", tool + "(./**/" + p + ")"} {
+				if !slices.Contains(deny, rule) {
+					t.Errorf("deny lacks %s", rule)
+				}
+			}
 		}
 	}
 }

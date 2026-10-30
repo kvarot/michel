@@ -16,7 +16,7 @@ func setProcessGroup(cmd *exec.Cmd) {
 }
 
 // processTree is the job object holding Claude Code and every process it
-// starts (Bash, composer, npm, the tests, the MCP server): killing the job
+// starts (the MCP server, any helper): killing the job
 // kills them all, and so does closing its last handle (Michel exiting).
 type processTree struct{ job windows.Handle }
 

@@ -35,9 +35,6 @@ type Spec struct {
 	// MCPEnv is the environment of the MCP server (fix.EnvAttempt,
 	// fix.EnvToken), written in the generated MCP configuration only.
 	MCPEnv map[string]string
-	// AllowedCommands are the project's test commands, run by the agent as
-	// exactly this argv (workcopy.SplitCommand), on top of BashRules.
-	AllowedCommands []string
 	// Timeout ends the session, its process tree killed. 0 means
 	// DefaultTimeout.
 	Timeout time.Duration
@@ -50,68 +47,45 @@ type Spec struct {
 const DefaultTimeout = 20 * time.Minute
 
 // tools are the only built-in tools of the session (--tools): the file
-// tools and Bash. No web, subagent, notebook or other tool exists in it.
-const tools = "Read,Edit,Write,Glob,Grep,Bash"
+// tools. No Bash (controller ruling 33: Michel runs updates, installs and
+// tests itself with closed argv), web, subagent, notebook or other tool
+// exists in it.
+const tools = "Read,Edit,Write,Glob,Grep"
 
-// BashRules are the commands the agent may run besides the project's test
-// commands: dependency updates without scripts or plugins, and reading git's
-// state. Any other command is denied (permission mode dontAsk).
-var BashRules = []string{
-	"Bash(composer update --no-scripts --no-plugins:*)",
-	"Bash(composer require --no-scripts --no-plugins:*)",
-	"Bash(npm install --ignore-scripts:*)",
-	"Bash(git diff:*)",
-	"Bash(git status:*)",
-}
-
-// fileRules give the file tools the working folder (the copy) only.
-var fileRules = []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob", "Grep"}
+// disallowed is the --disallowedTools value: Bash and the web tools,
+// denied whatever else would allow them.
+const disallowed = "Bash,WebFetch,WebSearch"
 
 // mcpServer is the name of Michel's server in the generated MCP config.
 const mcpServer = "michel"
 
-// denyRules are refused whatever else allows them: the web tools, the
-// copy's git folder and Claude Code's own settings, and the user's Claude
-// Code files (login, settings) and keys outside it.
-var denyRules = []string{
-	"WebFetch", "WebSearch",
-	"Edit(./.git/**)", "Write(./.git/**)", "Edit(./.claude/**)", "Write(./.claude/**)",
-	"Read(~/.claude/**)", "Read(~/.claude.json)", "Read(~/.ssh/**)",
-}
-
-// commandArg is one word of a test command Michel lets the agent run: no
-// pattern, parenthesis, comma, quote or shell character can reach the
-// permission rule.
-var commandArg = regexp.MustCompile(`^[A-Za-z0-9._/:=@%+-]+$`)
-
-// commandRule turns a declared test command into an exact Bash rule.
-func commandRule(c string) (string, error) {
-	argv, err := workcopy.SplitCommand(c)
-	if err != nil || len(argv) == 0 {
-		return "", errors.New("a test command is not a plain command line")
-	}
-	for _, a := range argv {
-		if !commandArg.MatchString(a) {
-			return "", errors.New("a test command holds characters Michel does not allow in a rule")
-		}
-	}
-	return "Bash(" + strings.Join(argv, " ") + ")", nil
-}
-
-// allowRules is the whole allow list of a session.
-func allowRules(s Spec) ([]string, error) {
-	rules := append(append([]string{}, fileRules...), BashRules...)
-	for _, c := range s.AllowedCommands {
-		r, err := commandRule(c)
-		if err != nil {
-			return nil, err
-		}
-		rules = append(rules, r)
-	}
+// allowRules give the file tools the working folder (the copy) only, and
+// the tools of Michel's MCP server when there is one.
+func allowRules(s Spec) []string {
+	rules := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob", "Grep"}
 	if len(s.MCPCommand) > 0 {
-		rules = append(rules, "mcp__"+mcpServer)
+		rules = append(rules, "mcp__"+mcpServer+"__*")
 	}
-	return rules, nil
+	return rules
+}
+
+// protected are the paths of the copy the agent never writes: install
+// folders (what Michel installs there runs in its tests), git's folder, and
+// Claude Code's project settings and MCP file. Each at the root and at any
+// depth.
+var protected = []string{"vendor/**", "node_modules/**", ".git/**", ".claude/**", ".mcp.json"}
+
+// denyRules are refused whatever else allows them: Bash, the web tools,
+// writes to the protected paths, and reads of the user's Claude Code files
+// (login, settings) and keys.
+func denyRules() []string {
+	rules := []string{"Bash", "WebFetch", "WebSearch"}
+	for _, tool := range []string{"Edit", "Write"} {
+		for _, p := range protected {
+			rules = append(rules, tool+"(./"+p+")", tool+"(./**/"+p+")")
+		}
+	}
+	return append(rules, "Read(~/.claude/**)", "Read(~/.claude.json)", "Read(~/.ssh/**)")
 }
 
 // generated returns the settings file and the MCP configuration of a
@@ -120,15 +94,11 @@ func allowRules(s Spec) ([]string, error) {
 // carries the same permissions for that reason): permissions, no hook at
 // all, project MCP servers off.
 func generated(s Spec) (settings, mcp []byte, err error) {
-	allow, err := allowRules(s)
-	if err != nil {
-		return nil, nil, err
-	}
 	settings, err = json.MarshalIndent(map[string]any{
 		"permissions": map[string]any{
 			"defaultMode":                  "dontAsk",
-			"allow":                        allow,
-			"deny":                         denyRules,
+			"allow":                        allowRules(s),
+			"deny":                         denyRules(),
 			"disableBypassPermissionsMode": "disable",
 		},
 		"disableAllHooks":            true,
@@ -152,8 +122,8 @@ func generated(s Spec) (settings, mcp []byte, err error) {
 // loginVars are the variables Claude Code reads to find a login the user
 // set up outside its config folder, passed through by name when Michel's
 // own environment has them (their values are never logged). The
-// CLAUDE_CODE_GIT_BASH_PATH is the Git Bash Claude Code's Bash tool needs
-// on Windows. ANTHROPIC_BASE_URL and the other providers' variables are not
+// CLAUDE_CODE_GIT_BASH_PATH is the Git Bash Claude Code looks for at start
+// on Windows (the agent has no Bash tool). ANTHROPIC_BASE_URL and the other providers' variables are not
 // passed: the allow proxy only reaches Anthropic.
 var loginVars = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_GIT_BASH_PATH"}
 
@@ -217,10 +187,6 @@ var sessionID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 // argv is the closed argv of a session: every value is Michel's, the
 // session id and the turn count are checked, the prompt goes on stdin.
 func argv(s Spec, mcpPath, settingsPath string) ([]string, error) {
-	allow, err := allowRules(s)
-	if err != nil {
-		return nil, err
-	}
 	a := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--mcp-config", mcpPath, "--strict-mcp-config",
 		"--settings", settingsPath, "--setting-sources", "",
@@ -228,8 +194,8 @@ func argv(s Spec, mcpPath, settingsPath string) ([]string, error) {
 		"--permission-mode", "dontAsk", "--permission-prompts", "none",
 		"--disable-slash-commands",
 		"--allowedTools"}
-	a = append(a, allow...)
-	a = append(a, "--disallowedTools", "WebFetch,WebSearch")
+	a = append(a, allowRules(s)...)
+	a = append(a, "--disallowedTools", disallowed)
 	if s.ResumeID != "" {
 		if !sessionID.MatchString(s.ResumeID) {
 			return nil, errors.New("the session to resume is not a Claude Code session id")
