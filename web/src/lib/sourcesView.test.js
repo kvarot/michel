@@ -53,8 +53,8 @@ describe('sourcesView', () => {
     expect(rowActions({ kind: 'skill', state: 'on', enabled: true, config: { installed: true }, badges: ['new_version'] })).toContain('upgrade')
     expect(rowActions({ kind: 'plugin', state: 'on', enabled: true })).toEqual(['detail', 'update', 'run', 'remove'])
     expect(rowActions({ kind: 'reference', state: 'hidden', enabled: true, origin: 'catalog' })).toEqual(['detail', 'reset'])
-    expect(t('sources.action.disable')).toBe('Désactiver sans donner ton accord')
-    expect(en('sources.action.disable')).toBe('Turn off without giving consent')
+    expect(t('sources.action.disable')).toBe('Refuser et désactiver cette source')
+    expect(en('sources.action.disable')).toBe('Decline and disable this source')
   })
 
   test('badgeKeys for new_version, suggested and archived', () => {

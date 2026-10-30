@@ -100,9 +100,9 @@ export function formatDate(iso, lang) {
 
 /**
  * formatPercent writes a share (0 to 1) as a percentage in lang, with one
- * decimal at most: "42,5 %" in French (decimal comma, narrow no-break space
- * before the sign), "42.5%" in English. whole rounds down to a whole number,
- * for a percentile ("more than 97%").
+ * decimal at most: "42,5 %" in French (decimal comma, a space before the
+ * sign, as the French texts write it), "42.5%" in English. whole rounds
+ * down to a whole number, for a percentile ("more than 97%").
  * @param {number} share
  * @param {string} lang
  * @param {boolean} [whole]
@@ -112,7 +112,7 @@ export function formatPercent(share, lang, whole = false) {
   // The epsilon keeps 0.29 at 29: 0.29 * 100 is 28.999999999999996.
   const n = whole ? Math.floor(x * 100 + 1e-9) : Math.round(x * 1000) / 10
   const s = String(n)
-  return lang === 'fr' ? `${s.replace('.', ',')}\u202f%` : `${s}%`
+  return lang === 'fr' ? `${s.replace('.', ',')} %` : `${s}%`
 }
 
 /** decisionLabel names a decision in force in lang; "" for none. */

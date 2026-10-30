@@ -88,19 +88,21 @@ describe('digestView', () => {
   })
 
   test('formatPercent per lang', () => {
-    expect(formatPercent(0.425, 'fr')).toBe('42,5\u202f%')
+    expect(formatPercent(0.425, 'fr')).toBe('42,5 %')
     expect(formatPercent(0.425, 'en')).toBe('42.5%')
-    expect(formatPercent(0.42, 'fr')).toBe('42\u202f%')
+    expect(formatPercent(0.42, 'fr')).toBe('42 %')
     expect(formatPercent(0.0004, 'en')).toBe('0%')
     expect(formatPercent(0.29, 'en', true)).toBe('29%')
-    expect(formatPercent(0.976, 'fr', true)).toBe('97\u202f%')
+    expect(formatPercent(0.976, 'fr', true)).toBe('97 %')
     expect(formatPercent(undefined, 'en')).toBe('0%')
   })
 
   test('the epss texts take the percentage with its sign', () => {
-    expect(translate('fr', 'item.epss', { p: formatPercent(0.425, 'fr') })).toBe("Risque d'attaque dans les 30 jours : 42,5\u202f%")
+    expect(translate('fr', 'item.epss', { p: formatPercent(0.425, 'fr') })).toBe("Risque d'attaque dans les 30 jours : 42,5 %")
     expect(translate('en', 'item.epss', { p: formatPercent(0.425, 'en') })).toBe('Chance of an attack within 30 days: 42.5%')
-    expect(translate('en', 'fact.epss_value', { p: '42.5%', pct: '97%' })).toBe('42.5% within 30 days, more than 97% of the flaws')
+    expect(translate('fr', 'fact.epss_value', { p: formatPercent(0.425, 'fr'), pct: formatPercent(0.976, 'fr', true) }))
+      .toBe("42,5 % de chances d'être attaquée dans les 30 jours : c'est plus que pour 97 % des failles.")
+    expect(translate('en', 'fact.epss_value', { p: '42.5%', pct: '97%' })).toBe('42.5% chance of an attack within 30 days: more than for 97% of the flaws.')
   })
 
   test('formatDate per lang', () => {
