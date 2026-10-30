@@ -57,7 +57,7 @@ func TestDigestFixLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"1 fix waits for your decision:", "acme/lib ACME-1 → 1.2.5", "left-pad NPM-2: fixed in your code (branch " + fix.Branch(b.ID) + " merged). Remember to deploy.",
-		"1 fix waits for Michel to be running"} {
+		"1 fix will start as soon as Michel is running."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text lacks %q:\n%s", want, text)
 		}
@@ -69,7 +69,7 @@ func TestDigestFixLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"1 correction attend ta décision", "corrigée dans ton code", "Pense à déployer", "attend que Michel soit lancé"} {
+	for _, want := range []string{"1 correction attend ta décision", "corrigée dans ton code", "Pense à déployer", "démarrera dès que Michel sera lancé"} {
 		if !strings.Contains(fr, want) {
 			t.Errorf("French text lacks %q:\n%s", want, fr)
 		}
