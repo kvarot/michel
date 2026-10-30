@@ -72,6 +72,10 @@ type Deps struct {
 	Policy     policy.Policy
 	PolicyPath string
 	Reload     func() (policy.Policy, error)
+	// LivePolicy, when set, is the policy in force as the process sees it
+	// now (michel serve: the one a consent given on the page reloads). The
+	// worker reads it at each pass instead of keeping Policy.
+	LivePolicy func() policy.Policy
 	// DataDir is Michel's data folder; OSVRoot the offline databases of the
 	// re-scan (empty: the policy's db.osv_path); SkillsDir the Claude Code
 	// skills folder (empty: ~/.claude/skills).

@@ -203,6 +203,7 @@ func (s *server) fixDeps(w http.ResponseWriter, r *http.Request, lang i18n.Lang)
 	}
 	d := *s.deps.Fix
 	d.Policy = s.currentPolicy()
+	d.LivePolicy = s.currentPolicy
 	d.Lang = lang
 	d.Actor = fixActor
 	if s.deps.Reload != nil {
@@ -212,10 +213,12 @@ func (s *server) fixDeps(w http.ResponseWriter, r *http.Request, lang i18n.Lang)
 }
 
 // fixWorker is serve's loop of the level 2 queue, on the server's
-// background context (Close stops it).
+// background context (Close stops it). It reads the server's policy at each
+// pass: a consent given on the page (which reloads it) counts at once.
 func (s *server) fixWorker(ctx context.Context) {
 	d := *s.deps.Fix
 	d.Policy = s.currentPolicy()
+	d.LivePolicy = s.currentPolicy
 	d.Lang = s.deps.Lang
 	fix.Worker(ctx, d)
 }

@@ -90,7 +90,9 @@ func gitRun(t *testing.T, env []string, dir string, args ...string) {
 	}
 }
 
-func newFixFixture(t *testing.T) *fixFixture {
+// newFixFixture builds the fixture; each opt runs on it before the handler
+// is built.
+func newFixFixture(t *testing.T, opts ...func(ff *fixFixture)) *fixFixture {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -148,6 +150,10 @@ func newFixFixture(t *testing.T) *fixFixture {
 			Sessions: fix.NewSessions(), Timeout: time.Minute, PollInterval: 20 * time.Millisecond,
 		}
 		f.deps.Fix = ff.fd
+		ff.fixture = f
+		for _, o := range opts {
+			o(ff)
+		}
 	})
 	return ff
 }
@@ -637,5 +643,44 @@ func TestRefusalsAreTranslated(t *testing.T) {
 	}
 	if len(fixStatus) != len(errs)-1 {
 		t.Errorf("fixStatus maps %d keys, the service has %d refusals", len(fixStatus), len(errs)-1)
+	}
+}
+
+// TestWorkerSeesConsentGivenAfterStart: the level 2 queue of serve works
+// with the policy in force, so a consent given on the page after the start
+// lets the next automatic attempt start (no restart needed).
+func TestWorkerSeesConsentGivenAfterStart(t *testing.T) {
+	fid := ""
+	ff := newFixFixture(t, func(ff *fixFixture) {
+		ff.deps.FixWorker = true
+		ff.fd.WorkerInterval = 20 * time.Millisecond
+		fid = ff.ids["ACME-2026-0001"]
+		if err := fix.NewRepo(ff.st).Enqueue(context.Background(), fid, ff.proj.ID); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Before the consent: the automatic start is refused, and audited.
+	deadline := time.Now().Add(10 * time.Second)
+	for len(ff.auditRows("fix.start")) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the worker made no attempt")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if rows := ff.auditRows("fix.start"); rows[0].evidence["reason"] != "fix.err.consent_required" {
+		t.Fatalf("first automatic start = %+v", rows[0])
+	}
+	ff.consent()
+	if err := fix.NewRepo(ff.st).Enqueue(context.Background(), fid, ff.proj.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ff.agents:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the worker did not start the attempt after the consent: %+v", ff.auditRows("fix.start"))
+	}
+	list, err := fix.NewRepo(ff.st).ListAttempts(context.Background(), ff.proj.ID, "")
+	if err != nil || len(list) != 1 || list[0].Origin != fix.OriginAgentAuto {
+		t.Errorf("attempts = %+v %v", list, err)
 	}
 }

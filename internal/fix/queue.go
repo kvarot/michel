@@ -183,7 +183,8 @@ func WorkOnce(ctx context.Context, d Deps) (bool, error) {
 }
 
 // Worker is the loop of michel serve: it looks at the queue every
-// WorkerInterval, one attempt at a time, and purges the old messages once a
+// WorkerInterval, one attempt at a time (with Deps.LivePolicy, under the
+// policy in force at each pass), and purges the old messages once a
 // day. It returns when ctx is done.
 func Worker(ctx context.Context, d Deps) {
 	interval := d.WorkerInterval
@@ -192,6 +193,10 @@ func Worker(ctx context.Context, d Deps) {
 	}
 	lastPurge := d.now()
 	for {
+		// A consent given since the last pass counts at once.
+		if d.LivePolicy != nil {
+			d.Policy = d.LivePolicy()
+		}
 		if _, err := WorkOnce(ctx, d); err != nil {
 			_ = d.record(ctx, "fix.worker", "serve", "error", map[string]any{"error": "worker_failed", "detail": auditDetail(d, err)})
 		}
