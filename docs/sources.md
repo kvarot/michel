@@ -127,7 +127,7 @@ You can still add any repository yourself: `michel source add --kind skill --nam
 
 ## To discover
 
-`discover.github` (off by default) searches the GitHub topics `mcp-security` and `claude-skills` at each `source update` (so once a day with the scheduled line) and keeps the repositories the registry does not know. The digest and the page list the new ones; `michel source discover --add owner/name --kind skill --pin <sha>` adds one (off, to install as above), `--ignore owner/name` hides it. The "awesome" lists of the catalog are links only, never read.
+`discover.github` (off by default) searches the GitHub topics `mcp-security` and `claude-skills` at each update of the sources (`source update`), so once a day if you scheduled the command, and keeps the repositories the registry does not know. The digest and the page list the new ones; `michel source discover --add owner/name --kind skill --pin <sha>` adds one (off, to install as above), `--ignore owner/name` hides it. The "awesome" lists of the catalog are links only, never read.
 
 ## Daily update
 
