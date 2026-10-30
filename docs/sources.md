@@ -36,7 +36,7 @@ The catalog is embedded in the binary. At each start Michel brings the registry 
 | `on` | Turned on and every host allowed. |
 | `hidden` | Removed from the lists (`source remove` on a catalog entry). `source reset <key>` brings it back. |
 
-A source can go back to `waiting_consent` on its own: when a new catalog moves a source to another host, the rule you wrote for the old host does not cover the new one, so Michel asks again instead of failing in silence.
+A source can go back to `waiting_consent` on its own. This happens when a new version of Michel changes the server address of a source: your former consent covered only the old address, so Michel asks again before contacting the new one.
 
 ## The consent screen and the rule it writes
 
@@ -75,9 +75,9 @@ Every request goes through the egress gateway and is written to the audit log as
 ## KEV and EPSS
 
 - **KEV** (`enrich.kev`) is CISA's list of vulnerabilities attackers already use. A finding on it shows `[KEV]` in `michel findings`, `kev: yes` in `michel finding`, a red chip on the page, and goes to the **head of the digest** ("Exploited in the wild, fix these first"), as long as it is open or decided "fix". The ones you deferred or ignored with a reason come back as one count line, not every morning. A malicious package (OSV `MAL-` advisory) follows the same rules.
-- KEV does **not** add points to the risk score: the score measures the risk of the fix, not its urgency. It marks the finding urgent ("fix this first") and puts it first in every list (see [remediation-risk.md](remediation-risk.md)).
+- KEV does **not** add points to the risk score: this score says how likely the fix is to break something, not how urgent it is. KEV marks the finding "fix this first" and puts it first in every list (see [remediation-risk.md](remediation-risk.md)).
 - If a finding you decided to ignore or defer appears on the KEV list, Michel asks you again: the decision is superseded (`kev_changed`) and the finding is back in "decisions to review".
-- **EPSS** (`enrich.epss`) estimates the chance a vulnerability is exploited within 30 days. Michel shows it only from the 50th percentile up ("Chance of exploitation within 30 days: 12%, higher than 95% of known flaws."); below, it says nothing rather than show a reassuring number.
+- **EPSS** (`enrich.epss`) estimates the chance a vulnerability is exploited within 30 days. Michel shows this figure only when the flaw is in the half of known flaws with the highest chance of exploitation ("Chance of exploitation within 30 days: 12%, higher than 95% of known flaws."); below that, it shows nothing rather than a small number that would wrongly reassure.
 
 ## "To read" and your technologies
 
@@ -97,21 +97,29 @@ A feed that is off but matches one of your technologies is marked "suggested for
 - Michel runs an enabled plugin with `run: true` at the end of `michel scan` of a project, or on demand with `michel source run <key> --project <name>`. A failure is a warning, not an error of the scan.
 - Their findings join the same list (kinds `config` and `code`), with the same decisions and digest. Only a new run of the same plugin on the same project can mark them gone.
 
-**How a tool is fenced.** Michel never runs a tool from the project folder: the working folder is `<data dir>/plugins/<tool>/`, the arguments are fixed (no text of yours is added), the environment is a short allowlist (no secret or token), the run stops after 30 minutes and its output is cut at 64 KB. `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` point to a local **refusal proxy** that answers 403 to every request and refuses every `CONNECT`, and records each try as a denied `egress.attempt` with purpose `plugin.<key>`. This is a **logged fence, not a guarantee**: a tool that ignores the proxy variables is not stopped by it. Trivy and Semgrep themselves, and their rules, are updated by you, outside Michel.
+**How a tool is kept off the network.**
+
+- Michel never runs a tool from the project folder, but from `<data dir>/plugins/<tool>/`.
+- The arguments are fixed: no text of yours is added.
+- The tool gets only a short list of environment variables: no secret, no token.
+- It is stopped after 30 minutes, and its output is cut at 64 KB.
+- Its proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) point to a **local go-between that refuses everything** (the "refusal proxy"): every connection attempt is refused (403, and `CONNECT` refused) and logged as a denied `egress.attempt` with purpose `plugin.<key>`.
+- It is a **safeguard, not a guarantee**: a tool that ignores these settings is not stopped.
+- Trivy and Semgrep themselves, and their rules, are updated by you, outside Michel.
 
 ## Skills and MCP servers
 
 - `michel source show <key>` gives the repository, the pinned commit, the licence found, the note and, after an update, its state (stars, last push, archived, new version).
 - `michel source install <key>` (once the source is enabled with `source enable <key>`) downloads the archive of the **pinned commit** (`codeload.github.com`, 50 MB compressed, 200 MB and 5,000 files extracted at most; paths leaving the folder and symbolic links refused, no executable bit kept) into the data folder, then shows a **preview**: files and sizes, the start of `SKILL.md` (or `README.md`), the licence ("Licence not found: check it before installing." when none), what will be written and where. You answer `y` or `N`.
 - A **skill** is copied to `~/.claude/skills/<name>/` with a `.michel-source` marker file. Michel refuses a folder that exists without its marker, never writes inside a project, and `source remove` deletes only a folder whose marker matches.
-- An **MCP server** is fetched and pinned for reading only. Michel writes nothing in Claude Code's settings: it prints the line to run yourself, `claude mcp add --scope user <name> -- <command> <args>`. A server started with `npx` downloads at start-up, outside Michel's control; the preview says it.
-- **Never an automatic update.** The daily update reads the repository state; when the head commit differs from the pinned one, the source shows "new version". `michel source upgrade <key>` shows the files added, changed and removed and the change of `SKILL.md`, then installs after your consent.
+- For an **MCP server**, Michel downloads its code and pins it to the commit, without ever starting it. Michel writes nothing in Claude Code's settings: it prints the line to run yourself, `claude mcp add --scope user <name> -- <command> <args>`. A server started with `npx` downloads at start-up, outside Michel's control; the preview says it.
+- **Never an automatic update.** Each day Michel only reads the repository state; when there is a newer commit than the pinned one, the source shows "new version". `michel source upgrade <key>` shows the files added, changed and removed and the change of `SKILL.md`, then installs after your consent.
 
 ### Known repositories Michel does not offer, and why
 
 - Snyk: it sends your data to a third party, against the sovereignty policy.
-- Offensive and OSINT tools (Burp, SecOps, Shodan, VirusTotal, Maigret): outside the purpose of watching your own dependencies.
-- Reverse engineering (IDA, Ghidra, JADX): same reason.
+- Burp, SecOps, Shodan, VirusTotal, Maigret (attack tools, or tools to investigate people): off topic, Michel watches your own dependencies.
+- IDA, Ghidra, JADX (analysis of already compiled programs): off topic too.
 - Mobb: it sends code to be checked.
 - Nearly unknown repositories: not enough trust to put them in a catalog.
 
@@ -136,9 +144,9 @@ The digest then has a **catalog** line (sources up to date, sources that could n
 ## Troubleshooting
 
 - **"waits for your consent"**: the source is on but a host has no rule. Run `michel source enable <key>` and read the text, or turn it off (`source disable <key>`, or "turn off" on the page).
-- **"the GitHub request budget is spent"** (recorded as `rate budget`): one update spends at most 50 GitHub requests without a token, 500 with one (`michel secret set github-token`). Each skill, MCP server or plugin costs 3 requests. The sources not read today are read at the next update.
-- **"repository state not read, no network rule for api.github.com yet"**: a plugin has no host of its own; its repository state is read once a skill or MCP server consent allowed `api.github.com`.
+- **"the GitHub request budget is spent"** (recorded as `rate budget` in the audit log and in `michel source show`): one update spends at most 50 GitHub requests without a token, 500 with one (`michel secret set github-token`). Each skill, MCP server or plugin costs 3 requests. The sources not read today are read at the next update; there is nothing to do, except set a token if it happens often.
+- **"repository state not read, no network rule for api.github.com yet"**: harmless. The plugin works as usual; only the "new version of the tool" check is missing. A plugin has no host of its own: Michel reads its repository state only once you allowed `api.github.com` by enabling a skill or an MCP server.
 - **Trivy or Semgrep "is not installed on this machine"**: Michel looks for the program on the `PATH` and never downloads it. Install it yourself, or give a report with `--input`.
-- **Trivy fails on its own database or checks**: Michel runs it offline with every update switch off. Update Trivy yourself, outside Michel, then run it again.
+- **Trivy stops with an error**: Michel runs it without a connection and with every update turned off. If your Trivy version needs to download something to work, it cannot do so from Michel. Run Trivy once yourself, outside Michel, or update it, then run it again.
 - **"Semgrep has no rules to run"**: put your YAML rules in `<data dir>/plugins/semgrep/rules/`.
-- **A KEV mark is missing on an isolated machine**: KEV and EPSS live in Michel's database, not in files you can copy (see [offline-installation.md](operations/offline-installation.md)).
+- **A KEV or EPSS mark is missing on an isolated machine**: this is expected, and there is no fix today. KEV and EPSS live in Michel's database (`michel.db`), and no command exports them. Copying the whole `michel.db` does not work: it also holds your projects, findings, decisions and audit log, and would replace those of the isolated machine. Scans work without these marks (see [offline-installation.md](operations/offline-installation.md)).

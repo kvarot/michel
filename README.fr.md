@@ -4,7 +4,7 @@
 
 Veille quotidienne locale et open source des vulnérabilités connues dans les dépendances de tes projets (Composer, npm ; Go ensuite), avec le coût et les effets de bord de chaque correctif exposés pour que tu décides, une preuve avant tout statut « corrigé », et des fiches de correctif compactes (Markdown, skill Claude Code, MCP) pour l'IA de code de ton choix.
 
-État : plans 1 à 4 livrés. Plan 1 : scan hors ligne des lockfiles Composer et npm contre des bases OSV locales, stockage SQLite des findings, journal d'audit chaîné par hachage, passerelle réseau fermée par défaut. Plan 2 : analyse locale de chaque faille (comment le paquet est atteint, quelle mise à jour le corrige, où ton code l'utilise, quels tests le couvrent, journal des modifications local) avec un score de risque public, expliquée en trois phrases en français ou en anglais (`michel analyze`, `michel finding`). Plan 3 : décisions (corriger, reporter, ignorer ; Michel ne te redemande que si quelque chose change), un résumé quotidien (le « digest ») envoyé par e-mail, par webhook signé (envoi automatique vers une adresse web, avec une signature qui prouve l'origine) ou par notification sur le bureau, des secrets gardés hors du fichier de politique, et une page « Aujourd'hui » locale, installable comme une application (`michel decide`, `michel digest`, `michel serve`) ; tous les messages en français ou en anglais. Plan 4 : un registre des sources (`michel source`, page « Sources ») : d'autres bases OSV, `yarn.lock` et `pnpm-lock.yaml`, les failles déjà attaquées (liste KEV de la CISA) et la probabilité d'attaque (EPSS) en tête du digest, les avis de sécurité des éditeurs « À lire », les résultats de Trivy et de Semgrep, des skills et serveurs MCP figés sur une version précise ; chaque source ne contacte ses hôtes qu'après ton accord. Pas encore : fiches de correctif, correctifs automatiques, IA, planificateur intégré.
+État : plans 1 à 4 livrés. Plan 1 : scan hors ligne des lockfiles Composer et npm contre des bases OSV locales, stockage SQLite des findings, journal d'audit chaîné par hachage, passerelle réseau fermée par défaut. Plan 2 : analyse locale de chaque faille (comment le paquet est atteint, quelle mise à jour le corrige, où ton code l'utilise, quels tests le couvrent, journal des modifications local) avec un score de risque public, expliquée en trois phrases en français ou en anglais (`michel analyze`, `michel finding`). Plan 3 : décisions (corriger, reporter, ignorer ; Michel ne te redemande que si quelque chose change), un résumé quotidien (le « digest ») envoyé par e-mail, par webhook signé (envoi automatique vers une adresse web, avec une signature qui prouve l'origine) ou par notification sur le bureau, des secrets gardés hors du fichier de politique, et une page « Aujourd'hui » locale, installable comme une application (`michel decide`, `michel digest`, `michel serve`) ; tous les messages en français ou en anglais. Plan 4 : un registre unique des sources (`michel source`, page « Sources »). Il ajoute d'autres bases OSV, la lecture de `yarn.lock` et `pnpm-lock.yaml`, la liste des failles déjà attaquées (KEV, CISA) et leur probabilité d'attaque (EPSS), placées en tête du digest, les avis des éditeurs (« À lire »), les résultats de Trivy et de Semgrep, et des skills et serveurs MCP bloqués sur une version précise. Chaque source ne contacte ses hôtes qu'après ton accord. Pas encore : fiches de correctif, correctifs automatiques, IA, planificateur intégré.
 
 ## Démarrage rapide
 
@@ -30,17 +30,17 @@ bin/michel audit verify
 
 ## Sources
 
-Tout ce que Michel lit est rangé dans un seul registre. Toutes les sources sont désactivées, sauf les bases OSV de Composer et de npm, et aucune ne contacte quoi que ce soit avant que tu acceptes ses hôtes ; ton accord écrit la règle réseau à ta place.
+Tout ce que Michel lit est rangé dans un seul registre. Toutes les sources sont désactivées au départ, sauf les bases OSV de Composer et de npm. Aucune ne se connecte à un serveur avant que tu aies accepté ses adresses (ses « hôtes ») ; quand tu acceptes, Michel écrit lui-même la règle réseau correspondante.
 
 ```
-bin/michel source list                         # sortes et états
+bin/michel source list                         # types et états
 bin/michel source enable enrich.kev            # failles déjà attaquées (liste KEV) : demande ton accord, écrit la règle
 bin/michel source update                       # lit tout de suite les sources activées
-bin/michel scan --all --update --digest        # la ligne à planifier : sources, scans, digest
+bin/michel scan --all --update --digest        # la commande à planifier : met à jour les sources, scanne, envoie le digest
 bin/michel source enable skill.trailofbits-code-audit    # accord pour les hôtes GitHub
-bin/michel source install skill.trailofbits-code-audit   # aperçu, puis y/N
+bin/michel source install skill.trailofbits-code-audit   # affiche un aperçu, puis te demande y (oui) ou N (non)
 ```
 
-Les sortes de sources, ce qui part vers chaque hôte, les plugins, les skills et les serveurs MCP : `docs/sources.fr.md`.
+Les types de sources, ce qui est envoyé à chaque hôte, les plugins, les skills et les serveurs MCP : `docs/sources.fr.md`.
 
 Licence : Apache-2.0.

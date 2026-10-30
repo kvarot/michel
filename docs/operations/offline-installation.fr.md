@@ -59,9 +59,9 @@ michel db status
 
 ## Autres bases, KEV et EPSS
 
-Michel télécharge les bases OSV des sources `osv.*` activées : `osv.packagist` et `osv.npm` au départ. `michel source enable osv.pypi` (par exemple) en ajoute une, après ton accord pour le bucket OSV ; `michel source update` (ou `scan --update`) télécharge alors toutes les bases activées, pas seulement Packagist et npm. Elles arrivent toutes dans le même dossier `osv/`, un sous-dossier par écosystème : la copie décrite plus haut les emporte aussi. Pour l'instant, Michel ne lit que les lockfiles Composer et npm (`composer.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`) : les autres bases attendent leurs lecteurs.
+Michel télécharge les bases OSV des sources `osv.*` activées : `osv.packagist` et `osv.npm` au départ. `michel source enable osv.pypi` (par exemple) en ajoute une, après ton accord pour le bucket OSV ; `michel source update` (ou `scan --update`) télécharge alors toutes les bases activées, pas seulement Packagist et npm. Elles arrivent toutes dans le même dossier `osv/`, un sous-dossier par écosystème : la copie décrite plus haut les emporte aussi. Pour l'instant, Michel ne lit que les fichiers de verrouillage des dépendances (lockfiles) de Composer et de npm (`composer.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`). Il ne sait pas encore lire ceux des autres écosystèmes (Python, Go, distributions Linux…) : ces bases se téléchargent mais ne servent pas encore, inutile de les activer pour l'instant.
 
-KEV et EPSS (`enrich.kev`, `enrich.epss`) ne sont pas des fichiers : `source update` les range dans la base de Michel (`<data-dir>/michel.db`), avec tes failles et tes décisions. Cette version n'a pas de commande pour les exporter ou les importer : tu ne peux donc pas les emporter seules sur une machine isolée. Sans elles, le scan marche pareil ; les failles n'ont simplement pas la marque « déjà attaquée » ni le chiffre EPSS. Voir [sources.fr.md](../sources.fr.md).
+KEV et EPSS (`enrich.kev`, `enrich.epss`) ne sont pas des fichiers : `source update` les enregistre dans la base de Michel (`<data-dir>/michel.db`), avec tes failles et tes décisions. Cette version n'a aucune commande pour les exporter ou les importer, et il n'y a pas de solution de rechange : copier `michel.db` entier emporterait aussi tes projets (avec leurs chemins), tes failles, tes décisions et ton journal d'audit, et remplacerait tout ce que la machine isolée connaît. Sans KEV ni EPSS, le scan marche pareil ; les failles n'ont simplement pas la marque « déjà attaquée » ni le chiffre EPSS. Voir [sources.fr.md](../sources.fr.md).
 
 ## Scanner
 
@@ -73,7 +73,7 @@ michel audit verify
 michel audit list --last 20
 ```
 
-`scan` cherche les fichiers `composer.lock`, `package-lock.json`, `yarn.lock` et `pnpm-lock.yaml`, en ignorant tout dossier `vendor/` et `node_modules/`. Un dossier sans aucun lockfile est noté `empty` (vide), pas en échec. Une base OSV absente fait échouer le scan avant tout le reste, en indiquant la commande pour y remédier. Un manifeste corrompu est consigné comme échoué (statut de scan `partial`) et les autres manifestes sont quand même analysés. `audit verify` contrôle la chaîne de hachage du journal d'audit. Après un scan hors ligne, `audit list` ne doit montrer aucun événement `egress.attempt`.
+`scan` cherche les fichiers `composer.lock`, `package-lock.json`, `yarn.lock` et `pnpm-lock.yaml`, en ignorant tout dossier `vendor/` et `node_modules/`. Un dossier sans aucun lockfile est noté `empty` (vide) et non comme un échec. Une base OSV absente fait échouer le scan avant tout le reste, en indiquant la commande pour y remédier. Un manifeste corrompu est consigné comme échoué (statut de scan `partial`) et les autres manifestes sont quand même analysés. `audit verify` contrôle la chaîne de hachage du journal d'audit. Après un scan hors ligne, `audit list` ne doit montrer aucun événement `egress.attempt`.
 
 ## Analyse
 

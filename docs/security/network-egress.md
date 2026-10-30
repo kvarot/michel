@@ -31,7 +31,7 @@ Michel writes the rules of a source after your consent (`michel source enable`, 
 | Desktop notification (`toast` channel) | A local subprocess with a fixed command line (Windows PowerShell 5.1 from `%SystemRoot%`, `notify-send`, `/usr/bin/osascript`); the text is passed as data on stdin or after `--`. No socket, no rule needed. |
 | `michel serve` (Today page and `/api/v1`) | A listener on a loopback address only (127.0.0.1, [::1] or localhost; any other `--listen` is refused). It accepts connections from this computer and makes no outbound connection. API calls need the local access token. |
 | Decisions, digest without `--send`, secrets | Read and write the data folder only. |
-| Plugins (Trivy, Semgrep) | A subprocess with a fixed argument list, started from `<data dir>/plugins/<tool>/`, with an allowlisted environment (no secret or token) and its proxy variables pointing to the refusal proxy (`internal/egress/denyproxy`, on `127.0.0.1`, a free port). The proxy answers 403 to every request, refuses every `CONNECT` and records each try as a denied `egress.attempt` (purpose `plugin.<key>`, at most 200 recorded per run; later ones are still refused). |
+| Plugins (Trivy, Semgrep) | A subprocess with a fixed argument list, started from `<data dir>/plugins/<tool>/`, with an allowlisted environment (no secret or token) and its proxy variables pointing to the refusal proxy (`internal/egress/denyproxy`, on `127.0.0.1`, a free port). The proxy answers 403 to every request, refuses every `CONNECT` and records each try as a denied `egress.attempt` (purpose `plugin.<key>`, at most 200 recorded per run; later ones are still refused, without being recorded). See [sources.md](../sources.md). |
 | MCP servers | Michel fetches and pins the source (purpose `source.repo`) but never starts the server. The `claude mcp add` line is yours to run; a server started with `npx` downloads at start-up, outside Michel. |
 
 ## Limits
@@ -40,11 +40,11 @@ Michel writes the rules of a source after your consent (`michel source enable`, 
 - Loopback (`127.0.0.1`, `::1`, `localhost`) is allowed without a rule for purposes prefixed `local.`. No purpose of that kind is used yet; a webhook on this machine still needs its `notify.webhook` rule.
 - `Gateway.DialContext` (raw connections, used by the email channel) dials TCP only (`tcp`, `tcp4`, `tcp6`); any other network (udp, unix, ip) is refused. It applies the same allow rules and writes the same `egress.attempt` event as HTTP, and refuses the connection when the audit log cannot be written.
 - A source waiting for consent (enabled, with a host that has no rule) is not read: `source update` makes no request for it.
-- When a new catalog moves a source to another host, the old rule does not cover the new host, so the source goes back to waiting for consent. The old rule stays in the policy file until you remove it.
+- If a new version of Michel changes the server address of a source, your former consent no longer applies: the source waits for your consent for the new address. The old rule stays in your policy file until you remove it.
 - A database download is capped at 2 GiB.
 - KEV is capped at 50 MB, EPSS at 200 MB once decompressed, an on-demand answer at 5 MB, a feed at 5 MB and 200 items, a skill or MCP archive at 50 MB compressed and 200 MB and 5,000 files extracted, a plugin report at 50 MB and 10,000 results.
 - On-demand enrichments: 200 CVEs per update for Vulnrichment and CIRCL, 100 for NVD (one request every 6 s, 0.6 s with a key); a 403 or 429 answer stops that source for the update.
-- GitHub: one update spends at most 50 requests without a token, 500 with one; the rest waits for the next update (`rate budget`).
+- GitHub: one update spends at most 50 requests without a token, 500 with one; the rest waits for the next update (recorded as `rate budget` in the audit log and in `michel source show`).
 - The GitHub status reads, the on-demand JSON reads and the NVD requests with a key do not follow redirects.
 - A database zip is rejected above 2,000,000 entries or 8 GiB uncompressed.
 - On any download or validation failure the previous database is kept.
@@ -64,20 +64,19 @@ Tested (automated tests):
 
 Declared only (not enforced by a test today):
 
-- The refusal proxy fences only a tool that honours the proxy variables. A tool that opens its own connections, or a program it starts that does so, is not stopped, and its requests are not logged. It is a logged fence, not a guarantee.
+- The refusal proxy stops only a tool that honours the proxy settings. A tool (or a program it starts) that opens its own connections is not stopped and does not appear in the log. It is a safeguard, not a guarantee.
 - Trivy, Semgrep and their rules are installed and updated by you, outside Michel. Michel passes the switches that keep them offline but does not check what the tool does with them.
 - The EPSS cap after decompression is in the code but no test exercises it (the KEV cap is tested).
 - No test ties the URL each reader calls (for example `enrich.KEVURL`, `enrich.EPSSURL`) to the hosts of its catalog entry. If they drift apart, the gateway denies and logs the request; nothing is sent elsewhere.
-
 - A dependency that uses `http.DefaultClient` or `http.DefaultTransport` directly would not be seen by the gateway. `internal/egress/boundary_test.go` (run by `go test ./...` in CI, and by `make lint`) parses the Michel code outside `internal/egress` and fails on `http.DefaultClient`, `http.DefaultTransport`, `http.Get/Post/Head/PostForm`, `http.Client{}` and `http.Transport{}` literals, `net.Dial`, `net.DialTimeout`, `net.DialTCP/DialUDP/DialIP/DialUnix`, `net.Dialer{}`, `tls.Dial`, `tls.DialWithDialer`, `tls.Dialer{}` and `smtp.Dial`, but it does not read the dependencies. A test that installs a deny-all default transport is planned.
 
 ## Not yet
 
 - A full proxy for subprocesses that lets only allowed hosts through (needed once fixes and dynamic tests run in an isolated environment). Today's refusal proxy denies everything.
-- Michel removing, after a catalog host change, the rule left for the old host.
+- Michel does not yet remove the old rule on its own when the address of a source changes.
 - Signed audit checkpoints (the audit log is hash-chained and tamper-evident, not signed).
 - System keychain for secrets on Linux and macOS (libsecret, Keychain): secrets are DPAPI-encrypted files on Windows, plain files readable by the user only (0600) elsewhere.
 
 ## History
 
-- Catalog version 4 (plan 4): the EPSS file moved to `epss.empiricalsecurity.com` (the former host `epss.cyentia.com` answers a permanent redirect, which the gateway would deny). A policy file that allowed the former host keeps that rule, and `enrich.epss` waits for consent for the new host.
+- Catalog version 4 (plan 4): the EPSS file moved to `epss.empiricalsecurity.com` (the former host `epss.cyentia.com` answers a permanent redirect, which the gateway would deny). If you had consented to the former host, that rule stays in your policy file and `enrich.epss` waits for your consent for the new one: run `michel source enable enrich.epss` to give it.
