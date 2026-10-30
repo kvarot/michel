@@ -18,6 +18,7 @@ import (
 	"github.com/kvarot/michel/internal/api"
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/buildinfo"
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/web"
@@ -107,6 +108,15 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return deps.Wrapf("cli.serve.token_failed", err)
 			}
+			// The fix service: stale agent files and copies are cleaned, the
+			// old conversations purged, then the level 2 queue is worked.
+			fd := fixDeps(cmd, deps, secrets, "serve")
+			fd.Sessions = fix.NewSessions()
+			if err := fix.Sweep(ctx, fd); err != nil {
+				return deps.Wrapf("cli.serve.fix_sweep_failed", err)
+			}
+			go fix.Worker(ctx, fd)
+			defer fd.Sessions.CloseAll()
 			var lc net.ListenConfig
 			ln, err := lc.Listen(ctx, "tcp", addr)
 			if err != nil {

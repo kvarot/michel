@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/kvarot/michel/internal/audit"
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
@@ -198,6 +199,10 @@ func newProjectRemoveCmd(deps *Deps) *cobra.Command {
 			}
 			switch {
 			case purge:
+				dataDir, _ := cmd.Flags().GetString("data-dir")
+				if err := fix.RemoveProjectFiles(dataDir, p.ID); err != nil {
+					fmt.Fprintln(deps.Stderr, deps.T("cli.project.remove.fix_files_failed", p.Name, err))
+				}
 				fmt.Fprintln(deps.Stdout, deps.T("cli.project.remove.purged", p.Name, p.Path))
 			case !p.Active:
 				fmt.Fprintln(deps.Stdout, deps.T("cli.project.remove.already_inactive", p.Name, p.Name))

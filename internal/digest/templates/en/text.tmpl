@@ -30,6 +30,14 @@ open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "hi
 {{- if .Superseded}}Decisions to review:
 {{range .Superseded}}  {{.Package}} {{.OSVID}}: was {{template "action" .PreviousAction}}, {{reason .Reason}}
 {{end}}{{end}}
+{{- if .FixWaiting}}{{fixWaiting (len .FixWaiting)}}:
+{{range .FixWaiting}}  {{.Package}} {{.OSVID}}{{if .Target}} → {{.Target}}{{end}}
+{{end}}{{end}}
+{{- if .FixApplied}}Fixed in your code:
+{{range .FixApplied}}  {{fixProven .}}
+{{end}}{{end}}
+{{- if .FixQueued}}{{fixQueued .FixQueued}}
+{{end}}
 {{- if .Due}}Due dates:
 {{range .Due}}  {{.Package}} {{.OSVID}}: deferred until {{day .DueAt}}{{if .Overdue}} (overdue){{end}}
 {{end}}{{end}}

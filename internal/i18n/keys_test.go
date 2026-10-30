@@ -19,6 +19,9 @@ var dynamicPrefixes = []string{
 	"explain.label.risk_", "explain.label.rec_", "explain.label.jump_", "explain.label.quality_",
 	"explain.label.method_", "explain.label.term_", "explain.severity.", "glossary.", "digest.reason.", "notify.type.",
 	"source.note.", "source.state.", "source.kind.", "source.consent.",
+	// fix.consent.* are rendered by the page and the CLI from ConsentText.What;
+	// fix.cause.* from the agent's end causes.
+	"fix.consent.", "fix.cause.",
 }
 
 // family says how a call names a catalog key: the prefix added to the

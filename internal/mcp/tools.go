@@ -426,7 +426,7 @@ func (s *server) proposal(p fix.Proposal) map[string]any {
 		}
 	}
 	return map[string]any{"id": p.ID, "summary": s.text(p.Summary, MaxSummary), "files": files,
-		"tests_status": s.text(p.TestsStatus, 32), "rescan_clean": p.RescanClean, "risk": p.Risk,
+		"tests_status": s.text(p.TestsStatus, 32), "tests_output": s.text(p.TestsOutput, 4000), "rescan_clean": p.RescanClean, "risk": p.Risk,
 		"created_at": p.CreatedAt.UTC().Format(time.RFC3339)}
 }
 

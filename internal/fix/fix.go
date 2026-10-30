@@ -6,6 +6,8 @@ package fix
 import (
 	"errors"
 	"time"
+
+	"github.com/kvarot/michel/internal/workcopy"
 )
 
 // State is where a fix attempt stands.
@@ -36,6 +38,9 @@ const (
 	RoleUser   = "user"
 	RoleAgent  = "agent"
 	RoleMichel = "michel"
+	// RoleTool is a tool the agent used (its name and a short summary), a
+	// line of progress rather than of conversation.
+	RoleTool = "tool"
 )
 
 var (
@@ -59,6 +64,34 @@ type Attempt struct {
 	Cause     string    `json:"cause"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// ApprovedBy is who approved the current proposal ("auto" when a level
+	// 3 rule did), "" before.
+	ApprovedBy string `json:"approved_by"`
+	// Work is the work copy and the update plan of the attempt (local
+	// paths: never sent out).
+	Work Work `json:"-"`
+}
+
+// Work is what the fix service keeps with an attempt: its copy and the
+// validated update plan it runs when the agent proposes.
+type Work struct {
+	Copy workcopy.Copy `json:"copy"`
+	// Mirror repeats Copy.Mirror, which the copy leaves out of JSON.
+	Mirror string `json:"mirror"`
+	Plan   Plan   `json:"plan"`
+}
+
+// Plan is the closed update Michel runs in the copy at proposal time,
+// built from the finding and the brief at Start (never from free text).
+type Plan struct {
+	Ecosystem   string `json:"ecosystem"`
+	ManifestRel string `json:"manifest_rel"`
+	Package     string `json:"package"`
+	Target      string `json:"target"`
+	Jump        string `json:"jump"`
+	// Update is the argv of the update command, empty when Michel has none
+	// for this lockfile (yarn, pnpm, unknown target).
+	Update []string `json:"update"`
 }
 
 // Proposal is what the agent proposes for an attempt. A newer proposal marks
@@ -73,8 +106,14 @@ type Proposal struct {
 	TestsOutput string   `json:"tests_output"`
 	RescanClean bool     `json:"rescan_clean"`
 	Risk        int      `json:"risk"`
-	// Hash is the fingerprint of the diff the user approves.
-	Hash        string    `json:"hash"`
+	// Hash is the fingerprint the user approves: SHA-256 over the raw
+	// patch, the fix commit, the tests status and the summary.
+	Hash string `json:"hash"`
+	// CommitSHA is the fix commit built in the private mirror.
+	CommitSHA string `json:"commit_sha"`
+	// DiffRaw is the exact patch the commit applies (hashed, checked for
+	// mask tokens before apply, never shown).
+	DiffRaw     []byte    `json:"-"`
 	StepsServer []string  `json:"steps_server"`
 	CreatedAt   time.Time `json:"created_at"`
 	Superseded  bool      `json:"superseded"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,7 +57,16 @@ func parseTime(s string) (time.Time, error) {
 // waits for the user: the project has no other attempt meanwhile.
 const busyStates = `('preparing','proposed','approved')`
 
-const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at`
+const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at, work_json, approved_by`
+
+func workJSON(w Work) (string, error) {
+	w.Mirror = w.Copy.Mirror
+	b, err := json.Marshal(w)
+	if err != nil {
+		return "", fmt.Errorf("cannot save the fix attempt: %w", err)
+	}
+	return string(b), nil
+}
 
 // CreateAttempt stores a new attempt in state preparing; ID, State and the
 // dates are set here.
@@ -66,24 +76,67 @@ func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	if err != nil {
 		return Attempt{}, err
 	}
-	a.ID, a.State, a.CreatedAt, a.UpdatedAt = id, StatePreparing, now, now
-	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now))
+	a.ID, a.State, a.CreatedAt, a.UpdatedAt, a.ApprovedBy = id, StatePreparing, now, now, ""
+	work, err := workJSON(a.Work)
+	if err != nil {
+		return Attempt{}, err
+	}
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,'')`,
+		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now), work)
 	if err != nil {
 		return Attempt{}, fmt.Errorf("cannot save the fix attempt: %w", err)
 	}
 	return a, nil
 }
 
+// SetWork records the work copy and the update plan of an attempt (and
+// CloneDir, the copy's folder).
+func (r *Repo) SetWork(ctx context.Context, id string, w Work) error {
+	work, err := workJSON(w)
+	if err != nil {
+		return err
+	}
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET work_json = ?, clone_dir = ?, updated_at = ? WHERE id = ?`,
+		work, w.Copy.Dir, ts(r.now()), id)
+	if err != nil {
+		return fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	return nil
+}
+
+// Approve moves the attempt from proposed to approved and records who did
+// it (ErrBadTransition in any other state).
+func (r *Repo) Approve(ctx context.Context, id, by string) error {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, approved_by = ?, updated_at = ? WHERE id = ? AND state = ?`,
+		string(StateApproved), by, ts(r.now()), id, string(StateProposed))
+	if err != nil {
+		return fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	if _, err := r.GetAttempt(ctx, id); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w (moving to %s)", ErrBadTransition, StateApproved)
+}
+
 type scanner interface{ Scan(...any) error }
 
 func scanAttempt(s scanner) (Attempt, error) {
 	var a Attempt
-	var state, created, updated string
-	if err := s.Scan(&a.ID, &a.FindingID, &a.ProjectID, &a.Origin, &state, &a.CloneDir, &a.SessionID, &a.Cause, &created, &updated); err != nil {
+	var state, created, updated, work string
+	if err := s.Scan(&a.ID, &a.FindingID, &a.ProjectID, &a.Origin, &state, &a.CloneDir, &a.SessionID, &a.Cause, &created, &updated, &work, &a.ApprovedBy); err != nil {
 		return Attempt{}, err
 	}
 	a.State = State(state)
+	if err := json.Unmarshal([]byte(work), &a.Work); err != nil {
+		return Attempt{}, fmt.Errorf("attempt %s has an unreadable work copy record: %w", a.ID, err)
+	}
+	a.Work.Copy.Mirror = a.Work.Mirror
 	var err error
 	if a.CreatedAt, err = parseTime(created); err != nil {
 		return Attempt{}, err
@@ -170,7 +223,7 @@ func (r *Repo) SetRun(ctx context.Context, id, cloneDir, sessionID string) error
 	return nil
 }
 
-const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded`
+const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw`
 
 // AddProposal stores p for its attempt and marks the attempt's previous
 // proposals Superseded, in one transaction. ID and CreatedAt are set here.
@@ -198,8 +251,9 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-		p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+		p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
+		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw)); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -224,10 +278,14 @@ func b2i(b bool) int {
 
 func scanProposal(s scanner) (Proposal, error) {
 	var p Proposal
-	var files, steps, created string
+	var err error
+	var files, steps, created, raw string
 	var rescan, superseded int
-	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded); err != nil {
+	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw); err != nil {
 		return Proposal{}, err
+	}
+	if p.DiffRaw, err = base64.StdEncoding.DecodeString(raw); err != nil {
+		return Proposal{}, fmt.Errorf("proposal %s has an unreadable patch: %w", p.ID, err)
 	}
 	if err := json.Unmarshal([]byte(files), &p.Files); err != nil {
 		return Proposal{}, fmt.Errorf("proposal %s has an unreadable file list: %w", p.ID, err)
@@ -237,7 +295,6 @@ func scanProposal(s scanner) (Proposal, error) {
 	}
 	p.Files, p.StepsServer = nonNil(p.Files), nonNil(p.StepsServer)
 	p.RescanClean, p.Superseded = rescan != 0, superseded != 0
-	var err error
 	if p.CreatedAt, err = parseTime(created); err != nil {
 		return Proposal{}, err
 	}
@@ -340,17 +397,23 @@ func (r *Repo) Enqueue(ctx context.Context, findingID, projectID string) error {
 }
 
 // NextQueued takes the oldest queued finding whose project has no attempt
-// being worked on or waiting for the user, removes it from the queue and
+// being worked on or waiting for the user and is not one of except (the
+// projects that reached their daily cap), removes it from the queue and
 // returns it; ok is false when there is none.
-func (r *Repo) NextQueued(ctx context.Context) (findingID, projectID string, ok bool, err error) {
+func (r *Repo) NextQueued(ctx context.Context, except ...string) (findingID, projectID string, ok bool, err error) {
 	tx, err := r.s.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return "", "", false, fmt.Errorf("cannot read the fix queue: %w", err)
 	}
 	defer tx.Rollback()
-	err = tx.QueryRowContext(ctx, `SELECT finding_id, project_id FROM fix_queue
-		WHERE project_id NOT IN (SELECT project_id FROM fix_attempt WHERE state IN `+busyStates+`)
-		ORDER BY queued_at, finding_id LIMIT 1`).Scan(&findingID, &projectID)
+	q := `SELECT finding_id, project_id FROM fix_queue
+		WHERE project_id NOT IN (SELECT project_id FROM fix_attempt WHERE state IN ` + busyStates + `)`
+	args := []any{}
+	for _, p := range except {
+		q += ` AND project_id <> ?`
+		args = append(args, p)
+	}
+	err = tx.QueryRowContext(ctx, q+` ORDER BY queued_at, finding_id LIMIT 1`, args...).Scan(&findingID, &projectID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", false, nil
 	}
@@ -377,4 +440,88 @@ func (r *Repo) StartedToday(ctx context.Context, projectID string, now time.Time
 		return 0, fmt.Errorf("cannot count today's fix attempts: %w", err)
 	}
 	return n, nil
+}
+
+// CountQueued counts the findings of the project waiting in the queue ("" for
+// every project).
+func (r *Repo) CountQueued(ctx context.Context, projectID string) (int, error) {
+	q, args := `SELECT COUNT(*) FROM fix_queue`, []any{}
+	if projectID != "" {
+		q += ` WHERE project_id = ?`
+		args = append(args, projectID)
+	}
+	var n int
+	if err := r.s.DB().QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("cannot read the fix queue: %w", err)
+	}
+	return n, nil
+}
+
+// Dequeue removes a finding from the queue (absent: nothing).
+func (r *Repo) Dequeue(ctx context.Context, findingID string) error {
+	if _, err := r.s.DB().ExecContext(ctx, `DELETE FROM fix_queue WHERE finding_id = ?`, findingID); err != nil {
+		return fmt.Errorf("cannot change the fix queue: %w", err)
+	}
+	return nil
+}
+
+// AttemptsOf returns the attempts of one finding, newest first.
+func (r *Repo) AttemptsOf(ctx context.Context, findingID string) ([]Attempt, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+attemptCols+` FROM fix_attempt WHERE finding_id = ? ORDER BY created_at DESC, id DESC`, findingID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
+	}
+	defer rows.Close()
+	out := []Attempt{}
+	for rows.Next() {
+		a, err := scanAttempt(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// SetConsent records the AI consent of a project for hosts (replacing a
+// previous one).
+func (r *Repo) SetConsent(ctx context.Context, projectID string, hosts []string) error {
+	b, err := json.Marshal(nonNil(hosts))
+	if err != nil {
+		return fmt.Errorf("cannot save the consent: %w", err)
+	}
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO fix_consent (project_id, given_at, hosts) VALUES (?,?,?)
+		ON CONFLICT (project_id) DO UPDATE SET given_at = excluded.given_at, hosts = excluded.hosts`, projectID, ts(r.now()), string(b))
+	if err != nil {
+		return fmt.Errorf("cannot save the consent: %w", err)
+	}
+	return nil
+}
+
+// Consent returns when the project gave its AI consent and for which
+// hosts; ok is false when it never did.
+func (r *Repo) Consent(ctx context.Context, projectID string) (at time.Time, hosts []string, ok bool, err error) {
+	var given, raw string
+	err = r.s.DB().QueryRowContext(ctx, `SELECT given_at, hosts FROM fix_consent WHERE project_id = ?`, projectID).Scan(&given, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil, false, nil
+	}
+	if err != nil {
+		return time.Time{}, nil, false, fmt.Errorf("cannot read the consent: %w", err)
+	}
+	if at, err = parseTime(given); err != nil {
+		return time.Time{}, nil, false, err
+	}
+	if err := json.Unmarshal([]byte(raw), &hosts); err != nil {
+		return time.Time{}, nil, false, fmt.Errorf("the consent of project %s is unreadable: %w", projectID, err)
+	}
+	return at, nonNil(hosts), true, nil
+}
+
+// DeleteConsent forgets the AI consent of a project.
+func (r *Repo) DeleteConsent(ctx context.Context, projectID string) error {
+	if _, err := r.s.DB().ExecContext(ctx, `DELETE FROM fix_consent WHERE project_id = ?`, projectID); err != nil {
+		return fmt.Errorf("cannot delete the consent: %w", err)
+	}
+	return nil
 }

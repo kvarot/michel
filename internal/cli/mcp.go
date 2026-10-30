@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
@@ -11,9 +10,6 @@ import (
 	"github.com/kvarot/michel/internal/mcp"
 	"github.com/spf13/cobra"
 )
-
-// errProposeNotYet is what propose_fix answers until the fix service exists.
-var errProposeNotYet = errors.New("propose_fix is not available yet")
 
 func newMCPCmd(deps *Deps) *cobra.Command {
 	return &cobra.Command{
@@ -40,11 +36,15 @@ func newMCPCmd(deps *Deps) *cobra.Command {
 			if in == nil {
 				in = os.Stdin
 			}
+			// The proposal is validated here, in this process, on the shared
+			// store (controller ruling 2): the token check stays at the MCP
+			// boundary, the attempt state check in fix.Propose.
+			fd := fixDeps(cmd, deps, secrets, "mcp")
 			return mcp.Serve(cmd.Context(), in, deps.Stdout, mcp.Deps{
 				Store: deps.Store, DataDir: dataDir, Policy: deps.Policy, Lang: deps.Lang, Secrets: secrets,
 				Attempt: attempt, Token: token, Version: buildinfo.Version, Log: deps.Stderr,
-				Propose: func(context.Context, string, fix.ProposeInput) (fix.Proposal, error) {
-					return fix.Proposal{}, errProposeNotYet
+				Propose: func(ctx context.Context, attemptID string, in fix.ProposeInput) (fix.Proposal, error) {
+					return fix.Propose(ctx, fd, attemptID, in)
 				},
 			})
 		},

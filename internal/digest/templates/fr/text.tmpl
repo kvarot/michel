@@ -30,6 +30,14 @@ failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevée
 {{- if .Superseded}}Décisions à revoir, car quelque chose a changé :
 {{range .Superseded}}  {{.Package}} {{.OSVID}} : était {{template "action" .PreviousAction}}, {{reason .Reason}}
 {{end}}{{end}}
+{{- if .FixWaiting}}{{fixWaiting (len .FixWaiting)}}:
+{{range .FixWaiting}}  {{.Package}} {{.OSVID}}{{if .Target}} → {{.Target}}{{end}}
+{{end}}{{end}}
+{{- if .FixApplied}}Corrigées dans ton code :
+{{range .FixApplied}}  {{fixProven .}}
+{{end}}{{end}}
+{{- if .FixQueued}}{{fixQueued .FixQueued}}
+{{end}}
 {{- if .Due}}Reports qui arrivent à échéance :
 {{range .Due}}  {{.Package}} {{.OSVID}} : reportée jusqu'au {{day .DueAt}}{{if .Overdue}} (date dépassée){{end}}
 {{end}}{{end}}

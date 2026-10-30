@@ -271,6 +271,11 @@ func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
 	}
 	defer tx.Rollback()
 	for _, q := range []string{
+		`DELETE FROM fix_message WHERE attempt_id IN (SELECT id FROM fix_attempt WHERE project_id = ?)`,
+		`DELETE FROM fix_proposal WHERE attempt_id IN (SELECT id FROM fix_attempt WHERE project_id = ?)`,
+		`DELETE FROM fix_attempt WHERE project_id = ?`,
+		`DELETE FROM fix_queue WHERE project_id = ?`,
+		`DELETE FROM fix_consent WHERE project_id = ?`,
 		`DELETE FROM decision WHERE project_id = ?`,
 		`DELETE FROM analysis WHERE finding_id IN (SELECT id FROM finding WHERE project_id = ?)`,
 		`DELETE FROM finding WHERE project_id = ?`,

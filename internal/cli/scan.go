@@ -12,6 +12,7 @@ import (
 
 	"github.com/kvarot/michel/internal/buildinfo"
 	"github.com/kvarot/michel/internal/enrich"
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/plugin"
 	"github.com/kvarot/michel/internal/project"
@@ -166,6 +167,21 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					problems = true
 				}
 				analysis[p.Name] = deps.T("cli.scan.summary.analysis_skipped")
+				// The applied fixes of the project are settled by this scan
+				// (proven when merged and gone), and its eligible findings
+				// queued for michel serve at level 2.
+				if fd, ferr := scanFixDeps(cmd, deps); ferr != nil {
+					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, ferr))
+				} else {
+					if _, err := fix.Prove(ctx, fd, p.ID); err != nil {
+						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
+					}
+					if all {
+						if _, err := fix.QueueEligible(ctx, fd, p.ID); err != nil {
+							fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
+						}
+					}
+				}
 				if !noAnalyze && (r.Status == scan.ScanOK || r.Status == scan.ScanPartial) {
 					// Analysis problems are warnings: they never change the scan's exit code.
 					ar, aerr := analyzeProject(cmd, deps, p, false)
@@ -340,4 +356,11 @@ func ignoredConfigWarning(deps *Deps, projects []project.Project, name, rel stri
 // its informational chatter.
 func scannerLogHandler(w io.Writer) slog.Handler {
 	return slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn})
+}
+
+// scanFixDeps builds the fix deps of a scan: proving and queueing read the
+// store and the user's repository only, so the secret store is not opened
+// (a scan creates nothing in the data folder besides its own rows).
+func scanFixDeps(cmd *cobra.Command, deps *Deps) (fix.Deps, error) {
+	return fixDeps(cmd, deps, nil, "cli"), nil
 }
