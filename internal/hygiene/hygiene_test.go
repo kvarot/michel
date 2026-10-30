@@ -127,6 +127,48 @@ func TestHygieneMechanismCatchesAHashedToken(t *testing.T) {
 	}
 }
 
+// TestHygieneSkipsGitignoredPaths checks that a file git ignores (here an IDE
+// folder listed in .gitignore) is not checked: it cannot be committed, so a
+// forbidden token in it is no violation. The same token in a visible file is.
+func TestHygieneSkipsGitignoredPaths(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := t.TempDir()
+	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
+		t.Skipf("git init: %v %s", err, out)
+	}
+	token := "zqhygieneignoredtok"
+	sum := sha256.Sum256([]byte(token))
+	digests := map[string]bool{hex.EncodeToString(sum[:]): true}
+	write := func(name, body string) {
+		p := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".gitignore", ".idea/\n")
+	write(".idea/x.xml", "<project>"+token+"</project>\n")
+	write("visible.md", "mentions "+token+"\n")
+	keep, err := gitVisible(root)
+	if err != nil {
+		t.Fatalf("gitVisible: %v", err)
+	}
+	if keep[".idea/x.xml"] || !keep["visible.md"] {
+		t.Fatalf("visible files = %v", keep)
+	}
+	violations, err := scanTreeWith(root, digests, keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || !strings.HasPrefix(violations[0], "visible.md:1") {
+		t.Errorf("violations = %v, want only visible.md:1", violations)
+	}
+}
+
 // gitVisible returns the files git would commit under root (tracked, or
 // untracked and not ignored), as slash-separated paths relative to root. A
 // file git ignores (an IDE's workspace, a local build) cannot land in the
