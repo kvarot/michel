@@ -3,6 +3,8 @@ package brief
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/kvarot/michel/internal/gitrepo"
 	"github.com/kvarot/michel/internal/i18n"
@@ -35,7 +37,7 @@ func WriteSkill(skillsDir string, b Brief, lang i18n.Lang) (string, error) {
 	lang = langOf(lang)
 	front := frontMatter(b)
 	skill := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n", name,
-		yamlStr(i18n.T(lang, "brief.skill.description", clean(b.Package), clean(b.OSVID)))) +
+		yamlStr(i18n.T(lang, "brief.skill.description", b.Package, b.OSVID, safeName(b.Project)))) +
 		"```yaml\n" + front + "```\n\n" + body(b, lang) + "\n" + footer(lang)
 	dir := filepath.Join(skillsDir, name)
 	if err := gitrepo.WriteOwnedDir(dir, SkillKey(b.FindingID), map[string][]byte{"SKILL.md": []byte(skill)}); err != nil {
@@ -53,4 +55,16 @@ func RemoveSkill(skillsDir, findingID string) error {
 	}
 	_, err = gitrepo.RemoveOwnedDir(filepath.Join(skillsDir, name), SkillKey(findingID))
 	return err
+}
+
+var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// safeName reduces a project name to plain characters for the skill's
+// description, which Claude Code reads as an instruction.
+func safeName(s string) string {
+	s = strings.Trim(unsafeName.ReplaceAllString(s, "_"), "_")
+	if len(s) > 40 {
+		s = s[:40]
+	}
+	return s
 }

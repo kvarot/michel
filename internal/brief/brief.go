@@ -155,10 +155,13 @@ func Build(ctx context.Context, d Deps, findingID string, m *mask.Masker) (Brief
 	if err != nil {
 		return Brief{}, err
 	}
+	if err := validate(fi, facts); err != nil {
+		return Brief{}, err
+	}
 	b := Brief{
-		FindingID: fi.ID, ProjectID: p.ID, Project: clean(p.Name), Severity: facts.SeverityLabel, CVSS: facts.CVSS,
+		FindingID: fi.ID, ProjectID: p.ID, Project: clean(p.Name), Severity: enum(facts.SeverityLabel), CVSS: facts.CVSS,
 		OSVID: facts.OSVID, Package: facts.Package, Installed: facts.Installed, Fixed: facts.Target,
-		Jump: string(facts.Jump), Directness: string(facts.Directness), Via: facts.Via,
+		Jump: enum(string(facts.Jump)), Directness: enum(string(facts.Directness)), Via: facts.Via,
 		KEV: fi.KEV, EPSS: fi.EPSS, Lockfiles: []string{}, CallSites: []Site{}, References: []string{},
 		Reading: []string{}, UpdateCommands: []string{}, Breaking: []string{}, CoveringTests: []string{},
 		Explanation: explain.Explanation{What: m.Mask(ex.What), Impact: m.Mask(ex.Impact), Cost: m.Mask(ex.Cost)},
@@ -207,6 +210,46 @@ func Build(ctx context.Context, d Deps, findingID string, m *mask.Masker) (Brief
 	b.TestCmd = m.Mask(clean(p.TestCmd))
 	b.DoneWhen = i18n.T(lang, "brief.done_when", b.OSVID, b.Package)
 	return b, nil
+}
+
+var enumRe = regexp.MustCompile(`^[a-z]{1,16}$`)
+
+// validate refuses a finding whose identifiers could carry text into the
+// brief outside a data block: the id, and for a dependency the package and
+// its versions, must match strict patterns.
+func validate(fi scan.Finding, f explain.Facts) error {
+	if !idRe.MatchString(fi.ID) {
+		return fmt.Errorf("finding id %q is not a plain identifier", fi.ID)
+	}
+	if fi.Kind != "" && fi.Kind != scan.KindDependency {
+		return nil
+	}
+	if !pkgRe.MatchString(fi.Package) || strings.Contains(fi.Package, "..") {
+		return fmt.Errorf("finding %s: package name %q is not valid", fi.ID, scan.SanitizeText(fi.Package))
+	}
+	if !osvIDRe.MatchString(fi.OSVID) {
+		return fmt.Errorf("finding %s: advisory id %q is not valid", fi.ID, scan.SanitizeText(fi.OSVID))
+	}
+	if !versionRe.MatchString(fi.InstalledVersion) {
+		return fmt.Errorf("finding %s: installed version %q is not valid", fi.ID, scan.SanitizeText(fi.InstalledVersion))
+	}
+	if f.Target != "" && !versionRe.MatchString(f.Target) {
+		return fmt.Errorf("finding %s: fixed version %q is not valid", fi.ID, scan.SanitizeText(f.Target))
+	}
+	for _, v := range fi.FixedVersions {
+		if !versionRe.MatchString(v) {
+			return fmt.Errorf("finding %s: fixed version %q is not valid", fi.ID, scan.SanitizeText(v))
+		}
+	}
+	return nil
+}
+
+// enum keeps a short lowercase word, else "unknown".
+func enum(s string) string {
+	if enumRe.MatchString(s) {
+		return s
+	}
+	return "unknown"
 }
 
 // findFinding resolves an exact id, else a unique prefix.

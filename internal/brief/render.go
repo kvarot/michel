@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/kvarot/michel/internal/explain"
 	"github.com/kvarot/michel/internal/i18n"
 )
 
@@ -24,14 +25,20 @@ func funcs() template.FuncMap {
 		"join": strings.Join,
 		// pct writes a share (0..1) as a whole percentage.
 		"pct": func(x float64) int { return int(math.Round(x * 100)) },
-		// fence is a code fence longer than any run of backticks in s.
-		"fence": func(s string) string {
+		// fence is a code fence longer than any run of backticks in the
+		// texts it will wrap (strings, lists of strings, sites, sentences).
+		"fence": func(vs ...any) string {
 			longest, run := 0, 0
-			for _, r := range s {
-				if r == '`' {
-					run++
-					longest = max(longest, run)
-				} else {
+			for _, v := range vs {
+				for _, t := range texts(v) {
+					for _, r := range t {
+						if r == '`' {
+							run++
+							longest = max(longest, run)
+						} else {
+							run = 0
+						}
+					}
 					run = 0
 				}
 			}
@@ -89,4 +96,23 @@ func footer(l i18n.Lang) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.ReplaceAll(out.String(), "\r\n", "\n")) + "\n"
+}
+
+// texts lists the strings inside v, for the fence length.
+func texts(v any) []string {
+	switch x := v.(type) {
+	case string:
+		return []string{x}
+	case []string:
+		return x
+	case []Site:
+		var out []string
+		for _, s := range x {
+			out = append(out, s.File, s.Snippet)
+		}
+		return out
+	case explain.Explanation:
+		return []string{x.What, x.Impact, x.Cost}
+	}
+	return nil
 }
