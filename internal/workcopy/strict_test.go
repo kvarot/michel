@@ -470,3 +470,82 @@ func TestTreeListingCapIsReachable(t *testing.T) {
 		t.Errorf("the listing cap %d is not below the git output cap %d: it can never refuse a listing", listingCap(), maxGitOutput)
 	}
 }
+
+// Ruling 29: a lock key is a literal folder path. Glob characters are
+// refused, and its folder prefixes are never cut at a wildcard (a key
+// "src*/node_modules/x" must not stop the junction check before src*).
+func TestLockKeysAreLiteral(t *testing.T) {
+	for _, k := range []string{"node_modules/a*", "src?/node_modules/x", "node_modules/[a]", "node_modules/{a,b}", "node_modules/!a", "a]/node_modules/x", "a}/node_modules/x"} {
+		if validLockKey(k) {
+			t.Errorf("validLockKey(%q) = true, want false", k)
+		}
+	}
+	for _, k := range []string{"node_modules/a", "node_modules/@s/b", "packages/w/node_modules/x"} {
+		if !validLockKey(k) {
+			t.Errorf("validLockKey(%q) = false, want true", k)
+		}
+	}
+	if got := lockPrefixes("a/b*/c"); !slices.Equal(got, []string{"a", "a/b*", "a/b*/c"}) {
+		t.Errorf("lockPrefixes = %v, want literal prefixes", got)
+	}
+	if got := workspacePrefixes("apps/*/web"); !slices.Equal(got, []string{"apps"}) {
+		t.Errorf("workspacePrefixes = %v, want [apps]", got)
+	}
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	reg := `"version":"1.0.0","integrity":"sha512-x","resolved":"https://r.example/x.tgz"`
+	writeFile(t, c.Dir, "g/package-lock.json", `{"lockfileVersion":3,"packages":{"":{},"src*/node_modules/x":{`+reg+`}}}`)
+	if err := Install(context.Background(), d, c, "npm", "g/package-lock.json"); !errors.Is(err, ErrUnsafeInstall) {
+		t.Errorf("glob lock key: %v, want ErrUnsafeInstall", err)
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("an install ran %d commands", len(rec.runs))
+	}
+}
+
+// Ruling 29: the target of a linked package is checked like a key: a
+// link or junction at any of its folders refuses the install.
+func TestLinkTargetsAreChecked(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	outside := t.TempDir()
+	writeFile(t, outside, "keep.txt", "keep\n")
+	for _, bad := range []string{"pack*s/w", "packages/../w", "packages/.git/w"} {
+		writeFile(t, c.Dir, "b/package-lock.json", `{"lockfileVersion":3,"packages":{"":{},"node_modules/w":{"link":true,"resolved":"`+bad+`"}}}`)
+		if err := Install(context.Background(), d, c, "npm", "b/package-lock.json"); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("link target %q: %v, want ErrUnsafeInstall", bad, err)
+		}
+	}
+	writeFile(t, c.Dir, "a/package-lock.json", `{"lockfileVersion":3,"packages":{"":{},"node_modules/w":{"link":true,"resolved":"libs/w"}}}`)
+	writeFile(t, c.Dir, "a/libs/.keep", "")
+	if !junction(t, filepath.Join(c.Dir, "a", "libs", "w"), outside) {
+		t.Skip("no junction or symbolic link available")
+	}
+	if err := Install(context.Background(), d, c, "npm", "a/package-lock.json"); !errors.Is(err, ErrOutsideCopy) {
+		t.Errorf("link target through a junction: %v, want ErrOutsideCopy", err)
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("an install ran %d commands", len(rec.runs))
+	}
+	if b, err := os.ReadFile(filepath.Join(outside, "keep.txt")); err != nil || string(b) != "keep\n" {
+		t.Errorf("the outside folder was touched: %v", err)
+	}
+}
+
+// Ruling 29: checkPackageJSON returns the workspaces it collected together
+// with the error of the walk, whatever the evaluation order.
+func TestCheckPackageJSONReturnsWorkspaces(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "p/package.json", `{"workspaces":["apps/web","packages/*"]}`)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	ws, err := checkPackageJSON(root, "p")
+	if err != nil || !slices.Equal(ws, []string{"apps/web", "packages/*"}) {
+		t.Errorf("checkPackageJSON = %v, %v; want the two workspaces", ws, err)
+	}
+}

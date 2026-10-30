@@ -236,8 +236,9 @@ func checkSpecs(v any) error {
 // but an exact npm version, depends on a local path (file:, link:, a
 // relative or absolute path) or lists workspaces outside its folder. It
 // returns the workspace patterns of the lockfile's own package.json.
-func checkPackageJSON(root *os.Root, dir string) (workspaces []string, err error) {
-	return workspaces, upTo(dir, func(d string) error {
+func checkPackageJSON(root *os.Root, dir string) ([]string, error) {
+	var workspaces []string
+	err := upTo(dir, func(d string) error {
 		b, err := settings(root, path.Join(d, "package.json"))
 		if err != nil || b == nil {
 			return err
@@ -284,12 +285,28 @@ func checkPackageJSON(root *os.Root, dir string) (workspaces []string, err error
 		}
 		return nil
 	})
+	return workspaces, err
 }
 
-// folderPrefixes lists the folders a slash path goes through, the path
-// itself included: a/b/c gives a, a/b, a/b/c. For a workspace pattern,
-// only the segments before the first wildcard count.
-func folderPrefixes(p string) []string {
+// globChars are the characters npm reads as a pattern in a workspace; a
+// lock key or a link target holding one is refused (it is a literal path).
+const globChars = "*?[]{}!"
+
+// lockPrefixes lists the folders a literal slash path (a lock key, a link
+// target) goes through, the path itself included: a/b/c gives a, a/b,
+// a/b/c. No segment is read as a pattern.
+func lockPrefixes(p string) []string {
+	var out []string
+	segs := strings.Split(p, "/")
+	for i := range segs {
+		out = append(out, strings.Join(segs[:i+1], "/"))
+	}
+	return out
+}
+
+// workspacePrefixes lists the folders a workspace pattern goes through
+// before its first wildcard: apps/*/web gives apps.
+func workspacePrefixes(p string) []string {
 	var out []string
 	segs := strings.Split(p, "/")
 	for i, s := range segs {
@@ -302,12 +319,20 @@ func folderPrefixes(p string) []string {
 }
 
 // checkLockFolders refuses, through the root of the copy, a link or a
-// junction at any folder a package-lock.json key or a workspace goes
-// through (npm would write through it, outside the copy). A folder that
-// does not exist yet is fine: npm creates it.
-func checkLockFolders(root *os.Root, dir string, keys, workspaces []string) error {
-	for _, p := range slices.Concat(keys, workspaces) {
-		for _, prefix := range folderPrefixes(p) {
+// junction at any folder a package-lock.json key, a linked package's
+// target or a workspace goes through (npm would write or read through it,
+// outside the copy). A folder that does not exist yet is fine: npm
+// creates it.
+func checkLockFolders(root *os.Root, dir string, paths, workspaces []string) error {
+	var all [][]string
+	for _, p := range paths {
+		all = append(all, lockPrefixes(p))
+	}
+	for _, w := range workspaces {
+		all = append(all, workspacePrefixes(w))
+	}
+	for _, prefixes := range all {
+		for _, prefix := range prefixes {
 			info, err := root.Lstat(path.Join(dir, prefix))
 			if errors.Is(err, fs.ErrNotExist) {
 				break
@@ -326,7 +351,7 @@ func checkLockFolders(root *os.Root, dir string, keys, workspaces []string) erro
 func nodeModulesFolders(keys []string) []string {
 	set := map[string]bool{}
 	for _, k := range keys {
-		for _, prefix := range folderPrefixes(k) {
+		for _, prefix := range lockPrefixes(k) {
 			if path.Base(prefix) == "node_modules" {
 				set[prefix] = true
 			}
@@ -337,10 +362,10 @@ func nodeModulesFolders(keys []string) []string {
 }
 
 // validLockKey reports whether a package-lock.json packages key names a
-// folder of the project: relative, without "..", a drive, a backslash or
-// an unsafe segment.
+// folder of the project: relative, without "..", a drive, a backslash, a
+// glob character or an unsafe segment.
 func validLockKey(k string) bool {
-	if k == "" || escapes(k) || strings.Contains(k, `\`) {
+	if k == "" || escapes(k) || strings.ContainsAny(k, `\`+globChars) {
 		return false
 	}
 	for _, seg := range strings.Split(k, "/") {
@@ -378,8 +403,9 @@ func bundlingParent(key string) (parent, name string, ok bool) {
 // https with an integrity and an exact version; a bundled package (inside
 // its parent's tarball) with a version and a parent that lists it in
 // bundleDependencies; a workspace folder entry without a resolved. It
-// returns the keys (folders of the project), sorted.
-func checkPackageLock(lock []byte) ([]string, error) {
+// returns the keys (folders of the project), sorted, and the targets of
+// the linked packages (folders of the project too), sorted.
+func checkPackageLock(lock []byte) (keys, links []string, err error) {
 	fail := func(format string, a ...any) error {
 		return fmt.Errorf("%w: package-lock.json %s", ErrUnsafeInstall, fmt.Sprintf(format, a...))
 	}
@@ -388,15 +414,15 @@ func checkPackageLock(lock []byte) ([]string, error) {
 		err = exactKeys(doc, "lockfileVersion", "packages")
 	}
 	if err != nil {
-		return nil, fail("cannot be read: %v", err)
+		return nil, nil, fail("cannot be read: %v", err)
 	}
 	version, ok := doc["lockfileVersion"].(json.Number)
 	if n, err := version.Int64(); !ok || err != nil || n < 2 {
-		return nil, fail("must be a version 2 or 3 lockfile")
+		return nil, nil, fail("must be a version 2 or 3 lockfile")
 	}
 	packages, ok := asObject(doc["packages"])
 	if !ok {
-		return nil, fail("has no packages object")
+		return nil, nil, fail("has no packages object")
 	}
 	entries := map[string]lockEntry{}
 	for key, v := range packages {
@@ -404,14 +430,14 @@ func checkPackageLock(lock []byte) ([]string, error) {
 			continue // the project itself: its package.json is checked
 		}
 		if !validLockKey(key) {
-			return nil, fail("names a package outside the project")
+			return nil, nil, fail("names a package outside the project")
 		}
 		obj, ok := asObject(v)
 		if !ok {
-			return nil, fail("has a package that is not an object")
+			return nil, nil, fail("has a package that is not an object")
 		}
 		if err := exactKeys(obj, "link", "inBundle", "resolved", "version", "integrity", "bundleDependencies"); err != nil {
-			return nil, fail("%s: %v", key, err)
+			return nil, nil, fail("%s: %v", key, err)
 		}
 		var e lockEntry
 		var errs []error
@@ -426,48 +452,50 @@ func checkPackageLock(lock []byte) ([]string, error) {
 		e.integrity, err = optString(obj, "integrity")
 		errs = append(errs, err)
 		if err := errors.Join(errs...); err != nil {
-			return nil, fail("%s: %v", key, err)
+			return nil, nil, fail("%s: %v", key, err)
 		}
 		e.bundles = obj["bundleDependencies"]
 		entries[key] = e
 	}
 	for key, e := range entries {
 		if e.version != "" && !semver.MatchString(e.version) {
-			return nil, fail("locks a package at something other than an exact version")
+			return nil, nil, fail("locks a package at something other than an exact version")
 		}
 		installed := slices.Contains(strings.Split(key, "/"), "node_modules")
 		if e.resolved != "" && !e.link && !strings.HasPrefix(e.resolved, "https://") {
-			return nil, fail("resolves a package from elsewhere than an https registry")
+			return nil, nil, fail("resolves a package from elsewhere than an https registry")
 		}
 		switch {
 		case e.link:
-			if e.resolved == "" || escapes(e.resolved) || strings.Contains(e.resolved, ":") || strings.Contains(e.resolved, `\`) {
-				return nil, fail("links a package outside the project")
+			if !validLockKey(e.resolved) || strings.Contains(e.resolved, ":") {
+				return nil, nil, fail("links a package outside the project")
 			}
+			links = append(links, e.resolved)
 		case !installed:
 			// A workspace folder of the project: nothing is fetched for it.
 			if e.resolved != "" {
-				return nil, fail("resolves a folder of the project from elsewhere")
+				return nil, nil, fail("resolves a folder of the project from elsewhere")
 			}
 		case e.bundled:
 			if e.version == "" {
-				return nil, fail("has a bundled package without a version")
+				return nil, nil, fail("has a bundled package without a version")
 			}
 			parentKey, name, ok := bundlingParent(key)
 			parent, found := entries[parentKey]
 			if !ok || !found || !bundles(parent.bundles, name) {
-				return nil, fail("has a bundled package that no parent package bundles")
+				return nil, nil, fail("has a bundled package that no parent package bundles")
 			}
 		default:
 			if e.resolved == "" {
-				return nil, fail("resolves a package from elsewhere than an https registry")
+				return nil, nil, fail("resolves a package from elsewhere than an https registry")
 			}
 			if e.integrity == "" || e.version == "" {
-				return nil, fail("has a package without an integrity or a version")
+				return nil, nil, fail("has a package without an integrity or a version")
 			}
 		}
 	}
-	return slices.Sorted(maps.Keys(entries)), nil
+	slices.Sort(links)
+	return slices.Sorted(maps.Keys(entries)), links, nil
 }
 
 // bundles reports whether a bundleDependencies value (true, or a list of
@@ -810,14 +838,14 @@ func Install(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string)
 		if err != nil {
 			return err
 		}
-		keys, err := checkPackageLock(lock)
+		keys, links, err := checkPackageLock(lock)
 		if err != nil {
 			return err
 		}
 		if err := checkNpmrc(root, dir); err != nil {
 			return err
 		}
-		if err := checkLockFolders(root, dir, keys, workspaces); err != nil {
+		if err := checkLockFolders(root, dir, slices.Concat(keys, links), workspaces); err != nil {
 			return err
 		}
 		// Every node_modules the lock names starts fresh (workspaces too).
