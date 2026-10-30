@@ -1,13 +1,16 @@
 package workcopy
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -32,17 +35,29 @@ var (
 	// was prepared (it could make git run a program, through a filter or a
 	// diff driver).
 	ErrCopyTampered = errors.New("the git configuration of the fix copy was changed")
+	// ErrCopyTooLarge: the project's files exceed the limits of a copy.
+	ErrCopyTooLarge = errors.New("the project is too large for a fix copy")
 )
 
-// Copy is the fix copy of one attempt.
+// Copy is the fix copy of one attempt. It is two folders of the data
+// folder:
+//   - Mirror, <data>/worktrees/<project id>/<attempt id>.git: a bare clone
+//     of the user's repository, private to Michel (never in the agent's
+//     reach), where the fix commit is built and from which it is fetched;
+//   - Dir, <data>/worktrees/<project id>/<attempt id>: the agent's copy, a
+//     fresh repository holding the files of Base minus the excluded ones
+//     and one synthetic commit (Root). It has no history, no excluded
+//     blob, no remote and no absolute path.
 type Copy struct {
-	// Dir is <data>/worktrees/<project id>/<attempt id>. Never shown.
-	Dir string
+	Dir    string
+	Mirror string `json:"-"`
 	// Base is the commit of the project's HEAD the copy was made from.
 	Base string
-	// Excluded lists the tracked files left out of the copy (slash paths,
-	// sorted): they are in its index, never on its disk, and stay unchanged
-	// in its commits.
+	// Root is the synthetic commit "michel: base" of the agent's copy: the
+	// change is the copy's working tree against it.
+	Root string
+	// Excluded lists the files of Base left out of the copy (slash paths,
+	// sorted). They stay unchanged in the fix commit.
 	Excluded []string
 	// Exclude repeats the project's excluded folder names, so that a new
 	// file under one of them never becomes part of the change.
@@ -50,9 +65,10 @@ type Copy struct {
 	// SecretHits are the secrets the detectors found in the files of the
 	// copy (file, line and kind, never the value).
 	SecretHits []mask.Hit
-	// ConfigSHA is the SHA-256 of the copy's .git/config as git clone wrote
-	// it. Diff, Commit and Apply refuse a copy whose configuration changed
-	// since (an agent could add a filter or a driver that git would run).
+	// ConfigSHA is the SHA-256 of the copy's .git/config and
+	// .git/info/attributes as Michel made them. Diff, Commit and Apply
+	// refuse a copy whose configuration changed since (an agent could add
+	// a filter or a driver that git would run).
 	ConfigSHA string
 }
 
@@ -61,6 +77,20 @@ var idShape = regexp.MustCompile(`^[0-9A-Za-z]{1,64}$`)
 
 // excludedFiles are the file name patterns never copied, at any depth.
 var excludedFiles = []string{".env*", "*.pem", "*.key", "id_*"}
+
+// Limits of a copy: per file, in all, and in number of files.
+const (
+	maxCopyFile  = 256 << 20
+	maxCopyTotal = 4 << 30
+	maxCopyFiles = 500000
+)
+
+// plainAttributes turn off, for every path, what git would otherwise do
+// to a file's bytes or presence between the repository and the disk:
+// export-ignore and export-subst (archive), end-of-line conversion,
+// filters, ident and re-encoding. Written in the info/attributes of the
+// mirror and of the copy, it wins over the project's .gitattributes.
+const plainAttributes = "* -export-ignore -export-subst -text -eol -filter -ident -working-tree-encoding\n"
 
 // IsGitRepo reports whether path is the top folder of a git repository: it
 // holds a .git folder with a HEAD, or a .git file pointing to one (a linked
@@ -85,24 +115,9 @@ func IsGitRepo(path string) bool {
 	return err == nil && bytes.HasPrefix(b, []byte("gitdir:"))
 }
 
-// sparsePatterns is the sparse-checkout definition of a copy: everything
-// but the excluded files and folders. The excluded tracked files keep their
-// index entry (skip-worktree) and are never written on disk.
-func sparsePatterns(exclude []string) string {
-	var b strings.Builder
-	b.WriteString("/*\n")
-	for _, p := range excludedFiles {
-		b.WriteString("!" + p + "\n")
-	}
-	for _, n := range exclude {
-		b.WriteString("!" + n + "/\n")
-	}
-	return b.String()
-}
-
-// excludePathspecs keep the same files out of git add in the copy: a file
-// the agent creates there (a new .env, a key) never becomes part of the
-// change.
+// excludePathspecs keep the excluded files out of git add in the copy: a
+// file the agent creates there (a new .env, a key) never becomes part of
+// the change.
 func excludePathspecs(exclude []string) []string {
 	out := []string{"."}
 	for _, p := range excludedFiles {
@@ -114,19 +129,44 @@ func excludePathspecs(exclude []string) []string {
 	return out
 }
 
+// isExcluded reports whether the slash path rel is left out of a copy.
+func isExcluded(rel string, exclude []string) bool {
+	segs := strings.Split(rel, "/")
+	base := segs[len(segs)-1]
+	for _, p := range excludedFiles {
+		if ok, _ := path.Match(p, base); ok {
+			return true
+		}
+	}
+	for _, s := range segs[:len(segs)-1] {
+		if slices.Contains(exclude, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // validFolderName reports whether n is a plain folder name (project.Exclude
 // is validated when stored; checked again before it reaches git).
 func validFolderName(n string) bool {
 	return n != "" && n != "." && n != ".." && !strings.ContainsAny(n, "/\\:*?[]!\n\r\x00") && filepath.IsLocal(n)
 }
 
-// Prepare makes the fix copy of attempt attemptID of p in
-// <data>/worktrees/<project id>/<attempt id>: git clone --local
-// --no-checkout of the project folder, then a checkout of its HEAD commit
-// without the excluded files (.env*, *.pem, *.key, id_*, the folders of
-// p.Exclude). Nothing is written under p.Path: the clone only reads it, and
-// git runs there without hooks, file system monitor, automatic gc, system or
-// global configuration. The secret detectors run on the files of the copy.
+// michelIdent is the author and committer of every commit Michel makes.
+func michelIdent(d Deps) []string {
+	date := d.now().UTC().Format("2006-01-02T15:04:05Z")
+	return []string{"GIT_AUTHOR_NAME=Michel", "GIT_AUTHOR_EMAIL=michel@localhost", "GIT_AUTHOR_DATE=" + date,
+		"GIT_COMMITTER_NAME=Michel", "GIT_COMMITTER_EMAIL=michel@localhost", "GIT_COMMITTER_DATE=" + date}
+}
+
+// Prepare makes the fix copy of attempt attemptID of p: a private bare
+// mirror of the project (git clone --bare --local --no-hardlinks, which
+// only reads p.Path), then the agent's copy, a fresh repository filled from
+// git archive of the project's HEAD commit without the excluded files
+// (.env*, *.pem, *.key, id_*, the folders of p.Exclude), symbolic links or
+// special files, and one synthetic commit. git runs without hooks, file
+// system monitor, automatic gc, system or global configuration. The secret
+// detectors run on the files of the copy.
 func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (Copy, error) {
 	if !idShape.MatchString(p.ID) || !idShape.MatchString(attemptID) {
 		return Copy{}, ErrInvalidID
@@ -156,73 +196,194 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return Copy{}, fmt.Errorf("Michel cannot create the fix copy: %w", noPath(err))
 	}
-	dir := filepath.Join(parent, attemptID)
-	if _, err := os.Lstat(dir); err == nil {
-		return Copy{}, ErrCopyExists
+	c := Copy{Dir: filepath.Join(parent, attemptID), Mirror: filepath.Join(parent, attemptID+".git"), Base: base, Exclude: exclude}
+	for _, f := range []string{c.Dir, c.Mirror} {
+		if _, err := os.Lstat(f); err == nil {
+			return Copy{}, ErrCopyExists
+		}
 	}
-	c := Copy{Dir: dir, Base: base, Exclude: exclude}
+	archive := c.Dir + ".tar"
+	defer os.Remove(archive)
 	fail := func(err error) (Copy, error) {
-		_ = os.RemoveAll(dir)
+		_ = os.RemoveAll(c.Dir)
+		_ = os.RemoveAll(c.Mirror)
 		return Copy{}, err
 	}
 	if _, stderr, err := h.git(ctx, d, parent, "", localTransport, nil,
-		"clone", "--local", "--no-checkout", "--no-hardlinks", "--quiet", "--", p.Path, dir); err != nil {
+		"clone", "--bare", "--local", "--no-hardlinks", "--quiet", "--", p.Path, c.Mirror); err != nil {
 		return fail(gitErr("clone", err, stderr))
 	}
-	info := filepath.Join(dir, ".git", "info")
-	if err := os.MkdirAll(info, 0o700); err != nil {
-		return fail(fmt.Errorf("Michel cannot prepare the fix copy: %w", noPath(err)))
+	if err := writeAttributes(c.Mirror); err != nil {
+		return fail(err)
 	}
-	if err := os.WriteFile(filepath.Join(info, "sparse-checkout"), []byte(sparsePatterns(exclude)), 0o600); err != nil {
-		return fail(fmt.Errorf("Michel cannot prepare the fix copy: %w", noPath(err)))
+	if _, stderr, err := h.git(ctx, d, parent, c.Mirror, nil, nil, "archive", "--format=tar", "-o", archive, base); err != nil {
+		return fail(gitErr("archive", err, stderr))
 	}
-	sparse := []string{"-c", "core.sparseCheckout=true", "-c", "core.sparseCheckoutCone=false"}
-	if _, stderr, err := h.git(ctx, d, dir, dir, sparse, nil, "checkout", "--quiet", "--detach", base); err != nil {
-		return fail(gitErr("checkout", err, stderr))
+	if _, stderr, err := h.git(ctx, d, parent, "", nil, nil, "init", "--quiet", "--template=", "--initial-branch=main", c.Dir); err != nil {
+		return fail(gitErr("init", err, stderr))
 	}
-	out, stderr, err := h.git(ctx, d, dir, dir, nil, nil, "ls-files", "-t", "-z")
+	if err := writeAttributes(filepath.Join(c.Dir, ".git")); err != nil {
+		return fail(err)
+	}
+	kept, excluded, err := extract(archive, c.Dir, exclude)
 	if err != nil {
-		return fail(gitErr("ls-files", err, stderr))
+		return fail(err)
 	}
-	var kept []string
-	for _, e := range strings.Split(string(out), "\x00") {
-		tag, rel, ok := strings.Cut(e, " ")
-		if !ok {
-			continue
-		}
-		if tag == "S" {
-			c.Excluded = append(c.Excluded, rel)
-		} else {
-			kept = append(kept, rel)
-		}
+	c.Excluded = excluded
+	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(exclude)...)...); err != nil {
+		return fail(gitErr("add", err, stderr))
 	}
-	slices.Sort(c.Excluded)
-	c.SecretHits = mask.ScanFiles(dir, kept)
-	if c.ConfigSHA, err = configSHA(dir); err != nil {
+	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, michelIdent(d),
+		"commit", "--quiet", "--no-verify", "--no-gpg-sign", "--allow-empty", "-m", "michel: base"); err != nil {
+		return fail(gitErr("commit", err, stderr))
+	}
+	if c.Root, err = h.revParseCommit(ctx, d, c.Dir, "HEAD"); err != nil || c.Root == "" {
+		return fail(errors.Join(err, errors.New("Michel cannot read the base commit of the fix copy")))
+	}
+	c.SecretHits = mask.ScanFiles(c.Dir, kept)
+	if c.ConfigSHA, err = configSHA(c.Dir); err != nil {
 		return fail(err)
 	}
 	return c, nil
 }
 
-// configSHA is the SHA-256 of the copy's git configuration. A .git/commondir
-// (which would make git read another configuration) is refused.
+// writeAttributes writes plainAttributes in <gitDir>/info/attributes.
+func writeAttributes(gitDir string) error {
+	info := filepath.Join(gitDir, "info")
+	if err := os.MkdirAll(info, 0o700); err != nil {
+		return fmt.Errorf("Michel cannot prepare the fix copy: %w", noPath(err))
+	}
+	if err := os.WriteFile(filepath.Join(info, "attributes"), []byte(plainAttributes), 0o600); err != nil {
+		return fmt.Errorf("Michel cannot prepare the fix copy: %w", noPath(err))
+	}
+	return nil
+}
+
+// extract writes the regular files and folders of the tar archive under
+// dir, Michel's own reader: no symbolic or hard link, no special file, no
+// path outside dir or under a .git folder, sizes capped. It returns the
+// files written and the excluded files left out (slash paths, sorted).
+func extract(archive, dir string, exclude []string) (kept, excluded []string, err error) {
+	f, err := os.Open(archive)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Michel cannot read the project's files: %w", noPath(err))
+	}
+	defer f.Close()
+	tr := tar.NewReader(f)
+	var total int64
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("Michel cannot read the project's files: %w", err)
+		}
+		rel := strings.TrimSuffix(hdr.Name, "/")
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeDir {
+			continue // links, pax headers, special files
+		}
+		if rel == "" || checkEntry(rawEntry{path: rel, mode: "100644"}) != nil {
+			continue
+		}
+		full := filepath.Join(dir, filepath.FromSlash(rel))
+		if hdr.Typeflag == tar.TypeDir {
+			if err := os.MkdirAll(full, 0o755); err != nil {
+				return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
+			}
+			continue
+		}
+		if isExcluded(rel, exclude) {
+			excluded = append(excluded, rel)
+			continue
+		}
+		total += hdr.Size
+		if hdr.Size > maxCopyFile || total > maxCopyTotal || len(kept) >= maxCopyFiles {
+			return nil, nil, ErrCopyTooLarge
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
+		}
+		mode := os.FileMode(0o644)
+		if hdr.Mode&0o111 != 0 {
+			mode = 0o755
+		}
+		out, err := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		if err != nil {
+			return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
+		}
+		_, cerr := io.Copy(out, io.LimitReader(tr, maxCopyFile))
+		if err := errors.Join(cerr, out.Close()); err != nil {
+			return nil, nil, fmt.Errorf("Michel cannot write the fix copy: %w", noPath(err))
+		}
+		kept = append(kept, rel)
+	}
+	slices.Sort(excluded)
+	return kept, excluded, nil
+}
+
+// configSHA is the SHA-256 of the copy's .git/config and
+// .git/info/attributes. A .git/commondir (which would make git read
+// another configuration) is refused.
 func configSHA(dir string) (string, error) {
 	if _, err := os.Lstat(filepath.Join(dir, ".git", "commondir")); err == nil {
 		return "", ErrCopyTampered
 	}
-	b, err := os.ReadFile(filepath.Join(dir, ".git", "config"))
-	if err != nil {
-		return "", fmt.Errorf("Michel cannot read the git configuration of the fix copy: %w", noPath(err))
+	h := sha256.New()
+	for _, f := range []string{"config", filepath.Join("info", "attributes")} {
+		b, err := os.ReadFile(filepath.Join(dir, ".git", f))
+		if err != nil {
+			return "", fmt.Errorf("Michel cannot read the git configuration of the fix copy: %w", noPath(err))
+		}
+		fmt.Fprintf(h, "%d\x00", len(b))
+		h.Write(b)
 	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// checkCopy checks that c is a fix copy whose git configuration is the one
-// Prepare recorded.
-func checkCopy(c Copy) error {
-	if err := copyDir(c.Dir); err != nil {
+// inDataDir checks that p is a path under d.DataDir.
+func inDataDir(d Deps, p string) error {
+	if d.DataDir == "" || !filepath.IsAbs(d.DataDir) {
+		return ErrNotACopy
+	}
+	rel, err := filepath.Rel(d.DataDir, p)
+	if err != nil || !filepath.IsLocal(rel) {
+		return ErrNotACopy
+	}
+	return nil
+}
+
+// copyDir checks that c.Dir is an agent copy of the data folder: an
+// absolute <data>/.../worktrees/<project id>/<attempt id> folder holding a
+// .git folder.
+func copyDir(d Deps, c Copy) error {
+	dir := c.Dir
+	if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || inDataDir(d, dir) != nil {
+		return ErrNotACopy
+	}
+	attempt, projectDir := filepath.Base(dir), filepath.Dir(dir)
+	if !idShape.MatchString(attempt) || !idShape.MatchString(filepath.Base(projectDir)) || filepath.Base(filepath.Dir(projectDir)) != "worktrees" {
+		return ErrNotACopy
+	}
+	for _, f := range []string{dir, filepath.Join(dir, ".git")} {
+		if info, err := os.Lstat(f); err != nil || !info.IsDir() {
+			return ErrNotACopy
+		}
+	}
+	return nil
+}
+
+// checkCopy checks that c is a fix copy with its mirror, whose git
+// configuration is the one Prepare recorded.
+func checkCopy(d Deps, c Copy) error {
+	if err := copyDir(d, c); err != nil {
 		return err
+	}
+	if c.Mirror != c.Dir+".git" {
+		return ErrNotACopy
+	}
+	if info, err := os.Lstat(c.Mirror); err != nil || !info.IsDir() {
+		return ErrNotACopy
 	}
 	got, err := configSHA(c.Dir)
 	if err != nil {
@@ -234,29 +395,19 @@ func checkCopy(c Copy) error {
 	return nil
 }
 
-// copyDir checks that dir is a fix copy: an absolute
-// .../worktrees/<project id>/<attempt id> folder holding a .git folder.
-func copyDir(dir string) error {
-	if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
-		return ErrNotACopy
-	}
-	attempt, projectDir := filepath.Base(dir), filepath.Dir(dir)
-	if !idShape.MatchString(attempt) || !idShape.MatchString(filepath.Base(projectDir)) || filepath.Base(filepath.Dir(projectDir)) != "worktrees" {
-		return ErrNotACopy
-	}
-	if info, err := os.Lstat(filepath.Join(dir, ".git")); err != nil || !info.IsDir() {
-		return ErrNotACopy
-	}
-	return nil
-}
-
-// Remove deletes the fix copy c, and nothing that is not a fix copy.
-func Remove(c Copy) error {
-	if err := copyDir(c.Dir); err != nil {
+// Remove deletes the fix copy c and its mirror, and nothing that is not a
+// fix copy under d.DataDir.
+func Remove(d Deps, c Copy) error {
+	if err := copyDir(d, c); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(c.Dir); err != nil {
-		return fmt.Errorf("Michel cannot delete the fix copy: %w", noPath(err))
+	if c.Mirror != "" && c.Mirror != c.Dir+".git" {
+		return ErrNotACopy
+	}
+	for _, p := range []string{c.Dir, c.Dir + ".git", c.Dir + ".tar", c.Dir + ".index", c.Dir + ".patch"} {
+		if err := os.RemoveAll(p); err != nil {
+			return fmt.Errorf("Michel cannot delete the fix copy: %w", noPath(err))
+		}
 	}
 	// The project's folder of copies goes when it is empty.
 	_ = os.Remove(filepath.Dir(c.Dir))

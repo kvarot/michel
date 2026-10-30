@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
@@ -26,8 +26,8 @@ var (
 	ErrInvalidBranch = errors.New("invalid fix branch name")
 	// ErrBranchExists: the fix branch already exists in the project.
 	ErrBranchExists = errors.New("the fix branch already exists in the project")
-	// ErrInvalidCommit: not a full commit id of the copy that descends from
-	// its base.
+	// ErrInvalidCommit: not a fix commit of the mirror (full id, exactly one
+	// parent, Base).
 	ErrInvalidCommit = errors.New("invalid fix commit")
 )
 
@@ -77,16 +77,16 @@ func checkEntry(e rawEntry) error {
 	return nil
 }
 
-// checkRange checks every path changed between two revisions of the copy
-// (to "" means the index) and returns them, sorted.
-func (h home) checkRange(ctx context.Context, d Deps, c Copy, from, to string) ([]string, error) {
+// checkRange checks every path changed between two revisions of repo (to
+// "" means the index) and returns them, sorted.
+func (h home) checkRange(ctx context.Context, d Deps, repo, from, to string) ([]string, error) {
 	args := []string{"--raw", "-z", "--no-renames", "--no-ext-diff", "--no-textconv"}
 	if to == "" {
 		args = append(args, "--cached", from)
 	} else {
 		args = append(args, from, to)
 	}
-	out, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(args, "--")...)
+	out, stderr, err := h.git(ctx, d, repo, repo, nil, nil, "diff", append(args, "--")...)
 	if err != nil {
 		return nil, gitErr("diff", err, stderr)
 	}
@@ -108,49 +108,72 @@ func (h home) checkRange(ctx context.Context, d Deps, c Copy, from, to string) (
 	return files, nil
 }
 
-// Diff stages every change of the copy (git add -A, the excluded files
-// left out) and returns the diff against c.Base, computed by Michel and
-// sanitized for display, with the changed files (slash paths, sorted). A
-// path outside the copy, a symbolic link or a submodule is ErrOutsideCopy.
-func Diff(ctx context.Context, d Deps, c Copy) (diff string, files []string, err error) {
-	if err := checkCopy(c); err != nil {
-		return "", nil, err
+// Change is the change of a fix copy, computed by Michel.
+type Change struct {
+	// Raw is the binary patch (git diff --binary) from the copy's base to
+	// its working tree: the exact bytes Commit applies. A proposal's
+	// fingerprint hashes Raw, never Display.
+	Raw []byte
+	// Display is the text diff for people: binary files summarized,
+	// sanitized (scan.SanitizeText). Shown, never hashed.
+	Display string
+	// Files are the changed paths (slash paths, sorted).
+	Files []string
+}
+
+// Diff stages every change of the agent's copy (git add -A, the excluded
+// files left out) and returns it against the copy's base commit c.Root:
+// whatever the agent committed in the copy, the change is its working
+// tree. A path outside the copy, a symbolic link or a submodule is
+// ErrOutsideCopy.
+func Diff(ctx context.Context, d Deps, c Copy) (Change, error) {
+	if err := checkCopy(d, c); err != nil {
+		return Change{}, err
 	}
-	if !shaShape.MatchString(c.Base) {
-		return "", nil, ErrInvalidCommit
+	if !shaShape.MatchString(c.Root) {
+		return Change{}, ErrInvalidCommit
 	}
 	h, err := ensureHome(d)
 	if err != nil {
-		return "", nil, err
+		return Change{}, err
 	}
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(c.Exclude)...)...); err != nil {
-		return "", nil, gitErr("add", err, stderr)
+		return Change{}, gitErr("add", err, stderr)
 	}
-	files, err = h.checkRange(ctx, d, c, c.Base, "")
+	files, err := h.checkRange(ctx, d, c.Dir, c.Root, "")
 	if err != nil {
-		return "", nil, err
+		return Change{}, err
 	}
-	out, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff",
-		"--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", c.Base, "--")
+	common := []string{"--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color"}
+	raw, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, "--binary", c.Root, "--")...)
 	if err != nil {
-		return "", nil, gitErr("diff", err, stderr)
+		return Change{}, gitErr("diff", err, stderr)
 	}
-	if len(out) >= maxGitOutput {
-		return "", nil, ErrDiffTooLarge
+	text, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "diff", append(common, c.Root, "--")...)
+	if err != nil {
+		return Change{}, gitErr("diff", err, stderr)
 	}
-	return scan.SanitizeText(strings.ToValidUTF8(string(out), "�")), files, nil
+	if len(raw) >= maxGitOutput || len(text) >= maxGitOutput {
+		return Change{}, ErrDiffTooLarge
+	}
+	return Change{Raw: raw, Display: scan.SanitizeText(strings.ToValidUTF8(string(text), "\uFFFD")), Files: files}, nil
 }
 
-// Commit stages and checks the change of the copy (as Diff), commits it as
-// Michel and returns the commit id. The committed tree is checked again
-// against c.Base.
+// Commit computes the change of the copy (as Diff) and builds one commit
+// in the private mirror: the tree of Base with the change applied (a
+// temporary index in the data folder, git apply --cached), parent Base,
+// author and committer Michel. It returns that commit's id. Commits the
+// agent made in its copy are ignored: nothing of them reaches the mirror.
 func Commit(ctx context.Context, d Deps, c Copy, message string) (string, error) {
-	_, files, err := Diff(ctx, d, c)
+	ch, err := Diff(ctx, d, c)
 	if err != nil {
 		return "", err
 	}
-	if len(files) == 0 {
+	if len(ch.Files) == 0 {
 		return "", ErrNothingToCommit
+	}
+	if !shaShape.MatchString(c.Base) {
+		return "", ErrInvalidCommit
 	}
 	h, err := ensureHome(d)
 	if err != nil {
@@ -160,30 +183,74 @@ func Commit(ctx context.Context, d Deps, c Copy, message string) (string, error)
 	if message == "" {
 		message = "fix: Michel"
 	}
-	date := d.now().UTC().Format(time.RFC3339)
-	ident := []string{"GIT_AUTHOR_NAME=Michel", "GIT_AUTHOR_EMAIL=michel@localhost", "GIT_AUTHOR_DATE=" + date,
-		"GIT_COMMITTER_NAME=Michel", "GIT_COMMITTER_EMAIL=michel@localhost", "GIT_COMMITTER_DATE=" + date}
-	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, ident, "commit", "--quiet", "--no-verify", "--no-gpg-sign", "-m", message); err != nil {
-		return "", gitErr("commit", err, stderr)
+	index, patch := c.Dir+".index", c.Dir+".patch"
+	defer os.Remove(index)
+	defer os.Remove(patch)
+	_ = os.Remove(index)
+	_ = os.Remove(patch)
+	if err := os.WriteFile(patch, ch.Raw, 0o600); err != nil {
+		return "", fmt.Errorf("Michel cannot prepare the fix commit: %w", noPath(err))
 	}
-	sha, err := h.revParseCommit(ctx, d, c.Dir, "HEAD")
+	withIndex := []string{"GIT_INDEX_FILE=" + index}
+	if _, stderr, err := h.git(ctx, d, c.Mirror, c.Mirror, nil, withIndex, "read-tree", c.Base); err != nil {
+		return "", gitErr("read-tree", err, stderr)
+	}
+	if _, stderr, err := h.git(ctx, d, c.Mirror, c.Mirror, nil, withIndex, "apply", "--cached", "--binary", "--whitespace=nowarn", patch); err != nil {
+		return "", gitErr("apply", err, stderr)
+	}
+	out, stderr, err := h.git(ctx, d, c.Mirror, c.Mirror, nil, withIndex, "write-tree")
 	if err != nil {
-		return "", err
+		return "", gitErr("write-tree", err, stderr)
 	}
-	if sha == "" || sha == c.Base {
-		return "", ErrNothingToCommit
+	tree := strings.TrimSpace(string(out))
+	if !shaShape.MatchString(tree) {
+		return "", errors.New("git write-tree returned an unexpected tree id")
 	}
-	if _, err := h.checkRange(ctx, d, c, c.Base, sha); err != nil {
+	out, stderr, err = h.git(ctx, d, c.Mirror, c.Mirror, nil, michelIdent(d), "commit-tree", tree, "-p", c.Base, "-m", message)
+	if err != nil {
+		return "", gitErr("commit-tree", err, stderr)
+	}
+	sha := strings.TrimSpace(string(out))
+	if !shaShape.MatchString(sha) {
+		return "", errors.New("git commit-tree returned an unexpected commit id")
+	}
+	if err := h.checkFixCommit(ctx, d, c, sha); err != nil {
 		return "", err
 	}
 	return sha, nil
 }
 
+// checkFixCommit checks that sha is a commit of the mirror with exactly one
+// parent, Base, and a change that stays inside the copy.
+func (h home) checkFixCommit(ctx context.Context, d Deps, c Copy, sha string) error {
+	if got, err := h.revParseCommit(ctx, d, c.Mirror, sha); err != nil {
+		return err
+	} else if got != sha {
+		return ErrInvalidCommit
+	}
+	out, stderr, err := h.git(ctx, d, c.Mirror, c.Mirror, nil, nil, "rev-parse", sha+"^@") // sha is a validated full id
+	if err != nil {
+		return gitErr("rev-parse", err, stderr)
+	}
+	if parents := strings.Fields(string(out)); len(parents) != 1 || parents[0] != c.Base {
+		return ErrInvalidCommit
+	}
+	files, err := h.checkRange(ctx, d, c.Mirror, c.Base, sha)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return ErrNothingToCommit
+	}
+	return nil
+}
+
 // Apply creates branch (michel/fix-<short id>, which must not exist) in the
-// user's repository, pointing to the commit sha of the copy:
-// git -C <project> fetch --no-tags --no-write-fetch-head <copy> <sha>:refs/heads/<branch>.
-// It is the only write Michel makes in the project: git objects and that
-// one ref in its .git. No checkout, merge, reset or stash: the user's
+// user's repository, pointing to the fix commit sha of the mirror:
+// git -C <project> fetch --no-tags --no-write-fetch-head <mirror> <sha>:refs/heads/<branch>.
+// The commit must have exactly one parent, Base, and a change inside the
+// copy. It is the only write Michel makes in the project: git objects and
+// that one ref in its .git. No checkout, merge, reset or stash: the user's
 // working tree, index, HEAD and current branch are untouched.
 func Apply(ctx context.Context, d Deps, p project.Project, c Copy, sha, branch string) error {
 	if !branchShape.MatchString(branch) {
@@ -192,7 +259,7 @@ func Apply(ctx context.Context, d Deps, p project.Project, c Copy, sha, branch s
 	if !shaShape.MatchString(sha) || !shaShape.MatchString(c.Base) || sha == c.Base {
 		return ErrInvalidCommit
 	}
-	if err := checkCopy(c); err != nil {
+	if err := checkCopy(d, c); err != nil {
 		return err
 	}
 	if !filepath.IsAbs(p.Path) || !IsGitRepo(p.Path) {
@@ -202,20 +269,7 @@ func Apply(ctx context.Context, d Deps, p project.Project, c Copy, sha, branch s
 	if err != nil {
 		return err
 	}
-	// The commit is one of the copy's, made on top of its base, and its
-	// change stays inside the copy.
-	if got, err := h.revParseCommit(ctx, d, c.Dir, sha); err != nil {
-		return err
-	} else if got != sha {
-		return ErrInvalidCommit
-	}
-	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "merge-base", "--is-ancestor", c.Base, sha); err != nil {
-		if exitCode(err) == 1 {
-			return ErrInvalidCommit
-		}
-		return gitErr("merge-base", err, stderr)
-	}
-	if _, err := h.checkRange(ctx, d, c, c.Base, sha); err != nil {
+	if err := h.checkFixCommit(ctx, d, c, sha); err != nil {
 		return err
 	}
 	ref := "refs/heads/" + branch
@@ -224,9 +278,12 @@ func Apply(ctx context.Context, d Deps, p project.Project, c Copy, sha, branch s
 	} else if exitCode(err) != 1 {
 		return gitErr("rev-parse", err, stderr)
 	}
-	if _, stderr, err := h.git(ctx, d, d.DataDir, p.Path, localTransport, nil, "fetch",
+	// The fix commit has no ref in the mirror: its upload-pack must accept a
+	// want of any object (git passes -c options on to it).
+	fetchCfg := append(append([]string{}, localTransport...), "-c", "uploadpack.allowAnySHA1InWant=true")
+	if _, stderr, err := h.git(ctx, d, d.DataDir, p.Path, fetchCfg, nil, "fetch",
 		"--quiet", "--no-tags", "--no-write-fetch-head", "--no-auto-maintenance", "--no-recurse-submodules",
-		c.Dir, sha+":"+ref); err != nil {
+		c.Mirror, sha+":"+ref); err != nil {
 		return gitErr("fetch", err, stderr)
 	}
 	got, err := h.revParseCommit(ctx, d, p.Path, ref)

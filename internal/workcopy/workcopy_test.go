@@ -125,7 +125,7 @@ func prepare(t *testing.T, f fixture) Copy {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	t.Cleanup(func() { _ = Remove(c) })
+	t.Cleanup(func() { _ = Remove(f.deps, c) })
 	return c
 }
 
@@ -157,7 +157,7 @@ func TestPrepareNeverWritesInProject(t *testing.T) {
 	before := treeDigest(t, f.proj.Path)
 	c := prepare(t, f)
 	writeFile(t, c.Dir, "README.md", "fixed\n")
-	if _, _, err := Diff(context.Background(), f.deps, c); err != nil {
+	if _, err := Diff(context.Background(), f.deps, c); err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
 	if _, err := Commit(context.Background(), f.deps, c, "fix"); err != nil {
@@ -206,18 +206,18 @@ func TestPrepareSkipsExcludedFiles(t *testing.T) {
 	writeFile(t, c.Dir, ".env", "DB_PASSWORD=other\n")
 	writeFile(t, c.Dir, "new.pem", "x\n")
 	writeFile(t, c.Dir, "src/app.php", "<?php\n")
-	_, files, err := Diff(context.Background(), f.deps, c)
+	ch, err := Diff(context.Background(), f.deps, c)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
-	if !slices.Equal(files, []string{"src/app.php"}) {
-		t.Errorf("files %v, want only src/app.php", files)
+	if !slices.Equal(ch.Files, []string{"src/app.php"}) {
+		t.Errorf("files %v, want only src/app.php", ch.Files)
 	}
 	sha, err := Commit(context.Background(), f.deps, c, "fix")
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
-	tree := gitT(t, f.env, c.Dir, "ls-tree", "-r", "--name-only", sha)
+	tree := gitT(t, f.env, c.Mirror, "ls-tree", "-r", "--name-only", sha)
 	for _, rel := range want {
 		if !strings.Contains(tree, rel) {
 			t.Errorf("the commit drops the excluded tracked file %s", rel)
@@ -271,7 +271,7 @@ func TestDiffRejectsOutsideCopy(t *testing.T) {
 		blob := gitT(t, f.env, c.Dir, "hash-object", "-w", "link")
 		gitT(t, f.env, c.Dir, "-c", "core.symlinks=false", "update-index", "--add", "--cacheinfo", "120000,"+blob+",link")
 	}
-	if _, _, err := Diff(context.Background(), f.deps, c); !errors.Is(err, ErrOutsideCopy) {
+	if _, err := Diff(context.Background(), f.deps, c); !errors.Is(err, ErrOutsideCopy) {
 		t.Errorf("Diff with a symbolic link: %v, want ErrOutsideCopy", err)
 	}
 	if _, err := Commit(context.Background(), f.deps, c, "fix"); !errors.Is(err, ErrOutsideCopy) {
@@ -279,15 +279,29 @@ func TestDiffRejectsOutsideCopy(t *testing.T) {
 	}
 }
 
+// fakeCopy makes an empty folder shaped like a fix copy in d.DataDir.
+func fakeCopy(t *testing.T, d Deps) Copy {
+	t.Helper()
+	dir := filepath.Join(d.DataDir, "worktrees", "01JDEMO0000000000000000000", "01JFAKE0000000000000000000")
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return Copy{Dir: dir}
+}
+
 func TestRunTestsNotRunWithoutCommand(t *testing.T) {
-	c := Copy{Dir: t.TempDir()}
-	d := Deps{DataDir: t.TempDir(), Exec: func(context.Context, string, []string, []string, string) ([]byte, []byte, error) {
+	d := Deps{DataDir: t.TempDir()}
+	c := fakeCopy(t, d)
+	d.Exec = func(context.Context, string, []string, []string, string) ([]byte, []byte, error) {
 		t.Error("a command ran without a test command")
 		return nil, nil, nil
-	}}
+	}
 	status, out, err := RunTests(context.Background(), d, c, nil)
 	if status != TestsNotRun || out != "" || err != nil {
 		t.Errorf("got %q %q %v, want not_run", status, out, err)
+	}
+	if status, _, err := RunTests(context.Background(), d, Copy{Dir: t.TempDir()}, []string{"phpunit"}); status != TestsNotRun || !errors.Is(err, ErrNotACopy) {
+		t.Errorf("tests outside a copy: %q %v, want ErrNotACopy", status, err)
 	}
 
 	var gotName, gotDir string
@@ -392,7 +406,8 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 		}
 		for _, want := range []string{"HOME=" + home, "USERPROFILE=" + home, "COMPOSER_HOME=" + filepath.Join(home, "composer"),
 			"npm_config_cache=" + filepath.Join(home, "npm"), "HTTPS_PROXY=http://127.0.0.1:1", "HTTP_PROXY=http://127.0.0.1:1",
-			"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + filepath.Join(home, "gitconfig"), "GIT_TERMINAL_PROMPT=0"} {
+			"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + filepath.Join(home, "gitconfig"), "GIT_TERMINAL_PROMPT=0",
+			"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0"} {
 			if !slices.Contains(r.env, want) {
 				t.Errorf("%s %v: %s missing from the environment", r.name, r.args, want)
 			}
@@ -402,7 +417,7 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 			t.Errorf("%s %v ran from %s, outside the data folder", r.name, r.args, r.dir)
 		}
 		if r.name == "git" {
-			if !slices.Contains(r.args, "core.hooksPath="+filepath.Join(home, "no-hooks")) || !slices.Contains(r.args, "core.fsmonitor=false") {
+			if !slices.Contains(r.args, "core.hooksPath="+filepath.Join(f.deps.DataDir, "fix-hooks")) || !slices.Contains(r.args, "core.fsmonitor=false") {
 				t.Errorf("git %v: hooks or fsmonitor not disabled", r.args)
 			}
 			if !slices.Contains(allowedGit, gitSubcommand(r.args)) {
@@ -417,22 +432,24 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 }
 
 func TestInstallArgvByLockfile(t *testing.T) {
-	c := Copy{Dir: t.TempDir()}
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
 	writeFile(t, c.Dir, "composer.lock", "{}")
 	writeFile(t, c.Dir, "web/package-lock.json", "{}")
 	writeFile(t, c.Dir, "pn/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
 	writeFile(t, c.Dir, "y1/yarn.lock", "# yarn lockfile v1\n")
 	writeFile(t, c.Dir, "y2/yarn.lock", "__metadata:\n  version: 8\n")
-	rec := &recorder{}
-	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	writeFile(t, c.Dir, "y2/package.json", `{"packageManager":"yarn@4.5.0"}`)
+	npmrc := filepath.Join(d.DataDir, "fix-home", "npmrc")
 	for _, tc := range []struct {
 		eco, rel, name string
 		args           []string
 		dir            string
 	}{
 		{"Packagist", "composer.lock", "composer", []string{"install", "--no-scripts", "--no-interaction", "--no-plugins"}, ""},
-		{"npm", "web/package-lock.json", "npm", []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund"}, "web"},
-		{"npm", "pn/pnpm-lock.yaml", "pnpm", []string{"install", "--frozen-lockfile", "--ignore-scripts"}, "pn"},
+		{"npm", "web/package-lock.json", "npm", []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund", "--userconfig", npmrc}, "web"},
+		{"npm", "pn/pnpm-lock.yaml", "pnpm", []string{"install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"}, "pn"},
 		{"npm", "y1/yarn.lock", "yarn", []string{"install", "--frozen-lockfile", "--ignore-scripts", "--non-interactive"}, "y1"},
 		{"npm", "y2/yarn.lock", "yarn", []string{"install", "--immutable", "--mode=skip-build"}, "y2"},
 	} {
@@ -452,8 +469,14 @@ func TestInstallArgvByLockfile(t *testing.T) {
 			t.Errorf("Install(%s, %s) accepted", tc.eco, tc.rel)
 		}
 	}
+	if err := Install(context.Background(), d, Copy{Dir: t.TempDir()}, "Packagist", "composer.lock"); !errors.Is(err, ErrNotACopy) {
+		t.Errorf("install outside a copy: %v, want ErrNotACopy", err)
+	}
 	if len(rec.runs) != 0 {
 		t.Errorf("a refused install ran %v", rec.runs)
+	}
+	if b, err := os.ReadFile(npmrc); err != nil || len(b) != 0 {
+		t.Errorf("Michel's npmrc is not an empty file: %v", err)
 	}
 	d.Exec = func(context.Context, string, []string, []string, string) ([]byte, []byte, error) {
 		return nil, []byte("Your requirements could not be resolved"), &exec.ExitError{}
@@ -604,17 +627,27 @@ func TestIsMerged(t *testing.T) {
 func TestRemoveDeletesOnlyACopy(t *testing.T) {
 	f := newFixture(t)
 	c := prepare(t, f)
-	if err := Remove(Copy{Dir: f.proj.Path}); err == nil {
+	if err := Remove(f.deps, Copy{Dir: f.proj.Path}); err == nil {
 		t.Error("Remove accepted a folder that is not a copy")
+	}
+	// Shaped like a copy, but outside the data folder.
+	other := fakeCopy(t, Deps{DataDir: t.TempDir()})
+	if err := Remove(f.deps, other); !errors.Is(err, ErrNotACopy) {
+		t.Errorf("Remove outside the data folder: %v, want ErrNotACopy", err)
+	}
+	if _, err := os.Stat(other.Dir); err != nil {
+		t.Error("Remove deleted a folder outside the data folder")
 	}
 	if _, err := os.Stat(f.proj.Path); err != nil {
 		t.Fatal(err)
 	}
-	if err := Remove(c); err != nil {
+	if err := Remove(f.deps, c); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if _, err := os.Stat(c.Dir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the copy is still there: %v", err)
+	for _, p := range []string{c.Dir, c.Mirror} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is still there: %v", filepath.Base(p), err)
+		}
 	}
 }
 
@@ -631,7 +664,7 @@ func TestDiffRefusesTamperedCopyConfig(t *testing.T) {
 	if err := os.WriteFile(cfg, append(b, "[filter \"x\"]\n\tclean = run-me\n"...), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Diff(context.Background(), f.deps, c); !errors.Is(err, ErrCopyTampered) {
+	if _, err := Diff(context.Background(), f.deps, c); !errors.Is(err, ErrCopyTampered) {
 		t.Errorf("Diff: %v, want ErrCopyTampered", err)
 	}
 	if _, err := Commit(context.Background(), f.deps, c, "fix"); !errors.Is(err, ErrCopyTampered) {
@@ -644,7 +677,224 @@ func TestDiffRefusesTamperedCopyConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.ConfigSHA = ""
-	if _, _, err := Diff(context.Background(), f.deps, c); !errors.Is(err, ErrCopyTampered) {
+	if _, err := Diff(context.Background(), f.deps, c); !errors.Is(err, ErrCopyTampered) {
 		t.Errorf("Diff without a digest: %v, want ErrCopyTampered", err)
+	}
+}
+
+func TestCopyHasNoExcludedBlobs(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	objects := gitT(t, f.env, c.Dir, "cat-file", "--batch-all-objects", "--batch")
+	if strings.Contains(objects, "s3cr3tvalue") {
+		t.Error("an object of the copy holds the excluded .env")
+	}
+	if strings.Contains(objects, "private") {
+		t.Error("an object of the copy holds a file of an excluded folder")
+	}
+	if n := gitT(t, f.env, c.Dir, "rev-list", "--count", "--all"); n != "1" {
+		t.Errorf("the copy has %s commits, want 1", n)
+	}
+	if log := gitT(t, f.env, c.Dir, "log", "--format=%an %s"); log != "Michel michel: base" {
+		t.Errorf("copy log %q", log)
+	}
+	if remotes := gitT(t, f.env, c.Dir, "remote"); remotes != "" {
+		t.Errorf("the copy has remotes: %s", remotes)
+	}
+}
+
+func TestCopyHasNoAbsolutePath(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	needles := []string{f.proj.Path, filepath.ToSlash(f.proj.Path), f.deps.DataDir, filepath.ToSlash(f.deps.DataDir)}
+	err := filepath.Walk(c.Dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		for _, n := range needles {
+			if strings.Contains(strings.ToLower(string(b)), strings.ToLower(n)) {
+				rel, _ := filepath.Rel(c.Dir, p)
+				t.Errorf("%s holds an absolute path", rel)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCopyKeepsFilesAsCommitted(t *testing.T) {
+	f := newFixture(t)
+	// export-ignore would drop tests/ from git archive; eol=crlf would
+	// rewrite line ends; both are turned off for the copy.
+	writeFile(t, f.proj.Path, ".gitattributes", "tests export-ignore\n*.txt text eol=crlf\n")
+	writeFile(t, f.proj.Path, "tests/AppTest.php", "<?php\n")
+	writeFile(t, f.proj.Path, "notes.txt", "a\nb\n")
+	gitT(t, f.env, f.proj.Path, "add", "-A")
+	gitT(t, f.env, f.proj.Path, "commit", "-q", "-m", "attributes")
+	c := prepare(t, f)
+	if _, err := os.Stat(filepath.Join(c.Dir, "tests", "AppTest.php")); err != nil {
+		t.Errorf("an export-ignore file is missing from the copy: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(c.Dir, "notes.txt")); string(b) != "a\nb\n" {
+		t.Errorf("notes.txt %q, want the committed bytes", b)
+	}
+	writeFile(t, c.Dir, "notes.txt", "a\nc\n")
+	sha, err := Commit(context.Background(), f.deps, c, "fix")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if got := gitT(t, f.env, c.Mirror, "diff", "--name-only", c.Base, sha); got != "notes.txt" {
+		t.Errorf("fix commit changes %q, want notes.txt", got)
+	}
+}
+
+func TestDiffRawIsTheAppliedPatch(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, "README.md", "fixed\x1b[31m\r\n")
+	writeFile(t, c.Dir, "bin.dat", "\x00\x01\x02")
+	ch, err := Diff(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !strings.Contains(string(ch.Raw), "\x1b[31m\r") || !strings.Contains(string(ch.Raw), "GIT binary patch") {
+		t.Error("Raw is not the exact binary patch")
+	}
+	if strings.Contains(ch.Display, "\x1b") || strings.Contains(ch.Display, "GIT binary patch") {
+		t.Error("Display is not the sanitized text diff")
+	}
+	if !slices.Equal(ch.Files, []string{"README.md", "bin.dat"}) {
+		t.Errorf("files %v", ch.Files)
+	}
+	sha, err := Commit(context.Background(), f.deps, c, "fix")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if got := gitT(t, f.env, c.Mirror, "cat-file", "blob", sha+":bin.dat"); got != "\x00\x01\x02" {
+		t.Errorf("binary file %q in the fix commit", got)
+	}
+}
+
+func TestApplyIgnoresAgentCommits(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	// The agent commits in its copy: a file added then removed, a hook.
+	writeFile(t, c.Dir, "evil.txt", "evil payload\n")
+	gitT(t, f.env, c.Dir, "add", "evil.txt")
+	gitT(t, f.env, c.Dir, "commit", "-q", "-m", "add")
+	evil := gitT(t, f.env, c.Dir, "rev-parse", "HEAD:evil.txt")
+	gitT(t, f.env, c.Dir, "rm", "-q", "evil.txt")
+	gitT(t, f.env, c.Dir, "commit", "-q", "-m", "remove")
+	writeFile(t, c.Dir, ".git/hooks/x", "#!/bin/sh\n")
+	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib"}]}`+"\n")
+	sha, err := Commit(context.Background(), f.deps, c, "fix(deps): upgrade acme/lib")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	branch := "michel/fix-01jattempt00"
+	if err := Apply(context.Background(), f.deps, f.proj, c, sha, branch); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if n := gitT(t, f.env, f.proj.Path, "rev-list", "--count", c.Base+".."+branch); n != "1" {
+		t.Errorf("the branch adds %s commits, want 1", n)
+	}
+	if parents := gitT(t, f.env, f.proj.Path, "rev-parse", branch+"^@"); parents != c.Base {
+		t.Errorf("parents %q, want Base", parents)
+	}
+	if who := gitT(t, f.env, f.proj.Path, "log", "-1", "--format=%an <%ae> %cn", branch); who != "Michel <michel@localhost> Michel" {
+		t.Errorf("author %q", who)
+	}
+	if files := gitT(t, f.env, f.proj.Path, "diff", "--name-only", c.Base, branch); files != "composer.lock" {
+		t.Errorf("the branch changes %q", files)
+	}
+	cmd := exec.Command("git", "-C", f.proj.Path, "cat-file", "-e", evil)
+	cmd.Env = f.env
+	if cmd.Run() == nil {
+		t.Error("an object of the agent's commits reached the project")
+	}
+	// A commit of the copy is not a fix commit.
+	agentHead := gitT(t, f.env, c.Dir, "rev-parse", "HEAD")
+	if err := Apply(context.Background(), f.deps, f.proj, c, agentHead, "michel/fix-otherbranch"); err == nil {
+		t.Error("a commit of the agent's copy was applied")
+	}
+}
+
+func TestPlantedHooksDoNotRun(t *testing.T) {
+	f := newFixture(t)
+	c := prepare(t, f)
+	marker := filepath.Join(t.TempDir(), "ran")
+	hook := "#!/bin/sh\necho ran > '" + filepath.ToSlash(marker) + "'\n"
+	for _, dir := range []string{filepath.Join(f.deps.DataDir, "fix-hooks"), filepath.Join(c.Dir, ".git", "hooks"), filepath.Join(c.Mirror, "hooks"), filepath.Join(f.deps.DataDir, "fix-home")} {
+		for _, name := range []string{"pre-commit", "post-commit", "commit-msg", "reference-transaction", "post-index-change"} {
+			writeFile(t, dir, name, hook)
+			_ = os.Chmod(filepath.Join(dir, name), 0o755)
+		}
+	}
+	writeFile(t, c.Dir, "README.md", "fixed\n")
+	sha, err := Commit(context.Background(), f.deps, c, "fix")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := Apply(context.Background(), f.deps, f.proj, c, sha, "michel/fix-01jattempt00"); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("a planted hook ran")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.deps.DataDir, "fix-hooks")); len(entries) != 0 {
+		t.Error("the hooks folder was not emptied")
+	}
+}
+
+func TestInstallRefusesUnsafeProjectSettings(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	writeFile(t, c.Dir, "a/yarn.lock", "# yarn lockfile v1\n")
+	writeFile(t, c.Dir, "a/.yarnrc.yml", "yarnPath: .yarn/releases/yarn.cjs\n")
+	writeFile(t, c.Dir, "b/yarn.lock", "__metadata:\n  version: 8\n")
+	writeFile(t, c.Dir, "b/.yarnrc.yml", "plugins:\n  - path: .yarn/plugins/x.cjs\n")
+	writeFile(t, c.Dir, "c/sub/yarn.lock", "# yarn lockfile v1\n")
+	writeFile(t, c.Dir, "c/.yarnrc", "yarn-path \".yarn/releases/yarn-1.js\"\n")
+	writeFile(t, c.Dir, "d/package-lock.json", "{}")
+	writeFile(t, c.Dir, "d/package.json", `{"packageManager":"pnpm@9.0.0"}`)
+	writeFile(t, c.Dir, "e/pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+	writeFile(t, c.Dir, "e/package.json", `{"packageManager":"yarn@1.22.0+sha256.abc"}`)
+	for _, rel := range []string{"a/yarn.lock", "b/yarn.lock", "c/sub/yarn.lock", "d/package-lock.json", "e/pnpm-lock.yaml"} {
+		if err := Install(context.Background(), d, c, "npm", rel); !errors.Is(err, ErrUnsafeInstall) {
+			t.Errorf("%s: %v, want ErrUnsafeInstall", rel, err)
+		}
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("an unsafe install ran %v", rec.runs)
+	}
+	writeFile(t, c.Dir, "f/yarn.lock", "# yarn lockfile v1\n")
+	writeFile(t, c.Dir, "f/.yarnrc.yml", "nodeLinker: node-modules\n")
+	writeFile(t, c.Dir, "f/package.json", `{"packageManager":"yarn@4.5.0"}`)
+	if err := Install(context.Background(), d, c, "npm", "f/yarn.lock"); err != nil {
+		t.Errorf("a plain yarn project is refused: %v", err)
+	}
+}
+
+func TestInstallRefusesSymlinkedManifestDir(t *testing.T) {
+	rec := &recorder{}
+	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
+	c := fakeCopy(t, d)
+	outside := t.TempDir()
+	writeFile(t, outside, "composer.lock", "{}")
+	if err := os.Symlink(outside, filepath.Join(c.Dir, "vendored")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if err := Install(context.Background(), d, c, "Packagist", "vendored/composer.lock"); !errors.Is(err, ErrOutsideCopy) {
+		t.Errorf("install through a linked folder: %v, want ErrOutsideCopy", err)
+	}
+	if len(rec.runs) != 0 {
+		t.Errorf("the install ran %v", rec.runs)
 	}
 }

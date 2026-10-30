@@ -100,27 +100,42 @@ func defaultExec(ctx context.Context, name string, args, env []string, dir strin
 // home is the folder the subprocesses of the fix copy use as their home, in
 // the data folder: their settings and caches stay there and none of the
 // user's own (global git config, composer or npm credentials) is read.
-type home struct{ dir string }
+// hooks is git's hooks folder, outside the home (a subprocess may write in
+// its home), emptied before every batch of git commands.
+type home struct{ dir, hooks string }
 
 func (h home) gitconfig() string { return filepath.Join(h.dir, "gitconfig") }
-func (h home) noHooks() string   { return filepath.Join(h.dir, "no-hooks") }
+func (h home) npmrc() string     { return filepath.Join(h.dir, "npmrc") }
 
 // ensureHome creates <data>/fix-home with an empty git configuration, an
-// empty hooks folder and the composer and npm caches.
+// empty npmrc and the composer and npm caches, and recreates
+// <data>/fix-hooks empty: whatever was planted there never runs.
 func ensureHome(d Deps) (home, error) {
 	if d.DataDir == "" || !filepath.IsAbs(d.DataDir) {
 		return home{}, errors.New("Michel has no data folder for the fix copy")
 	}
-	h := home{dir: filepath.Join(d.DataDir, "fix-home")}
-	for _, sub := range []string{"", "composer", "npm", "no-hooks"} {
+	h := home{dir: filepath.Join(d.DataDir, "fix-home"), hooks: filepath.Join(d.DataDir, "fix-hooks")}
+	fail := func(err error) (home, error) {
+		return home{}, fmt.Errorf("Michel cannot prepare its folder for the fix copy: %w", noPath(err))
+	}
+	if err := os.RemoveAll(h.hooks); err != nil {
+		return fail(err)
+	}
+	if err := os.MkdirAll(h.hooks, 0o700); err != nil {
+		return fail(err)
+	}
+	for _, sub := range []string{"", "composer", "npm"} {
 		if err := os.MkdirAll(filepath.Join(h.dir, sub), 0o700); err != nil {
-			return home{}, fmt.Errorf("Michel cannot prepare its folder for the fix copy: %w", noPath(err))
+			return fail(err)
 		}
 	}
-	// Michel owns this file: it stays empty, whatever wrote in it.
-	if b, err := os.ReadFile(h.gitconfig()); err != nil || len(b) > 0 {
-		if err := os.WriteFile(h.gitconfig(), nil, 0o600); err != nil {
-			return home{}, fmt.Errorf("Michel cannot prepare its folder for the fix copy: %w", noPath(err))
+	// Michel owns these files: they stay empty, whatever wrote in them.
+	for _, f := range []string{h.gitconfig(), h.npmrc()} {
+		if info, err := os.Lstat(f); err != nil || !info.Mode().IsRegular() || info.Size() > 0 {
+			_ = os.RemoveAll(f)
+			if err := os.WriteFile(f, nil, 0o600); err != nil {
+				return fail(err)
+			}
 		}
 	}
 	return h, nil
@@ -149,22 +164,25 @@ func (h home) env(proxyAddr string, extra ...string) []string {
 		env = append(env, k+"="+proxy)
 	}
 	env = append(env, "NO_PROXY=", "no_proxy=",
-		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+h.gitconfig(), "GIT_TERMINAL_PROMPT=0")
+		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+h.gitconfig(), "GIT_TERMINAL_PROMPT=0",
+		// Corepack never downloads a package manager nor pins one in package.json.
+		"COREPACK_ENABLE_DOWNLOAD_PROMPT=0", "COREPACK_ENABLE_AUTO_PIN=0")
 	return append(env, extra...)
 }
 
 // allowedGit is the closed list of git subcommands Michel runs.
-var allowedGit = []string{"clone", "checkout", "status", "diff", "add", "commit", "fetch", "merge-base", "rev-parse", "ls-files"}
+var allowedGit = []string{"clone", "init", "archive", "add", "diff", "commit", "fetch", "merge-base", "rev-parse",
+	"read-tree", "apply", "write-tree", "commit-tree"}
 
 // safeConfig neutralizes, for every git command, the settings of a
 // repository's own .git/config (the user's project is not trusted) that make
 // git run a program or write on its own: hooks (an empty folder of Michel's
-// as core.hooksPath), the file system monitor, automatic gc and
+// outside the subprocesses' home, as core.hooksPath), the file system monitor, automatic gc and
 // maintenance, credential helpers and commit signing. System and global
 // configuration are not read at all (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL).
 func (h home) safeConfig() []string {
 	return []string{
-		"-c", "core.hooksPath=" + h.noHooks(),
+		"-c", "core.hooksPath=" + h.hooks,
 		"-c", "core.fsmonitor=false",
 		"-c", "gc.auto=0",
 		"-c", "maintenance.auto=false",

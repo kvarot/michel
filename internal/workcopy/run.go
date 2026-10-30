@@ -2,6 +2,7 @@ package workcopy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/kvarot/michel/internal/scan"
+	"gopkg.in/yaml.v3"
 )
 
 // Test statuses.
@@ -74,8 +76,8 @@ func RunTests(ctx context.Context, d Deps, c Copy, testCmd []string) (status, ou
 	if len(testCmd) == 0 || testCmd[0] == "" {
 		return TestsNotRun, "", nil
 	}
-	if c.Dir == "" || !filepath.IsAbs(c.Dir) {
-		return TestsNotRun, "", ErrNotACopy
+	if err := copyDir(d, c); err != nil {
+		return TestsNotRun, "", err
 	}
 	h, err := ensureHome(d)
 	if err != nil {
@@ -104,15 +106,16 @@ var lockfileEcosystem = map[string]string{
 }
 
 // installArgv is the closed install command of a lockfile: never a script
-// of the project (v1 design § 4.5), never an interactive prompt.
-func installArgv(name string, content []byte) (string, []string) {
+// of the project (v1 design § 4.5), never an interactive prompt, never the
+// user's npm configuration (npmrc is Michel's empty file).
+func installArgv(name string, content []byte, npmrc string) (string, []string) {
 	switch name {
 	case "composer.lock":
 		return "composer", []string{"install", "--no-scripts", "--no-interaction", "--no-plugins"}
 	case "package-lock.json":
-		return "npm", []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund"}
+		return "npm", []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund", "--userconfig", npmrc}
 	case "pnpm-lock.yaml":
-		return "pnpm", []string{"install", "--frozen-lockfile", "--ignore-scripts"}
+		return "pnpm", []string{"install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"}
 	default: // yarn.lock: berry (YAML with __metadata) or v1
 		if strings.Contains(string(content), "__metadata:") {
 			return "yarn", []string{"install", "--immutable", "--mode=skip-build"}
@@ -121,15 +124,93 @@ func installArgv(name string, content []byte) (string, []string) {
 	}
 }
 
+// ErrUnsafeInstall: the project would make the package manager run its own
+// code (a yarn release or plugin of the repository, another package manager
+// than the one of the lockfile).
+var ErrUnsafeInstall = errors.New("the project's settings would make the install run code from the repository")
+
+// insideCopy resolves the symbolic links of dir and checks that it stays
+// inside the copy (whose own links are resolved too).
+func insideCopy(c Copy, dir string) error {
+	root, err := filepath.EvalSymlinks(c.Dir)
+	if err != nil {
+		return ErrNotACopy
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrNoLockfile, filepath.Base(dir))
+	}
+	if rel, err := filepath.Rel(root, real); err != nil || (rel != "." && !filepath.IsLocal(rel)) {
+		return fmt.Errorf("%w: the folder of the lockfile leads outside the copy", ErrOutsideCopy)
+	}
+	return nil
+}
+
+// checkYarn refuses a yarn install that would run code of the repository:
+// a .yarnrc.yml setting yarnPath or plugins, or a .yarnrc setting
+// yarn-path, in the folder of the lockfile or any folder above it in the
+// copy (yarn reads them all).
+func checkYarn(root, dir string) error {
+	for d := dir; ; d = filepath.Dir(d) {
+		if b, err := os.ReadFile(filepath.Join(d, ".yarnrc.yml")); err == nil {
+			var cfg map[string]any
+			if yaml.Unmarshal(b, &cfg) != nil {
+				return fmt.Errorf("%w: .yarnrc.yml cannot be read", ErrUnsafeInstall)
+			}
+			for _, k := range []string{"yarnPath", "plugins"} {
+				if _, ok := cfg[k]; ok {
+					return fmt.Errorf("%w: .yarnrc.yml sets %s", ErrUnsafeInstall, k)
+				}
+			}
+		}
+		if b, err := os.ReadFile(filepath.Join(d, ".yarnrc")); err == nil {
+			for _, line := range strings.Split(string(b), "\n") {
+				if k := strings.TrimSpace(line); strings.HasPrefix(k, "yarn-path") || strings.HasPrefix(k, `"yarn-path"`) {
+					return fmt.Errorf("%w: .yarnrc sets yarn-path", ErrUnsafeInstall)
+				}
+			}
+		}
+		if d == root || filepath.Dir(d) == d {
+			return nil
+		}
+	}
+}
+
+// checkPackageManager refuses an install when package.json (next to the
+// lockfile) names another package manager than prog in packageManager:
+// corepack would fetch and run that one instead.
+func checkPackageManager(dir, prog string) error {
+	b, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return nil
+	}
+	var pkg struct {
+		PackageManager string `json:"packageManager"`
+	}
+	if json.Unmarshal(b, &pkg) != nil {
+		return fmt.Errorf("%w: package.json cannot be read", ErrUnsafeInstall)
+	}
+	if pkg.PackageManager == "" {
+		return nil
+	}
+	name, _, _ := strings.Cut(pkg.PackageManager, "@")
+	if strings.TrimSpace(name) != prog {
+		return fmt.Errorf("%w: package.json asks for %s, the lockfile is %s's", ErrUnsafeInstall, scan.SanitizeText(name), prog)
+	}
+	return nil
+}
+
 // Install installs the dependencies of the lockfile manifestRel (a slash
 // path relative to the copy, the finding's manifest) of ecosystem, in its
 // folder of the copy, without scripts: composer install --no-scripts
-// --no-interaction --no-plugins, npm ci --ignore-scripts, pnpm install
-// --ignore-scripts or yarn install without builds. The registries are
-// reached through the egress proxy only. A failed install is a *CmdError.
+// --no-interaction --no-plugins, npm ci --ignore-scripts (Michel's empty
+// npmrc), pnpm install --ignore-scripts --ignore-pnpmfile, or yarn install
+// without builds. A project that would make the install run its own code
+// is ErrUnsafeInstall. The registries are reached through the egress proxy
+// only. A failed install is a *CmdError.
 func Install(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string) error {
-	if c.Dir == "" || !filepath.IsAbs(c.Dir) {
-		return ErrNotACopy
+	if err := copyDir(d, c); err != nil {
+		return err
 	}
 	rel := filepath.FromSlash(manifestRel)
 	if !filepath.IsLocal(rel) || strings.Contains(manifestRel, `\`) {
@@ -141,6 +222,10 @@ func Install(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string)
 		return fmt.Errorf("%w: %s (%s)", ErrUnsupportedLockfile, manifestRel, ecosystem)
 	}
 	full := filepath.Join(c.Dir, rel)
+	dir := filepath.Dir(full)
+	if err := insideCopy(c, dir); err != nil {
+		return err
+	}
 	info, err := os.Lstat(full)
 	if err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("%w: %s", ErrNoLockfile, manifestRel)
@@ -153,8 +238,18 @@ func Install(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string)
 	if err != nil {
 		return err
 	}
-	prog, args := installArgv(name, content)
-	stdout, stderr, err := d.exec()(ctx, prog, args, h.env(d.ProxyAddr), filepath.Dir(full))
+	prog, args := installArgv(name, content, h.npmrc())
+	if prog == "yarn" {
+		if err := checkYarn(c.Dir, dir); err != nil {
+			return err
+		}
+	}
+	if eco == "npm" {
+		if err := checkPackageManager(dir, prog); err != nil {
+			return err
+		}
+	}
+	stdout, stderr, err := d.exec()(ctx, prog, args, h.env(d.ProxyAddr), dir)
 	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
