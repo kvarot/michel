@@ -241,7 +241,7 @@ func (r *Repo) SetRun(ctx context.Context, id, cloneDir, sessionID string) error
 	return nil
 }
 
-const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw`
+const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version`
 
 // AddProposal stores p for its attempt and marks the attempt's previous
 // proposals Superseded, in one transaction that also checks the attempt is
@@ -286,9 +286,9 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
 		p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
-		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw)); err != nil {
+		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -316,7 +316,7 @@ func scanProposal(s scanner) (Proposal, error) {
 	var err error
 	var files, steps, created, raw string
 	var rescan, superseded int
-	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw); err != nil {
+	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion); err != nil {
 		return Proposal{}, err
 	}
 	if p.DiffRaw, err = base64.StdEncoding.DecodeString(raw); err != nil {

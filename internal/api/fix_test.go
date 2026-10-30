@@ -211,7 +211,8 @@ func (ff *fixFixture) seedProposed() (string, string) {
 		ff.t.Fatal(err)
 	}
 	p, err := repo.AddProposal(ctx, fix.Proposal{AttemptID: a.ID, Summary: "Upgrade vuln-pkg to 1.2.5.", Diff: "--- a/package-lock.json\n+++ b/package-lock.json\n",
-		Files: []string{"package-lock.json"}, TestsStatus: "passed", RescanClean: true, Hash: "hash-one", CommitSHA: "abc"})
+		Files: []string{"package-lock.json"}, TestsStatus: "passed", RescanClean: true, Hash: "hash-one", CommitSHA: "abc",
+		FromVersion: "1.0.0", ToVersion: "1.2.5"})
 	if err != nil {
 		ff.t.Fatal(err)
 	}
@@ -682,5 +683,29 @@ func TestWorkerSeesConsentGivenAfterStart(t *testing.T) {
 	list, err := fix.NewRepo(ff.st).ListAttempts(context.Background(), ff.proj.ID, "")
 	if err != nil || len(list) != 1 || list[0].Origin != fix.OriginAgentAuto {
 		t.Errorf("attempts = %+v %v", list, err)
+	}
+}
+
+// TestProposalViewCarriesVersions: the proposal names the versions it moves
+// the package between, in the attempt's view and in the list.
+func TestProposalViewCarriesVersions(t *testing.T) {
+	ff := newFixFixture(t)
+	id, _ := ff.seedProposed()
+	resp, body := ff.do("GET", "/api/v1/fix/"+id, testToken, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("attempt = %d %s", resp.StatusCode, body)
+	}
+	var v AttemptView
+	if err := json.Unmarshal([]byte(body), &v); err != nil || v.Proposal == nil {
+		t.Fatalf("attempt body: %v %s", err, body)
+	}
+	if v.Proposal.FromVersion != "1.0.0" || v.Proposal.ToVersion != "1.2.5" {
+		t.Errorf("versions = %q -> %q", v.Proposal.FromVersion, v.Proposal.ToVersion)
+	}
+	resp, body = ff.do("GET", "/api/v1/fixes?state=proposed", testToken, "")
+	var list []AttemptView
+	if err := json.Unmarshal([]byte(body), &list); err != nil || resp.StatusCode != http.StatusOK || len(list) != 1 || list[0].Proposal == nil ||
+		list[0].Proposal.ToVersion != "1.2.5" {
+		t.Errorf("list = %d %s", resp.StatusCode, body)
 	}
 }

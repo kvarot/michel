@@ -84,6 +84,9 @@ describe('proposalSentence', () => {
     const sheet = { analysis: { upgrade: { target: '1.0.3' }, calls: { count: 4 } } }
     expect(proposalFacts(a, sheet)).toEqual({ package: 'acme/lib', from: '1.0.0', to: '1.0.3', sites: 4, tests: 'passed' })
     expect(proposalFacts(a, null)).toEqual({ package: 'acme/lib', from: '1.0.0', to: '1.0.5', sites: null, tests: 'passed' })
+    // The proposal's own versions (what the fix commit resolves) come first.
+    a.proposal = { tests_status: 'failed', hash: 'h', from_version: '0.9.9', to_version: '1.0.7' }
+    expect(proposalFacts(a, sheet)).toEqual({ package: 'acme/lib', from: '0.9.9', to: '1.0.7', sites: 4, tests: 'failed' })
   })
 })
 

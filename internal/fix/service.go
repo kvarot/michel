@@ -997,6 +997,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 		AttemptID: attemptID, Summary: summary, Diff: m.Mask(ch.Display), Files: ch.Files,
 		TestsStatus: testsStatus, TestsOutput: tell(testsOut), RescanClean: clean, Risk: risk,
 		CommitSHA: sha, DiffRaw: ch.Raw, StepsServer: []string{},
+		FromVersion: cleanVersion(fi.InstalledVersion), ToVersion: committedVersion(ctx, wd, c, plan, sha),
 	}
 	prop.Hash = proposalHash(ch.Raw, sha, testsStatus, summary)
 	prop, err = repo.AddProposal(ctx, prop)
@@ -1108,6 +1109,55 @@ func manifestConstraintOK(manifest []byte, ecosystem, pkg string) bool {
 		}
 	}
 	return found
+}
+
+// committedVersion is the version of the planned package the fix commit's
+// lockfile resolves (read from the commit in the mirror), else the planned
+// target; "" when neither is known.
+func committedVersion(ctx context.Context, wd workcopy.Deps, c workcopy.Copy, plan Plan, sha string) string {
+	if plan.Package != "" && plan.ManifestRel != "" {
+		if lock, ok, err := workcopy.CommitFile(ctx, wd, c, sha, plan.ManifestRel); err == nil && ok {
+			if v := cleanVersion(lockVersion(lock, plan.Ecosystem, plan.Package)); v != "" {
+				return v
+			}
+		}
+	}
+	return cleanVersion(plan.Target)
+}
+
+// cleanVersion is v without a leading "v", or "" when it is not a plain
+// version string.
+func cleanVersion(v string) string {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if !planVersionRe.MatchString(v) {
+		return ""
+	}
+	return v
+}
+
+// lockVersion is the version a composer.lock (Packagist) or a
+// package-lock.json (npm) resolves pkg to; "" when absent or unreadable.
+func lockVersion(lock []byte, ecosystem, pkg string) string {
+	var doc map[string]any
+	if json.Unmarshal(lock, &doc) != nil || doc == nil {
+		return ""
+	}
+	if ecosystem == "Packagist" {
+		for _, section := range []string{"packages", "packages-dev"} {
+			list, _ := doc[section].([]any)
+			for _, e := range list {
+				if entry, _ := e.(map[string]any); entry != nil && entry["name"] == pkg {
+					v, _ := entry["version"].(string)
+					return v
+				}
+			}
+		}
+		return ""
+	}
+	packages, _ := doc["packages"].(map[string]any)
+	entry, _ := packages["node_modules/"+pkg].(map[string]any)
+	v, _ := entry["version"].(string)
+	return v
 }
 
 // lockResolvesTarget reports whether the lockfile resolves pkg to exactly

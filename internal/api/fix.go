@@ -82,7 +82,11 @@ type ProposalView struct {
 	Risk        int      `json:"risk"`
 	Hash        string   `json:"hash"`
 	StepsServer []string `json:"steps_server"`
-	CreatedAt   string   `json:"created_at"`
+	// FromVersion and ToVersion are the package's versions before and
+	// after the fix ("" when unknown).
+	FromVersion string `json:"from_version"`
+	ToVersion   string `json:"to_version"`
+	CreatedAt   string `json:"created_at"`
 }
 
 // MessageView is one line of the conversation. Role is user, agent, michel
@@ -291,7 +295,8 @@ func messageView(m *mask.Masker, msg fix.Message) MessageView {
 
 func proposalView(m *mask.Masker, p fix.Proposal, full bool) *ProposalView {
 	v := &ProposalView{ID: p.ID, Summary: shown(m, p.Summary), Files: sanitizeAll(p.Files), TestsStatus: p.TestsStatus,
-		RescanClean: p.RescanClean, Risk: p.Risk, Hash: p.Hash, StepsServer: sanitizeAll(p.StepsServer), CreatedAt: stamp(p.CreatedAt)}
+		RescanClean: p.RescanClean, Risk: p.Risk, Hash: p.Hash, StepsServer: sanitizeAll(p.StepsServer),
+		FromVersion: scan.SanitizeText(p.FromVersion), ToVersion: scan.SanitizeText(p.ToVersion), CreatedAt: stamp(p.CreatedAt)}
 	if full {
 		// The diff keeps its lines: only secrets and absolute paths go.
 		v.Diff = m.Mask(strings.ToValidUTF8(p.Diff, "�"))

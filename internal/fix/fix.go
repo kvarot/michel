@@ -123,8 +123,14 @@ type Proposal struct {
 	CommitSHA string `json:"commit_sha"`
 	// DiffRaw is the exact patch the commit applies (hashed, checked for
 	// mask tokens before apply, never shown).
-	DiffRaw     []byte    `json:"-"`
-	StepsServer []string  `json:"steps_server"`
+	DiffRaw     []byte   `json:"-"`
+	StepsServer []string `json:"steps_server"`
+	// FromVersion is the package's version when the attempt started;
+	// ToVersion the one the fix commit's lockfile resolves, else the
+	// planned target ("" when unknown). Not covered by Hash: both follow
+	// from the patch.
+	FromVersion string    `json:"from_version"`
+	ToVersion   string    `json:"to_version"`
 	CreatedAt   time.Time `json:"created_at"`
 	Superseded  bool      `json:"superseded"`
 }

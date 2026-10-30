@@ -71,20 +71,23 @@ export function groupAttempts(list, findings = []) {
 }
 
 /**
- * proposalFacts gathers what proposalSentence says: the package and its
- * versions from the attempt, the target from the finding's analysis (else
- * the first fixed version), the number of call sites (null when there is
- * no analysis) and the tests of the proposal.
+ * proposalFacts gathers what proposalSentence says: the package, the
+ * versions the proposal moves it between (from_version / to_version, what
+ * the fix commit's lockfile resolves); for an older proposal without them,
+ * the installed version and the analysis' target (else the first fixed
+ * version). Then the number of call sites (null when there is no
+ * analysis) and the tests of the proposal.
  * @param {object} attempt AttemptView
  * @param {object|null} sheet the finding as GET /findings/{id} answers it
  */
 export function proposalFacts(attempt, sheet) {
   const f = attempt?.finding || {}
   const a = sheet?.analysis || null
+  const p = attempt?.proposal || {}
   return {
     package: f.package || '',
-    from: f.installed_version || '',
-    to: a?.upgrade?.target || (f.fixed_versions || [])[0] || '',
+    from: p.from_version || f.installed_version || '',
+    to: p.to_version || a?.upgrade?.target || (f.fixed_versions || [])[0] || '',
     sites: a && a.calls ? Number(a.calls.count) || 0 : null,
     tests: attempt?.proposal?.tests_status || 'not_run',
   }
