@@ -620,7 +620,7 @@
   "fix.cause.restarted": "Michel was restarted while the agent worked",
   "fix.cause.timeout": "the attempt reached its time limit",
   "fix.cause.too_large": "Your project is too large for Michel to make a working copy of it. You can read the brief and fix it by hand.",
-  "fix.cause.unsafe_install": "Your project's settings would make the install run code from the repository: Michel chose to run nothing. You can read the brief and fix it by hand.",
+  "fix.cause.unsafe_install": "Your project's settings would make the install run programs from the project itself: to be safe, Michel ran nothing. You can read the brief and fix it by hand.",
   "fix.consent.agent": "Claude Code talks to %s (Anthropic's service).",
   "fix.consent.external_providers": "By accepting, you allow external AI providers in your policy (setting ai.external_providers_enabled).",
   "fix.consent.install": "Michel downloads the packages the copy needs from %s.",

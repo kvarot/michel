@@ -507,8 +507,8 @@
   "fix.activity.working": "L'agent travaille.",
 
   "fix.consent.strict_intro": "Ta politique est en mode strict_local : rien ne sort de ton ordinateur et aucune IA externe n'est utilisée. C'est la protection la plus forte.",
-  "fix.consent.strict_change": "Pour qu'un agent (Claude Code) corrige ce projet, Michel doit passer ta politique en mode standard : les IA externes seront permises, mais seulement vers les adresses ci-dessous, et seulement pour les projets où tu donnes ton accord. Michel garde une copie de l'ancienne politique (fichier .bak).",
-  "fix.consent.strict_accept": "Autoriser les IA externes (mode standard)",
+  "fix.consent.strict_change": "Pour qu'un agent (Claude Code) corrige ce projet, Michel doit passer ta politique en mode standard. Tu perds la garantie que rien ne sort de ton ordinateur : des IA externes pourront être utilisées. Tu gardes un cadre précis : seulement vers les adresses listées ci-dessous, et seulement pour les projets où tu donnes ton accord. Michel garde une copie de l'ancienne politique (fichier .bak), pour que tu puisses revenir en arrière.",
+  "fix.consent.strict_accept": "Passer en mode standard et autoriser les IA externes",
   "fixset.ai_strict": "Ta politique est en mode strict_local : aucune IA externe. Pour qu'un agent travaille sur ce projet, Michel doit d'abord passer en mode standard, avec ton accord.",
   "fix.proposal.commands": "Ce que Michel a lancé sur la copie",
   "fix.proposal.cmd.update": "Mise à jour :",
