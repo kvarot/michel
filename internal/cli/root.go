@@ -196,6 +196,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newServeCmd(deps))
 	root.AddCommand(newSourceCmd(deps))
 	root.AddCommand(newTechCmd(deps))
+	root.AddCommand(newBriefCmd(deps))
 	return root
 }
 

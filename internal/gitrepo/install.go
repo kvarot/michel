@@ -223,28 +223,8 @@ func copySkill(d Deps, key, sha, folder, name string) (string, error) {
 	if err := os.WriteFile(filepath.Join(tmp, MarkerFile), m, 0o644); err != nil {
 		return "", fmt.Errorf("cannot write the marker: %w", err)
 	}
-	if _, err := os.Lstat(dst); err == nil {
-		// Ours (checked above): the previous version goes aside into a
-		// fresh folder of unpredictable name, removed only after success.
-		aside, err := os.MkdirTemp(skills, ".michel-old-")
-		if err != nil {
-			return "", fmt.Errorf("cannot replace the installed skill: %w", err)
-		}
-		old := filepath.Join(aside, name)
-		if err := os.Rename(dst, old); err != nil {
-			os.Remove(aside)
-			return "", fmt.Errorf("cannot replace the installed skill: %w", err)
-		}
-		if err := os.Rename(tmp, dst); err != nil {
-			if rerr := os.Rename(old, dst); rerr != nil {
-				return "", fmt.Errorf("cannot install the skill (%v), and the previous version could not be put back: it is in %s", err, old)
-			}
-			os.Remove(aside)
-			return "", fmt.Errorf("cannot install the skill: %w", err)
-		}
-		os.RemoveAll(aside)
-	} else if err := os.Rename(tmp, dst); err != nil {
-		return "", fmt.Errorf("cannot install the skill: %w", err)
+	if err := swapDir(skills, tmp, dst, name); err != nil {
+		return "", err
 	}
 	ok = true
 	return dst, nil
@@ -478,4 +458,35 @@ func splitLines(s string) []string {
 		return nil
 	}
 	return strings.Split(strings.TrimSuffix(strings.ReplaceAll(s, "\r\n", "\n"), "\n"), "\n")
+}
+
+// swapDir puts the prepared folder tmp in place of dst (named name, in
+// skills). An existing dst, checked to be ours by the caller, goes aside
+// into a fresh folder of unpredictable name, removed only after success, and
+// is put back when the rename fails.
+func swapDir(skills, tmp, dst, name string) error {
+	if _, err := os.Lstat(dst); err == nil {
+		// Ours (checked above): the previous version goes aside into a
+		// fresh folder of unpredictable name, removed only after success.
+		aside, err := os.MkdirTemp(skills, ".michel-old-")
+		if err != nil {
+			return fmt.Errorf("cannot replace the installed skill: %w", err)
+		}
+		old := filepath.Join(aside, name)
+		if err := os.Rename(dst, old); err != nil {
+			os.Remove(aside)
+			return fmt.Errorf("cannot replace the installed skill: %w", err)
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			if rerr := os.Rename(old, dst); rerr != nil {
+				return fmt.Errorf("cannot install the skill (%v), and the previous version could not be put back: it is in %s", err, old)
+			}
+			os.Remove(aside)
+			return fmt.Errorf("cannot install the skill: %w", err)
+		}
+		os.RemoveAll(aside)
+	} else if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("cannot install the skill: %w", err)
+	}
+	return nil
 }
