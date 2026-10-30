@@ -170,6 +170,15 @@ func (m *Masker) Save(st secret.Store, attemptID string) error {
 	return nil
 }
 
+// Delete removes the saved table of an attempt; an absent table is not an
+// error.
+func Delete(st secret.Store, attemptID string) error {
+	if err := st.Delete(storeName(attemptID)); err != nil && !errors.Is(err, secret.ErrNotFound) {
+		return fmt.Errorf("cannot delete the mask table: %w", err)
+	}
+	return nil
+}
+
 var errCorrupt = errors.New("mask table is corrupt")
 
 // Load reads what Save wrote: same nonce, same tokens; numbering goes on

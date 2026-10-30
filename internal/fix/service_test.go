@@ -90,8 +90,10 @@ const standardPolicy = "sovereignty:\n  mode: standard\n  data_classification: s
 type recorder struct {
 	mu   sync.Mutex
 	runs []run
-	// fail makes the program named here exit with an error.
-	fail string
+	// fail makes the program named here exit with an error, writing
+	// failOutput (or "1 failure") on stderr.
+	fail       string
+	failOutput string
 	// onRun, when set, acts in the copy for a recorded command (a fake
 	// composer that rewrites the lockfile).
 	onRun func(name string, args []string, dir string)
@@ -116,7 +118,11 @@ func (r *recorder) exec(ctx context.Context, name string, args, env []string, di
 		r.onRun(name, args, dir)
 	}
 	if r.fail != "" && name == r.fail {
-		return nil, []byte("1 failure"), &exec.ExitError{}
+		out := r.failOutput
+		if out == "" {
+			out = "1 failure"
+		}
+		return nil, []byte(out), &exec.ExitError{}
 	}
 	return []byte("ok\n"), nil, nil
 }
@@ -396,7 +402,7 @@ func TestStartNeedsConsent(t *testing.T) {
 	if f.started != 0 {
 		t.Error("the agent was started without consent")
 	}
-	texts := ConsentNeeded(f.proj, f.d.Policy)
+	texts := ConsentNeeded(f.proj, f.d.Policy, false)
 	var hosts []string
 	for _, c := range texts {
 		if c.Host != "" {
@@ -530,8 +536,8 @@ func TestGiveConsentWritesRulesAndAudit(t *testing.T) {
 	if len(hosts) != len(AgentHosts)+len(InstallHosts) {
 		t.Errorf("audited hosts = %v", hosts)
 	}
-	if len(ConsentNeeded(f.proj, f.d.Policy)) != 0 {
-		t.Errorf("consent still needed after GiveConsent: %+v", ConsentNeeded(f.proj, f.d.Policy))
+	if len(ConsentNeeded(f.proj, f.d.Policy, true)) != 0 {
+		t.Errorf("consent still needed after GiveConsent: %+v", ConsentNeeded(f.proj, f.d.Policy, true))
 	}
 	// Given twice: nothing new to write, consent recorded again.
 	f.consent()
@@ -1114,7 +1120,13 @@ func TestMessageReachesTheAgent(t *testing.T) {
 		t.Fatal("the agent received nothing")
 	}
 	msgs, _ := f.d.Repo.ListMessages(context.Background(), a.ID)
-	if len(msgs) != 1 || msgs[0].Role != RoleUser || strings.Contains(msgs[0].Text, "AKIA") {
+	var user []Message
+	for _, m := range msgs {
+		if m.Role == RoleUser {
+			user = append(user, m)
+		}
+	}
+	if len(user) != 1 || strings.Contains(user[0].Text, "AKIA") {
 		t.Errorf("stored messages = %+v", msgs)
 	}
 	close(hold)

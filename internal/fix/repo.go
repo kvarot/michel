@@ -69,7 +69,9 @@ func workJSON(w Work) (string, error) {
 }
 
 // CreateAttempt stores a new attempt in state preparing; ID, State and the
-// dates are set here.
+// dates are set here. The insert is conditional on the project having no
+// attempt being worked on or waiting for the user (one statement, so two
+// callers cannot both succeed): ErrBusy otherwise.
 func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	now := r.now()
 	id, err := r.newID(now)
@@ -81,10 +83,15 @@ func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	if err != nil {
 		return Attempt{}, err
 	}
-	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,'','','')`,
-		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now), work)
+	res, err := r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`)
+		SELECT ?,?,?,?,?,?,?,?,?,?,?,'','',''
+		WHERE NOT EXISTS (SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN `+busyStates+`)`,
+		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now), work, a.ProjectID)
 	if err != nil {
 		return Attempt{}, fmt.Errorf("cannot save the fix attempt: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Attempt{}, ErrBusy
 	}
 	return a, nil
 }
@@ -108,20 +115,27 @@ func (r *Repo) SetWork(ctx context.Context, id string, w Work) error {
 }
 
 // Approve moves the attempt from proposed to approved and records who did
-// it and for which proposal (id and hash), in one conditional update
-// (ErrBadTransition in any other state).
+// it and for which proposal (id and hash), in one conditional update that
+// also checks that proposal is still the current one with that hash:
+// ErrStaleProposal when it is not (the attempt stays proposed),
+// ErrBadTransition in any other state.
 func (r *Repo) Approve(ctx context.Context, id, by, proposalID, hash string) error {
 	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, approved_by = ?, approved_proposal = ?, approved_hash = ?, updated_at = ?
-		WHERE id = ? AND state = ?`,
-		string(StateApproved), by, proposalID, hash, ts(r.now()), id, string(StateProposed))
+		WHERE id = ? AND state = ?
+		AND EXISTS (SELECT 1 FROM fix_proposal WHERE id = ? AND attempt_id = ? AND superseded = 0 AND hash = ?)`,
+		string(StateApproved), by, proposalID, hash, ts(r.now()), id, string(StateProposed), proposalID, id, hash)
 	if err != nil {
 		return fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		return nil
 	}
-	if _, err := r.GetAttempt(ctx, id); err != nil {
+	a, err := r.GetAttempt(ctx, id)
+	if err != nil {
 		return err
+	}
+	if a.State == StateProposed {
+		return ErrStaleProposal
 	}
 	return fmt.Errorf("%w (moving to %s)", ErrBadTransition, StateApproved)
 }
@@ -135,8 +149,10 @@ func scanAttempt(s scanner) (Attempt, error) {
 		return Attempt{}, err
 	}
 	a.State = State(state)
+	// An unreadable record never hides the attempt from a listing: it is
+	// returned without a copy, WorkError set.
 	if err := json.Unmarshal([]byte(work), &a.Work); err != nil {
-		return Attempt{}, fmt.Errorf("attempt %s has an unreadable work copy record: %w", a.ID, err)
+		a.Work, a.WorkError = Work{}, fmt.Sprintf("unreadable work copy record: %v", err)
 	}
 	a.Work.Copy.Mirror = a.Work.Mirror
 	var err error

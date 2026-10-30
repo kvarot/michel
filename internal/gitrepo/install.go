@@ -57,6 +57,13 @@ func readMarker(dir string) (marker, bool) {
 	return m, true
 }
 
+// OwnerKey returns the key written in the marker of dir (a folder Michel
+// owns); ok is false for a missing or unreadable marker.
+func OwnerKey(dir string) (key string, ok bool) {
+	m, ok := readMarker(dir)
+	return m.Key, ok
+}
+
 // ownedBy reports whether dir carries the marker of key.
 func ownedBy(dir, key string) bool {
 	m, ok := readMarker(dir)

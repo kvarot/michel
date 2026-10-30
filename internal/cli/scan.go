@@ -170,16 +170,13 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				// The applied fixes of the project are settled by this scan
 				// (proven when merged and gone), and its eligible findings
 				// queued for michel serve at level 2.
-				if fd, ferr := scanFixDeps(cmd, deps); ferr != nil {
-					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, ferr))
-				} else {
-					if _, err := fix.Prove(ctx, fd, p.ID); err != nil {
+				fd := scanFixDeps(cmd, deps)
+				if _, err := fix.Prove(ctx, fd, p.ID); err != nil {
+					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
+				}
+				if all {
+					if _, err := fix.QueueEligible(ctx, fd, p.ID); err != nil {
 						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
-					}
-					if all {
-						if _, err := fix.QueueEligible(ctx, fd, p.ID); err != nil {
-							fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
-						}
 					}
 				}
 				if !noAnalyze && (r.Status == scan.ScanOK || r.Status == scan.ScanPartial) {
@@ -361,6 +358,6 @@ func scannerLogHandler(w io.Writer) slog.Handler {
 // scanFixDeps builds the fix deps of a scan: proving and queueing read the
 // store and the user's repository only, so the secret store is not opened
 // (a scan creates nothing in the data folder besides its own rows).
-func scanFixDeps(cmd *cobra.Command, deps *Deps) (fix.Deps, error) {
-	return fixDeps(cmd, deps, nil, "cli"), nil
+func scanFixDeps(cmd *cobra.Command, deps *Deps) fix.Deps {
+	return fixDeps(cmd, deps, nil, "cli")
 }

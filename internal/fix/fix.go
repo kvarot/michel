@@ -72,8 +72,10 @@ type Attempt struct {
 	ApprovedProposal string `json:"approved_proposal"`
 	ApprovedHash     string `json:"approved_hash"`
 	// Work is the work copy and the update plan of the attempt (local
-	// paths: never sent out).
-	Work Work `json:"-"`
+	// paths: never sent out). WorkError is set when the stored record could
+	// not be read: the attempt is listed, but has no usable copy.
+	Work      Work   `json:"-"`
+	WorkError string `json:"-"`
 }
 
 // Work is what the fix service keeps with an attempt: its copy and the
@@ -83,6 +85,10 @@ type Work struct {
 	// Mirror repeats Copy.Mirror, which the copy leaves out of JSON.
 	Mirror string `json:"mirror"`
 	Plan   Plan   `json:"plan"`
+	// Tree0 is the tree of the copy right after Michel's own update, before
+	// the agent touched anything: a proposal applied without a click must
+	// commit that very tree (controller ruling 36).
+	Tree0 string `json:"tree0"`
 }
 
 // Plan is the closed update Michel runs in the copy at proposal time,

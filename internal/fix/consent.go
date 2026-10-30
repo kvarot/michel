@@ -70,12 +70,14 @@ func missingRules(pol policy.Policy) []policy.AllowRule {
 // ConsentNeeded lists what the user must accept before an agent works on p
 // under pol: what leaves the computer, what runs on it (controller ruling
 // 30), the project's classification when it is sensitive, each host that
-// has no allow rule yet, and the policy switch of external providers. It is
-// empty when the policy already allows everything (the per-project consent
-// record is checked by Start).
-func ConsentNeeded(p project.Project, pol policy.Policy) []ConsentText {
+// has no allow rule yet, and the policy switch of external providers.
+// consented says whether the project already gave its consent (the
+// fix_consent row, Repo.Consent): a project that did not always gets the
+// sentences, with host lines only for the rules still missing. It is empty
+// for a consented project under a policy that allows everything.
+func ConsentNeeded(p project.Project, pol policy.Policy, consented bool) []ConsentText {
 	rules := missingRules(pol)
-	if len(rules) == 0 && pol.Sovereignty.AI.ExternalProvidersEnabled {
+	if consented && len(rules) == 0 && pol.Sovereignty.AI.ExternalProvidersEnabled {
 		return nil
 	}
 	out := []ConsentText{{What: "fix.consent.what_leaves"}, {What: "fix.consent.runs_code"}}

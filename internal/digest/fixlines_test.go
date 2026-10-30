@@ -18,6 +18,16 @@ func TestDigestFixLines(t *testing.T) {
 	queued := f.seed(finding{pkg: "acme/other", osv: "ACME-3", severity: "low", firstSeen: now.Add(-10 * 24 * time.Hour)})
 	repo := fix.NewRepo(f.st)
 	repo.Now = func() time.Time { return now.Add(-time.Hour) }
+	// The proven attempt first: one attempt at a time per project.
+	b, err := repo.CreateAttempt(ctx, fix.Attempt{FindingID: proven, ProjectID: f.proj.ID, Origin: fix.OriginAgentAuto})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range [][2]fix.State{{fix.StatePreparing, fix.StateProposed}, {fix.StateProposed, fix.StateApproved}, {fix.StateApproved, fix.StateApplied}, {fix.StateApplied, fix.StateProvenFixed}} {
+		if err := repo.SetState(ctx, b.ID, []fix.State{s[0]}, s[1], ""); err != nil {
+			t.Fatal(err)
+		}
+	}
 	a, err := repo.CreateAttempt(ctx, fix.Attempt{FindingID: waiting, ProjectID: f.proj.ID, Origin: fix.OriginAgent,
 		Work: fix.Work{Plan: fix.Plan{Target: "1.2.5"}}})
 	if err != nil {
@@ -28,15 +38,6 @@ func TestDigestFixLines(t *testing.T) {
 	}
 	if err := repo.SetState(ctx, a.ID, []fix.State{fix.StatePreparing}, fix.StateProposed, ""); err != nil {
 		t.Fatal(err)
-	}
-	b, err := repo.CreateAttempt(ctx, fix.Attempt{FindingID: proven, ProjectID: f.proj.ID, Origin: fix.OriginAgentAuto})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range [][2]fix.State{{fix.StatePreparing, fix.StateProposed}, {fix.StateProposed, fix.StateApproved}, {fix.StateApproved, fix.StateApplied}, {fix.StateApplied, fix.StateProvenFixed}} {
-		if err := repo.SetState(ctx, b.ID, []fix.State{s[0]}, s[1], ""); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if err := repo.Enqueue(ctx, queued, f.proj.ID); err != nil {
 		t.Fatal(err)
@@ -77,5 +78,30 @@ func TestDigestFixLines(t *testing.T) {
 	page, err := RenderHTML(d)
 	if err != nil || !strings.Contains(page, "Fixed in your code") || !strings.Contains(page, "acme/lib") {
 		t.Errorf("html: %v\n%s", err, page)
+	}
+}
+
+func TestDigestSurvivesUnreadableAttempt(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id := f.seed(finding{pkg: "acme/lib", osv: "ACME-9", severity: "high", firstSeen: now.Add(-2 * 24 * time.Hour)})
+	repo := fix.NewRepo(f.st)
+	a, err := repo.CreateAttempt(ctx, fix.Attempt{FindingID: id, ProjectID: f.proj.ID, Origin: fix.OriginAgent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetState(ctx, a.ID, []fix.State{fix.StatePreparing}, fix.StateProposed, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.DB().Exec(`UPDATE fix_attempt SET work_json = 'not json' WHERE id = ?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	d := f.compute(i18n.EN, Options{})
+	p := projectNamed(t, d, "demo")
+	if len(p.FixWaiting) != 0 || p.FixUnreadable != 1 {
+		t.Errorf("waiting %+v unreadable %d", p.FixWaiting, p.FixUnreadable)
+	}
+	if _, err := RenderText(d); err != nil {
+		t.Fatal(err)
 	}
 }

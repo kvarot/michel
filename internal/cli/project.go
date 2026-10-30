@@ -169,6 +169,18 @@ func newProjectRemoveCmd(deps *Deps) *cobra.Command {
 			var p project.Project
 			var err error
 			if purge {
+				// What the fix service keeps outside the tables goes first
+				// (the attempts are still listed): mask tables, tokens,
+				// copies, mirrors, briefs.
+				if p0, gerr := repo.Get(ctx, arg); gerr == nil {
+					secrets, serr := openSecrets(cmd, deps)
+					if serr == nil {
+						serr = fix.PurgeProject(ctx, fixDeps(cmd, deps, secrets, "cli"), p0.ID)
+					}
+					if serr != nil {
+						fmt.Fprintln(deps.Stderr, deps.T("cli.project.remove.fix_files_failed", p0.Name, serr))
+					}
+				}
 				p, err = repo.Purge(ctx, arg)
 			} else {
 				p, err = repo.Remove(ctx, arg)
@@ -199,10 +211,6 @@ func newProjectRemoveCmd(deps *Deps) *cobra.Command {
 			}
 			switch {
 			case purge:
-				dataDir, _ := cmd.Flags().GetString("data-dir")
-				if err := fix.RemoveProjectFiles(dataDir, p.ID); err != nil {
-					fmt.Fprintln(deps.Stderr, deps.T("cli.project.remove.fix_files_failed", p.Name, err))
-				}
 				fmt.Fprintln(deps.Stdout, deps.T("cli.project.remove.purged", p.Name, p.Path))
 			case !p.Active:
 				fmt.Fprintln(deps.Stdout, deps.T("cli.project.remove.already_inactive", p.Name, p.Name))

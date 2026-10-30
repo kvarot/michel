@@ -133,12 +133,19 @@ func TestQueueOneAttemptPerProject(t *testing.T) {
 func TestStartedTodayCountsAutoOnly(t *testing.T) {
 	ctx := context.Background()
 	r := newRepo(t)
-	newAttempt(t, r, "f1", "p1", OriginAgentAuto)
-	newAttempt(t, r, "f2", "p1", OriginAgentAuto)
-	newAttempt(t, r, "f3", "p1", OriginAgent)
-	newAttempt(t, r, "f4", "p2", OriginAgentAuto)
+	// One attempt at a time per project: each one ends before the next.
+	ended := func(finding, project, origin string) {
+		a := newAttempt(t, r, finding, project, origin)
+		if err := r.SetState(ctx, a.ID, []State{StatePreparing}, StateFailed, "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ended("f1", "p1", OriginAgentAuto)
+	ended("f2", "p1", OriginAgentAuto)
+	ended("f3", "p1", OriginAgent)
+	ended("f4", "p2", OriginAgentAuto)
 	r.Now = func() time.Time { return t0.Add(-48 * time.Hour) }
-	newAttempt(t, r, "f5", "p1", OriginAgentAuto)
+	ended("f5", "p1", OriginAgentAuto)
 	n, err := r.StartedToday(ctx, "p1", t0)
 	if err != nil || n != 2 {
 		t.Fatalf("StartedToday = %d, %v; want 2", n, err)

@@ -790,81 +790,116 @@ func freshFolder(root *os.Root, dir, folder string) error {
 // is deleted first. The registries are reached through the egress proxy
 // only. A failed install is a *CmdError.
 func Install(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string) error {
-	if err := copyDir(d, c); err != nil {
+	p, err := prepareInstall(ctx, d, c, ecosystem, manifestRel)
+	if err != nil {
 		return err
 	}
+	defer p.root.Close()
+	return p.run(ctx, d, p.in.prog, p.in.args)
+}
+
+// prepared is a copy checked and made ready for an install or an update of
+// one lockfile: its root (to close), the lockfile's folder and name, the
+// fix home and the install command of the lockfile.
+type prepared struct {
+	root *os.Root
+	copy string // c.Dir
+	dir  string
+	name string
+	h    home
+	in   install
+}
+
+// prepareInstall makes every check Install and Update share: the manifest
+// path, the ecosystem, the real folder, the strict lockfile read, the
+// settings allowlists (composer.json / package.json, .npmrc), the lock
+// folders, and fresh output folders. The caller closes p.root.
+func prepareInstall(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string) (p prepared, err error) {
+	if err := copyDir(d, c); err != nil {
+		return p, err
+	}
 	if manifestRel == "" || strings.Contains(manifestRel, `\`) || path.Clean(manifestRel) != manifestRel || !filepath.IsLocal(filepath.FromSlash(manifestRel)) {
-		return fmt.Errorf("%w: %s", ErrUnsupportedLockfile, manifestRel)
+		return p, fmt.Errorf("%w: %s", ErrUnsupportedLockfile, manifestRel)
 	}
 	for _, seg := range strings.Split(manifestRel, "/") {
 		if !safeSegment(seg) {
-			return fmt.Errorf("%w: %s", ErrUnsupportedLockfile, manifestRel)
+			return p, fmt.Errorf("%w: %s", ErrUnsupportedLockfile, manifestRel)
 		}
 	}
 	name, dir := path.Base(manifestRel), path.Dir(manifestRel)
 	eco, ok := lockfileEcosystem[name]
 	if !ok || eco != ecosystem {
-		return fmt.Errorf("%w: %s (%s)", ErrUnsupportedLockfile, manifestRel, ecosystem)
+		return p, fmt.Errorf("%w: %s (%s)", ErrUnsupportedLockfile, manifestRel, ecosystem)
 	}
 	if name == "yarn.lock" || name == "pnpm-lock.yaml" {
-		return ErrInstallUnsupported
+		return p, ErrInstallUnsupported
 	}
 	root, err := os.OpenRoot(c.Dir)
 	if err != nil {
-		return ErrNotACopy
+		return p, ErrNotACopy
 	}
-	defer root.Close()
+	defer func() {
+		if err != nil {
+			root.Close()
+		}
+	}()
 	if err := realFolder(root, dir); err != nil {
-		return err
+		return p, err
 	}
 	lock, err := readIn(root, manifestRel, maxLockfile)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrNoLockfile, manifestRel)
+		return p, fmt.Errorf("%w: %s", ErrNoLockfile, manifestRel)
 	}
 	h, err := ensureHome(d)
 	if err != nil {
-		return err
+		return p, err
 	}
 	in := installFor(name, h.npmrc())
 	if in.prog == "composer" {
 		if err := checkComposerJSON(root, dir); err != nil {
-			return err
+			return p, err
 		}
 		if err := checkComposerLock(lock); err != nil {
-			return err
+			return p, err
 		}
 	} else {
 		workspaces, err := checkPackageJSON(root, dir)
 		if err != nil {
-			return err
+			return p, err
 		}
 		keys, links, err := checkPackageLock(lock)
 		if err != nil {
-			return err
+			return p, err
 		}
 		if err := checkNpmrc(root, dir); err != nil {
-			return err
+			return p, err
 		}
 		if err := checkLockFolders(root, dir, slices.Concat(keys, links), workspaces); err != nil {
-			return err
+			return p, err
 		}
 		// Every node_modules the lock names starts fresh (workspaces too).
 		for _, nm := range nodeModulesFolders(keys) {
 			if err := freshFolder(root, path.Join(dir, path.Dir(nm)), "node_modules"); err != nil {
-				return err
+				return p, err
 			}
 		}
 	}
 	if err := freshFolder(root, dir, in.folder); err != nil {
-		return err
+		return p, err
 	}
-	cwd := filepath.Join(c.Dir, filepath.FromSlash(dir))
-	stdout, stderr, err := d.exec()(ctx, in.prog, in.args, h.env(d.ProxyAddr), cwd)
+	return prepared{root: root, copy: c.Dir, dir: dir, name: name, h: h, in: in}, nil
+}
+
+// run executes prog args in the lockfile's folder with the fix environment;
+// a failure is a *CmdError.
+func (p prepared) run(ctx context.Context, d Deps, prog string, args []string) error {
+	cwd := filepath.Join(p.copy, filepath.FromSlash(p.dir))
+	stdout, stderr, err := d.exec()(ctx, prog, args, p.h.env(d.ProxyAddr), cwd)
 	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		return &CmdError{Cmd: in.prog + " " + in.args[0], Err: err, Output: combined(stdout, stderr)}
+		return &CmdError{Cmd: prog + " " + args[0], Err: err, Output: combined(stdout, stderr)}
 	}
 	return nil
 }

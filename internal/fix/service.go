@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -447,6 +446,35 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		}
 	}
 	w := Work{Copy: c, Plan: buildPlan(fi, b)}
+	// Michel's own update, on the pristine copy, before the agent sees it
+	// (controller ruling 36); its result is the first message of Michel.
+	dirs := []string{c.Dir, c.Mirror, d.DataDir}
+	if len(w.Plan.Update) > 0 {
+		proxyURL, closeInstall, err := allowproxy.Listen(d.Gateway, policy.PurposeFixInstall)
+		if err != nil {
+			return fail("fix.cause.prepare_failed", err)
+		}
+		wdi := wd
+		wdi.ProxyAddr = proxyURL
+		err = workcopy.Update(ctx, wdi, c, w.Plan.Ecosystem, w.Plan.ManifestRel, w.Plan.Update)
+		closeInstall()
+		var cmdErr *workcopy.CmdError
+		var text string
+		switch {
+		case err == nil:
+			text = i18n.T(lang, "fix.msg.update_ran", strings.Join(w.Plan.Update, " "))
+		case errors.As(err, &cmdErr):
+			text = i18n.T(lang, "fix.msg.update_failed", shown(m, dirs, cmdErr.Output))
+		case changeRefused(err):
+			return fail("fix.cause.change_refused", err)
+		default:
+			text = i18n.T(lang, "fix.msg.update_refused", shown(m, dirs, noPath(err).Error()))
+		}
+		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: text})
+	}
+	if w.Tree0, err = workcopy.TreeHash(ctx, wd, c); err != nil {
+		return fail("fix.cause.prepare_failed", err)
+	}
 	if err := repo.SetWork(ctx, a.ID, w); err != nil {
 		return fail("fix.cause.prepare_failed", err)
 	}
@@ -580,7 +608,9 @@ func (d Deps) run(id string, r *running) {
 			case finished(a.State):
 				_ = r.sess.Close()
 			case a.State == StateApproved && a.ApprovedBy == ActorAuto:
-				_ = d.applyApproved(ctx, id)
+				// The agent is stopped first; the end of this loop applies
+				// (the copy is removed only once Claude Code has left it).
+				_ = r.sess.Close()
 			}
 		}
 	}
@@ -613,9 +643,22 @@ func (d Deps) run(id string, r *running) {
 		_ = DeleteAttemptToken(d.Secrets, id)
 	case StateApproved:
 		if a.ApprovedBy == ActorAuto {
-			_ = d.applyLocked(ctx, a)
+			d.applyAuto(ctx, a)
 		}
 	}
+}
+
+// applyAuto applies an automatically approved attempt under its lock
+// (held by the caller); a failure ends the attempt as failed with its cause
+// instead of being retried.
+func (d Deps) applyAuto(ctx context.Context, a Attempt) {
+	err := d.applyLocked(ctx, a)
+	if err == nil || errors.Is(err, ErrMaskToken) || errors.Is(err, ErrStaleProposal) {
+		return
+	}
+	cause := i18n.T(d.lang(), "fix.cause.apply_failed", auditDetail(d, err))
+	_ = d.repo().SetState(ctx, a.ID, []State{StateApproved}, StateFailed, cause)
+	d.cleanup(ctx, a, true)
 }
 
 // applyApproved applies an attempt approved by a level 3 rule, under the
@@ -635,7 +678,8 @@ func (d Deps) applyApproved(ctx context.Context, id string) error {
 	if a.State != StateApproved {
 		return nil
 	}
-	return d.applyLocked(ctx, a)
+	d.applyAuto(ctx, a)
+	return nil
 }
 
 // cleanup removes what an ended attempt leaves: the skill, the token, the
@@ -701,17 +745,60 @@ func noPath(err error) error {
 	return err
 }
 
+// maxShown bounds a command output quoted in a message.
+const maxShown = 8000
+
+// shown makes a text safe for a message of Michel: the copy, mirror and
+// data folders replaced by <path>, control characters removed, bounded,
+// then masked with the attempt's masker (secrets and other absolute paths).
+func shown(m *mask.Masker, dirs []string, text string) string {
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, dir, "<path>")
+		text = strings.ReplaceAll(text, filepath.ToSlash(dir), "<path>")
+	}
+	text = strings.TrimSpace(scan.SanitizeText(strings.ToValidUTF8(text, "�")))
+	if r := []rune(text); len(r) > maxShown {
+		text = string(r[:maxShown]) + "…"
+	}
+	return m.Mask(text)
+}
+
+// maxDetail bounds the detail of an error in the audit log.
+const maxDetail = 200
+
+// auditDetail is what the audit keeps of an error: no path, no secret,
+// sanitized and bounded.
+func auditDetail(d Deps, err error) string {
+	if err == nil {
+		return ""
+	}
+	text := noPath(err).Error()
+	if d.DataDir != "" {
+		text = strings.ReplaceAll(text, d.DataDir, "<data>")
+		text = strings.ReplaceAll(text, filepath.ToSlash(d.DataDir), "<data>")
+	}
+	text = mask.New().Mask(scan.SanitizeText(strings.ToValidUTF8(text, "")))
+	if r := []rune(text); len(r) > maxDetail {
+		text = string(r[:maxDetail]) + "…"
+	}
+	return text
+}
+
 // Propose records the agent's proposal for the attempt (state preparing or
 // proposed; a new proposal supersedes the previous one). Michel does the
-// work itself, in the copy and with the fix home: the validated update
-// command of the plan, the install, the project's tests, the re-scan, then
-// the diff (a change outside the copy, of an excluded file or unreadable
-// ends the attempt: ErrChangeRefused) and one commit in the mirror. The
-// proposal's Hash is the SHA-256 of the raw patch, the commit, the tests
-// status and the summary. A change holding a mask token is ErrMaskToken
-// (the attempt goes on); an empty change is ErrNoChange. The results come
-// back as a message of Michel, and the proposal is approved at once when
-// the project's level 3 rules allow it.
+// work itself, in the copy and with the fix home: the install (with every
+// check of the settings), the project's tests, the re-scan, then the diff
+// (a change outside the copy, of an excluded file or unreadable ends the
+// attempt: ErrChangeRefused) and one commit in the mirror. The proposal's
+// Hash is the SHA-256 of the raw patch, the commit, the tests status and
+// the summary. A change holding a mask token is ErrMaskToken (the attempt
+// goes on); an empty change is ErrNoChange. The results come back as a
+// message of Michel. The proposal is approved at once when the project's
+// level 3 rules allow it and the committed tree is the one Michel's own
+// update left (Work.Tree0): the agent changed nothing.
 func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Proposal, error) {
 	repo := d.repo()
 	lang := d.lang()
@@ -736,19 +823,21 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 			m = loaded
 		}
 	}
-	summary := m.Mask(strings.TrimSpace(scan.SanitizeText(in.Summary)))
-	notes := m.Mask(strings.TrimSpace(scan.SanitizeText(in.Notes)))
+	dirs := []string{c.Dir, c.Mirror, d.DataDir}
+	tell := func(text string) string { return shown(m, dirs, text) }
+	summary := tell(in.Summary)
+	notes := tell(in.Notes)
 	say := func(text string) {
-		_, _ = repo.AddMessage(ctx, Message{AttemptID: attemptID, Role: RoleMichel, Text: text})
+		_, _ = repo.AddMessage(ctx, Message{AttemptID: attemptID, Role: RoleMichel, Text: tell(text)})
 	}
 	fail := func(key string, cause error) (Proposal, error) {
-		text := i18n.T(lang, key, scan.SanitizeText(noPath(cause).Error()))
+		text := i18n.T(lang, key, tell(noPath(cause).Error()))
 		say(text)
 		_ = repo.SetState(ctx, attemptID, []State{StatePreparing, StateProposed}, StateFailed, text)
 		got, _ := repo.GetAttempt(ctx, attemptID)
 		d.sessions().Close(attemptID)
 		d.cleanup(ctx, got, true)
-		_ = d.record(ctx, "fix.propose", attemptID, "refused", map[string]any{"attempt_id": attemptID, "finding_id": fi.ID, "reason": key})
+		_ = d.record(ctx, "fix.propose", attemptID, "refused", map[string]any{"attempt_id": attemptID, "finding_id": fi.ID, "reason": key, "detail": auditDetail(d, cause)})
 		return Proposal{}, fmt.Errorf("%w: %v", ErrChangeRefused, cause)
 	}
 	if d.Gateway == nil {
@@ -758,7 +847,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 		_, _ = repo.AddMessage(ctx, Message{AttemptID: attemptID, Role: RoleAgent, Text: i18n.T(lang, "fix.msg.notes", notes)})
 	}
 
-	// Michel's own run: update, install, tests, re-scan.
+	// Michel's own run on the agent's tree: install, tests, re-scan.
 	proxyURL, closeProxy, err := allowproxy.Listen(d.Gateway, policy.PurposeFixInstall)
 	if err != nil {
 		return Proposal{}, err
@@ -768,34 +857,6 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	wd.ProxyAddr = proxyURL
 	var lines []string
 	plan := a.Work.Plan
-	// A proposal applied without a click must be Michel's own update: when
-	// the project allows one, the lockfile goes back to its base content
-	// before the update command rewrites it, so nothing the agent wrote in
-	// it survives (controller ruling 35).
-	autoCandidate := p.FixLevel >= 3 && p.AutoFixMinor && len(plan.Update) > 0
-	if autoCandidate {
-		if _, err := workcopy.RestoreBase(ctx, wd, c, plan.ManifestRel); err != nil {
-			if changeRefused(err) {
-				return fail("fix.cause.change_refused", err)
-			}
-			return Proposal{}, err
-		}
-	}
-	updateRan := false
-	if len(plan.Update) > 0 {
-		status, out, err := workcopy.RunTests(ctx, wd, c, plan.Update)
-		switch {
-		case err == nil && status == workcopy.TestsPassed:
-			updateRan = true
-			lines = append(lines, i18n.T(lang, "fix.msg.update_ran", strings.Join(plan.Update, " ")))
-		case err != nil && changeRefused(err):
-			return fail("fix.cause.change_refused", err)
-		default:
-			lines = append(lines, i18n.T(lang, "fix.msg.update_failed", strings.TrimSpace(out)))
-		}
-	} else {
-		lines = append(lines, i18n.T(lang, "fix.msg.no_update"))
-	}
 	testsStatus, testsOut := workcopy.TestsNotRun, ""
 	installed := false
 	var cmdErr *workcopy.CmdError
@@ -804,21 +865,19 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 		installed = true
 	case errors.Is(err, workcopy.ErrInstallUnsupported):
 		lines = append(lines, i18n.T(lang, "fix.msg.install_unsupported"))
-	case errors.Is(err, workcopy.ErrUnsafeInstall), errors.Is(err, workcopy.ErrUnsupportedLockfile), errors.Is(err, workcopy.ErrNoLockfile), errors.Is(err, workcopy.ErrOutsideCopy):
-		lines = append(lines, i18n.T(lang, "fix.msg.install_refused", scan.SanitizeText(noPath(err).Error())))
 	case errors.As(err, &cmdErr):
 		testsStatus, testsOut = workcopy.TestsFailed, cmdErr.Output
-		lines = append(lines, i18n.T(lang, "fix.msg.install_failed", strings.TrimSpace(cmdErr.Output)))
+		lines = append(lines, i18n.T(lang, "fix.msg.install_failed", tell(cmdErr.Output)))
 	case changeRefused(err):
 		return fail("fix.cause.change_refused", err)
 	default:
-		lines = append(lines, i18n.T(lang, "fix.msg.install_refused", scan.SanitizeText(noPath(err).Error())))
+		lines = append(lines, i18n.T(lang, "fix.msg.install_refused", tell(noPath(err).Error())))
 	}
 	if installed {
 		argv, err := workcopy.SplitCommand(p.TestCmd)
 		switch {
 		case err != nil:
-			lines = append(lines, i18n.T(lang, "fix.msg.tests_not_run", scan.SanitizeText(err.Error())))
+			lines = append(lines, i18n.T(lang, "fix.msg.tests_not_run", tell(err.Error())))
 		case len(argv) == 0:
 			lines = append(lines, i18n.T(lang, "fix.msg.tests_none"))
 		default:
@@ -830,11 +889,11 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 			case testsStatus == workcopy.TestsPassed:
 				lines = append(lines, i18n.T(lang, "fix.msg.tests_passed"))
 			case testsStatus == workcopy.TestsFailed:
-				lines = append(lines, i18n.T(lang, "fix.msg.tests_failed", strings.TrimSpace(testsOut)))
+				lines = append(lines, i18n.T(lang, "fix.msg.tests_failed", tell(testsOut)))
 			default:
 				reason := ""
 				if terr != nil {
-					reason = scan.SanitizeText(noPath(terr).Error())
+					reason = tell(noPath(terr).Error())
 				}
 				lines = append(lines, i18n.T(lang, "fix.msg.tests_not_run", reason))
 			}
@@ -842,7 +901,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	}
 	clean := false
 	if absent, err := d.rescan(ctx, c.Dir, fi, p); err != nil {
-		lines = append(lines, i18n.T(lang, "fix.msg.rescan_failed", scan.SanitizeText(noPath(err).Error())))
+		lines = append(lines, i18n.T(lang, "fix.msg.rescan_failed", tell(noPath(err).Error())))
 	} else if clean = absent; clean {
 		lines = append(lines, i18n.T(lang, "fix.msg.rescan_clean", scan.SanitizeText(fi.OSVID)))
 	} else {
@@ -864,6 +923,14 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	if mask.HasToken(string(ch.Raw)) {
 		say(strings.Join(append(lines, i18n.T(lang, "fix.msg.mask_token")), "\n"))
 		return Proposal{}, ErrMaskToken
+	}
+	// The tree the commit holds (Commit builds it from this very change).
+	tree, err := workcopy.TreeHash(ctx, wd, c)
+	if err != nil {
+		if changeRefused(err) {
+			return fail("fix.cause.change_refused", err)
+		}
+		return Proposal{}, err
 	}
 	message := "fix(deps): update " + plan.Package
 	if plan.Target != "" {
@@ -889,7 +956,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	}
 	prop := Proposal{
 		AttemptID: attemptID, Summary: summary, Diff: m.Mask(ch.Display), Files: ch.Files,
-		TestsStatus: testsStatus, TestsOutput: m.Mask(testsOut), RescanClean: clean, Risk: risk,
+		TestsStatus: testsStatus, TestsOutput: tell(testsOut), RescanClean: clean, Risk: risk,
 		CommitSHA: sha, DiffRaw: ch.Raw, StepsServer: []string{},
 	}
 	prop.Hash = proposalHash(ch.Raw, sha, testsStatus, summary)
@@ -903,9 +970,11 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 		}
 	}
 	say(strings.Join(append(lines, i18n.T(lang, "fix.msg.proposed")), "\n"))
+	unchanged := a.Work.Tree0 != "" && tree == a.Work.Tree0
 	if err := d.record(ctx, "fix.propose", attemptID, "ok", map[string]any{
 		"attempt_id": attemptID, "finding_id": fi.ID, "project_id": p.ID, "proposal_id": prop.ID, "hash": prop.Hash,
-		"commit": sha, "files": len(ch.Files), "tests": testsStatus, "rescan_clean": clean, "risk": risk, "superseded": a.State == StateProposed,
+		"commit": sha, "files": len(ch.Files), "tests": testsStatus, "rescan_clean": clean, "risk": risk,
+		"superseded": a.State == StateProposed, "tree_unchanged": unchanged,
 	}); err != nil {
 		return prop, err
 	}
@@ -914,100 +983,132 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 			d.Notify(ctx, len(waiting))
 		}
 	}
-	if hasAn && autoCandidate && updateRan && AutoApplicable(p, prop, an, effectiveRisk(d.Policy, p)) {
-		own, err := michelsOwnChange(ctx, wd, c, plan, ch.Files)
-		if err != nil {
-			return prop, err
+	if p.FixLevel >= 3 && p.AutoFixMinor {
+		reason := ""
+		switch {
+		case !hasAn:
+			reason = "no analysis"
+		case !unchanged:
+			reason = "the agent changed the tree Michel's update left"
+		case !AutoApplicable(p, prop, an, effectiveRisk(d.Policy, p)):
+			reason = "the level 3 rules are not all met"
+		default:
+			own, err := michelsOwnCommit(ctx, wd, c, plan, sha)
+			if err != nil {
+				return prop, err
+			}
+			if !own {
+				reason = "the committed manifest or lockfile is not what Michel's update writes"
+			}
 		}
-		if own {
+		if reason == "" {
 			auto := d
 			auto.Actor = ActorAuto
 			if err := Approve(ctx, auto, attemptID, prop.Hash); err != nil {
 				return prop, err
 			}
 		} else {
-			_ = d.record(ctx, "fix.auto", attemptID, "skipped", map[string]any{"attempt_id": attemptID, "reason": "the change is not only Michel's own update"})
+			_ = d.record(ctx, "fix.auto", attemptID, "skipped", map[string]any{"attempt_id": attemptID, "reason": reason})
 		}
 	}
 	return prop, nil
 }
 
-// manifestOf is the manifest next to a lockfile (slash path).
-func manifestOf(lockRel string) string {
-	dir, base := path.Dir(lockRel), path.Base(lockRel)
-	var m string
-	switch base {
-	case "composer.lock":
-		m = "composer.json"
-	case "package-lock.json", "npm-shrinkwrap.json":
-		m = "package.json"
-	default:
-		return ""
-	}
-	if dir == "." {
-		return m
-	}
-	return dir + "/" + m
-}
+// plainConstraint is the only shape of constraint Michel's own update leaves
+// in a manifest: a plain semver range (^1.2.5, ~1.2, 1.2.5, >=1.2). No
+// alias, path, URL, git, dev- or "as" form.
+var plainConstraint = regexp.MustCompile(`^(?:[\^~]|>=)?v?[0-9]+(?:\.[0-9]+){0,2}$`)
 
-// michelsOwnChange reports whether the change is exactly what Michel's
-// update command produced: the files changed are the plan's lockfile
-// (rewritten by the command from its base content) and at most its
-// manifest, whose only difference with the base is the constraint of the
-// planned package. Any other file, or any other change of the manifest
-// (scripts, repositories, another package...), means the agent edited
-// something: the user validates by hand.
-func michelsOwnChange(ctx context.Context, wd workcopy.Deps, c workcopy.Copy, plan Plan, files []string) (bool, error) {
-	manifest := manifestOf(plan.ManifestRel)
-	if manifest == "" {
+// michelsOwnCommit reports whether the proposal commit sha holds, for the
+// planned package, exactly what Michel's update command writes: read from
+// the commit in the mirror (never from the working tree), the manifest
+// gives the package a plain semver constraint, and the lockfile resolves
+// it to plan.Target from an https registry.
+func michelsOwnCommit(ctx context.Context, wd workcopy.Deps, c workcopy.Copy, plan Plan, sha string) (bool, error) {
+	manifest := workcopy.ManifestOf(plan.ManifestRel)
+	if manifest == "" || plan.Package == "" || plan.Target == "" {
 		return false, nil
 	}
-	for _, f := range files {
-		if f != plan.ManifestRel && f != manifest {
-			return false, nil
-		}
-	}
-	if !slices.Contains(files, manifest) {
-		return true, nil
-	}
-	before, ok, err := workcopy.BaseFile(ctx, wd, c, manifest)
+	mb, ok, err := workcopy.CommitFile(ctx, wd, c, sha, manifest)
 	if err != nil || !ok {
 		return false, err
 	}
-	root, err := os.OpenRoot(c.Dir)
-	if err != nil {
-		return false, nil
+	lb, ok, err := workcopy.CommitFile(ctx, wd, c, sha, plan.ManifestRel)
+	if err != nil || !ok {
+		return false, err
 	}
-	defer root.Close()
-	after, err := root.ReadFile(filepath.FromSlash(manifest))
-	if err != nil {
-		return false, nil
-	}
-	return manifestLimitedTo(before, after, plan.Ecosystem, plan.Package), nil
+	return manifestConstraintOK(mb, plan.Ecosystem, plan.Package) && lockResolvesTarget(lb, plan.Ecosystem, plan.Package, plan.Target), nil
 }
 
-// manifestLimitedTo reports whether the only difference between two
-// manifests is the constraint of pkg in the dependency sections.
-func manifestLimitedTo(before, after []byte, ecosystem, pkg string) bool {
-	var a, b map[string]any
-	if json.Unmarshal(before, &a) != nil || json.Unmarshal(after, &b) != nil || a == nil || b == nil {
+// manifestConstraintOK reports whether every constraint of pkg in the
+// manifest is a plain semver range (and there is at least one).
+func manifestConstraintOK(manifest []byte, ecosystem, pkg string) bool {
+	var doc map[string]any
+	if json.Unmarshal(manifest, &doc) != nil || doc == nil {
 		return false
 	}
 	sections := []string{"dependencies", "devDependencies", "optionalDependencies", "peerDependencies"}
 	if ecosystem == "Packagist" {
 		sections = []string{"require", "require-dev"}
 	}
-	for _, m := range []map[string]any{a, b} {
-		for _, s := range sections {
-			if deps, ok := m[s].(map[string]any); ok {
-				delete(deps, pkg)
-				if len(deps) == 0 {
-					delete(m, s)
-				}
-			}
+	found := false
+	for _, s := range sections {
+		deps, ok := doc[s].(map[string]any)
+		if !ok {
+			continue
+		}
+		v, ok := deps[pkg]
+		if !ok {
+			continue
+		}
+		found = true
+		cons, ok := v.(string)
+		if !ok || !plainConstraint.MatchString(cons) || strings.ContainsAny(cons, ":/@") ||
+			strings.Contains(cons, "git") || strings.Contains(cons, "file") || strings.Contains(cons, "http") ||
+			strings.Contains(cons, "npm:") || strings.Contains(cons, "dev-") || strings.Contains(cons, " as ") {
+			return false
 		}
 	}
-	return reflect.DeepEqual(a, b)
+	return found
+}
+
+// lockResolvesTarget reports whether the lockfile resolves pkg to exactly
+// target, downloaded from an https URL.
+func lockResolvesTarget(lock []byte, ecosystem, pkg, target string) bool {
+	var doc map[string]any
+	if json.Unmarshal(lock, &doc) != nil || doc == nil {
+		return false
+	}
+	sameVersion := func(v any) bool {
+		s, ok := v.(string)
+		return ok && (s == target || s == "v"+target)
+	}
+	if ecosystem == "Packagist" {
+		found := false
+		for _, section := range []string{"packages", "packages-dev"} {
+			list, _ := doc[section].([]any)
+			for _, e := range list {
+				entry, _ := e.(map[string]any)
+				if entry == nil || entry["name"] != pkg {
+					continue
+				}
+				dist, _ := entry["dist"].(map[string]any)
+				url, _ := dist["url"].(string)
+				if !sameVersion(entry["version"]) || !strings.HasPrefix(strings.ToLower(url), "https://") {
+					return false
+				}
+				found = true
+			}
+		}
+		return found
+	}
+	packages, _ := doc["packages"].(map[string]any)
+	entry, _ := packages["node_modules/"+pkg].(map[string]any)
+	if entry == nil {
+		return false
+	}
+	resolved, _ := entry["resolved"].(string)
+	return sameVersion(entry["version"]) && strings.HasPrefix(strings.ToLower(resolved), "https://")
 }
 
 // effectiveRisk is the risk rule of the project: the policy's with its
@@ -1194,7 +1295,7 @@ func (d Deps) applyLocked(ctx context.Context, a Attempt) error {
 		return err
 	}
 	if err := workcopy.Apply(ctx, d.work(), p, a.Work.Copy, prop.CommitSHA, branch); err != nil {
-		_ = actor.record(ctx, "fix.apply", a.ID, "error", map[string]any{"attempt_id": a.ID, "hash": prop.Hash, "error": scan.SanitizeText(noPath(err).Error())})
+		_ = actor.record(ctx, "fix.apply", a.ID, "error", map[string]any{"attempt_id": a.ID, "hash": prop.Hash, "error": "apply_failed", "detail": auditDetail(d, err)})
 		return err
 	}
 	if err := repo.SetState(ctx, a.ID, []State{StateApproved}, StateApplied, ""); err != nil {
@@ -1336,7 +1437,7 @@ func finished(s State) bool {
 func Sweep(ctx context.Context, d Deps) error {
 	repo := d.repo()
 	lang := d.lang()
-	if _, err := repo.PurgeMessages(ctx, d.now().Add(-MessageRetention)); err != nil {
+	if err := d.purge(ctx); err != nil {
 		return err
 	}
 	for _, sub := range []string{"agent", "fix-tmp"} {
@@ -1366,10 +1467,31 @@ func Sweep(ctx context.Context, d Deps) error {
 	if err != nil {
 		return err
 	}
-	keep := map[string]bool{}
+	keep, liveFinding := map[string]bool{}, map[string]bool{}
 	for _, a := range all {
 		if !finished(a.State) {
 			keep[a.ID] = true
+		}
+		if a.State == StatePreparing || a.State == StateProposed || a.State == StateApproved {
+			liveFinding[a.FindingID] = true
+		}
+		// A token serves a session of a preparing attempt only.
+		if a.State != StatePreparing && d.Secrets != nil {
+			_ = DeleteAttemptToken(d.Secrets, a.ID)
+		}
+	}
+	// Skills Michel wrote for findings without a live attempt.
+	if skills, err := d.skillsDir(); err == nil {
+		entries, _ := os.ReadDir(skills)
+		for _, e := range entries {
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), "michel-fix-") {
+				continue
+			}
+			key, ok := gitrepo.OwnerKey(filepath.Join(skills, e.Name()))
+			fid, isFix := strings.CutPrefix(key, "fix:")
+			if ok && isFix && !liveFinding[fid] {
+				_ = brief.RemoveSkill(skills, fid)
+			}
 		}
 	}
 	wd := d.work()
@@ -1411,4 +1533,48 @@ func RemoveProjectFiles(dataDir, projectID string) error {
 		}
 	}
 	return nil
+}
+
+// purge deletes the messages older than MessageRetention, and the mask
+// tables of the finished attempts of that age (their messages are gone).
+func (d Deps) purge(ctx context.Context) error {
+	repo := d.repo()
+	before := d.now().Add(-MessageRetention)
+	if _, err := repo.PurgeMessages(ctx, before); err != nil {
+		return err
+	}
+	if d.Secrets == nil {
+		return nil
+	}
+	all, err := repo.ListAttempts(ctx, "", "")
+	if err != nil {
+		return err
+	}
+	for _, a := range all {
+		if finished(a.State) && a.UpdatedAt.Before(before) {
+			_ = mask.Delete(d.Secrets, a.ID)
+		}
+	}
+	return nil
+}
+
+// PurgeProject forgets what the fix service keeps for a project outside its
+// tables: the mask tables and tokens of its attempts in the secret store,
+// its copies, mirrors and briefs. The rows go with project.Repo.Purge.
+func PurgeProject(ctx context.Context, d Deps, projectID string) error {
+	attempts, err := d.repo().ListAttempts(ctx, projectID, "")
+	if err != nil {
+		return err
+	}
+	for _, a := range attempts {
+		d.sessions().Close(a.ID)
+		if d.Secrets != nil {
+			_ = mask.Delete(d.Secrets, a.ID)
+			_ = DeleteAttemptToken(d.Secrets, a.ID)
+		}
+		if skills, err := d.skillsDir(); err == nil {
+			_ = brief.RemoveSkill(skills, a.FindingID)
+		}
+	}
+	return RemoveProjectFiles(d.DataDir, projectID)
 }

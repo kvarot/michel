@@ -153,6 +153,9 @@ type ProjectDigest struct {
 	FixWaiting []FixLine `json:"fix_waiting,omitempty"`
 	FixApplied []FixLine `json:"fix_applied,omitempty"`
 	FixQueued  int       `json:"fix_queued"`
+	// FixUnreadable counts the attempts whose stored record could not be
+	// read: left out of the lines above, never a failure of the digest.
+	FixUnreadable int `json:"fix_unreadable,omitempty"`
 	// Open counts the open findings (new, pending, decided fix or defer) by
 	// severity; Decided counts the decisions in force by action; Total is
 	// the open findings plus the ignored ones.
@@ -671,6 +674,10 @@ func (c computer) fixes(ctx context.Context, p project.Project, pd *ProjectDiges
 		return err
 	}
 	for _, a := range waiting {
+		if a.WorkError != "" {
+			pd.FixUnreadable++
+			continue
+		}
 		pd.FixWaiting = append(pd.FixWaiting, line(a))
 	}
 	proven, err := repo.ListAttempts(ctx, p.ID, string(fix.StateProvenFixed))
@@ -679,6 +686,10 @@ func (c computer) fixes(ctx context.Context, p project.Project, pd *ProjectDiges
 	}
 	for _, a := range proven {
 		if !a.UpdatedAt.After(c.since) {
+			continue
+		}
+		if a.WorkError != "" {
+			pd.FixUnreadable++
 			continue
 		}
 		l := line(a)

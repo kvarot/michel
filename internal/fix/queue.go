@@ -193,10 +193,10 @@ func Worker(ctx context.Context, d Deps) {
 	lastPurge := d.now()
 	for {
 		if _, err := WorkOnce(ctx, d); err != nil {
-			_ = d.record(ctx, "fix.worker", "serve", "error", map[string]any{"error": err.Error()})
+			_ = d.record(ctx, "fix.worker", "serve", "error", map[string]any{"error": "worker_failed", "detail": auditDetail(d, err)})
 		}
 		if d.now().Sub(lastPurge) >= 24*time.Hour {
-			_, _ = d.repo().PurgeMessages(ctx, d.now().Add(-MessageRetention))
+			_ = d.purge(ctx)
 			lastPurge = d.now()
 		}
 		select {
