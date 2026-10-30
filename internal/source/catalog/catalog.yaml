@@ -3,7 +3,7 @@
 # purpose or config changes: Sync then rewrites those fields, never enabled, hidden,
 # tech or the user settings. Each note is the i18n key source.note.<key> (hyphens
 # become underscores). Only osv.packagist and osv.npm are enabled by default.
-version: 3
+version: 4
 entries:
   - key: osv.packagist
     kind: osv
@@ -208,7 +208,7 @@ entries:
     kind: enrichment
     name: "FIRST EPSS"
     url: "https://www.first.org/epss/"
-    hosts: ["epss.cyentia.com"]
+    hosts: ["epss.empiricalsecurity.com"]
     purpose: source.enrich
     config: {format: "epss", on_demand: false}
     note: source.note.enrich.epss

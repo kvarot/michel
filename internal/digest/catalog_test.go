@@ -58,7 +58,7 @@ func TestDigestCatalogLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	// enrich.epss waits for consent: its host has no rule.
-	allowed := func(host, purpose string) bool { return host != "epss.cyentia.com" }
+	allowed := func(host, purpose string) bool { return host != "epss.empiricalsecurity.com" }
 	d := f.compute(i18n.EN, Options{Allowed: allowed})
 	c := d.Catalog
 	if c.Silent || !reflect.DeepEqual(c.Failed, []string{"enrich.kev"}) || !reflect.DeepEqual(c.WaitingConsent, []string{"enrich.epss"}) ||

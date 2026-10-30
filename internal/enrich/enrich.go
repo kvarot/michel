@@ -33,7 +33,7 @@ type Deps struct {
 // Where the sources are read.
 const (
 	KEVURL  = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-	EPSSURL = "https://epss.cyentia.com/epss_scores-current.csv.gz"
+	EPSSURL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 )
 
 // Size caps: the KEV JSON, and the EPSS CSV once decompressed.

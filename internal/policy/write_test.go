@@ -94,7 +94,7 @@ func TestAddAllowRuleOnFlowListAndMissingFile(t *testing.T) {
 	if err := os.WriteFile(path, example, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if added, err := AddAllowRule(path, AllowRule{Host: "epss.cyentia.com", Purpose: PurposeEnrich}); err != nil || !added {
+	if added, err := AddAllowRule(path, AllowRule{Host: "epss.empiricalsecurity.com", Purpose: PurposeEnrich}); err != nil || !added {
 		t.Fatalf("added=%v err=%v", added, err)
 	}
 	p, _, err := Load(path, dir)

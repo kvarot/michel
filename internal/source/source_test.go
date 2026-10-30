@@ -177,6 +177,58 @@ func TestSyncInsertsThenKeepsUserChoices(t *testing.T) {
 	}
 }
 
+// A newer catalog that moves an entry to another host (the EPSS feed moved in
+// catalog 4) leaves the entry enabled but waiting for consent: the allow rule
+// written for the old host does not cover the new one, so the source is not
+// read and its state says why, instead of a silent egress denial.
+func TestSyncHostChangeWaitsForConsentAgain(t *testing.T) {
+	ctx := context.Background()
+	r := NewRepo(newStore(t))
+	entries, _, err := Catalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Sync(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetEnabled(ctx, "enrich.epss", true); err != nil {
+		t.Fatal(err)
+	}
+	rules := map[string]bool{"old.example.org|" + get(t, r, "enrich.epss").Purpose: true}
+	allowed := func(host, purpose string) bool { return rules[host+"|"+purpose] }
+	next := make([]Entry, len(entries))
+	copy(next, entries)
+	for i := range next {
+		if next[i].Key == "enrich.epss" {
+			next[i].Hosts = []string{"old.example.org"}
+		}
+	}
+	if _, _, err := syncEntries(ctx, r, next, CatalogVersion+1); err != nil {
+		t.Fatal(err)
+	}
+	if st := get(t, r, "enrich.epss").State(allowed); st != StateOn {
+		t.Fatalf("consented on the old host: state %s", st)
+	}
+	for i := range next {
+		if next[i].Key == "enrich.epss" {
+			next[i].Hosts = []string{"new.example.org"}
+		}
+	}
+	if _, _, err := syncEntries(ctx, r, next, CatalogVersion+2); err != nil {
+		t.Fatal(err)
+	}
+	e := get(t, r, "enrich.epss")
+	if !e.Enabled || !reflect.DeepEqual(e.Hosts, []string{"new.example.org"}) {
+		t.Fatalf("after the move: %+v", e)
+	}
+	if st := e.State(allowed); st != StateWaitingConsent {
+		t.Errorf("after the move: state %s, want %s", st, StateWaitingConsent)
+	}
+	if need := ConsentNeeded(e, allowed); len(need) != 1 || need[0].Host != "new.example.org" {
+		t.Errorf("consent needed = %+v", need)
+	}
+}
+
 func TestStateWaitingConsentWithoutRule(t *testing.T) {
 	r, _ := synced(t)
 	none := func(string, string) bool { return false }
