@@ -3,6 +3,7 @@
 // can ask for the token; a failed connection is an ApiError with offline set.
 import { reactive } from 'vue'
 import { keys, load, save } from './lib/storage.js'
+import { connect } from './lib/stream.js'
 
 const base = '/api/v1'
 
@@ -68,9 +69,46 @@ export const api = {
   post(path, body) {
     return request('POST', path, body)
   },
+  /** patch sends PATCH with a JSON body (only the fields sent change). */
+  patch(path, body) {
+    return request('PATCH', path, body)
+  },
   /** del sends DELETE, with a JSON body when one is given. */
   del(path, body) {
     return request('DELETE', path, body)
+  },
+  /**
+   * stream reads the text/event-stream at path with the token (fetch, since
+   * EventSource cannot send it) and calls onEvent({event, id, data}) with
+   * data parsed from JSON. It connects again with a growing delay when the
+   * connection drops (status 'reconnecting', then 'open'); a 401 or 404
+   * stops it (status 'stopped'). It returns {close}.
+   * @param {string} path
+   * @param {(ev: {event: string, id: string, data: any}) => void} onEvent
+   * @param {(status: 'open'|'reconnecting'|'stopped', http?: number) => void} [onStatus]
+   */
+  stream(path, onEvent, onStatus = () => {}) {
+    const headers = {}
+    if (state.token) headers.Authorization = `Bearer ${state.token}`
+    return connect({
+      url: base + path,
+      headers,
+      onEvent(ev) {
+        let data = null
+        try {
+          data = JSON.parse(ev.data)
+        } catch {
+          return
+        }
+        onEvent({ event: ev.event, id: ev.id, data })
+      },
+      onOpen: () => onStatus('open'),
+      onDrop: () => onStatus('reconnecting'),
+      onStop({ status }) {
+        if (status === 401) events.dispatchEvent(new Event('unauthorized'))
+        onStatus('stopped', status)
+      },
+    })
   },
   /** on listens to "unauthorized"; it returns the function that stops listening. */
   on(name, fn) {
