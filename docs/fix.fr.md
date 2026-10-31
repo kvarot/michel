@@ -79,7 +79,7 @@ L'agent ne travaille jamais dans ton dossier. Pour chaque tentative, Michel pré
 
 La copie ne contient que les fichiers de ton dernier commit. Restent donc dehors : tout ce que git ignore ou ne suit pas, les fichiers `.env*`, `*.pem`, `*.key`, `id_*` (dans tous les dossiers, majuscules comprises), les dossiers que tu as exclus (`michel project set <nom> --exclude <dossier>`), les liens symboliques et les fichiers spéciaux. Une copie est limitée à 30 000 fichiers, 256 Mio par fichier et 4 Gio en tout ; un projet plus gros est refusé (voir « En cas de problème »). Pendant la préparation, Michel n'écrit rien dans ton projet (c'est vérifié par un test).
 
-Avant que l'agent démarre, Michel passe ses détecteurs de secrets sur les fichiers de la copie. Un secret écrit dans ton code est signalé dans la conversation (« 2 secrets semblent écrits dans ton code (…) : l'agent peut les lire »), avec les fichiers concernés, pour que tu puisses les tenir à l'écart : sors le secret du code (mets-le dans une variable d'environnement ou un fichier `.env`, qui n'est jamais copié), ou exclus le dossier qui le contient (le message le nomme ; `--exclude` prend des noms de dossiers, pas de fichiers).
+Avant que l'agent démarre, Michel passe ses détecteurs de secrets sur les fichiers de la copie. Un secret écrit dans ton code est signalé dans la conversation (« 2 secrets semblent écrits dans ton code (…) : l'agent peut les lire »), avec les fichiers concernés, pour que tu puisses les tenir à l'écart : sors le secret du code (mets-le dans une variable d'environnement ou un fichier `.env`, qui n'est jamais copié), ou exclus le ou les dossiers qui le contiennent (le message les nomme ; `--exclude` prend des noms de dossiers, pas de fichiers).
 
 ## Ce que l'agent peut faire, et ce qu'il ne peut pas faire
 
@@ -97,7 +97,7 @@ L'agent **ne peut pas** :
 - écrire dans `vendor/`, `node_modules/`, `.git/`, `.claude/` ou `.mcp.json`, ni lire tes fichiers Claude Code (`~/.claude`, `~/.claude.json`) et tes clés (`~/.ssh`) ;
 - valider, appliquer, changer un réglage ou la politique : aucun outil ne le permet, la validation passe seulement par l'API locale avec son jeton.
 
-Une tentative dure au plus 20 minutes et au plus 50 tours de l'agent ; ensuite Michel arrête ses processus. Michel demande à l'agent de t'écrire dans ta langue (ses messages et le résumé de sa proposition) ; le code reste tel quel. Le contenu du dépôt, les avis et les articles sont donnés à l'agent comme des données à lire, jamais comme des consignes de Michel. Les conversations sont gardées 30 jours, secrets masqués.
+Une tentative dure au plus 20 minutes et au plus 50 échanges avec l'agent (un échange = une réponse ou une action de sa part) ; ensuite Michel arrête ses processus. Michel demande à l'agent de t'écrire dans ta langue (ses messages et le résumé de sa proposition) ; le code reste tel quel. Le contenu du dépôt, les avis et les articles sont donnés à l'agent comme des données à lire, jamais comme des consignes de Michel. Les conversations sont gardées 30 jours, secrets masqués.
 
 ## Ce que Michel lance lui-même
 
@@ -108,7 +108,7 @@ Au départ, sur la copie encore telle que tu l'as mise dans ton commit (avant qu
 
 Il n'y a pas de mise à jour pour un fichier `yarn.lock` ou `pnpm-lock.yaml` : l'agent part des fichiers du projet tels qu'ils sont.
 
-Le résultat est le premier message de Michel dans la conversation. Ce que cette mise à jour installe (`vendor/`, `node_modules/`) est retiré de la copie juste après, et n'entre jamais dans la proposition ni dans la branche, sauf si ton dépôt suit déjà des fichiers dans ce dossier : la proposition contient le manifeste et le fichier de verrouillage (plus ce que l'agent a changé).
+Le résultat est le premier message de Michel dans la conversation. Ce que cette mise à jour installe (`vendor/`, `node_modules/`) est retiré de la copie juste après. Cela n'entre jamais dans la proposition ni dans la branche, sauf si ton dépôt versionne déjà des fichiers dans ce dossier. La proposition contient le manifeste et le fichier de verrouillage (plus ce que l'agent a changé).
 
 Quand l'agent propose sa correction (`propose_fix`), Michel prend une fois pour toutes un instantané de la copie : ce que l'agent écrit après est ignoré. Michel reconstruit cet instantané dans un dossier séparé (`<data>/fix-tmp/<tentative>/`, jamais dans la copie de l'agent), puis il :
 
@@ -148,7 +148,8 @@ Voici les états que tu verras sur la page : `preparing` (en préparation) → `
 Avant que ce que Michel donne lui-même arrive à l'agent (la fiche, les réponses MCP), Michel masque les secrets : clés AWS, jetons GitHub, clés PEM, valeurs de type `.env`, affectations de mot de passe, secret, jeton ou clé, mots de passe dans une adresse de connexion ; les chemins complets de ton ordinateur deviennent des chemins relatifs. Chaque secret est remplacé par un repère `[secret-<aléatoire>-N]`. La table qui relie les repères aux vraies valeurs reste dans le coffre à secrets de Michel (chiffré par Windows, ou un fichier lisible par toi seul ailleurs) et n'est jamais envoyée. Le journal d'audit note combien de valeurs ont été masquées et de quel type, jamais les valeurs.
 
 - La page et l'API ne remettent jamais la vraie valeur : un secret y reste affiché comme un repère.
-- Michel ne met **jamais** de repère dans un commit : une modification qui en contient un est refusée (l'agent a pu le recopier depuis la fiche). Au moment de la proposition, l'agent est prévenu et peut proposer à nouveau ; si un repère arrivait quand même à l'étape de la branche, Michel ne crée pas la branche et la tentative passe `failed` avec cette cause (c'est un refus de Michel, pas le tien). Si une correction a vraiment besoin d'une valeur secrète dans le code, tu l'ajoutes à la main. Les modifications affichées sur la page sont masquées, mais la branche contient la modification telle qu'elle a été écrite : une ligne de ton code qui ressemble à un mot de passe n'est pas une raison de la refuser.
+- Michel ne met **jamais** de repère dans un commit : une modification qui en contient un est refusée (l'agent a pu le recopier depuis la fiche). Au moment de la proposition, l'agent est prévenu et peut proposer à nouveau ; si un repère arrivait quand même à l'étape de la branche, Michel ne crée pas la branche et la tentative passe `failed` avec cette cause (c'est un refus de Michel, pas le tien). Si une correction a vraiment besoin d'une valeur secrète dans le code, tu l'ajoutes à la main.
+- Les modifications affichées sur la page sont masquées, mais la branche contient la modification telle qu'elle a été écrite : une ligne de ton code qui ressemble à un mot de passe n'est pas une raison de refuser la modification.
 - **La limite** : les fichiers de la copie ne sont **pas** masqués. La copie contient ton vrai code, Claude Code le lit, donc il part chez Anthropic. Ce qui protège tes secrets, c'est que les fichiers exclus ne sont pas copiés ; un secret écrit dans un fichier de ton commit est lu par l'agent. C'est pour ça que Michel te les signale avant que l'agent démarre. La détection des secrets n'est jamais parfaite : certaines formes (`<password>` en XML, valeurs YAML sur plusieurs lignes, mot de passe contenant un `@` non encodé dans une adresse…) peuvent passer.
 
 ## Risques qui restent
@@ -177,7 +178,7 @@ Avant que ce que Michel donne lui-même arrive à l'agent (la fiche, les répons
 | « Tests : pas lancés », projet yarn ou pnpm | Michel n'installe pas avec yarn ni pnpm : vérifie toi-même que ton site marche avant de fusionner. |
 | « Tests : pas lancés », installation refusée | La page dit quel réglage bloque : retire-le, ou vérifie toi-même que ton site marche avant de fusionner. |
 | « Michel a refusé la modification de l'agent » | L'agent a touché un fichier hors de la copie ou un fichier protégé. Rien n'a été appliqué ; tu peux réessayer. |
-| « Michel n'a pas créé la branche : la modification contient un texte de remplacement… » | La modification contenait un repère `[secret-…]` à la place d'un secret. Rien n'a été appliqué ; relance une correction. |
+| « Michel n'a pas créé la branche : la modification contenait un repère… » | La modification contenait un repère `[secret-…]` à la place d'un secret. Rien n'a été appliqué ; relance une correction. |
 | « La proposition a changé depuis que tu l'as lue » | Lis la nouvelle, puis valide-la. |
 | « Une correction est déjà en cours sur ce projet » | Termine-la ou refuse-la d'abord. |
 | Niveau 2 : rien ne démarre | `michel serve` doit tourner ; le projet a besoin de son accord IA ; au plus 3 tentatives lancées seules par jour et par projet. |

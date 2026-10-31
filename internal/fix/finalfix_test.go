@@ -316,11 +316,11 @@ func mapValues(t mask.Table) []string {
 
 func TestSecretHitsNameTheFolder(t *testing.T) {
 	text := secretHitsMessage(i18n.EN, []mask.Hit{{File: "config/db.php", Line: 3}, {File: "config/db.php", Line: 4}, {File: "app.php", Line: 1}})
-	if !strings.Contains(text, "exclude the folder config") || !strings.Contains(text, "move the secrets out of the code") {
+	if !strings.Contains(text, "exclude the folder or folders concerned: config") || !strings.Contains(text, "move them out of the code") {
 		t.Errorf("message = %q", text)
 	}
 	text = secretHitsMessage(i18n.FR, []mask.Hit{{File: "app.php", Line: 1}})
-	if strings.Contains(text, "exclus") || !strings.Contains(text, "sors le secret du code") {
+	if strings.Contains(text, "exclus") || !strings.Contains(text, "sors-le du code") {
 		t.Errorf("a root file has no folder to exclude: %q", text)
 	}
 	if secretHitsMessage(i18n.EN, nil) != "" {

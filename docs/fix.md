@@ -79,7 +79,7 @@ The agent never works in your folder. For each attempt Michel makes, in its data
 
 The copy holds only the files of your last commit. So left out are: whatever git ignores or does not track, `.env*`, `*.pem`, `*.key`, `id_*` files (in every folder, ignoring case), the folders you excluded (`michel project set <name> --exclude <folder>`), symbolic links and special files. A copy is capped at 30,000 files, 256 MiB per file and 4 GiB in all; a larger project is refused (see "Troubleshooting"). During the preparation Michel writes nothing in your project (checked by a test).
 
-Before the agent starts, Michel runs its secret detectors on the files of the copy. A secret written in your code is reported in the conversation ("2 secrets seem written in your code (…): the agent can read them") with the relative files, so that you can keep them out: take the secret out of the code (into an environment variable or a `.env` file, which is never copied), or exclude the folder that holds it (the message names it; `--exclude` takes folder names, not files).
+Before the agent starts, Michel runs its secret detectors on the files of the copy. A secret written in your code is reported in the conversation ("2 secrets seem written in your code (…): the agent can read them") with the relative files, so that you can keep them out: take the secret out of the code (into an environment variable or a `.env` file, which is never copied), or exclude the folder or folders that hold it (the message names them; `--exclude` takes folder names, not files).
 
 ## What the agent can and cannot do
 
@@ -97,7 +97,7 @@ The agent **cannot**:
 - write in `vendor/`, `node_modules/`, `.git/`, `.claude/` or `.mcp.json`, or read your Claude Code files (`~/.claude`, `~/.claude.json`) and your keys (`~/.ssh`);
 - approve, apply, change a setting or the policy: there is no such tool, approval only goes through the local API with its token.
 
-An attempt runs at most 20 minutes and at most 50 turns of the agent, then its process tree is stopped. The agent is asked to write to you in the language of Michel (its messages and the summary of its proposal); code stays as it is. Repository content, advisories and articles are passed to the agent as untrusted data, never as Michel's instructions. Conversations are kept 30 days, with secrets masked.
+An attempt runs at most 20 minutes and at most 50 exchanges with the agent (an exchange = one answer or one action of the agent), then its process tree is stopped. The agent is asked to write to you in the language of Michel (its messages and the summary of its proposal); code stays as it is. Repository content, advisories and articles are passed to the agent as untrusted data, never as Michel's instructions. Conversations are kept 30 days, with secrets masked.
 
 ## What Michel runs itself
 
@@ -108,7 +108,7 @@ At the start, on the copy still as you committed it (before the agent sees it), 
 
 There is no update for a yarn or pnpm lockfile: the agent works from the project's files as they are.
 
-Its result is Michel's first message in the conversation. What this update installs (`vendor/`, `node_modules/`) is removed from the copy right after, and is never part of the proposal nor of the branch, unless your repository already tracks files in that folder: the proposal holds the manifest and the lockfile (plus what the agent changed). When the agent proposes (`propose_fix`), Michel takes one snapshot of the copy, once and for all (later writes of the agent are ignored), rebuilds that snapshot in a scratch folder (`<data>/fix-tmp/<attempt>/`, never the agent's copy), and there:
+Its result is Michel's first message in the conversation. What this update installs (`vendor/`, `node_modules/`) is removed from the copy right after. It is never part of the proposal nor of the branch, unless your repository already versions files in that folder. The proposal holds the manifest and the lockfile (plus what the agent changed). When the agent proposes (`propose_fix`), Michel takes one snapshot of the copy, once and for all (later writes of the agent are ignored), rebuilds that snapshot in a scratch folder (`<data>/fix-tmp/<attempt>/`, never the agent's copy), and there:
 
 1. installs the dependencies (`composer install --no-scripts --no-plugins` or `npm ci --ignore-scripts`), from scratch;
 2. runs the project's tests, if you declared a command (`michel project set <name> --test-cmd "vendor/bin/phpunit"`, split into words without a shell);
@@ -144,7 +144,8 @@ The states you will see on the page: `preparing` → `proposed` → `approved` o
 Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks secrets: AWS keys, GitHub tokens, PEM keys, `.env`-style values, password/secret/token/key assignments, passwords in connection URLs; the absolute paths of your computer become relative paths. Each secret is replaced by a token `[secret-<random>-N]`. The table linking the tokens to the real values stays in Michel's secret store (DPAPI-encrypted on Windows, a file readable by you only elsewhere) and is never sent. The audit records how many values were masked and of which kind, never the values.
 
 - The page and the API never unmask: a secret shows as a token there.
-- Michel **never** unmasks into a commit: a change that holds a token is refused (the agent may have copied it from the brief). At the proposal, the agent is told and can propose again; should one reach the branch step, Michel creates no branch and the attempt is `failed` with that cause (it is Michel's refusal, not yours). If a fix really needs a secret value in code, you add it by hand. The diff shown on the page is masked, but the branch holds the change as written: a password-like line of your own code is not a reason to refuse it.
+- Michel **never** unmasks into a commit: a change that holds a token is refused (the agent may have copied it from the brief). At the proposal, the agent is told and can propose again; should one reach the branch step, Michel creates no branch and the attempt is `failed` with that cause (it is Michel's refusal, not yours). If a fix really needs a secret value in code, you add it by hand.
+- The diff shown on the page is masked, but the branch holds the change as written: a password-like line of your own code is not a reason to refuse the change.
 - **The limit**: the files of the copy are **not** masked. The copy holds your real code, and Claude Code reads it, so it goes to Anthropic. What protects your secrets is that the excluded files are not copied; a secret written in a committed file is read by the agent. That is why Michel reports those before the agent starts. Secret detection is never perfect: some forms (XML `<password>`, YAML block values, a password with an unencoded `@` in a URL…) can slip through.
 
 ## Residual risks
@@ -173,7 +174,7 @@ Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks
 | "Tests: not run", yarn or pnpm project | Michel does not install with yarn or pnpm: check your site yourself before merging. |
 | "Tests: not run", install refused | The page says which setting blocks: remove it, or check your site yourself before merging. |
 | "Michel refused the agent's change" | The agent touched a file outside the copy or a protected file. Nothing was applied; try again. |
-| "Michel did not create the branch: the change holds a placeholder…" | The change held a `[secret-…]` token instead of a secret. Nothing was applied; start a new fix. |
+| "Michel did not create the branch: the change held a placeholder…" | The change held a `[secret-…]` token instead of a secret. Nothing was applied; start a new fix. |
 | "The proposal changed since you read it" | Read the new one, then approve it. |
 | "A fix is already in progress on this project" | Finish or refuse it first. |
 | Level 2: nothing starts | `michel serve` must run; the project needs its AI consent; at most 3 attempts started alone per day and per project. |
