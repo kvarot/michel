@@ -215,7 +215,26 @@ func (f *fileReader) get(p string, say bool) *readFile {
 		f.c.unseen(cleanPath(p), ReasonRefused)
 		return nil
 	}
-	res, ok := f.c.run(cmdRead(p))
+	// The name is not enough: a php.ini may be a link to /etc/shadow or to
+	// another user's home. Resolve it on the server, apply the rules to the
+	// real file too, and read the real file.
+	rl, ok := f.c.run([]string{"readlink", "-f", p})
+	if !ok {
+		if f.c.err == nil && say {
+			f.c.unseen(p, ReasonNotRead)
+		}
+		return nil
+	}
+	resolved := cleanPath(strings.TrimSpace(string(rl.Stdout)))
+	if resolved == "" {
+		f.c.unseen(p, ReasonNotRead)
+		return nil
+	}
+	if resolved != p && refusal(f.c.t, f.c.links, resolved) != nil {
+		f.c.unseen(p, ReasonRefused)
+		return nil
+	}
+	res, ok := f.c.run(cmdRead(resolved))
 	if !ok {
 		if f.c.err != nil {
 			return nil

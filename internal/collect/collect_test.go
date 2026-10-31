@@ -535,7 +535,7 @@ func TestUnreadableIniIsUnseen(t *testing.T) {
 		if strings.Contains(l, "sudo") {
 			t.Fatalf("sudo used: %s", l)
 		}
-		if strings.Contains(l, "/etc/php/8.2/fpm/php.ini") {
+		if strings.Contains(l, "'head'") && strings.Contains(l, "/etc/php/8.2/fpm/php.ini") {
 			n++
 		}
 	}

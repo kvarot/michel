@@ -374,26 +374,31 @@ var (
 	// secretParam is a credential passed as a parameter inside a value
 	// (session.save_path = "tcp://redis:6379?auth=..."); its value is
 	// replaced by maskedPart before anything else.
-	secretParam = regexp.MustCompile(`(?i)([?&;,\s](?:auth|password|passwd|pass|pwd|secret|token|key)=)([^&;,\s"']*)`)
+	// The name may carry a [] (phpredis ACL: auth[]=user&auth[]=pass), raw
+	// or URL-encoded; every value of a repeated parameter is masked.
+	secretParam = regexp.MustCompile(`(?i)([?&;,\s](?:auth|password|passwd|pass|pwd|secret|token|key)(?:\[[^\]=&;,\s]*\]|%5B[^=&;,\s]*?%5D)?=)([^&;,\s"']*)`)
 )
 
 // maskedPart stands for a credential removed from inside a value.
 const maskedPart = "[masked]"
 
 // secretSegment reports whether one word of a directive name says it holds
-// a secret. Words are compared whole (or as a known suffix), so pcre.jit or
-// session.use_only_cookies are not caught.
+// a secret: it contains password, passwd, secret, credential, token,
+// license, dsn or key (keys, keyfile, privkey_path...), starts with auth,
+// or is pw, pwd, pass or passphrase. Short words are compared whole, so
+// pcre.jit or session.use_only_cookies are not caught; the few harmless
+// names holding "key" are listed in harmlessNames.
 func secretSegment(w string) bool {
-	for _, sub := range []string{"password", "passwd", "secret", "credential", "token", "license", "dsn"} {
+	for _, sub := range []string{"password", "passwd", "secret", "credential", "token", "license", "dsn", "key"} {
 		if strings.Contains(w, sub) {
 			return true
 		}
 	}
 	switch w {
-	case "pw", "pwd", "pass", "passphrase", "auth", "key":
+	case "pw", "pwd", "pass", "passphrase":
 		return true
 	}
-	return strings.HasPrefix(w, "auth") || strings.HasSuffix(w, "key") && w != "monkey" && w != "hotkey"
+	return strings.HasPrefix(w, "auth")
 }
 
 // SecretName is secretName, for tests and for callers that show a name.

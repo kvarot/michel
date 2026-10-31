@@ -125,3 +125,91 @@ func TestPHPInfoEnvironmentNotDirectives(t *testing.T) {
 		t.Fatalf("directives %v", info.Directives)
 	}
 }
+
+func TestRepeatedAuthParamMasked(t *testing.T) {
+	for _, v := range []string{
+		"tcp://redis.example.test:6379?auth[]=user&auth[]=hunter2-demo",
+		"tcp://redis.example.test:6379?auth%5B%5D=user&auth%5B%5D=hunter2-demo",
+	} {
+		h := debian(t)
+		h.cliJSON = strings.Replace(h.cliJSON, `"session.save_path":"/var/lib/php/sessions"`, `"session.save_path":"`+v+`"`, 1)
+		e := start(t, h)
+		inv := run(t, e, nil)
+		d, ok := directive(inv, "cli", "session.save_path")
+		if !ok || !strings.Contains(d.Value, "redis.example.test") {
+			t.Fatalf("save_path %+v", d)
+		}
+		body, _ := json.Marshal(inv)
+		all := string(body)
+		rows, err := e.st.DB().Query(`SELECT evidence FROM audit_event`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var ev string
+			rows.Scan(&ev)
+			all += ev
+		}
+		rows.Close()
+		if strings.Contains(all, "hunter2-demo") {
+			t.Fatalf("%s: credential stored", v)
+		}
+	}
+}
+
+func TestKeyWordsInNamesAreSecret(t *testing.T) {
+	for _, n := range []string{"redis.keys", "app.api_keys", "ssl.keyfile", "java.keystore", "tls.privkey_path", "session.redis_key"} {
+		if !collect.SecretName(n) {
+			t.Errorf("%s not secret", n)
+		}
+	}
+	for _, n := range []string{"xdebug.idekey", "highlight.keyword", "mysqlnd.sha256_server_public_key", "memory_limit"} {
+		if collect.SecretName(n) {
+			t.Errorf("%s secret", n)
+		}
+	}
+}
+
+func TestLinkedConfigFileResolvedBeforeRead(t *testing.T) {
+	h := debian(t)
+	evil := "/etc/php/8.2/fpm/conf.d/evil.ini"
+	h.files[evil] = "root:x:0:0\n"
+	h.files["/etc/shadow"] = "root:x:0:0\n"
+	h.links[evil] = "/etc/shadow"
+	h.links["/etc/php/8.2/fpm/conf.d/home.ini"] = "/home/other/app.ini"
+	h.files["/home/other/app.ini"] = "x = 1\n"
+	o := h.fpm["/usr/sbin/php-fpm8.2"]
+	o.i = strings.Replace(o.i, "/etc/php/8.2/fpm/conf.d/10-opcache.ini", "/etc/php/8.2/fpm/conf.d/10-opcache.ini,\n"+evil+",\n/etc/php/8.2/fpm/conf.d/home.ini", 1)
+	h.fpm["/usr/sbin/php-fpm8.2"] = o
+	e := start(t, h)
+	e.deps.ExtraPaths = []string{"/etc/php/8.2/fpm/conf.d/home.ini"}
+	inv := run(t, e, demoLinks)
+	if !hasUnseen(inv, evil, "collect.unseen.refused") || !hasUnseen(inv, "/etc/php/8.2/fpm/conf.d/home.ini", "collect.unseen.refused") {
+		t.Fatalf("unseen %+v", inv.Unseen)
+	}
+	for _, l := range e.srv.Log() {
+		if strings.Contains(l, "'head'") && (strings.Contains(l, "evil.ini") || strings.Contains(l, "/etc/shadow") || strings.Contains(l, "home.ini") || strings.Contains(l, "/home/other")) {
+			t.Fatalf("linked secret file read: %s", l)
+		}
+	}
+	for _, f := range inv.Files {
+		if f.Path == evil {
+			t.Fatal("evil.ini listed as read")
+		}
+	}
+	// A link to an allowed file is read through its real path.
+	h2 := debian(t)
+	h2.links["/etc/php/8.2/fpm/php.ini"] = "/etc/php/8.2/fpm/php.ini.d/real.ini"
+	h2.files["/etc/php/8.2/fpm/php.ini.d/real.ini"] = "memory_limit = 256M\n"
+	e2 := start(t, h2)
+	inv = run(t, e2, nil)
+	read := false
+	for _, l := range e2.srv.Log() {
+		if strings.Contains(l, "'head'") && strings.Contains(l, "/etc/php/8.2/fpm/php.ini.d/real.ini") {
+			read = true
+		}
+	}
+	if !read {
+		t.Fatal("the real file was not read")
+	}
+}
