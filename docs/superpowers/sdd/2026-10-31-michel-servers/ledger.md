@@ -35,3 +35,18 @@ Task 1: minor (deferred): target.Repo.Add stores FixLevel 0 / CheckInterval 0 wh
 Task 1: minor (deferred): PreprodID not validated (exists, not self)
 Task 1: minor (deferred): target Remove leaves orphan findings; target_project rows not cleaned on project purge; FindByIDPrefix cross-kind
 Task 1: minor (deferred): no test that project view/digest counts ignore server findings
+Task 2: dispatched (BASE cc531d5, implementer a4a724694b6b9d16d, opus)
+Ruling R7: a confirmed target.HostKey pins the host key exclusively (known_hosts consulted only when HostKey is empty) — stricter than "fingerprint or known_hosts", safer against a stale known_hosts entry — costs: a re-keyed server needs re-confirmation even if known_hosts was updated.
+Task 2: review — Needs fixes (1 Important: default HostKeyAlgorithms order gives false ErrHostKeyChanged with Ed25519-only known_hosts; Fingerprint shows ECDSA)
+Task 2: minor (deferred): egress.DialLocalSocket exported & unaudited — restrict callers to internal/sshx in boundary_test or document agent-only
+Task 2: minor (deferred): ErrNoKeyAccepted matched on x/crypto message "unable to authenticate" — pin with comment/test
+Task 2: minor (deferred): open(): stop() return not checked after NewClientConn (ctx cancel race returns closed client)
+Task 2: minor (deferred): revoked key / unreadable known_hosts both audited as "error"
+Task 2: minor (deferred): TestDialThroughGateway "no TCP" check async-weak; no audit test for failed Dial
+Task 2: minor (deferred): Quote assumes POSIX login shell (csh/fish differ) — document in docs/servers
+Task 2: minor (deferred): ErrNoAgent wraps socket path text — API must show sentinel only (carry to T12)
+Task 2: ⚠️ ssh.agent_pipe setting not wired (only SystemAgent(path)) — carry to T12 serve wiring
+Task 2: fix round 1/5 (1 addressed, 0 open — host key algorithms from known_hosts, Ed25519 preferred; commits af71400..2b50f6d)
+Task 2: minor (deferred): known_hosts listing only types the server lacks → generic "no common algorithm" instead of typed ErrHostKeyChanged (still refused pre-auth)
+Task 2: minor (deferred): @cert-authority entries ignored when deriving algorithms
+Task 2: complete (commits cc531d5..2b50f6d, review clean)
