@@ -132,6 +132,14 @@ func (m *Masker) Counts() map[string]int {
 	return out
 }
 
+// Len returns the number of tokens of the table: a Mask that made a new
+// token makes it grow (the caller then saves the table).
+func (m *Masker) Len() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.table)
+}
+
 // Table returns a copy of the token table.
 func (m *Masker) Table() Table {
 	m.mu.Lock()

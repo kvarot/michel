@@ -67,11 +67,15 @@ var detectors = []detector{
 // public keys. Keep this list short.
 var notSecretNames = regexp.MustCompile(`(?i)^(?:MONKEY|DONKEY|TURKEY|HOTKEY|COMPASS|BYPASS|SURPASS|.*PUBLIC_?KEY.*)$`)
 
-// tokenShape is any "[secret-...]" string, whatever its nonce.
-var tokenShape = regexp.MustCompile(`\[secret-[0-9A-Za-z-]+\]`)
+// tokenShape is the exact shape of a token Michel makes,
+// "[secret-<8 hex nonce>-<n>]", whatever its nonce. A library file that
+// merely says "[secret-key]" is not one.
+var tokenShape = regexp.MustCompile(`\[secret-[0-9a-f]{8}-[0-9]+\]`)
 
-// HasToken reports whether s contains anything shaped like a mask token,
-// whoever made it. It is the check that no token lands in a commit.
+// HasToken reports whether s contains a mask token of Michel's shape,
+// whichever Masker made it. It is the check that no token lands in a
+// commit; it is run on the raw bytes of a change, never on a masked text
+// (which holds tokens by design).
 func HasToken(s string) bool { return tokenShape.MatchString(s) }
 
 // isPlaceholder reports whether v is exactly "<path>" or exactly one token of

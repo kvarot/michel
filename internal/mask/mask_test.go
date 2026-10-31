@@ -107,7 +107,9 @@ func TestMaskDetectors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New()
 			out := m.Mask(tc.in)
-			if strings.Contains(out, tc.secret) || !HasToken(out) {
+			// The token's random nonce may hold a short secret ("ab"):
+			// look outside the tokens.
+			if strings.Contains(tokenShape.ReplaceAllString(out, ""), tc.secret) || !HasToken(out) {
 				t.Fatalf("not masked: %q", out)
 			}
 			if m.Counts()[tc.kind] != 1 {
@@ -410,7 +412,9 @@ func TestScanFilesSkipsSymlinks(t *testing.T) {
 
 func TestHasToken(t *testing.T) {
 	for in, want := range map[string]bool{
-		"a [secret-1] b": true, "[secret-42]": true, "[secret-deadbeef-7]": true,
+		"a [secret-deadbeef-1] b": true, "[secret-0a1b2c3d-42]": true, "[secret-deadbeef-7]": true,
+		// Not Michel's shape: a library may say these literally.
+		"[secret-1]": false, "[secret-42]": false, "[secret-key]": false, "[secret-DEADBEEF-7]": false, "[secret-deadbee-7]": false,
 		"[secret-]": false, "secret-1": false, "[note]": false, "": false,
 	} {
 		if HasToken(in) != want {

@@ -187,8 +187,10 @@ export function mergeMessages(list, msg) {
   return out.map((m, i) => ({ m, i })).sort((a, b) => at(a.m) - at(b.m) || a.i - b.i).map((x) => x.m)
 }
 
-// A masked secret, whole: Michel never shows a fragment (ruling 38).
-const maskToken = /\[secret-[0-9A-Za-z-]+\]/g
+// A masked secret, whole, in Michel's exact token shape (the same as
+// mask.HasToken): Michel never shows a fragment (ruling 38), and a text
+// such as "[secret-key]" in a library stays plain text.
+const maskToken = /\[secret-[0-9a-f]{8}-[0-9]+\]/g
 
 /**
  * splitMasked cuts a text into plain parts ({text}) and masked secrets

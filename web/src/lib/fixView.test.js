@@ -156,6 +156,7 @@ describe('splitMasked', () => {
       { text: 'key=' }, { secret: '[secret-ab12cd34-1]' }, { text: ' and ' }, { secret: '[secret-ab12cd34-2]' }, { text: '.' },
     ])
     expect(splitMasked('nothing')).toEqual([{ text: 'nothing' }])
+    expect(splitMasked('a [secret-key] b')).toEqual([{ text: 'a [secret-key] b' }])
     expect(splitMasked('')).toEqual([])
   })
 })
