@@ -6,8 +6,11 @@ package sshtest
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -53,6 +56,9 @@ type Options struct {
 	Sudo bool
 	// Shell runs `sh -s`; nil means `sh -s` is unsupported (exit 127).
 	Shell ShellFunc
+	// HostKeyTypes lists the host keys the server holds, among "ed25519",
+	// "ecdsa" (P-256) and "rsa" (2048 bits); empty means ed25519 only.
+	HostKeyTypes []string
 	// PasswordOnly makes the server refuse every public key and offer only
 	// password authentication.
 	PasswordOnly bool
@@ -62,7 +68,8 @@ type Options struct {
 type Server struct {
 	opts     Options
 	ln       net.Listener
-	signer   ssh.Signer
+	signers  map[string]ssh.Signer // by Options.HostKeyTypes name
+	main     ssh.Signer            // ed25519 when held, else the first
 	accepted atomic.Int64
 	authN    atomic.Int64
 
@@ -78,19 +85,27 @@ type Server struct {
 // New starts a server on 127.0.0.1:0 and stops it at the end of the test.
 func New(t testing.TB, opts Options) *Server {
 	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	types := opts.HostKeyTypes
+	if len(types) == 0 {
+		types = []string{"ed25519"}
 	}
-	signer, err := ssh.NewSignerFromKey(priv)
-	if err != nil {
-		t.Fatal(err)
+	signers := map[string]ssh.Signer{}
+	var main ssh.Signer
+	for _, typ := range types {
+		sg, err := newHostSigner(typ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signers[typ] = sg
+		if main == nil || typ == "ed25519" {
+			main = sg
+		}
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{opts: opts, ln: ln, signer: signer, files: map[string]string{}, authorized: map[string]bool{}}
+	s := &Server{opts: opts, ln: ln, signers: signers, main: main, files: map[string]string{}, authorized: map[string]bool{}}
 	for k, v := range opts.Files {
 		s.files[k] = v
 	}
@@ -103,11 +118,39 @@ func New(t testing.TB, opts Options) *Server {
 // Addr is the host:port the server listens on.
 func (s *Server) Addr() string { return s.ln.Addr().String() }
 
-// HostPublicKey is the server's host key.
-func (s *Server) HostPublicKey() ssh.PublicKey { return s.signer.PublicKey() }
+func newHostSigner(typ string) (ssh.Signer, error) {
+	var key any
+	var err error
+	switch typ {
+	case "ed25519":
+		_, key, err = ed25519.GenerateKey(rand.Reader)
+	case "ecdsa":
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	case "rsa":
+		key, err = rsa.GenerateKey(rand.Reader, 2048)
+	default:
+		return nil, fmt.Errorf("sshtest: unknown host key type %q", typ)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewSignerFromKey(key)
+}
 
-// HostKeyFingerprint is the SHA256 fingerprint of the host key.
-func (s *Server) HostKeyFingerprint() string { return ssh.FingerprintSHA256(s.signer.PublicKey()) }
+// HostPublicKey is the server's main host key: the Ed25519 one when the
+// server holds it, else the first of Options.HostKeyTypes.
+func (s *Server) HostPublicKey() ssh.PublicKey { return s.main.PublicKey() }
+
+// HostPublicKeyOf is the host key of one Options.HostKeyTypes name, or nil.
+func (s *Server) HostPublicKeyOf(typ string) ssh.PublicKey {
+	if sg, ok := s.signers[typ]; ok {
+		return sg.PublicKey()
+	}
+	return nil
+}
+
+// HostKeyFingerprint is the SHA256 fingerprint of the main host key.
+func (s *Server) HostKeyFingerprint() string { return ssh.FingerprintSHA256(s.main.PublicKey()) }
 
 // Accepted counts the TCP connections the server accepted.
 func (s *Server) Accepted() int { return int(s.accepted.Load()) }
@@ -192,7 +235,9 @@ func (s *Server) config() *ssh.ServerConfig {
 			return &ssh.Permissions{}, nil
 		}
 	}
-	cfg.AddHostKey(s.signer)
+	for _, sg := range s.signers {
+		cfg.AddHostKey(sg)
+	}
 	return cfg
 }
 

@@ -385,3 +385,64 @@ func TestConnectAudited(t *testing.T) {
 		t.Fatalf("%d target.connect events, want 1", n)
 	}
 }
+
+// multiKey is a server with the three usual host key types; the x/crypto
+// default would negotiate ECDSA first.
+func multiKey(t *testing.T) *sshtest.Server {
+	return sshtest.New(t, sshtest.Options{
+		HostKeyTypes: []string{"rsa", "ecdsa", "ed25519"},
+		Commands:     map[string]sshtest.Handler{"echo-args": echoArgs},
+	})
+}
+
+func TestKnownHostsOnlyOneKeyTypeOfSeveral(t *testing.T) {
+	for _, typ := range []string{"ed25519", "rsa", "ecdsa"} {
+		t.Run(typ, func(t *testing.T) {
+			srv := multiKey(t)
+			d := deps(t, srv, true)
+			key := srv.HostPublicKeyOf(typ)
+			line := knownhosts.Line([]string{knownhosts.Normalize(srv.Addr())}, key)
+			if err := os.WriteFile(d.KnownHosts, []byte(line+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := sshx.Dial(context.Background(), d, tgt(t, srv, false))
+			if err != nil {
+				t.Fatalf("known_hosts lists only the %s key: Dial: %v", typ, err)
+			}
+			defer c.Close()
+			if c.HostKeyFingerprint() != ssh.FingerprintSHA256(key) || c.HostKeyType() != key.Type() {
+				t.Fatalf("negotiated %s %s, want the %s key", c.HostKeyType(), c.HostKeyFingerprint(), typ)
+			}
+		})
+	}
+}
+
+func TestFingerprintPrefersEd25519(t *testing.T) {
+	srv := multiKey(t)
+	d := deps(t, srv, true)
+	tg := tgt(t, srv, false)
+	want := ssh.FingerprintSHA256(srv.HostPublicKeyOf("ed25519"))
+	fp, typ, err := sshx.FingerprintKey(context.Background(), d, tg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp != want || typ != ssh.KeyAlgoED25519 {
+		t.Fatalf("Fingerprint = %s %s, want the Ed25519 key %s", typ, fp, want)
+	}
+	if fp2, _ := sshx.Fingerprint(context.Background(), d, tg); fp2 != want {
+		t.Fatalf("Fingerprint = %s", fp2)
+	}
+	_, err = sshx.Dial(context.Background(), d, tg)
+	var unk sshx.ErrHostKeyUnknown
+	if !errors.As(err, &unk) || unk.Fingerprint != want || unk.KeyType != ssh.KeyAlgoED25519 {
+		t.Fatalf("unknown host: %v (%+v)", err, unk)
+	}
+
+	// The confirmed Ed25519 fingerprint is the pin Dial checks against.
+	tg.HostKey = want
+	c, err := sshx.Dial(context.Background(), d, tg)
+	if err != nil {
+		t.Fatalf("pinned Ed25519 fingerprint refused: %v", err)
+	}
+	c.Close()
+}

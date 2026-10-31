@@ -88,6 +88,7 @@ type Client struct {
 	d       Deps
 	t       target.Target
 	fp      string
+	keyType string
 	start   time.Time
 	timeout time.Duration
 
@@ -104,8 +105,9 @@ func address(t target.Target) string {
 }
 
 // open dials addr through the gateway and runs the SSH handshake bounded by
-// ctx and handshakeTimeout.
-func open(ctx context.Context, d Deps, addr string, cfg *ssh.ClientConfig) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
+// ctx and handshakeTimeout. algos, once the TCP peer is known, chooses the
+// host key algorithms to offer.
+func open(ctx context.Context, d Deps, addr string, cfg *ssh.ClientConfig, algos func(remote net.Addr) []string) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
 	if d.Gateway == nil {
 		return nil, nil, nil, errors.New("sshx: no egress gateway")
 	}
@@ -116,6 +118,7 @@ func open(ctx context.Context, d Deps, addr string, cfg *ssh.ClientConfig) (ssh.
 		}
 		return nil, nil, nil, err
 	}
+	cfg.HostKeyAlgorithms = algos(conn.RemoteAddr())
 	deadline := time.Now().Add(handshakeTimeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
@@ -186,7 +189,13 @@ func dial(ctx context.Context, d Deps, t target.Target) (*Client, string, error)
 		Timeout:         handshakeTimeout,
 	}
 	addr := address(t)
-	sc, chans, reqs, err := open(ctx, d, addr, cfg)
+	algos := func(net.Addr) []string { return preferredHostKeyAlgos }
+	if t.HostKey == "" {
+		// Ask for a key type known_hosts holds, so an unchanged server is
+		// never reported as changed because it offered another key type.
+		algos = func(remote net.Addr) []string { return knownHostAlgorithms(kh, addr, remote) }
+	}
+	sc, chans, reqs, err := open(ctx, d, addr, cfg, algos)
 	if err != nil {
 		if hk.err != nil {
 			return nil, hk.fingerprint, hk.err
@@ -200,46 +209,58 @@ func dial(ctx context.Context, d Deps, t target.Target) (*Client, string, error)
 	if timeout <= 0 {
 		timeout = DefaultCommandTimeout
 	}
-	return &Client{c: ssh.NewClient(sc, chans, reqs), d: d, t: t, fp: hk.fingerprint, timeout: timeout}, hk.fingerprint, nil
+	return &Client{c: ssh.NewClient(sc, chans, reqs), d: d, t: t, fp: hk.fingerprint, keyType: hk.keyType, timeout: timeout}, hk.fingerprint, nil
 }
 
 // errFingerprintRead stops the handshake once the host key is captured.
 var errFingerprintRead = errors.New("host key captured")
 
 // Fingerprint reads the server's host key without authenticating, so the
-// user can confirm it: the handshake stops right after the key exchange.
+// user can confirm it: the handshake stops right after the key exchange. It
+// asks for Ed25519 first (then ECDSA, then RSA), like Dial with a pin, so the
+// fingerprint matches what OpenSSH shows and what Dial checks.
 func Fingerprint(ctx context.Context, d Deps, t target.Target) (string, error) {
+	fp, _, err := FingerprintKey(ctx, d, t)
+	return fp, err
+}
+
+// FingerprintKey is Fingerprint plus the SSH key type of the host key
+// (ssh-ed25519, ecdsa-sha2-nistp256, ssh-rsa...).
+func FingerprintKey(ctx context.Context, d Deps, t target.Target) (string, string, error) {
 	if t.Host == "" {
-		return "", errors.New("sshx: the target has no host")
+		return "", "", errors.New("sshx: the target has no host")
 	}
 	user := t.User
 	if user == "" {
 		user = "michel"
 	}
-	var fp string
+	var fp, typ string
 	cfg := &ssh.ClientConfig{
 		User: user,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-			fp = ssh.FingerprintSHA256(key)
+			fp, typ = ssh.FingerprintSHA256(key), key.Type()
 			return errFingerprintRead
 		},
 		Timeout: handshakeTimeout,
 	}
-	sc, _, _, err := open(ctx, d, address(t), cfg)
+	sc, _, _, err := open(ctx, d, address(t), cfg, func(net.Addr) []string { return preferredHostKeyAlgos })
 	if sc != nil {
 		sc.Close()
 	}
 	if fp != "" {
-		return fp, nil
+		return fp, typ, nil
 	}
 	if err == nil {
 		err = errors.New("sshx: the server sent no host key")
 	}
-	return "", err
+	return "", "", err
 }
 
 // HostKeyFingerprint is the fingerprint of the host key accepted at Dial.
 func (c *Client) HostKeyFingerprint() string { return c.fp }
+
+// HostKeyType is the SSH key type of the host key accepted at Dial.
+func (c *Client) HostKeyType() string { return c.keyType }
 
 // Quote turns argv into one POSIX shell command line: every element is
 // single-quoted ('\” for an apostrophe), so the remote shell sees exactly
