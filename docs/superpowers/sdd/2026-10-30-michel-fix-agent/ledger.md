@@ -196,3 +196,11 @@ Task 10: FR 1af7e63
 Task 10: fix round 1/5 (8 addressed, 0 open — page races, long paths, plain causes, strict_local switch, no skill, commands, console explained, minors; commits 2471c6e..1af7e63)
 Task 10: minor (deferred): a failed rule write after the strict_local switch leaves standard mode without project consent (audited, retry works); ai.consent records external_providers_written false after a switch; bundle size warning (584 kB); no component tests for FixPage lifecycle.
 Task 10: complete (commits 84eddaa..1af7e63, review clean)
+Task 11: BASE 2c38f10
+Task 11: real run done by controller (aggregates in .superpowers/.../real-run-aggregates.md): end-to-end works up to proposal (40 s, MCP used, rescan clean, strict_local switch, audit verify 44 ok); 4 findings — vendor/ in the proposal (170 files), apply refused by a mask-token false positive, Michel's refusal shown as « Tu as refusé », agent answers in English. Carried into the final review fix wave.
+Task 11: part 1 ae593e6 (docs; also fixed date-dependent TestWorkerCapsThreePerDay clock). Concerns → final wave: secret_hits message points to an exclude setting that only takes folders; agent.Spec.MaxTurns never set by the service.
+Ruling 45: a vanished finding without the merged commit leaves the attempt « inconclusive » (finding status gone from the scan) — code + docs agree; spec § 8.3 wording covers the finding, not the attempt — cost if wrong: none.
+Task 11: part 2 fe405da; FR 605460b
+Task 11: review Approved. Minors → final wave: ruling 45 missing from deferred-and-rulings.md; docs state line « failed from preparing » incomplete (also from proposed/approved); real-run turns/treeDigest not recorded; re-check docs after the final-wave fixes.
+Task 11: complete (commits 2c38f10..605460b, review clean)
+Final review: MERGE_BASE = git merge-base main HEAD
