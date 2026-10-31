@@ -105,6 +105,21 @@ func judge(a UpstreamAdvisory, version [3]int) (fixed string, vulnerable bool) {
 // ruled out) to be vulnerable. A compiled runtime whose version cannot be
 // read gets a visible finding instead of being skipped.
 func Evaluate(t target.Target, inv target.Inventory, s Set) []scan.Finding {
+	return EvaluateWith(t, inv, s, Options{})
+}
+
+// Options carries what Evaluate cannot read in the inventory.
+type Options struct {
+	// DistroOpen maps an installed package name to the ids and aliases of
+	// the distribution advisories still open on it (the vulnerability
+	// matcher's hits). A runtime installed from that package counts the
+	// upstream advisories they name as open, so the mitigation settings
+	// that hold those back are judged for it too.
+	DistroOpen map[string][]string
+}
+
+// EvaluateWith is Evaluate with the distribution advisories of o.
+func EvaluateWith(t target.Target, inv target.Inventory, s Set, o Options) []scan.Finding {
 	var out []scan.Finding
 	for _, rt := range inv.PHP {
 		key := rt.SAPI + ":" + rt.Binary
@@ -112,6 +127,7 @@ func Evaluate(t target.Target, inv target.Inventory, s Set) []scan.Finding {
 		var open []UpstreamAdvisory
 		switch {
 		case rt.FromPackage != "":
+			open = namedIn(s.Upstream, o.DistroOpen[rt.FromPackage])
 		case !okVer:
 			open = s.Upstream
 			out = append(out, unknownVersionFinding(t, rt, key, s))
@@ -342,6 +358,20 @@ func advisedText(r ConfigRule) string {
 		return "set it to the site directory"
 	}
 	return r.Advised
+}
+
+// namedIn returns the advisories whose id or one alias is in ids.
+func namedIn(all []UpstreamAdvisory, ids []string) []UpstreamAdvisory {
+	if len(ids) == 0 {
+		return nil
+	}
+	var out []UpstreamAdvisory
+	for _, a := range all {
+		if slices.Contains(ids, a.ID) || slices.ContainsFunc(a.Aliases, func(x string) bool { return slices.Contains(ids, x) }) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // mitigatesOpen tells whether the rule holds back one of the open advisories.

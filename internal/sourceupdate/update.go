@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -154,6 +155,11 @@ type Deps struct {
 	Budget  *Budget
 	// Actor is the audit actor ("cli" when empty).
 	Actor string
+	// Rematch, when set, judges the stored server inventories again once an
+	// OSV database was updated (servercheck.Rematch, injected so this package
+	// does not depend on the server packages); it never connects to a server
+	// and returns the number of new findings.
+	Rematch func(ctx context.Context) (int, error)
 }
 
 // NewVersion is a repository source with a newer version than the pinned one.
@@ -188,6 +194,10 @@ type Report struct {
 	DiscoverNew int               `json:"discover_new"`
 	Apply       ApplyResult       `json:"apply"`
 	ApplyError  string            `json:"apply_error,omitempty"`
+	// Rematched is the number of new server findings the rematch found;
+	// RematchError is its error, in English.
+	Rematched    int    `json:"rematched"`
+	RematchError string `json:"rematch_error,omitempty"`
 }
 
 var (
@@ -331,7 +341,7 @@ func Run(ctx context.Context, deps Deps, keys []string, kind source.Kind) (Repor
 	if _, err := feed.NewRepo(deps.Store).Purge(ctx, deps.Now()); err != nil {
 		return rep, err
 	}
-	enrichRead, applied := false, false
+	enrichRead, applied, osvUpdated := false, false, false
 	failed := false
 	for _, e := range entries {
 		if !applied && phaseOf(e) > phaseEnrich {
@@ -351,9 +361,23 @@ func Run(ctx context.Context, deps Deps, keys []string, kind source.Kind) (Repor
 		if ok && phaseOf(e) == phaseEnrich {
 			enrichRead = true
 		}
+		if ok && e.Kind == source.KindOSV && slices.Contains(rep.Updated, e.Key) {
+			osvUpdated = true
+		}
 	}
 	if !applied && enrichRead {
 		failed = applyEnrichment(ctx, deps, &rep) || failed
+	}
+	if osvUpdated && deps.Rematch != nil {
+		n, err := deps.Rematch(ctx)
+		rep.Rematched = n
+		if err != nil {
+			if ctx.Err() != nil {
+				return rep, ctx.Err()
+			}
+			rep.RematchError = bounded(err.Error())
+			failed = true
+		}
 	}
 	if failed || len(rep.Failed) > 0 {
 		return rep, ErrSomeFailed

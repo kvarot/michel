@@ -673,7 +673,8 @@ func (s *server) sourcesUpdate(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	repo := source.NewRepo(s.deps.Store)
 	rep, err := sourceupdate.Run(ctx, sourceupdate.Deps{Store: s.deps.Store, Repo: repo, Audit: s.deps.Audit, Gateway: s.deps.Sources.Gateway,
-		Secrets: s.deps.Secrets, OSVRoot: s.deps.OSVRoot, Now: s.deps.Now, Budget: sourceupdate.BudgetFor(s.deps.Secrets), Actor: sourceActor}, keys, "")
+		Secrets: s.deps.Secrets, OSVRoot: s.deps.OSVRoot, Now: s.deps.Now, Budget: sourceupdate.BudgetFor(s.deps.Secrets), Actor: sourceActor,
+		Rematch: s.deps.Sources.Rematch}, keys, "")
 	if err != nil && !errors.Is(err, sourceupdate.ErrSomeFailed) {
 		s.failed(w, r, strings.Join(keys, ", "), err)
 		return

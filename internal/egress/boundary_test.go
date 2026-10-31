@@ -142,7 +142,7 @@ func TestNoDirectHTTPOutsideEgress(t *testing.T) {
 		t.Fatalf("only %d Go files checked under %s: the walk is not seeing the module", checked, root)
 	}
 	// The packages that read the sources must be among those checked.
-	for _, dir := range []string{"internal/sourceupdate", "internal/sourceupdate/readers", "internal/enrich", "internal/osvdb", "internal/feed", "internal/gitrepo", "internal/workcopy", "internal/agent", "internal/sshx", "internal/sshx/sshtest", "internal/collect", "internal/vulnmatch"} {
+	for _, dir := range []string{"internal/sourceupdate", "internal/sourceupdate/readers", "internal/enrich", "internal/osvdb", "internal/feed", "internal/gitrepo", "internal/workcopy", "internal/agent", "internal/sshx", "internal/sshx/sshtest", "internal/collect", "internal/vulnmatch", "internal/servercheck"} {
 		if !seen[filepath.ToSlash(filepath.Join(root, dir))] {
 			t.Errorf("the boundary walk did not check %s", dir)
 		}

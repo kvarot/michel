@@ -75,6 +75,9 @@ type Sources struct {
 	// (tests); nil keeps the real ones.
 	PluginExec  func(ctx context.Context, name string, args, env []string, dir string) (stdout, stderr []byte, err error)
 	PluginProxy func() (addr string, close func())
+	// Rematch judges the stored server inventories again after an OSV
+	// database update (sourceupdate.Deps.Rematch); nil skips it.
+	Rematch func(ctx context.Context) (int, error)
 }
 
 // maxBody bounds a request body.

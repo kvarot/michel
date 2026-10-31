@@ -21,6 +21,7 @@ import (
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/web"
 	"github.com/spf13/cobra"
 )
@@ -133,8 +134,9 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			d := api.Deps{Store: deps.Store, Audit: deps.Audit, Policy: deps.Policy, Secrets: secrets, Now: deps.Now,
 				Version: buildinfo.Version, OSVRoot: dbRoot(cmd, deps), Lang: deps.Lang,
 				AllowedHosts: []string{bound, net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("localhost", port), net.JoinHostPort("::1", port)},
-				PolicyPath:   sd.PolicyPath, Reload: sd.Reload, Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir},
-				Fix: &fd, FixWorker: true}
+				PolicyPath:   sd.PolicyPath, Reload: sd.Reload,
+				Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir, Rematch: serverRematch(cmd, deps)},
+				Fix:     &fd, FixWorker: true}
 			if fsys, ok := web.Dist(); ok {
 				d.Web = fsys
 			}
@@ -152,6 +154,14 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			fmt.Fprintln(deps.Stdout, deps.T("cli.serve.url", url))
 			served := make(chan error, 1)
 			go func() { served <- srv.Serve(ln) }()
+			// The servers due for a check are checked one at a time in the
+			// background; the scheduler stops with serve.
+			schedCtx, stopSched := context.WithCancel(ctx)
+			schedDone := make(chan struct{})
+			go func() {
+				defer close(schedDone)
+				servercheck.Scheduler(schedCtx, serverCheckDeps(cmd, deps), serverCheckInterval)
+			}()
 			if open {
 				if err := openBrowser(url); err != nil {
 					fmt.Fprintln(deps.Stderr, deps.T("cli.serve.open_failed", err))
@@ -168,6 +178,8 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			shutdown, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
+			stopSched()
+			<-schedDone
 			// The plugin runs the page started, the fix queue and the agents
 			// are stopped and waited for.
 			h.Close()

@@ -170,7 +170,9 @@ func TestDueRespectsInterval(t *testing.T) {
 	mk("never-checked", 24*time.Hour, time.Time{}, true)
 	mk("due", 24*time.Hour, now.Add(-24*time.Hour), true)
 	mk("fresh", 24*time.Hour, now.Add(-23*time.Hour), true)
-	mk("manual", 0, time.Time{}, true)
+	// A zero interval counts as the default 24 h.
+	mk("zero-due", 0, now.Add(-25*time.Hour), true)
+	mk("zero-fresh", 0, now.Add(-1*time.Hour), true)
 	mk("inactive", 24*time.Hour, time.Time{}, false)
 	due, err := r.Due(ctx, now)
 	if err != nil {
@@ -180,7 +182,7 @@ func TestDueRespectsInterval(t *testing.T) {
 	for _, d := range due {
 		names = append(names, d.Name)
 	}
-	if !reflect.DeepEqual(names, []string{"due", "never-checked"}) {
+	if !reflect.DeepEqual(names, []string{"due", "never-checked", "zero-due"}) {
 		t.Fatalf("due = %v", names)
 	}
 }

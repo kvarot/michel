@@ -128,7 +128,8 @@ func normalize(t *Target) error {
 }
 
 // Add validates and stores t. ID, Active and CreatedAt are set here. A zero
-// FixLevel stays 0 and a zero CheckInterval means by hand only.
+// FixLevel stays 0 and a zero CheckInterval is stored as 0 (Due counts it
+// as DefaultCheckInterval).
 func (r *Repo) Add(ctx context.Context, t Target) (Target, error) {
 	if err := normalize(&t); err != nil {
 		return Target{}, err
@@ -386,17 +387,33 @@ func (r *Repo) LatestInventory(ctx context.Context, targetID string) (Inventory,
 	return inv, true, nil
 }
 
+// SetLastCheckAt records when the last check of a server succeeded.
+func (r *Repo) SetLastCheckAt(ctx context.Context, id string, at time.Time) error {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE target SET last_check_at = ? WHERE id = ?`, ts(at), id)
+	if err != nil {
+		return fmt.Errorf("cannot save the date of the check: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	return nil
+}
+
 // Due returns the active servers whose last check is older than their check
-// interval (never checked counts as due), by name. A zero interval means by
-// hand only, so such a server is never due.
+// interval (never checked counts as due), by name. A zero interval counts as
+// DefaultCheckInterval.
 func (r *Repo) Due(ctx context.Context, now time.Time) ([]Target, error) {
-	all, err := r.query(ctx, `SELECT `+cols+` FROM target WHERE active = 1 AND check_interval_s > 0 ORDER BY name`)
+	all, err := r.query(ctx, `SELECT `+cols+` FROM target WHERE active = 1 ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	out := []Target{}
 	for _, t := range all {
-		if t.LastCheckAt.IsZero() || !t.LastCheckAt.Add(t.CheckInterval).After(now) {
+		every := t.CheckInterval
+		if every <= 0 {
+			every = DefaultCheckInterval
+		}
+		if t.LastCheckAt.IsZero() || !t.LastCheckAt.Add(every).After(now) {
 			out = append(out, t)
 		}
 	}

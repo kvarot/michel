@@ -197,6 +197,43 @@ func ApplyExternal(ctx context.Context, tx *sql.Tx, projectID, sourceKey, runID 
 	return newN, still + reappeared, gone, superseded, err
 }
 
+// ServerApply shapes ApplyServerFindings. Unread lists the manifest keys
+// (such as "os-packages" or "fpm:/usr/sbin/php-fpm8.2") the check could not
+// judge: their findings are neither refreshed nor closed. Enriched tells
+// that the findings carry their enrichment (see applyScan).
+type ServerApply struct {
+	Unread   []string
+	Enriched bool
+}
+
+// ApplyServerFindings records the findings of one check of a server
+// (targetID, runID) inside tx with the statuses of a scan (see applyScan):
+// a finding the check no longer sees, without a fix by Michel, becomes gone.
+// Server findings keep the target id in project_id and are stored as OSV
+// findings (source_key ""), so a plugin's findings are never touched. A
+// finding that comes back counts in still. The decisions superseded are
+// returned for the audit log, which the caller writes after the commit.
+func ApplyServerFindings(ctx context.Context, tx *sql.Tx, targetID, runID string, now time.Time, fs []Finding, o ServerApply) (newN, still, gone int, superseded []Superseded, err error) {
+	if targetID == "" {
+		return 0, 0, 0, nil, errors.New("a server finding needs the id of its server")
+	}
+	for _, f := range fs {
+		if f.ProjectID != targetID || (f.Kind != KindServerPackage && f.Kind != KindServerConfig) {
+			return 0, 0, 0, nil, fmt.Errorf("finding %s is not a finding of server %s", label(f), targetID)
+		}
+	}
+	current, err := currentDecisions(ctx, tx, targetID)
+	if err != nil {
+		return 0, 0, 0, nil, err
+	}
+	unread := map[string]bool{}
+	for _, m := range o.Unread {
+		unread[m] = true
+	}
+	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, targetID, "", runID, now, fs, unread, current, o.Enriched)
+	return newN, still + reappeared, gone, superseded, err
+}
+
 // apply is applyScan for the findings of one source: "" for the OSV scan, a
 // plugin key for a plugin run. Only the findings of that source are read and
 // closed; the findings are stored with that source key.

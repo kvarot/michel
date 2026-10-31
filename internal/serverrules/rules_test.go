@@ -220,3 +220,41 @@ func TestEveryRuleHasEnAndFrText(t *testing.T) {
 		}
 	}
 }
+
+func TestDistroAdvisoryOpensMitigations(t *testing.T) {
+	ids := func(fs []scan.Finding) []string {
+		var out []string
+		for _, f := range fs {
+			out = append(out, f.OSVID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	s := mustRules(t)
+	tg := srv(target.EnvProd, target.KindVPS)
+	for _, c := range []struct {
+		version string
+		want    []string
+	}{
+		{"8.3.6-1", []string{"session_upload_progress_off"}},
+		{"8.5.1-1", []string{"fatal_error_backtraces_off", "session_upload_progress_off"}},
+	} {
+		inv := target.Inventory{PHP: []target.PHPRuntime{fpm(c.version, "php-fpm-demo")}}
+		if fs := Evaluate(tg, inv, s); len(fs) != 0 {
+			t.Fatalf("%s without distro advisories: %+v", c.version, fs)
+		}
+		other := EvaluateWith(tg, inv, s, Options{DistroOpen: map[string][]string{"php-other": {"CVE-2026-109618"}}})
+		if len(other) != 0 {
+			t.Fatalf("%s: an advisory on another package opened %+v", c.version, other)
+		}
+		got := EvaluateWith(tg, inv, s, Options{DistroOpen: map[string][]string{"php-fpm-demo": {"DSA-0000-9", "CVE-2026-109619"}}})
+		if !slices.Equal(ids(got), c.want) {
+			t.Fatalf("%s: findings %v, want %v", c.version, ids(got), c.want)
+		}
+		for _, f := range got {
+			if !f.Mitigation || f.Kind != scan.KindServerConfig {
+				t.Fatalf("%s: %+v", c.version, f)
+			}
+		}
+	}
+}

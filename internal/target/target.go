@@ -46,8 +46,8 @@ const (
 )
 
 // DefaultCheckInterval is the time between two checks of a server unless the
-// user chooses another one. Add keeps the interval it is given (0 means by
-// hand only), so callers that want the default set it.
+// user chooses another one. Add keeps the interval it is given; Due counts a
+// zero interval as this default.
 const DefaultCheckInterval = 24 * time.Hour
 
 // Target is one server.
@@ -63,7 +63,7 @@ type Target struct {
 	Env            Env
 	Classification policy.Classification
 	FixLevel       int
-	// CheckInterval is the time between two automatic checks; 0 means by hand only.
+	// CheckInterval is the time between two automatic checks; 0 means DefaultCheckInterval.
 	CheckInterval time.Duration
 	PreprodID     string
 	Executor      Executor
