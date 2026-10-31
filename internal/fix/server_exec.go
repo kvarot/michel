@@ -1,13 +1,16 @@
 package fix
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/scan"
@@ -18,9 +21,37 @@ import (
 )
 
 // Nothing here logs or audits what a server printed: a script's error
-// output, a simulation's output or a backup's content never leave this
-// file except as the encrypted backup copy. Audit events carry ids, hashes,
-// exit statuses and counts.
+// output is only looked at to tell its own outcome lines apart, a
+// simulation's output is parsed, a backup's content is kept encrypted;
+// none of them is stored as text, logged or audited. Audit events carry
+// ids, hashes, exit statuses, error keys and counts.
+
+// Bounds of a fix script's run. They replace, for the scripts only, the
+// collection's per-command cap: an apt-get with triggers easily takes
+// minutes, and a running fix is never killed.
+const (
+	DefaultConfigApplyTimeout  = 5 * time.Minute
+	DefaultPackageApplyTimeout = 30 * time.Minute
+	// recordTimeout bounds what Michel records after a run, under a
+	// context the caller cannot cancel.
+	recordTimeout = 2 * time.Minute
+	// runningMargin is added to the longest bound before Sweep takes a
+	// running attempt of a stopped process for lost.
+	runningMargin = 10 * time.Minute
+)
+
+func (d Deps) applyBound(pkg bool) time.Duration {
+	if pkg {
+		if d.PackageApplyTimeout > 0 {
+			return d.PackageApplyTimeout
+		}
+		return DefaultPackageApplyTimeout
+	}
+	if d.ConfigApplyTimeout > 0 {
+		return d.ConfigApplyTimeout
+	}
+	return DefaultConfigApplyTimeout
+}
 
 // Fixed details of the steps (English, Michel's own words).
 const (
@@ -29,6 +60,7 @@ const (
 	detailStopped     = "stopped before any change"
 	detailRolledBack  = "failed after the change; the script put the files back"
 	detailRollbackBad = "failed, and putting the files back failed too"
+	detailPkgFailed   = "the upgrade failed; the package may have changed"
 	detailStderr      = "PHP complained while reading the file"
 	detailSiteDown    = "the site does not answer"
 	detailNoSiteCheck = "no site check is possible from this computer"
@@ -36,6 +68,7 @@ const (
 	detailPartial     = "the check could not judge everything"
 	detailCheckFailed = "the check did not complete"
 	detailProven      = "the check no longer sees the problem"
+	detailUnknown     = "the run ended without an answer (time limit or connection lost)"
 )
 
 // shArgv is how a bundle is sent: on standard input, to `sudo -n sh -s`
@@ -68,14 +101,42 @@ func (r *serverRun) step(op, detail string, ok bool) {
 	}
 }
 
-func (r *serverRun) saveSteps(ctx context.Context) {
-	_ = r.d.repo().SetSteps(ctx, r.prop.ID, r.steps)
+// pkg tells whether the fix upgrades a package: no script can undo it.
+func (r *serverRun) pkg() bool { return r.plan.NeedsSnapshot || r.sf.NeedsSnapshot }
+
+// keep runs f and logs its error: what Michel records after a run must
+// never be dropped silently.
+func keep(what string, attemptID string, err error) error {
+	if err != nil {
+		slog.Warn("server fix: cannot record", "what", what, "attempt", attemptID, "err", err)
+	}
+	return err
+}
+
+func (r *serverRun) saveSteps(ctx context.Context) error {
+	return keep("steps", r.a.ID, r.d.repo().SetSteps(ctx, r.prop.ID, r.steps))
+}
+
+// move changes the attempt's state; a failure is logged and audited.
+func (r *serverRun) move(ctx context.Context, from []State, to State, cause string) error {
+	err := r.d.repo().SetState(ctx, r.a.ID, from, to, cause)
+	if err != nil {
+		keep("state "+string(to), r.a.ID, err)
+		_ = r.audit(ctx, "server_fix.state", "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "to": string(to)})
+	}
+	return err
+}
+
+// audit records an event; a failure is logged.
+func (r *serverRun) audit(ctx context.Context, action, result string, ev map[string]any) error {
+	return keep(action, r.a.ID, r.d.record(ctx, action, r.a.ID, result, ev))
 }
 
 // checked loads what Apply and AppliedByMe need, and checks that the
 // approved proposal is the current one and that its stored scripts and
 // record still have the hash the user approved. Nothing is sent when it
-// fails.
+// fails; a record that no longer matches ends the attempt (failed), so a
+// new fix can be prepared.
 func (d Deps) checked(ctx context.Context, a Attempt, action string) (*serverRun, error) {
 	repo := d.repo()
 	prop, ok, err := repo.CurrentProposal(ctx, a.ID)
@@ -86,19 +147,19 @@ func (d Deps) checked(ctx context.Context, a Attempt, action string) (*serverRun
 		return nil, ErrNoProposal
 	}
 	refuse := func(reason string, e error) (*serverRun, error) {
-		_ = d.record(ctx, action, a.ID, "refused", map[string]any{"attempt_id": a.ID, "target_id": a.ProjectID, "reason": reason,
-			"approved_hash": a.ApprovedHash, "current_hash": prop.Hash})
+		_ = keep(action, a.ID, d.record(ctx, action, a.ID, "refused", map[string]any{"attempt_id": a.ID, "target_id": a.ProjectID, "reason": reason,
+			"approved_hash": a.ApprovedHash, "current_hash": prop.Hash}))
 		return nil, e
 	}
 	if prop.ID != a.ApprovedProposal || prop.Hash != a.ApprovedHash || prop.Hash == "" {
 		return refuse("proposal changed after approval", ErrStaleProposal)
 	}
 	if prop.Scripts == nil || prop.Server == nil {
-		return refuse("no scripts", ErrScriptChanged)
+		return d.endRefused(ctx, a, ErrScriptChanged, refuse, "no scripts")
 	}
 	sf := *prop.Server
 	if serverfix.Hash(*prop.Scripts) != prop.Scripts.Hash || serverHash(prop.Scripts.Hash, sf) != prop.Hash || sf.TargetID != a.ProjectID {
-		return refuse("stored scripts do not match their hash", ErrScriptChanged)
+		return d.endRefused(ctx, a, ErrScriptChanged, refuse, "stored scripts do not match their hash")
 	}
 	if d.Targets == nil {
 		return nil, errors.New("the fix service needs the server registry")
@@ -110,10 +171,19 @@ func (d Deps) checked(ctx context.Context, a Attempt, action string) (*serverRun
 	return &serverRun{d: d, a: a, prop: prop, sf: sf, t: t}, nil
 }
 
+// endRefused audits a refusal and ends the approved attempt with its cause.
+func (d Deps) endRefused(ctx context.Context, a Attempt, e error, refuse func(string, error) (*serverRun, error), reason string) (*serverRun, error) {
+	_, _ = refuse(reason, e)
+	if err := d.repo().SetState(ctx, a.ID, []State{StateApproved}, StateFailed, d.causeOf(e)); err != nil {
+		return nil, errors.Join(e, keep("state failed", a.ID, err))
+	}
+	return nil, e
+}
+
 // rebuild validates the stored actions again against the current
 // inventory and renders them with the same correction id: the scripts must
 // come out byte for byte the validated ones (same hash), or nothing is
-// sent (ErrScriptChanged).
+// sent (ErrScriptChanged, the attempt ends).
 func (r *serverRun) rebuild(ctx context.Context, action string) error {
 	inv, ok, err := r.d.Targets.LatestInventory(ctx, r.t.ID)
 	if err != nil {
@@ -122,66 +192,106 @@ func (r *serverRun) rebuild(ctx context.Context, action string) error {
 	if !ok {
 		return ErrNoInventory
 	}
+	reason := ""
 	v, err := serverfix.Validate(serverfix.Plan{TargetID: r.sf.TargetID, FindingID: r.sf.FindingID, Mitigation: r.sf.Mitigation, Actions: r.sf.Actions}, r.t, inv)
 	var b serverfix.Bundle
-	if err == nil {
-		b, err = serverfix.Render(v, r.t, r.sf.CorrectionID)
+	switch {
+	case err != nil:
+		reason = "validation against the current inventory failed"
+	default:
+		if b, err = serverfix.Render(v, r.t, r.sf.CorrectionID); err != nil {
+			reason = "render failed"
+		} else if b.Hash != r.prop.Scripts.Hash {
+			reason = "scripts differ from the validated ones"
+		}
 	}
-	if err != nil || b.Hash != r.prop.Scripts.Hash {
-		_ = r.d.record(ctx, action, r.a.ID, "refused", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID,
-			"reason": "scripts differ from the validated ones", "hash": r.prop.Hash})
-		return ErrScriptChanged
+	if reason != "" {
+		_ = r.audit(ctx, action, "refused", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "reason": reason, "hash": r.prop.Hash})
+		return errors.Join(ErrScriptChanged, r.move(ctx, []State{StateApproved}, StateFailed, r.d.causeOf(ErrScriptChanged)))
 	}
 	r.b, r.plan = b, v
 	return nil
 }
 
-// Apply of a server fix, executor michel: under the attempt's lock, state
-// approved. The scripts are checked against the approved hash and rendered
-// again from the current inventory (same hash, or nothing is sent); a
-// package upgrade is simulated again in the same SSH connection right
-// before; the apply script goes on standard input; then Michel checks the
-// site from the workstation and checks the server again. A site that no
-// longer answers makes Michel run undo at once and check the site again.
+// Apply of a server fix, executor michel, state approved.
+//
+// Before anything is sent: the scripts are checked against the approved
+// hash and rendered again from the current inventory (same hash); the
+// executor and sudo mode are checked again on the re-rendered bundle; a
+// package upgrade needs its snapshot acknowledged. Then the attempt is
+// claimed (approved → running, one conditional update: a second Apply,
+// from any process, gets ErrBusy and a Refuse is refused). From there on
+// nothing depends on the caller's context: the script and everything
+// recorded after it run to their end. A package upgrade is simulated
+// again in the same SSH connection right before; the apply script goes on
+// standard input, bounded by its own limit and never killed; then Michel
+// checks the site from the workstation and checks the server again.
 func (d Deps) applyServer(ctx context.Context, a Attempt) error {
 	r, err := d.checked(ctx, a, "server_fix.apply")
 	if err != nil {
 		return err
 	}
-	if r.sf.Executor != target.ExecMichel || r.t.Executor != target.ExecMichel || (r.prop.Scripts.RunAsRoot && r.t.Sudo != target.SudoNopasswd) {
-		_ = d.record(ctx, "server_fix.apply", a.ID, "refused", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "reason": "not run by Michel"})
-		return ErrNotMichelExecutor
-	}
 	if r.sf.NeedsSnapshot {
 		if _, _, ok, err := d.repo().SnapshotAck(ctx, a.ID); err != nil {
 			return err
 		} else if !ok {
+			_ = r.audit(ctx, "server_fix.apply", "refused", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "reason": "snapshot required"})
 			return ErrSnapshotRequired
 		}
 	}
 	if err := r.rebuild(ctx, "server_fix.apply"); err != nil {
 		return err
 	}
+	// Who runs it is judged on the re-rendered bundle and the server's
+	// current settings, never on a stored flag.
+	if r.sf.Executor != target.ExecMichel {
+		// A fix the user runs: it waits for AppliedByMe.
+		_ = r.audit(ctx, "server_fix.apply", "refused", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "reason": "run by the user"})
+		return ErrNotMichelExecutor
+	}
+	if executorFor(r.t, r.b) != target.ExecMichel {
+		// The server's settings changed since the approval: Michel no
+		// longer runs it, the attempt ends so a new fix can be prepared.
+		_ = r.audit(ctx, "server_fix.apply", "refused", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "reason": "not run by Michel any more"})
+		return errors.Join(ErrNotMichelExecutor, r.move(ctx, []State{StateApproved}, StateFailed, d.causeOf(ErrNotMichelExecutor)))
+	}
+	claimed, err := d.repo().Claim(ctx, a.ID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return ErrBusy
+	}
+	bg := context.WithoutCancel(ctx)
+	return r.run(bg)
+}
+
+// run is the claimed part of Apply (state running), under a context the
+// caller cannot cancel.
+func (r *serverRun) run(ctx context.Context) error {
+	d := r.d
+	a := r.a
 	c, err := sshx.Dial(ctx, d.SSH, r.t)
 	if err != nil {
-		_ = d.record(ctx, "server_fix.apply", a.ID, "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "connect"})
-		return fmt.Errorf("cannot connect to server %s: %w", r.t.Name, err)
+		// Nothing was sent: the fix waits for another try.
+		_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "connect"})
+		return errors.Join(fmt.Errorf("cannot connect to server %s: %w", r.t.Name, err), r.move(ctx, []State{StateRunning}, StateApproved, ""))
 	}
 	defer c.Close()
-	if r.plan.NeedsSnapshot {
-		if err := simulate(ctx, c, r.plan); err != nil {
+	if r.pkg() {
+		if err := simulate(ctx, c, r.plan, r.t); err != nil {
 			r.step(string(serverfix.OpPackageUpgrade), detailNotRun, false)
 			return r.fail(ctx, err, "simulation")
 		}
 	}
-	res, err := c.Run(ctx, shArgv(r.b), strings.NewReader(r.b.Apply))
+	res, err := c.RunWith(ctx, shArgv(r.b), strings.NewReader(r.b.Apply), sshx.RunOptions{Timeout: d.applyBound(r.pkg()), NoKill: true})
 	if err != nil {
-		// The script may have stopped anywhere; its trap puts the files back
-		// on a hang-up, but Michel cannot tell: the user must look.
-		r.step("apply", "connection lost", false)
-		_ = r.fetchBackups(ctx, c)
-		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
-		return r.fail(ctx, ErrServerConnectionLost, "connection lost")
+		if errors.Is(err, sshx.ErrNotStarted) {
+			// No session: nothing ran on the server.
+			_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "not started"})
+			return errors.Join(err, r.move(ctx, []State{StateRunning}, StateApproved, ""))
+		}
+		return r.unknown(ctx, c)
 	}
 	code := res.Exit
 	// php -c exits 0 on ini warnings: for the CLI test, anything PHP says on
@@ -189,35 +299,73 @@ func (d Deps) applyServer(ctx context.Context, a Attempt) error {
 	// itself is never kept.
 	stderrFail := code == 0 && len(res.Stderr) > 0 && cliTest(r.plan)
 	r.scriptSteps(code, stderrFail)
-	_ = r.fetchBackups(ctx, c)
+	r.fetchBackups(ctx, c)
 	if code != 0 {
-		e := exitError(code)
+		e := classifyExit(code, res.Stderr, r.pkg())
 		switch {
 		case errors.Is(e, ErrServerRollbackFailed):
 			d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
 		case errors.Is(e, ErrServerRolledBack):
 			d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRolledBack})
+		case errors.Is(e, ErrPackageFailed):
+			d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
 		}
 		ferr := r.fail(ctx, e, "exit "+strconv.Itoa(code))
-		if errors.Is(e, ErrServerLineMoved) {
+		switch {
+		case errors.Is(e, ErrServerLineMoved):
 			c.Close()
 			r.repropose(ctx)
+		case errors.Is(e, ErrPackageFailed), errors.Is(e, ErrServerRollbackFailed):
+			c.Close()
+			r.recollect(ctx)
 		}
 		return ferr
 	}
-	if err := d.repo().SetState(ctx, a.ID, []State{StateApproved}, StateApplied, ""); err != nil {
+	if err := r.move(ctx, []State{StateRunning}, StateApplied, ""); err != nil {
 		return err
 	}
-	_ = d.record(ctx, "server_fix.apply", a.ID, "ok", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
+	_ = r.audit(ctx, "server_fix.apply", "ok", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "scripts_hash": r.b.Hash, "correction_id": r.sf.CorrectionID, "exit": 0, "author": d.approver(a)})
 	if stderrFail {
 		return r.undo(ctx, c, "php complained")
 	}
 	if ok, _ := r.checkSite(ctx); !ok {
+		if r.pkg() {
+			// No script can take a package back: the snapshot can.
+			c.Close()
+			return r.siteDownAfterUpgrade(ctx)
+		}
 		return r.undo(ctx, c, "site check failed")
 	}
 	c.Close()
 	return r.prove(ctx)
+}
+
+// unknown ends a run that got no answer (its bound passed, or the
+// connection dropped): Michel cannot tell what the script changed, so it
+// guesses no undo. The state is unknown, an urgent alert asks to look at
+// the server, and the server is checked again.
+func (r *serverRun) unknown(ctx context.Context, c *sshx.Client) error {
+	c.Close()
+	r.step("apply", detailUnknown, false)
+	r.d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUnknownState, Urgent: true, Backups: r.backupList()})
+	err := r.move(ctx, []State{StateRunning}, StateUnknown, r.d.causeOf(ErrServerUnknownState))
+	_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
+		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "error": "fix.server.unknown_state"})
+	r.recollect(ctx)
+	return errors.Join(ErrServerUnknownState, err)
+}
+
+// siteDownAfterUpgrade ends a package upgrade that took the site down:
+// nothing is undone (no script can), an urgent alert asks to restore the
+// snapshot.
+func (r *serverRun) siteDownAfterUpgrade(ctx context.Context) error {
+	r.d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
+	err := r.move(ctx, []State{StateApplied}, StateFailed, CauseSiteDownAfterUpgrade)
+	_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
+		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "error": "fix.server.site_down_after_upgrade"})
+	r.recollect(ctx)
+	return errors.Join(ErrSiteDownAfterUpgrade, err)
 }
 
 // approver is the actor an attempt was approved by.
@@ -244,6 +392,48 @@ func cliTest(p serverfix.Plan) bool {
 	return false
 }
 
+// scriptRolledBack is the line the apply script prints on its error
+// output when its trap put the files back (serverfix's own text): only
+// then is a failure "rolled back".
+const scriptRolledBack = "echec: fichiers remis"
+
+// classifyExit tells what a non-zero exit of the apply script means. The
+// scripts' own codes first (3 to 8); then sudo's refusal and a shell that
+// could not run (126, 127): nothing ran. For a package upgrade, any other
+// failure may have changed the package: only the snapshot takes it back.
+// For a configuration fix, a failure is "rolled back" only when the script
+// says its trap put the files back; otherwise it stopped before any change.
+func classifyExit(code int, stderr []byte, pkg bool) error {
+	switch code {
+	case 0:
+		return nil
+	case serverfix.ExitNotRoot:
+		return ErrServerWrongUser
+	case serverfix.ExitApplied:
+		return ErrServerAlreadyApplied
+	case serverfix.ExitLineMoved:
+		return ErrServerLineMoved
+	case serverfix.ExitLink:
+		return ErrServerLink
+	case serverfix.ExitUnsafe:
+		return ErrServerUnsafe
+	case 126, 127:
+		return ErrServerNotRun
+	}
+	if code == 1 && (bytes.HasPrefix(stderr, []byte("sudo:")) || bytes.Contains(stderr, []byte("\nsudo:"))) {
+		return ErrServerSudoRefused
+	}
+	switch {
+	case pkg:
+		return ErrPackageFailed
+	case code == serverfix.ExitRollbackFail:
+		return ErrServerRollbackFailed
+	case bytes.Contains(stderr, []byte(scriptRolledBack)):
+		return ErrServerRolledBack
+	}
+	return ErrServerStopped
+}
+
 // scriptSteps turns the exit status of the apply script into its steps.
 // The script runs as a whole, so a failure is placed on the first step
 // that can give it: the first step for a refusal before any change, the
@@ -251,15 +441,19 @@ func cliTest(p serverfix.Plan) bool {
 // failure after the change.
 func (r *serverRun) scriptSteps(code int, stderrFail bool) {
 	failsAt := func(a serverfix.Action) (bool, string) {
+		later := a.Op == serverfix.OpTestConfig || a.Op == serverfix.OpReload || a.Op == serverfix.OpPackageUpgrade
 		switch {
-		case code == serverfix.ExitNotRoot || code == serverfix.ExitApplied || code == serverfix.ExitLink || code == serverfix.ExitUnsafe:
+		case code == serverfix.ExitNotRoot || code == serverfix.ExitApplied || code == serverfix.ExitLink || code == serverfix.ExitUnsafe ||
+			code == 126 || code == 127:
 			return true, detailStopped
 		case code == serverfix.ExitLineMoved:
 			return a.Op == serverfix.OpSetDirective, detailStopped
+		case code != 0 && r.pkg():
+			return a.Op == serverfix.OpPackageUpgrade, detailPkgFailed
 		case code == serverfix.ExitRollbackFail:
-			return a.Op == serverfix.OpTestConfig || a.Op == serverfix.OpReload || a.Op == serverfix.OpPackageUpgrade, detailRollbackBad
+			return later, detailRollbackBad
 		case code != 0:
-			return a.Op == serverfix.OpTestConfig || a.Op == serverfix.OpReload || a.Op == serverfix.OpPackageUpgrade, detailRolledBack
+			return later, detailRolledBack
 		case stderrFail:
 			return a.Op == serverfix.OpTestConfig && a.SAPI == serverfix.SAPICLI, detailStderr
 		}
@@ -307,12 +501,13 @@ func (r *serverRun) checkSite(ctx context.Context) (ok bool, err error) {
 
 var errNoSiteCheck = errors.New("no site check")
 
-// undo runs the undo script at once (the site broke after the change),
-// checks the site again, and ends the attempt failed: rolled back, or with
-// an urgent alert and the backups to put back by hand when undo failed.
+// undo runs the undo script of a configuration fix at once (the site broke
+// after the change, or PHP complained), checks the site again, and ends the
+// attempt failed: rolled back, or with an urgent alert and the backups to
+// put back by hand when undo failed. A package fix is never "undone" here.
 func (r *serverRun) undo(ctx context.Context, c *sshx.Client, reason string) error {
 	d := r.d
-	res, err := c.Run(ctx, shArgv(r.b), strings.NewReader(r.b.Undo))
+	res, err := c.RunWith(ctx, shArgv(r.b), strings.NewReader(r.b.Undo), sshx.RunOptions{Timeout: d.applyBound(false), NoKill: true})
 	undone := err == nil && res.Exit == 0
 	if undone {
 		r.step(StepUndo, detailDone, true)
@@ -335,44 +530,42 @@ func (r *serverRun) undo(ctx context.Context, c *sshx.Client, reason string) err
 	}
 	ev := map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID, "hash": r.prop.Hash,
 		"correction_id": r.sf.CorrectionID, "exit": exit, "site_back": siteBack, "reason": reason}
+	var serr error
 	if !undone {
-		_ = d.record(ctx, "server_fix.rollback", r.a.ID, "error", ev)
+		_ = r.audit(ctx, "server_fix.rollback", "error", ev)
 		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
-		_ = d.repo().SetState(ctx, r.a.ID, []State{StateApplied}, StateFailed, d.causeOf(ErrServerRollbackFailed))
-		r.saveSteps(ctx)
-		r.recollect(ctx)
-		return ErrServerRollbackFailed
+		serr = r.move(ctx, []State{StateApplied}, StateFailed, d.causeOf(ErrServerRollbackFailed))
+	} else {
+		_ = r.audit(ctx, "server_fix.rollback", "ok", ev)
+		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRolledBack, Urgent: !siteBack})
+		serr = r.move(ctx, []State{StateApplied}, StateFailed, CauseRolledBack)
 	}
-	_ = d.record(ctx, "server_fix.rollback", r.a.ID, "ok", ev)
-	d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRolledBack, Urgent: !siteBack})
-	_ = d.repo().SetState(ctx, r.a.ID, []State{StateApplied}, StateFailed, CauseRolledBack)
-	r.saveSteps(ctx)
 	r.recollect(ctx)
-	return ErrServerRolledBack
+	if !undone {
+		return errors.Join(ErrServerRollbackFailed, serr)
+	}
+	return errors.Join(ErrServerRolledBack, serr)
 }
 
-// recollect checks the server again after a rollback, so the findings
-// show the server as it is; its outcome changes nothing of the attempt.
+// recollect checks the server again, so the findings show the server as it
+// is; its outcome changes nothing of the attempt. The steps are saved.
 func (r *serverRun) recollect(ctx context.Context) {
-	if r.d.CheckServer == nil {
-		return
+	if r.d.CheckServer != nil {
+		_, err := r.d.CheckServer(ctx, r.t.ID)
+		r.step(StepRecollect, map[bool]string{true: detailDone, false: detailCheckFailed}[err == nil], err == nil)
 	}
-	_, err := r.d.CheckServer(ctx, r.t.ID)
-	r.step(StepRecollect, map[bool]string{true: detailDone, false: detailCheckFailed}[err == nil], err == nil)
-	r.saveSteps(ctx)
+	_ = r.saveSteps(ctx)
 }
 
 // fail ends an attempt that stopped before or during the script (state
-// approved or applied → failed) with the cause of e, and returns e.
+// running or applied → failed) with the cause of e, and returns e.
 func (r *serverRun) fail(ctx context.Context, e error, reason string) error {
 	d := r.d
-	if err := d.repo().SetState(ctx, r.a.ID, []State{StateApproved, StateApplied}, StateFailed, d.causeOf(e)); err != nil {
-		return errors.Join(e, err)
-	}
-	r.saveSteps(ctx)
-	_ = d.record(ctx, "server_fix.apply", r.a.ID, "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
+	serr := r.move(ctx, []State{StateRunning, StateApplied}, StateFailed, d.causeOf(e))
+	_ = r.saveSteps(ctx)
+	_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "error": serverErrorKey(e), "reason": reason, "backups": len(r.backupList())})
-	return e
+	return errors.Join(e, serr)
 }
 
 // repropose checks the server again after a line moved since the
@@ -384,8 +577,12 @@ func (r *serverRun) repropose(ctx context.Context) {
 		return
 	}
 	if _, err := d.CheckServer(ctx, r.t.ID); err != nil {
+		r.step(StepRecollect, detailCheckFailed, false)
+		_ = r.saveSteps(ctx)
 		return
 	}
+	r.step(StepRecollect, detailDone, true)
+	_ = r.saveSteps(ctx)
 	list, err := scan.NewRepo(d.Store).FindByIDPrefix(ctx, r.sf.FindingID)
 	if err != nil || len(list) != 1 || list[0].Status == scan.StatusGone {
 		return
@@ -394,16 +591,20 @@ func (r *serverRun) repropose(ctx context.Context) {
 	if r.a.Work.Server != nil {
 		w = *r.a.Work.Server
 	}
-	if na, err := d.proposeServer(ctx, r.t, list[0], w); err == nil {
-		_ = d.record(ctx, "server_fix.repropose", na.ID, "ok", map[string]any{"attempt_id": na.ID, "previous_attempt_id": r.a.ID, "target_id": r.t.ID})
+	na, err := d.proposeServer(ctx, r.t, list[0], w)
+	if err != nil {
+		_ = r.audit(ctx, "server_fix.repropose", "error", map[string]any{"previous_attempt_id": r.a.ID, "target_id": r.t.ID, "error": serverErrorKey(err)})
+		return
 	}
+	_ = r.audit(ctx, "server_fix.repropose", "ok", map[string]any{"attempt_id": na.ID, "previous_attempt_id": r.a.ID, "target_id": r.t.ID})
 }
 
-// backups are the files the bundle backed up, with where each copy lies.
-func (r *serverRun) backups() (bak, file []string) {
-	dir := backupDir(r.b, r.sf.CorrectionID)
+// backupPaths are the files a bundle backs up, with where each copy lies
+// on the server.
+func backupPaths(b serverfix.Bundle, sf ServerFix) (bak, file []string) {
+	dir := backupDir(b, sf.CorrectionID)
 	n := 0
-	for _, a := range r.plan.Actions {
+	for _, a := range sf.Actions {
 		if a.Op == serverfix.OpBackup {
 			n++
 			bak = append(bak, dir+"/"+strconv.Itoa(n))
@@ -413,9 +614,13 @@ func (r *serverRun) backups() (bak, file []string) {
 	return bak, file
 }
 
-// backupList is "backup -> file" for each backup, for the alert's page.
-func (r *serverRun) backupList() []string {
-	bak, file := r.backups()
+// BackupList is "backup -> file" for each file a server fix backs up: what
+// the page lists for the user to put back by hand (the alert's Backups).
+func BackupList(p Proposal) []string {
+	if p.Scripts == nil || p.Server == nil {
+		return nil
+	}
+	bak, file := backupPaths(*p.Scripts, *p.Server)
 	out := make([]string, len(bak))
 	for i := range bak {
 		out[i] = bak[i] + " -> " + file[i]
@@ -423,23 +628,33 @@ func (r *serverRun) backupList() []string {
 	return out
 }
 
+func (r *serverRun) backupList() []string {
+	b := r.b
+	if b.Apply == "" && r.prop.Scripts != nil {
+		b = *r.prop.Scripts
+	}
+	return BackupList(Proposal{Scripts: &b, Server: &r.sf})
+}
+
 // fetchBackups reads the backups the script made, with the scripts' own
 // privilege (sudo -n cat for a root bundle, the SSH user for a .user.ini
 // one, from its home), and keeps them encrypted on the workstation. Only
 // the fixed paths Michel built are read; a backup that is missing, cut or
 // unreadable is skipped. Nothing on the server is ever deleted.
-func (r *serverRun) fetchBackups(ctx context.Context, c *sshx.Client) int {
+func (r *serverRun) fetchBackups(ctx context.Context, c *sshx.Client) {
 	if c == nil {
-		return 0
+		return
 	}
-	repo := r.d.repo()
-	have, _ := repo.Backups(ctx, r.a.ID)
+	d := r.d
+	have, err := d.backups(ctx, r.a.ID)
+	if err != nil {
+		keep("backups", r.a.ID, err)
+	}
 	seen := map[string]bool{}
 	for _, b := range have {
 		seen[b.RemotePath] = true
 	}
-	bak, _ := r.backups()
-	n := 0
+	bak, _ := backupPaths(r.b, r.sf)
 	for _, p := range bak {
 		if seen[p] {
 			continue
@@ -460,11 +675,16 @@ func (r *serverRun) fetchBackups(ctx context.Context, c *sshx.Client) int {
 			continue
 		}
 		sum := sha256.Sum256(res.Stdout)
-		if _, err := repo.AddBackup(ctx, ServerBackup{AttemptID: r.a.ID, TargetID: r.t.ID, RemotePath: p, SHA256: hex.EncodeToString(sum[:]), Content: res.Stdout}); err == nil {
-			n++
+		b := ServerBackup{AttemptID: r.a.ID, TargetID: r.t.ID, RemotePath: p, SHA256: hex.EncodeToString(sum[:]), Content: res.Stdout}
+		if err := d.addBackup(ctx, b); err != nil {
+			reason := "cannot store"
+			if errors.Is(err, errNoKeyStore) {
+				reason = "no key store"
+			}
+			_ = r.audit(ctx, "server_fix.backup", "refused", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "reason": reason})
+			keep("backup", r.a.ID, err)
 		}
 	}
-	return n
 }
 
 // prove checks the server again after a fix that ran and a site that
@@ -475,27 +695,27 @@ func (r *serverRun) fetchBackups(ctx context.Context, c *sshx.Client) int {
 func (r *serverRun) prove(ctx context.Context) error {
 	d := r.d
 	lang := d.lang()
-	repo := d.repo()
 	siteChecked := true
 	for _, s := range r.steps {
 		if s.Op == string(serverfix.OpCheckSite) && !s.OK {
 			siteChecked = false
 		}
 	}
+	end := func(detail string, ok bool, to State, cause string) error {
+		r.step(StepRecollect, detail, ok)
+		_ = r.saveSteps(ctx)
+		return r.move(ctx, []State{StateApplied}, to, cause)
+	}
 	if d.CheckServer == nil {
-		r.step(StepRecollect, detailCheckFailed, false)
-		r.saveSteps(ctx)
-		return repo.SetState(ctx, r.a.ID, []State{StateApplied}, StateInconclusive, d.causeOfKey("fix.server.check_failed"))
+		return end(detailCheckFailed, false, StateInconclusive, i18n.T(lang, "fix.server.check_failed"))
 	}
 	res, err := d.CheckServer(ctx, r.t.ID)
 	if err != nil {
-		r.step(StepRecollect, detailCheckFailed, false)
-		r.saveSteps(ctx)
-		return repo.SetState(ctx, r.a.ID, []State{StateApplied}, StateInconclusive, d.causeOfKey("fix.server.check_failed"))
+		return end(detailCheckFailed, false, StateInconclusive, i18n.T(lang, "fix.server.check_failed"))
 	}
 	list, err := scan.NewRepo(d.Store).FindByIDPrefix(ctx, r.sf.FindingID)
 	if err != nil {
-		return err
+		return errors.Join(err, end(detailCheckFailed, false, StateInconclusive, i18n.T(lang, "fix.server.check_failed")))
 	}
 	var f scan.Finding
 	for _, x := range list {
@@ -508,57 +728,58 @@ func (r *serverRun) prove(ctx context.Context) error {
 		(!res.ReleaseKnown || res.Unjudged > 0 || res.SkippedAdvisories > 0 || res.SourceToEnable != ""))
 	switch {
 	case gone && !partial && siteChecked:
-		r.step(StepRecollect, detailProven, true)
-		r.saveSteps(ctx)
-		if err := repo.SetState(ctx, r.a.ID, []State{StateApplied}, StateProvenFixed, ""); err != nil {
+		if err := end(detailProven, true, StateProvenFixed, ""); err != nil {
 			return err
 		}
-		_ = d.record(ctx, "server_fix.proven", r.a.ID, "ok", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID,
+		_ = r.audit(ctx, "server_fix.proven", "ok", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID,
 			"finding_id": r.sf.FindingID, "hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "mitigation": r.sf.Mitigation})
 		r.promote(ctx)
 		return nil
 	case !gone:
-		r.step(StepRecollect, detailStillSeen, false)
-		r.saveSteps(ctx)
-		return repo.SetState(ctx, r.a.ID, []State{StateApplied}, StateInconclusive, i18n.T(lang, "fix.server.still_seen"))
+		return end(detailStillSeen, false, StateInconclusive, i18n.T(lang, "fix.server.still_seen"))
 	case !siteChecked:
-		r.step(StepRecollect, detailProven, true)
-		r.saveSteps(ctx)
-		return repo.SetState(ctx, r.a.ID, []State{StateApplied}, StateInconclusive, i18n.T(lang, "fix.server.site_unchecked"))
+		return end(detailProven, true, StateInconclusive, i18n.T(lang, "fix.server.site_unchecked"))
 	default:
-		r.step(StepRecollect, detailPartial, false)
-		r.saveSteps(ctx)
-		return repo.SetState(ctx, r.a.ID, []State{StateApplied}, StateInconclusive, i18n.T(lang, "fix.server.check_partial"))
+		return end(detailPartial, false, StateInconclusive, i18n.T(lang, "fix.server.check_partial"))
 	}
 }
 
-func (d Deps) causeOfKey(key string) string { return i18n.T(d.lang(), key) }
-
 // promote builds the production fix once a preprod fix is proven: from the
 // production's own inventory (its paths, versions and services), so a new
-// hash, waiting for its own approval.
+// hash, waiting for its own approval. A production set to report only
+// gets none.
 func (r *serverRun) promote(ctx context.Context) {
 	d := r.d
 	w := r.a.Work.Server
 	if w == nil || w.ProdTargetID == "" {
 		return
 	}
+	ev := map[string]any{"preprod_attempt_id": r.a.ID, "target_id": w.ProdTargetID, "finding_id": w.ProdFindingID}
 	pt, err := d.Targets.Get(ctx, w.ProdTargetID)
 	if err != nil {
+		ev["error"] = "server"
+		_ = r.audit(ctx, "server_fix.promote", "error", ev)
+		return
+	}
+	if pt.FixLevel == 0 {
+		ev["error"] = serverErrorKey(ErrReportOnly)
+		_ = r.audit(ctx, "server_fix.promote", "refused", ev)
 		return
 	}
 	list, err := scan.NewRepo(d.Store).FindByIDPrefix(ctx, w.ProdFindingID)
 	if err != nil || len(list) != 1 || list[0].Status == scan.StatusGone {
+		ev["error"] = serverErrorKey(ErrFindingGone)
+		_ = r.audit(ctx, "server_fix.promote", "refused", ev)
 		return
 	}
 	na, err := d.proposeServer(ctx, pt, list[0], ServerWork{TargetID: pt.ID})
-	result, ev := "ok", map[string]any{"preprod_attempt_id": r.a.ID, "target_id": pt.ID, "finding_id": w.ProdFindingID}
+	result := "ok"
 	if err != nil {
 		result, ev["error"] = "error", serverErrorKey(err)
 	} else {
 		ev["attempt_id"] = na.ID
 	}
-	_ = d.record(ctx, "server_fix.promote", r.a.ID, result, ev)
+	_ = r.audit(ctx, "server_fix.promote", result, ev)
 }
 
 // AppliedByMe is the user's word that they ran the apply script of an
@@ -566,7 +787,8 @@ func (r *serverRun) promote(ctx context.Context) {
 // checks the site from the workstation and the server again: proven_fixed
 // or inconclusive as for Michel's own run. A site that no longer answers
 // gives an urgent alert telling the user to run undo now (Michel never
-// runs a script it was not allowed to); the attempt then fails.
+// runs a script it was not allowed to), or to restore the snapshot after a
+// package upgrade; the attempt then fails.
 func AppliedByMe(ctx context.Context, d Deps, attemptID string) error {
 	lock := d.sessions().attemptLock(attemptID)
 	lock.Lock()
@@ -589,23 +811,27 @@ func AppliedByMe(ctx context.Context, d Deps, attemptID string) error {
 		return ErrNotUserExecutor
 	}
 	r.b, r.plan = *r.prop.Scripts, serverfix.Plan{Actions: r.sf.Actions, NeedsSnapshot: r.sf.NeedsSnapshot, Mitigation: r.sf.Mitigation}
+	// One conditional update: a second AppliedByMe gets ErrBadTransition.
 	if err := d.repo().SetState(ctx, a.ID, []State{StateApproved}, StateApplied, ""); err != nil {
 		return err
 	}
-	_ = d.record(ctx, "server_fix.apply", a.ID, "ok", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
+	ctx = context.WithoutCancel(ctx)
+	_ = r.audit(ctx, "server_fix.apply", "ok", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "executor": "user", "author": d.actor()})
 	if c, err := sshx.Dial(ctx, d.SSH, r.t); err == nil {
 		r.fetchBackups(ctx, c)
 		c.Close()
 	}
 	r.step("apply", "run by you", true)
-	ok, _ := r.checkSite(ctx)
-	if !ok {
+	if ok, _ := r.checkSite(ctx); !ok {
+		if r.pkg() {
+			return r.siteDownAfterUpgrade(ctx)
+		}
 		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUndoNow, Urgent: true, Backups: r.backupList()})
-		_ = d.repo().SetState(ctx, a.ID, []State{StateApplied}, StateFailed, d.causeOf(ErrServerSiteDown))
-		r.saveSteps(ctx)
-		_ = d.record(ctx, "server_fix.apply", a.ID, "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "fix.server.site_down_user"})
-		return ErrServerSiteDown
+		serr := r.move(ctx, []State{StateApplied}, StateFailed, d.causeOf(ErrServerSiteDown))
+		_ = r.saveSteps(ctx)
+		_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "fix.server.site_down_user"})
+		return errors.Join(ErrServerSiteDown, serr)
 	}
 	return r.prove(ctx)
 }
@@ -617,15 +843,16 @@ func (d Deps) simulateOnce(ctx context.Context, t target.Target, v serverfix.Pla
 		return fmt.Errorf("cannot connect to server %s: %w", t.Name, err)
 	}
 	defer c.Close()
-	return simulate(ctx, c, v)
+	return simulate(ctx, c, v, t)
 }
 
 // simulate asks the package manager what the upgrade of v would do,
-// changing nothing (apt-get -s, dnf --assumeno, apk --simulate), and
-// refuses (ErrSimulationRefused) anything but exactly that upgrade: a
-// removal, a replacement, an error, another version. The output is read,
-// never kept.
-func simulate(ctx context.Context, c *sshx.Client, v serverfix.Plan) error {
+// changing nothing (apt-get -s, dnf --assumeno, apk --simulate), with the
+// apply's own privilege (sudo -n when sudo needs no password: dnf needs
+// root even to simulate), and refuses (ErrSimulationRefused) anything but
+// exactly that upgrade: a removal, a replacement, an error, another
+// version. The output is parsed, never kept.
+func simulate(ctx context.Context, c *sshx.Client, v serverfix.Plan, t target.Target) error {
 	var a serverfix.Action
 	for _, x := range v.Actions {
 		if x.Op == serverfix.OpPackageUpgrade {
@@ -642,6 +869,9 @@ func simulate(ctx context.Context, c *sshx.Client, v serverfix.Plan) error {
 		argv = []string{"apk", "add", "--simulate", "--upgrade", a.Package + ">=" + a.Version}
 	default:
 		return fmt.Errorf("%w: no package manager", ErrSimulationRefused)
+	}
+	if t.Sudo == target.SudoNopasswd {
+		argv = append([]string{"sudo", "-n"}, argv...)
 	}
 	res, err := c.Run(ctx, argv, nil)
 	if err != nil {

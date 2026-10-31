@@ -75,6 +75,7 @@ type Server struct {
 	signers  map[string]ssh.Signer // by Options.HostKeyTypes name
 	main     ssh.Signer            // ed25519 when held, else the first
 	accepted atomic.Int64
+	signals  atomic.Int64
 	authN    atomic.Int64
 
 	mu         sync.Mutex
@@ -155,6 +156,19 @@ func (s *Server) HostPublicKeyOf(typ string) ssh.PublicKey {
 
 // HostKeyFingerprint is the SHA256 fingerprint of the main host key.
 func (s *Server) HostKeyFingerprint() string { return ssh.FingerprintSHA256(s.main.PublicKey()) }
+
+// Signals counts the signal requests (such as SIGKILL) clients sent.
+func (s *Server) Signals() int { return int(s.signals.Load()) }
+
+// DropConnections cuts every open connection at once, as a network failure
+// would: the clients see their sessions end without an exit status.
+func (s *Server) DropConnections() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.conns {
+		c.Close()
+	}
+}
 
 // Accepted counts the TCP connections the server accepted.
 func (s *Server) Accepted() int { return int(s.accepted.Load()) }
@@ -323,6 +337,7 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 				s.mu.Unlock()
 				go func() { done <- s.run(ctx, cmd, ch) }()
 			case req.Type == "signal":
+				s.signals.Add(1)
 				cancel()
 				if req.WantReply {
 					req.Reply(true, nil)

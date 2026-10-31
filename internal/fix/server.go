@@ -121,7 +121,30 @@ var (
 	ErrServerRollbackFailed = errors.New("the fix failed and could not be undone")
 	ErrServerRolledBack     = errors.New("the fix failed and was undone: the server is as before")
 	ErrServerSiteDown       = errors.New("the site no longer answers since the fix: run the undo script now")
-	ErrServerConnectionLost = errors.New("the connection was lost while the script ran")
+	// ErrServerUnknownState: the script ran past its bound or its
+	// connection dropped; Michel cannot tell what changed.
+	ErrServerUnknownState = errors.New("the script gave no answer: Michel cannot tell what changed, look at the server")
+	// ErrServerSudoRefused: sudo asked for a password on the server:
+	// nothing ran.
+	ErrServerSudoRefused = errors.New("sudo refused to run the script without a password: nothing changed")
+	// ErrServerNotRun: the shell or sudo could not run the script (exit
+	// 126 or 127): nothing ran.
+	ErrServerNotRun = errors.New("the script could not be run on the server: nothing changed")
+	// ErrServerStopped: the script failed before its first change.
+	ErrServerStopped = errors.New("the script stopped before changing anything")
+	// ErrPackageFailed: the package upgrade failed; the package may have
+	// changed, only the snapshot takes it back.
+	ErrPackageFailed = errors.New("the package upgrade failed: restore your snapshot")
+	// ErrSiteDownAfterUpgrade: the site no longer answers after a package
+	// upgrade; only the snapshot takes it back.
+	ErrSiteDownAfterUpgrade = errors.New("the site no longer answers after the package upgrade: restore your snapshot")
+)
+
+// Causes stored as codes (CauseText renders them): the digest counts
+// CauseRolledBack only, never a package fix's failure.
+const (
+	CausePackageFailed        = "package_failed"
+	CauseSiteDownAfterUpgrade = "site_down_after_upgrade"
 )
 
 // serverErrorKey is the catalog key of a server refusal, "" otherwise.
@@ -149,7 +172,12 @@ func serverErrorKey(err error) string {
 		{ErrServerRollbackFailed, "fix.server.rollback_failed"},
 		{ErrServerRolledBack, "fix.server.rolled_back"},
 		{ErrServerSiteDown, "fix.server.site_down_user"},
-		{ErrServerConnectionLost, "fix.server.connection_lost"},
+		{ErrServerUnknownState, "fix.server.unknown_state"},
+		{ErrServerSudoRefused, "fix.server.sudo_refused"},
+		{ErrServerNotRun, "fix.server.not_run"},
+		{ErrServerStopped, "fix.server.stopped"},
+		{ErrPackageFailed, "fix.server.package_failed"},
+		{ErrSiteDownAfterUpgrade, "fix.server.site_down_after_upgrade"},
 		{serverfix.ErrUntestableBinary, "fix.server.untestable_binary"},
 		{serverfix.ErrMajorUpgrade, "fix.server.major_upgrade"},
 		{serverfix.ErrAmbiguous, "fix.server.ambiguous"},
@@ -168,35 +196,16 @@ func serverErrorKey(err error) string {
 	return ""
 }
 
-// exitError maps an exit status of a serverfix script to its error; nil
-// for 0.
-func exitError(code int) error {
-	switch code {
-	case 0:
-		return nil
-	case serverfix.ExitNotRoot:
-		return ErrServerWrongUser
-	case serverfix.ExitApplied:
-		return ErrServerAlreadyApplied
-	case serverfix.ExitLineMoved:
-		return ErrServerLineMoved
-	case serverfix.ExitLink:
-		return ErrServerLink
-	case serverfix.ExitUnsafe:
-		return ErrServerUnsafe
-	case serverfix.ExitRollbackFail:
-		return ErrServerRollbackFailed
-	}
-	// Any other failure comes from a step after the backups: the trap put
-	// the files back and reloaded.
-	return ErrServerRolledBack
-}
-
 // CauseText is the cause of an attempt as the user reads it: the stored
 // cause, except CauseRolledBack, kept as a code for the digest.
 func CauseText(lang i18n.Lang, cause string) string {
-	if cause == CauseRolledBack {
+	switch cause {
+	case CauseRolledBack:
 		return i18n.T(lang, "fix.server.rolled_back")
+	case CausePackageFailed:
+		return i18n.T(lang, "fix.server.package_failed")
+	case CauseSiteDownAfterUpgrade:
+		return i18n.T(lang, "fix.server.site_down_after_upgrade")
 	}
 	return cause
 }
@@ -204,8 +213,13 @@ func CauseText(lang i18n.Lang, cause string) string {
 // causeOf is the cause stored for err: CauseRolledBack, or the text of the
 // error's key.
 func (d Deps) causeOf(err error) string {
-	if errors.Is(err, ErrServerRolledBack) {
+	switch {
+	case errors.Is(err, ErrServerRolledBack):
 		return CauseRolledBack
+	case errors.Is(err, ErrPackageFailed):
+		return CausePackageFailed
+	case errors.Is(err, ErrSiteDownAfterUpgrade):
+		return CauseSiteDownAfterUpgrade
 	}
 	if k := serverErrorKey(err); k != "" {
 		return i18n.T(d.lang(), k)
@@ -287,6 +301,9 @@ func StartServer(ctx context.Context, d Deps, findingID string) (Attempt, error)
 	pt, err := d.Targets.Get(ctx, t.PreprodID)
 	if err != nil {
 		return Attempt{}, fmt.Errorf("cannot read the preprod server: %w", err)
+	}
+	if pt.FixLevel == 0 {
+		return Attempt{}, ErrReportOnly
 	}
 	pf, ok, err := d.sameOn(ctx, pt, f)
 	if err != nil {

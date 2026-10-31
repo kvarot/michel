@@ -25,6 +25,12 @@ const (
 	StateInconclusive State = "inconclusive"
 	StateFailed       State = "failed"
 	StateSuperseded   State = "superseded"
+	// StateRunning: Michel is running a server fix's script now (claimed
+	// atomically: no other Apply, no Refuse meanwhile).
+	StateRunning State = "running"
+	// StateUnknown: a server fix's script ran past its bound or its
+	// connection dropped: Michel cannot tell what it changed.
+	StateUnknown State = "unknown"
 )
 
 // Origin says who started an attempt.

@@ -22,6 +22,12 @@ const (
 	// AlertUndoNow: a fix the user ran broke the site; the user must run
 	// the undo script now (Michel never runs a script it was not allowed to).
 	AlertUndoNow = "undo_now"
+	// AlertRestoreSnapshot: a package upgrade failed or took the site
+	// down; there is no script to undo it, the snapshot is the way back.
+	AlertRestoreSnapshot = "restore_snapshot"
+	// AlertUnknownState: a fix script ran past its bound or lost its
+	// connection: Michel cannot tell what changed.
+	AlertUnknownState = "unknown_state"
 )
 
 // AlertInput is what Alert is told: the server, the findings concerned and

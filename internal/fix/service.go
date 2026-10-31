@@ -136,6 +136,11 @@ type Deps struct {
 	SiteCheck   func(ctx context.Context, url string) error
 	Alert       func(ctx context.Context, in servercheck.AlertInput)
 	OnStep      func(attemptID string, s StepResult)
+	// ConfigApplyTimeout and PackageApplyTimeout bound a fix script's run
+	// (0: DefaultConfigApplyTimeout, DefaultPackageApplyTimeout). They
+	// replace the per-command cap of the collection for the scripts only.
+	ConfigApplyTimeout  time.Duration
+	PackageApplyTimeout time.Duration
 }
 
 // DefaultMaxTurns caps the agentic turns of a session when Deps.MaxTurns
@@ -396,7 +401,7 @@ func (d Deps) find(ctx context.Context, id string) (scan.Finding, project.Projec
 // busy reports whether the project has an attempt being worked on or
 // waiting for the user.
 func (d Deps) busy(ctx context.Context, projectID string) (bool, error) {
-	for _, st := range []State{StatePreparing, StateProposed, StateApproved} {
+	for _, st := range []State{StatePreparing, StateProposed, StateApproved, StateRunning} {
 		list, err := d.repo().ListAttempts(ctx, projectID, string(st))
 		if err != nil {
 			return false, err
@@ -1479,6 +1484,9 @@ func Apply(ctx context.Context, d Deps, attemptID string) error {
 	if err != nil {
 		return err
 	}
+	if a.Work.Server != nil && a.State == StateRunning {
+		return ErrBusy
+	}
 	if a.State != StateApproved {
 		return fmt.Errorf("%w (the attempt is %s)", ErrBadTransition, a.State)
 	}
@@ -1660,7 +1668,7 @@ var idFolder = regexp.MustCompile(`^[0-9A-Za-z]{1,64}$`)
 // finished are the states whose copy has no use any more.
 func finished(s State) bool {
 	switch s {
-	case StateRefused, StateFailed, StateApplied, StateProvenFixed, StateInconclusive, StateSuperseded:
+	case StateRefused, StateFailed, StateApplied, StateProvenFixed, StateInconclusive, StateSuperseded, StateUnknown:
 		return true
 	}
 	return false
@@ -1726,6 +1734,21 @@ func Sweep(ctx context.Context, d Deps) error {
 			}
 		}
 		_ = os.Remove(dir) // only when empty
+	}
+	// A server fix left running by a stopped process: its script may have
+	// run, in part or whole. Past the longest bound Michel says so; it never
+	// guesses an undo.
+	running, err := repo.ListAttempts(ctx, "", string(StateRunning))
+	if err != nil {
+		return err
+	}
+	for _, a := range running {
+		if d.now().Sub(a.UpdatedAt) > d.applyBound(true)+runningMargin {
+			if err := repo.SetState(ctx, a.ID, []State{StateRunning}, StateUnknown, i18n.T(lang, "fix.server.unknown_state")); err != nil {
+				return err
+			}
+			_ = d.record(ctx, "server_fix.apply", a.ID, "error", map[string]any{"attempt_id": a.ID, "target_id": a.ProjectID, "error": "fix.server.unknown_state", "reason": "left running"})
+		}
 	}
 	approved, err := repo.ListAttempts(ctx, "", string(StateApproved))
 	if err != nil {

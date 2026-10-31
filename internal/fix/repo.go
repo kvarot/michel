@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kvarot/michel/internal/secret"
 	"github.com/kvarot/michel/internal/serverfix"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/oklog/ulid/v2"
@@ -57,7 +56,7 @@ func parseTime(s string) (time.Time, error) {
 
 // busyStates are the states of an attempt that is still being worked on or
 // waits for the user: the project has no other attempt meanwhile.
-const busyStates = `('preparing','proposed','approved')`
+const busyStates = `('preparing','proposed','approved','running')`
 
 const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at, work_json, approved_by, approved_proposal, approved_hash, cause_detail`
 
@@ -681,7 +680,8 @@ func (r *Repo) SnapshotAck(ctx context.Context, attemptID string) (at time.Time,
 }
 
 // ServerBackup is the copy of a server file a fix backed up, kept on the
-// workstation (encrypted at rest with secret.Protect).
+// workstation. Content is the plain file; the store only ever holds it
+// sealed (see Deps.addBackup).
 type ServerBackup struct {
 	ID         string
 	AttemptID  string
@@ -692,16 +692,13 @@ type ServerBackup struct {
 	CreatedAt  time.Time
 }
 
-// AddBackup stores the content of a backup, protected.
-func (r *Repo) AddBackup(ctx context.Context, b ServerBackup) (ServerBackup, error) {
+// AddBackup stores a sealed backup: blob is the encrypted content, b.Content
+// is not stored.
+func (r *Repo) AddBackup(ctx context.Context, b ServerBackup, blob []byte) (ServerBackup, error) {
 	now := r.now()
 	id, err := r.newID(now)
 	if err != nil {
 		return ServerBackup{}, err
-	}
-	blob, err := secret.Protect(b.Content)
-	if err != nil {
-		return ServerBackup{}, fmt.Errorf("cannot protect the backup: %w", err)
 	}
 	b.ID, b.CreatedAt = id, now
 	if _, err := r.s.DB().ExecContext(ctx, `INSERT INTO server_backup (id, attempt_id, target_id, remote_path, sha256, blob, created_at) VALUES (?,?,?,?,?,?,?)`,
@@ -711,26 +708,29 @@ func (r *Repo) AddBackup(ctx context.Context, b ServerBackup) (ServerBackup, err
 	return b, nil
 }
 
-// Backups returns the backups of an attempt, oldest first, decrypted.
-func (r *Repo) Backups(ctx context.Context, attemptID string) ([]ServerBackup, error) {
+// SealedBackup is a stored backup with its encrypted content.
+type SealedBackup struct {
+	ServerBackup
+	Blob []byte
+}
+
+// Backups returns the stored backups of an attempt, oldest first, still
+// sealed.
+func (r *Repo) Backups(ctx context.Context, attemptID string) ([]SealedBackup, error) {
 	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, attempt_id, target_id, remote_path, sha256, blob, created_at FROM server_backup WHERE attempt_id = ? ORDER BY created_at, id`, attemptID)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the backups: %w", err)
 	}
 	defer rows.Close()
-	var out []ServerBackup
+	var out []SealedBackup
 	for rows.Next() {
-		var b ServerBackup
+		var b SealedBackup
 		var blob, created string
 		if err := rows.Scan(&b.ID, &b.AttemptID, &b.TargetID, &b.RemotePath, &b.SHA256, &blob, &created); err != nil {
 			return nil, err
 		}
-		raw, err := base64.StdEncoding.DecodeString(blob)
-		if err != nil {
+		if b.Blob, err = base64.StdEncoding.DecodeString(blob); err != nil {
 			return nil, fmt.Errorf("backup %s is unreadable: %w", b.ID, err)
-		}
-		if b.Content, err = secret.Unprotect(raw); err != nil {
-			return nil, fmt.Errorf("backup %s cannot be decrypted: %w", b.ID, err)
 		}
 		if b.CreatedAt, err = parseTime(created); err != nil {
 			return nil, err
@@ -749,4 +749,20 @@ func (r *Repo) PurgeBackups(ctx context.Context, before time.Time) (int, error) 
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// Claim moves an approved attempt to running in one conditional update and
+// reports whether this caller got it: only one Apply, in any process, ever
+// runs a server fix's script.
+func (r *Repo) Claim(ctx context.Context, id string) (bool, error) {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, updated_at = ? WHERE id = ? AND state = ?`,
+		string(StateRunning), ts(r.now()), id, string(StateApproved))
+	if err != nil {
+		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	return n == 1, nil
 }

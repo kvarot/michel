@@ -55,6 +55,10 @@ type demoServer struct {
 	cliStderr string // what php -c prints on its error output
 	sim       string // apt-get -s output
 	pkgVer    string // installed libdemo version
+	aptExit   int    // exit of apt-get install
+	// onFPMTest, when set, runs while the script is at php-fpm -t (outside
+	// the lock): a test acts there in the middle of a run.
+	onFPMTest func(e sshtest.Exec)
 }
 
 // serverFixture is a store, the fix service's deps and the demo servers.
@@ -87,8 +91,13 @@ func newServerFixture(t *testing.T) *serverFixture {
 	pol.Sovereignty.Network.Allow = []policy.AllowRule{{Host: "127.0.0.1", Purpose: policy.PurposeTargetSSH}}
 	f.gw = egress.New(pol, nil)
 	now := func() time.Time { return f.clock }
+	secrets, err := secret.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.d = Deps{
-		Store: st, Audit: audit.NewLogger(st, now), Lang: i18n.EN, Now: now, Actor: "test", Sessions: NewSessions(),
+		Secrets: secrets,
+		Store:   st, Audit: audit.NewLogger(st, now), Lang: i18n.EN, Now: now, Actor: "test", Sessions: NewSessions(),
 		Targets:     f.targets,
 		SSH:         sshx.Deps{Gateway: f.gw, KnownHosts: filepath.Join(t.TempDir(), "known_hosts"), Now: time.Now},
 		CheckServer: f.check,
@@ -124,6 +133,7 @@ func (f *serverFixture) addServer(name, ver, ini string, exec target.Executor, s
 	s.root = &sshtest.Shell{UID: 0, Home: "/root"}
 	user := &sshtest.Shell{UID: 1000, Home: "/home/deploy"}
 	var srv *sshtest.Server
+	var apt sshtest.Handler
 	cat := func(e sshtest.Exec, p string) int {
 		v, ok := srv.File(p)
 		if !ok {
@@ -138,6 +148,9 @@ func (f *serverFixture) addServer(name, ver, ini string, exec target.Executor, s
 		Sudo:  sudo == target.SudoNopasswd, Shell: user.Func(), RootShell: s.root.Func(),
 		Commands: map[string]sshtest.Handler{
 			s.fpm: func(e sshtest.Exec) int {
+				if s.onFPMTest != nil {
+					s.onFPMTest(e)
+				}
 				s.mu.Lock()
 				defer s.mu.Unlock()
 				return s.fpmTest
@@ -158,20 +171,16 @@ func (f *serverFixture) addServer(name, ver, ini string, exec target.Executor, s
 				s.reloads = s.reloads[1:]
 				return code
 			},
-			"apt-get": func(e sshtest.Exec) int {
-				s.mu.Lock()
-				defer s.mu.Unlock()
-				if len(e.Args) > 1 && e.Args[1] == "-s" {
-					io.WriteString(e.Stdout, s.sim)
-					return 0
-				}
-				s.pkgVer = "1.1-1"
-				return 0
-			},
-			// sudo -n cat of a root backup (sudo nopasswd only).
+			"apt-get": func(e sshtest.Exec) int { return apt(e) },
+			// sudo -n cat of a root backup, sudo -n apt-get -s (sudo
+			// nopasswd only: the server refuses sudo otherwise).
 			"sudo": func(e sshtest.Exec) int {
 				if len(e.Args) == 4 && e.Args[1] == "-n" && e.Args[2] == "cat" {
 					return cat(e, e.Args[3])
+				}
+				if len(e.Args) > 3 && e.Args[1] == "-n" && e.Args[2] == "apt-get" {
+					e.Args = e.Args[2:]
+					return apt(e)
 				}
 				return 1
 			},
@@ -189,6 +198,19 @@ func (f *serverFixture) addServer(name, ver, ini string, exec target.Executor, s
 			},
 		},
 	})
+	apt = func(e sshtest.Exec) int {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if len(e.Args) > 1 && e.Args[1] == "-s" {
+			io.WriteString(e.Stdout, s.sim)
+			return 0
+		}
+		if s.aptExit != 0 {
+			return s.aptExit
+		}
+		s.pkgVer = "1.1-1"
+		return 0
+	}
 	s.srv = srv
 	host, port, err := net.SplitHostPort(srv.Addr())
 	if err != nil {
@@ -459,7 +481,7 @@ func TestServerConfigFixEndToEnd(t *testing.T) {
 		t.Error("the server backup is not the original file")
 	}
 	// The backup is kept on the workstation, encrypted at rest.
-	bs, err := f.d.repo().Backups(ctx, a.ID)
+	bs, err := f.d.backups(ctx, a.ID)
 	if err != nil || len(bs) != 1 || string(bs[0].Content) != demoIni || bs[0].RemotePath != bak || bs[0].TargetID != s.t.ID {
 		t.Fatalf("backups %+v %v", bs, err)
 	}
@@ -468,7 +490,7 @@ func TestServerConfigFixEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := base64.StdEncoding.DecodeString(blob)
-	if strings.Contains(blob, "expose_php") || (secret.Protected() && bytes.Contains(raw, []byte("expose_php"))) {
+	if strings.Contains(blob, "expose_php") || bytes.Contains(raw, []byte("expose_php")) {
 		t.Error("the backup is stored in clear")
 	}
 	if p := f.proposal(a.ID); len(p.Steps) == 0 || len(streamed) != len(p.Steps) {
@@ -571,7 +593,7 @@ func TestApproveNeedsSnapshotForPackages(t *testing.T) {
 	// script.
 	log := s.srv.Log()
 	for i, l := range log {
-		if strings.HasSuffix(l, "'sh' '-s'") && (i == 0 || !strings.HasPrefix(log[i-1], "'apt-get' '-s'")) {
+		if strings.HasSuffix(l, "'sh' '-s'") && (i == 0 || !strings.Contains(log[i-1], "'apt-get' '-s'")) {
 			t.Errorf("no simulation right before the script: %q", log)
 		}
 	}
@@ -751,7 +773,7 @@ func TestRollbackFailureAlertsUrgent(t *testing.T) {
 		t.Errorf("alerts %+v", f.alerts)
 	}
 	// The backup was still fetched, to put back by hand.
-	if bs, _ := f.d.repo().Backups(ctx, a.ID); len(bs) != 1 || string(bs[0].Content) != demoIni {
+	if bs, _ := f.d.backups(ctx, a.ID); len(bs) != 1 || string(bs[0].Content) != demoIni {
 		t.Errorf("backups %+v", bs)
 	}
 
@@ -1011,20 +1033,22 @@ func TestCLIConfigWarningIsAFailure(t *testing.T) {
 func TestBackupsPurgedAfter90Days(t *testing.T) {
 	f := newServerFixture(t)
 	ctx := context.Background()
-	repo := f.d.repo()
-	if _, err := repo.AddBackup(ctx, ServerBackup{AttemptID: "A1", TargetID: "T1", RemotePath: srvBackups + "c1/1", Content: []byte("old")}); err != nil {
+	if err := f.d.addBackup(ctx, ServerBackup{AttemptID: "A1", TargetID: "T1", RemotePath: srvBackups + "c1/1", Content: []byte("old")}); err != nil {
 		t.Fatal(err)
 	}
 	f.clock = f.clock.Add(2 * 24 * time.Hour)
-	if _, err := f.d.repo().AddBackup(ctx, ServerBackup{AttemptID: "A2", TargetID: "T1", RemotePath: srvBackups + "c2/1", Content: []byte("new")}); err != nil {
+	if err := f.d.addBackup(ctx, ServerBackup{AttemptID: "A2", TargetID: "T1", RemotePath: srvBackups + "c2/1", Content: []byte("new")}); err != nil {
 		t.Fatal(err)
 	}
 	f.clock = f.clock.Add(89 * 24 * time.Hour) // the first is 91 days old, the second 89
 	if err := Sweep(ctx, f.d); err != nil {
 		t.Fatal(err)
 	}
-	old, _ := f.d.repo().Backups(ctx, "A1")
-	kept, _ := f.d.repo().Backups(ctx, "A2")
+	old, _ := f.d.backups(ctx, "A1")
+	kept, kerr := f.d.backups(ctx, "A2")
+	if kerr != nil {
+		t.Fatal(kerr)
+	}
 	if len(old) != 0 || len(kept) != 1 || string(kept[0].Content) != "new" {
 		t.Errorf("after purge: %d old, %d kept", len(old), len(kept))
 	}
@@ -1081,7 +1105,7 @@ func TestServerAuditHasNoConfigContent(t *testing.T) {
 func TestServerExitCodesAndKeys(t *testing.T) {
 	for code, want := range map[int]error{3: ErrServerWrongUser, 4: ErrServerAlreadyApplied, 5: ErrServerLineMoved, 6: ErrServerLink,
 		7: ErrServerUnsafe, 8: ErrServerRollbackFailed, 1: ErrServerRolledBack, 2: ErrServerRolledBack} {
-		got := exitError(code)
+		got := classifyExit(code, []byte(scriptRolledBack), false)
 		if !errors.Is(got, want) {
 			t.Errorf("exit %d: %v", code, got)
 		}
@@ -1095,7 +1119,7 @@ func TestServerExitCodesAndKeys(t *testing.T) {
 			}
 		}
 	}
-	if exitError(0) != nil {
+	if classifyExit(0, nil, false) != nil {
 		t.Error("exit 0 is an error")
 	}
 	d := Deps{Lang: i18n.EN}

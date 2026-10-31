@@ -303,12 +303,31 @@ func (w *capped) bytes() ([]byte, bool) {
 // Run runs argv (quoted by Quote) with stdin, bounded by the command timeout
 // and ctx. A non-zero exit status is a Result, not an error.
 func (c *Client) Run(ctx context.Context, argv []string, stdin io.Reader) (Result, error) {
+	return c.RunWith(ctx, argv, stdin, RunOptions{})
+}
+
+// RunOptions changes how one command runs. Timeout, when set, replaces the
+// client's command timeout for this command. NoKill never signals the
+// remote command: when the bound or ctx ends the wait, the session is
+// closed and the command left to finish on its own (a validated fix script
+// must never be killed half way; its own trap handles a hang-up).
+type RunOptions struct {
+	Timeout time.Duration
+	NoKill  bool
+}
+
+// ErrNotStarted means the command was never sent (no session could be
+// opened): nothing ran on the server.
+var ErrNotStarted = errors.New("the command was not started")
+
+// RunWith is Run with options.
+func (c *Client) RunWith(ctx context.Context, argv []string, stdin io.Reader, o RunOptions) (Result, error) {
 	if len(argv) == 0 {
 		return Result{}, errors.New("sshx: empty command")
 	}
 	sess, err := c.c.NewSession()
 	if err != nil {
-		return Result{}, fmt.Errorf("cannot open an SSH session: %w", err)
+		return Result{}, fmt.Errorf("%w: cannot open an SSH session: %w", ErrNotStarted, err)
 	}
 	defer sess.Close()
 	var out, errOut capped
@@ -316,7 +335,11 @@ func (c *Client) Run(ctx context.Context, argv []string, stdin io.Reader) (Resul
 	sess.Stderr = &errOut
 	sess.Stdin = stdin
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	timeout := c.timeout
+	if o.Timeout > 0 {
+		timeout = o.Timeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sess.Run(Quote(argv)) }()
@@ -325,10 +348,12 @@ func (c *Client) Run(ctx context.Context, argv []string, stdin io.Reader) (Resul
 	select {
 	case runErr = <-done:
 	case <-ctx.Done():
-		sess.Signal(ssh.SIGKILL)
+		if !o.NoKill {
+			sess.Signal(ssh.SIGKILL)
+		}
 		sess.Close()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return Result{}, fmt.Errorf("%w (%v): %w", ErrCommandTimeout, c.timeout, ctx.Err())
+			return Result{}, fmt.Errorf("%w (%v): %w", ErrCommandTimeout, timeout, ctx.Err())
 		}
 		return Result{}, ctx.Err()
 	}
