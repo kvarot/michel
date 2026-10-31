@@ -80,4 +80,13 @@ Task 5: complete (commits 24b3e40..ef7f416, re-review clean)
 Task 5: minor (deferred, Task 6 input): M5 open distro advisories passed to Evaluate (PHP2Shell via distro backport) — carry to T6 dispatch
 Task 5: minor (deferred, MUST-FIX final wave): M6 inline ";" comments not stripped — "display_errors = On ; dev" missed (fail-open); fix in collect/files.go + strip in isOn
 Task 5: minor (deferred): PHP-VERSION-UNKNOWN finding has no i18n Key — UI (T13) must map by OSVID; 8.2 date-based EOL (2026-12-31) not modelled
-Task 6: dispatched (BASE ef7f416)
+Task 6: dispatched (BASE 9d8e545, implementer a229f5e724012fc42, sonnet)
+Task 6: implementer DONE_WITH_CONCERNS (commit cab6be2; unparsable versions skipped silently, CVSS vector-only → unknown, Ubuntu Pro, binary vs source version) → review dispatched (sonnet) incl. concerns
+Task 6: review — Needs fixes (5 Important: I1 unparseable version/bound fail-open; I2 unknown release looks clean; I3 CVSS vector unscored; I4 one finding per binary, unstable IDs; I5 RPM/Alpine lookup by Source only) → fix round 1
+Ruling: vulnmatch.Match returns Result{Hits, Unjudged, ReleaseKnown, Skipped} instead of []Hit; unparseable version/bound counts as affected (Hit.Uncertain); Findings takes Result — fail closed and visible beats brief signature — costs: Task 7 brief text names []Hit (carry to T7 dispatch).
+Task 6: minor (deferred, T7 input): Match has no repo — Task 7 must check osvdb.Enabled before Match to raise ErrSourceDisabled for a disabled source with archive present
+Task 6: minor (deferred): source version not collected (collect reads only ${source:Package}); Ubuntu Pro (ESM) ecosystems not handled
+Task 6: fix round 1/5 (I1-I5 + M2 part, M6, M7 addressed; M1, M2 Pro, M4, M5 skipped; commits cab6be2..b8a9e0c; tests written with fix, not seen failing) → re-review
+Task 6: complete (commits 9d8e545..b8a9e0c, re-review clean)
+Task 6: minor (deferred, T7 input): surface ReleaseKnown=false, Unjudged, Skipped>0 — zero hits with any of these is not "clean"; Uncertain only in summary prose (no structured flag)
+Task 6: minor (deferred): Rocky test lacks Fixed/Uncertain asserts; no real Alma/Rocky record checked
