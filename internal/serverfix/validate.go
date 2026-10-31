@@ -1,12 +1,19 @@
 package serverfix
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"github.com/google/osv-scalibr/semantic"
+
 	"github.com/kvarot/michel/internal/target"
+	"github.com/kvarot/michel/internal/vulnmatch"
 )
 
 // pathRe is the whole set of characters a written path may hold.
@@ -23,16 +30,28 @@ var refusedDirs = []string{
 	"/proc/", "/sys/", "/dev/", "/run/", "/var/log/", "/var/backups/", "/var/lib/", "/boot/",
 }
 
+// rootTrees are the only trees root writes into: system configuration
+// folders that root owns. The script checks every parent folder again
+// (owned by root, not writable by group or others) before any change.
+//   - /etc/ (Debian, Ubuntu, Alpine, RHEL php.ini and pools; /etc/opt too)
+//   - /usr/local/etc/ (PHP built from source, BSD layout)
+//   - /opt/remi/phpNN/root/etc/ (Remi's software collections)
+//   - /opt/cpanel/ea-phpNN/root/etc/ (cPanel EasyApache)
+var rootTrees = regexp.MustCompile(`^(/etc/|/usr/local/etc/|/opt/remi/php[0-9]+/root/etc/|/opt/cpanel/ea-php[0-9]+/root/etc/)`)
+
 // pathRefusal checks a path on its own: absolute, clean, no "..", plain
-// characters, a configuration file, no key file, no system folder, and not
-// in /root or another user's /home.
+// characters, a configuration file, no key file, no system folder. A file
+// root writes (anything but a .user.ini) must be in rootTrees; a .user.ini,
+// written as the SSH user, never in /root or another user's /home.
 func pathRefusal(t target.Target, p string) error {
 	switch {
 	case !pathRe.MatchString(p) || path.Clean(p) != p || strings.Contains(p, ".."):
 		return fmt.Errorf("%w: %q", ErrPathNotAllowed, p)
 	case !configFile.MatchString(path.Base(p)) || secretFile.MatchString(path.Base(p)):
 		return fmt.Errorf("%w: not a configuration file", ErrPathNotAllowed)
-	case strings.HasPrefix(p, "/root/") && t.User != "root":
+	case !isUserIni(p) && !rootTrees.MatchString(p):
+		return fmt.Errorf("%w: root writes only in system configuration folders", ErrPathNotAllowed)
+	case strings.HasPrefix(p, "/root/"):
 		return fmt.Errorf("%w: /root", ErrPathNotAllowed)
 	case strings.HasPrefix(p, "/home/") && (t.User == "" || !strings.HasPrefix(p, "/home/"+t.User+"/")):
 		return fmt.Errorf("%w: another user's home", ErrPathNotAllowed)
@@ -75,13 +94,27 @@ func allowedFile(t target.Target, inv target.Inventory, p string) error {
 }
 
 var (
-	binaryRe  = regexp.MustCompile(`^/[A-Za-z0-9._/+-]+$`)
 	serviceRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]*$`)
 	pkgRe     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]*$`)
 	versionRe = regexp.MustCompile(`^[0-9][A-Za-z0-9.+~:_-]*$`)
 	debFPM    = regexp.MustCompile(`^php-fpm([0-9]+\.[0-9]+)$`)
 	branchRe  = regexp.MustCompile(`^(?:[0-9]+:)?([0-9]+)\.([0-9]+)`)
+	majorRe   = regexp.MustCompile(`^(?:[0-9]+:)?([0-9]+)`)
+	// phpBinRe is a system PHP binary: php[version] or php-fpm[version] in
+	// a folder root owns. Root runs it to test a configuration, so nothing
+	// the SSH user's PATH could plant (~/bin) is ever accepted.
+	phpBinRe = regexp.MustCompile(`^/usr/(?:local/)?s?bin/php(-fpm)?[0-9.]*$`)
 )
+
+// phpBinary is the one rule for a PHP binary Michel runs: Validate, Render
+// and Lint all apply it.
+func phpBinary(p, sapi string) bool {
+	m := phpBinRe.FindStringSubmatch(p)
+	if m == nil || path.Clean(p) != p || strings.HasSuffix(p, ".") {
+		return false
+	}
+	return (sapi == SAPIFPM) == (m[1] != "")
+}
 
 // fpmService is the service of a PHP-FPM binary: php8.2-fpm for Debian's
 // php-fpm8.2, the binary's name elsewhere (php-fpm, php-fpm83).
@@ -101,12 +134,16 @@ func serviceManager(inv target.Inventory) string {
 	return "systemctl"
 }
 
-// packageManager is the package manager of the system, or "".
+// packageManager is the package manager of a system whose versions Michel
+// can compare (vulnmatch.Ecosystem), or "".
 func packageManager(inv target.Inventory) string {
+	if _, ok := vulnmatch.Ecosystem(inv.OS); !ok {
+		return ""
+	}
 	switch inv.OS.ID {
-	case "debian", "ubuntu", "raspbian", "linuxmint":
+	case "debian", "ubuntu":
 		return "apt"
-	case "rhel", "centos", "rocky", "almalinux", "fedora", "ol", "amzn":
+	case "rocky", "almalinux":
 		return "dnf"
 	case "alpine":
 		return "apk"
@@ -114,15 +151,102 @@ func packageManager(inv target.Inventory) string {
 	return ""
 }
 
-// services lists the services Michel may reload: the PHP-FPM seen.
+// services lists the services Michel may reload: the system PHP-FPM seen.
 func services(inv target.Inventory) map[string]bool {
 	out := map[string]bool{}
 	for _, rt := range inv.PHP {
-		if rt.SAPI == SAPIFPM && binaryRe.MatchString(rt.Binary) {
+		if rt.SAPI == SAPIFPM && phpBinary(rt.Binary, SAPIFPM) {
 			out[fpmService(rt.Binary)] = true
 		}
 	}
 	return out
+}
+
+// branch is "8.2" for 8.2.7-1~deb12u1 or 1:8.2.7, or "".
+func branch(v string) string {
+	if m := branchRe.FindStringSubmatch(v); m != nil {
+		return m[1] + "." + m[2]
+	}
+	return ""
+}
+
+func major(v string) string {
+	if m := majorRe.FindStringSubmatch(v); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// isPHPPackage tells a package of PHP itself.
+func isPHPPackage(inv target.Inventory, name string) bool {
+	if strings.HasPrefix(name, "php") {
+		return true
+	}
+	for _, rt := range inv.PHP {
+		if rt.FromPackage == name {
+			return true
+		}
+	}
+	return false
+}
+
+// newer says whether v is strictly newer than cur in the system's ecosystem.
+func newer(inv target.Inventory, cur, v string) (bool, error) {
+	eco, ok := vulnmatch.Ecosystem(inv.OS)
+	if !ok {
+		return false, fmt.Errorf("%w: versions of %q cannot be compared", ErrUnknownPackage, inv.OS.ID)
+	}
+	pv, err := semantic.Parse(v, eco)
+	if err != nil {
+		return false, fmt.Errorf("%w: version %q", ErrUnknownPackage, v)
+	}
+	c, err := pv.CompareStr(cur)
+	if err != nil {
+		return false, fmt.Errorf("%w: installed version %q", ErrUnknownPackage, cur)
+	}
+	return c > 0, nil
+}
+
+// checkPackage validates one package_upgrade: an installed package, a
+// strictly newer version, no change of PHP branch and no change of major
+// version of any package (spec § 8.4: a major upgrade of PHP or of a
+// service is a proposal only; Michel does not tell a service's package
+// from a library's, so the rule holds for every package).
+func checkPackage(inv target.Inventory, a Action) (Action, error) {
+	if !pkgRe.MatchString(a.Package) || len(a.Package) > 128 {
+		return a, fmt.Errorf("%w: %q", ErrUnknownPackage, a.Package)
+	}
+	if !versionRe.MatchString(a.Version) || len(a.Version) > 128 {
+		return a, fmt.Errorf("%w: version %q", ErrUnknownPackage, a.Version)
+	}
+	var cur *target.Package
+	for i := range inv.Packages {
+		if inv.Packages[i].Name == a.Package {
+			cur = &inv.Packages[i]
+			break
+		}
+	}
+	if cur == nil {
+		return a, fmt.Errorf("%w: %q is not installed", ErrUnknownPackage, a.Package)
+	}
+	m := packageManager(inv)
+	if m == "" {
+		return a, fmt.Errorf("%w: unknown package manager for %q", ErrUnknownPackage, inv.OS.ID)
+	}
+	ok, err := newer(inv, cur.Version, a.Version)
+	if err != nil {
+		return a, err
+	}
+	if !ok {
+		return a, fmt.Errorf("%w: %s %s is not newer than %s", ErrDowngrade, a.Package, a.Version, cur.Version)
+	}
+	if isPHPPackage(inv, a.Package) && branch(cur.Version) != branch(a.Version) {
+		return a, ErrMajorUpgrade
+	}
+	if major(cur.Version) != major(a.Version) {
+		return a, ErrMajorUpgrade
+	}
+	return Action{Op: OpPackageUpgrade, Package: a.Package, Version: a.Version, Manager: m}, nil
 }
 
 // userRe is a plain Unix user name.
@@ -158,56 +282,14 @@ func checkMix(files []string, pkg bool) error {
 	return nil
 }
 
-// branch is "8.2" for 8.2.7-1~deb12u1 or 1:8.2.7, or "".
-func branch(v string) string {
-	if m := branchRe.FindStringSubmatch(v); m != nil {
-		return m[1] + "." + m[2]
-	}
-	return ""
-}
-
-// isPHPPackage tells a package of PHP itself.
-func isPHPPackage(inv target.Inventory, name string) bool {
-	if strings.HasPrefix(name, "php") {
-		return true
-	}
-	for _, rt := range inv.PHP {
-		if rt.FromPackage == name {
-			return true
-		}
-	}
-	return false
-}
-
-// checkPackage validates one package_upgrade.
-func checkPackage(inv target.Inventory, a Action) (Action, error) {
-	if !pkgRe.MatchString(a.Package) || len(a.Package) > 128 {
-		return a, fmt.Errorf("%w: %q", ErrUnknownPackage, a.Package)
-	}
-	if !versionRe.MatchString(a.Version) || len(a.Version) > 128 {
-		return a, fmt.Errorf("%w: version %q", ErrUnknownPackage, a.Version)
-	}
-	var cur *target.Package
-	for i := range inv.Packages {
-		if inv.Packages[i].Name == a.Package {
-			cur = &inv.Packages[i]
-			break
-		}
-	}
-	if cur == nil {
-		return a, fmt.Errorf("%w: %q is not installed", ErrUnknownPackage, a.Package)
-	}
-	if cur.Version == a.Version {
-		return a, fmt.Errorf("%w: %q is already at %s", ErrBadAction, a.Package, a.Version)
-	}
-	if isPHPPackage(inv, a.Package) && branch(cur.Version) != branch(a.Version) {
-		return a, ErrMajorUpgrade
-	}
-	m := packageManager(inv)
-	if m == "" {
-		return a, fmt.Errorf("%w: unknown package manager for %q", ErrUnknownPackage, inv.OS.ID)
-	}
-	return Action{Op: OpPackageUpgrade, Package: a.Package, Version: a.Version, Manager: m}, nil
+// sealOf is the digest Validate stores in a plan and Render checks.
+func sealOf(p Plan, t target.Target) string {
+	p.seal = ""
+	j, _ := json.Marshal(p)
+	h := sha256.New()
+	fmt.Fprintf(h, "michel-serverfix-plan\n%s\n%s\n%s\n", strconv.Quote(t.ID), strconv.Quote(t.User), strconv.Quote(t.SiteURL))
+	h.Write(j)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // Validate checks a proposed plan against the server and its inventory
@@ -216,7 +298,7 @@ func checkPackage(inv target.Inventory, a Action) (Action, error) {
 // configuration, a reload_service per PHP-FPM touched (and those proposed),
 // at most one package_upgrade, and a check_site when the server has a site.
 // The agent's own backup_file, test_config and check_site are checked then
-// replaced by Michel's.
+// replaced by Michel's. Only the returned plan, unchanged, can be rendered.
 func Validate(p Plan, t target.Target, inv target.Inventory) (Plan, error) {
 	if t.ID == "" || (p.TargetID != "" && p.TargetID != t.ID) || (inv.TargetID != "" && inv.TargetID != t.ID) {
 		return Plan{}, fmt.Errorf("%w: plan for another server", ErrBadAction)
@@ -277,7 +359,11 @@ func Validate(p Plan, t target.Target, inv target.Inventory) (Plan, error) {
 			if err := checkValue(a.Directive, value); err != nil {
 				return Plan{}, err
 			}
-			if _, err := rule(a.Directive); err != nil {
+			r, err := rule(a.Directive)
+			if err != nil {
+				return Plan{}, err
+			}
+			if err := checkAdvised(r, value); err != nil {
 				return Plan{}, err
 			}
 			loc, err := locate(inv, a.SAPI, a.Directive, a.Path)
@@ -295,23 +381,19 @@ func Validate(p Plan, t target.Target, inv target.Inventory) (Plan, error) {
 					return Plan{}, fmt.Errorf("%w: %s set twice in one file", ErrBadAction, loc.key)
 				}
 			}
-			writes = append(writes, Action{Op: OpSetDirective, Path: loc.path, Directive: a.Directive, Value: value,
-				SAPI: a.SAPI, Key: loc.key, Line: loc.line, Append: loc.append})
-			if !contains(files, loc.path) {
-				files = append(files, loc.path)
-			}
 			switch {
-			case loc.rt != nil && loc.rt.SAPI == SAPIFPM:
-				if !binaryRe.MatchString(loc.rt.Binary) {
-					return Plan{}, fmt.Errorf("%w: FPM binary %q", ErrUnknownService, loc.rt.Binary)
-				}
-				addTest(Action{Op: OpTestConfig, SAPI: SAPIFPM, Binary: loc.rt.Binary})
-				addReload(fpmService(loc.rt.Binary))
 			case loc.rt != nil:
-				if !binaryRe.MatchString(loc.rt.Binary) {
-					return Plan{}, fmt.Errorf("%w: PHP binary %q", ErrBadAction, loc.rt.Binary)
+				// A root file is tested by a system PHP binary, never by one
+				// the collection found elsewhere (the SSH user's PATH).
+				if !phpBinary(loc.rt.Binary, loc.rt.SAPI) {
+					return Plan{}, fmt.Errorf("%w: %q", ErrUntestableBinary, loc.rt.Binary)
 				}
-				addTest(Action{Op: OpTestConfig, SAPI: SAPICLI, Binary: loc.rt.Binary, Path: loc.path})
+				if loc.rt.SAPI == SAPIFPM {
+					addTest(Action{Op: OpTestConfig, SAPI: SAPIFPM, Binary: loc.rt.Binary})
+					addReload(fpmService(loc.rt.Binary))
+				} else {
+					addTest(Action{Op: OpTestConfig, SAPI: SAPICLI, Binary: loc.rt.Binary, Path: loc.path})
+				}
 			default:
 				// A .user.ini is read again by PHP on its own. It is never
 				// handed to `php -c`: parsed as a php.ini it could load an
@@ -319,6 +401,11 @@ func Validate(p Plan, t target.Target, inv target.Inventory) (Plan, error) {
 				if err := checkOwner(t); err != nil {
 					return Plan{}, err
 				}
+			}
+			writes = append(writes, Action{Op: OpSetDirective, Path: loc.path, Directive: a.Directive, Value: value,
+				SAPI: a.SAPI, Key: loc.key, Line: loc.line, Append: loc.append})
+			if !contains(files, loc.path) {
+				files = append(files, loc.path)
 			}
 		default:
 			return Plan{}, fmt.Errorf("%w: op %q", ErrBadAction, a.Op)
@@ -341,5 +428,6 @@ func Validate(p Plan, t target.Target, inv target.Inventory) (Plan, error) {
 	if t.SiteURL != "" {
 		out.Actions = append(out.Actions, Action{Op: OpCheckSite})
 	}
+	out.seal = sealOf(out, t)
 	return out, nil
 }

@@ -44,6 +44,15 @@ func checkValue(directive, v string) error {
 	return nil
 }
 
+// checkAdvised refuses a value the rule itself judges risky (an empty
+// open_basedir included): a fix never makes things worse.
+func checkAdvised(r serverrules.ConfigRule, v string) error {
+	if serverrules.RiskyValue(r, v) {
+		return fmt.Errorf("%w: %s = %q is the risky value", ErrBadValue, r.Directive, v)
+	}
+	return nil
+}
+
 // checkKey accepts a plain directive name or a pool php_*[name] form.
 func checkKey(k string) bool {
 	if nameRe.MatchString(k) {
@@ -121,36 +130,44 @@ func locate(inv target.Inventory, sapi, directive, want string) (location, error
 
 	// A pool line is read after the ini files: php_admin_* is final, a
 	// php_value/php_flag counts only for a directive a pool may change.
+	// Within a pool file the last line wins; several pool files setting it
+	// is ambiguous unless the proposal names one.
 	if sapi == SAPIFPM {
-		var admin, plain *target.Directive
+		perFile := map[string]*target.Directive{}
+		var order []string
 		for i := range inv.Directives {
 			d := &inv.Directives[i]
 			if d.SAPI != SAPIFPM || d.Binary != rt.Binary || d.Line <= 0 || !contains(rt.PoolFiles, d.File) {
 				continue
 			}
 			m := poolKeyRe.FindStringSubmatch(d.Name)
-			if m == nil || m[3] != directive {
+			if m == nil || m[3] != directive || (m[1] == "" && system) {
 				continue
 			}
-			if m[1] != "" {
-				if admin == nil {
-					admin = d
-				}
-			} else if !system && plain == nil {
-				plain = d
+			cur, seen := perFile[d.File]
+			if !seen {
+				order = append(order, d.File)
+			}
+			curAdmin := seen && strings.HasPrefix(cur.Name, "php_admin_")
+			if !seen || m[1] != "" || !curAdmin {
+				perFile[d.File] = d
 			}
 		}
-		found := admin
-		if found == nil {
-			found = plain
-		}
+		var found *target.Directive
 		switch {
-		case found != nil && want != "" && want != found.File:
+		case want != "" && perFile[want] != nil:
+			found = perFile[want]
+		case want != "" && len(order) > 0:
 			return location{}, fmt.Errorf("%w: PHP reads %s from a pool line", ErrPathNotAllowed, directive)
-		case found != nil:
-			return location{rt: rt, path: found.File, key: found.Name, line: found.Line}, nil
+		case len(order) > 1:
+			return location{}, fmt.Errorf("%w: %d pools set %s, name one", ErrAmbiguous, len(order), directive)
+		case len(order) == 1:
+			found = perFile[order[0]]
 		case want != "" && contains(rt.PoolFiles, want):
 			return location{}, fmt.Errorf("%w: the pool does not set %s, Michel adds lines to php.ini only", ErrPathNotAllowed, directive)
+		}
+		if found != nil {
+			return location{rt: rt, path: found.File, key: found.Name, line: found.Line}, nil
 		}
 	}
 	// The ini files, in PHP's load order: the last one setting it wins.
@@ -187,7 +204,8 @@ func locateUserIni(inv target.Inventory, r serverrules.ConfigRule, want string) 
 	if r.Changeable == "system" {
 		return location{}, fmt.Errorf("%w: %s has no effect in a .user.ini", ErrPathNotAllowed, r.Directive)
 	}
-	var last *target.Directive
+	perFile := map[string]*target.Directive{}
+	var order []string
 	for i := range inv.Directives {
 		d := &inv.Directives[i]
 		if d.SAPI != SAPIUserIni || d.Name != r.Directive || d.Line <= 0 || path.Base(d.File) != ".user.ini" {
@@ -196,9 +214,16 @@ func locateUserIni(inv target.Inventory, r serverrules.ConfigRule, want string) 
 		if want != "" && d.File != want {
 			continue
 		}
-		last = d
+		if perFile[d.File] == nil {
+			order = append(order, d.File)
+		}
+		perFile[d.File] = d // the last line of a file wins
 	}
-	if last != nil {
+	if len(order) > 1 {
+		return location{}, fmt.Errorf("%w: %d .user.ini set %s, name one", ErrAmbiguous, len(order), r.Directive)
+	}
+	if len(order) == 1 {
+		last := perFile[order[0]]
 		return location{path: last.File, key: r.Directive, line: last.Line}, nil
 	}
 	inis := userInis(inv)
@@ -208,8 +233,11 @@ func locateUserIni(inv target.Inventory, r serverrules.ConfigRule, want string) 
 		}
 		return location{path: want, key: r.Directive, append: true}, nil
 	}
-	if len(inis) != 1 {
-		return location{}, fmt.Errorf("%w: %d .user.ini read", ErrPathNotAllowed, len(inis))
+	if len(inis) > 1 {
+		return location{}, fmt.Errorf("%w: %d .user.ini read, name one", ErrAmbiguous, len(inis))
+	}
+	if len(inis) == 0 {
+		return location{}, fmt.Errorf("%w: no .user.ini read", ErrPathNotAllowed)
 	}
 	return location{path: inis[0], key: r.Directive, append: true}, nil
 }

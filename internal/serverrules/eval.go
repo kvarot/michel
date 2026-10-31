@@ -213,6 +213,10 @@ func eolFinding(t target.Target, rt target.PHPRuntime, key, branch string) scan.
 	}
 }
 
+// RiskyValue says whether value is the risky one for the rule, judged as
+// the evaluation does (on, off or empty).
+func RiskyValue(r ConfigRule, value string) bool { return riskyValue(r, value) }
+
 var poolRe = regexp.MustCompile(`^php_(admin_)?(value|flag)\[(.+)\]$`)
 
 // riskyValue says whether a value of the rule's directive is the risky one.

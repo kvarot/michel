@@ -348,7 +348,7 @@ func (c *collector) fpm(found map[string]string, files *fileReader) {
 	seen := map[string]bool{}
 	var bins []string
 	for _, n := range fpmNames {
-		for _, asked := range []string{n, sbin + n} {
+		for _, asked := range []string{sbin + n, n} {
 			if p, ok := found[asked]; ok && isFPMBinary(p) && !seen[p] {
 				seen[p] = true
 				bins = append(bins, p)

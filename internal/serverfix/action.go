@@ -72,17 +72,35 @@ type Plan struct {
 	// NeedsSnapshot is set by Validate when the fix upgrades a package:
 	// there is no automatic way back, the user's snapshot is the way back.
 	NeedsSnapshot bool `json:"needs_snapshot,omitempty"`
+
+	// seal binds the plan to what Validate checked (its actions and the
+	// target): Render refuses any other plan, so fields the agent could set
+	// (Key, Line, Binary, Manager) never reach a script unchecked. A plan
+	// stored and read back is validated again before rendering.
+	seal string
 }
 
 // Bundle is what the user validates: both scripts, a plain explanation and
 // the checks Michel makes from the workstation afterwards. Hash covers
 // Apply, Undo and Checks.
+//
+// RunAsRoot tells how the scripts are run. True (php.ini, pool, package):
+// the scripts run wholly as root and stop at once otherwise; Task 10 sends
+// them with `sudo -n sh -s` when sudo_mode is nopasswd, else the user runs
+// them as root. Their backups live in /var/lib/michel/backups/<correction>.
+// False (.user.ini): they run as the SSH user, refuse root, and keep their
+// backups in ~/.michel/backups/<correction>.
+//
+// A correction id is used once: once Apply created its backup folder, a
+// second Apply with the same id stops (exit 4), even after a failure; a
+// retry needs a new correction id.
 type Bundle struct {
-	Apply   string
-	Undo    string
-	Explain string
-	Checks  []Action
-	Hash    string
+	Apply     string
+	Undo      string
+	Explain   string
+	Checks    []Action
+	Hash      string
+	RunAsRoot bool
 }
 
 // SimResult is what a package manager's simulation would do.
@@ -115,6 +133,21 @@ var (
 	// ErrBadAction: an unknown op, a missing field, an empty plan or a plan
 	// for another server.
 	ErrBadAction = errors.New("serverfix: malformed action")
+	// ErrAmbiguous: several pools or .user.ini set the directive; the
+	// proposal must name the file.
+	ErrAmbiguous = errors.New("serverfix: several files set this directive, name one")
+	// ErrUntestableBinary: the PHP binary is not a system one (php or
+	// php-fpm[version] in /usr/bin, /usr/sbin, /usr/local/bin or
+	// /usr/local/sbin), so Michel cannot test the configuration as root;
+	// the fix can only be offered with executor user.
+	ErrUntestableBinary = errors.New("serverfix: the PHP binary is not a system one, the configuration cannot be tested")
+	// ErrDowngrade: the version is not strictly newer than the installed one.
+	ErrDowngrade = errors.New("serverfix: the version is not newer than the installed one")
+	// ErrNotValidated: Render was given a plan Validate did not return.
+	ErrNotValidated = errors.New("serverfix: this plan was not validated")
+	// ErrSimulation: the simulation output does not show the expected
+	// upgrade (empty, an error, another version).
+	ErrSimulation = errors.New("serverfix: the simulation does not show the expected upgrade")
 	// ErrGrammar: a rendered script holds a line outside the grammar.
 	ErrGrammar = errors.New("serverfix: script line outside the grammar")
 )

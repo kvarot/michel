@@ -15,19 +15,28 @@ import (
 // Shell is a tiny POSIX sh for the scripts internal/serverfix renders, run
 // on the server's in-memory file system. It knows exactly the constructs
 // that grammar uses and fails on anything else (exit 2): simple commands
-// with single and double quotes, "$VAR", "${VAR}" and "$(id -u)" inside
-// double quotes, ;, ||, { ...; }, if ...; then ...; fi on one line,
-// redirections >, >> and >&2, NAME="..." assignments, name() { ... }
-// functions over several lines, set -eu, umask, trap (EXIT runs on exit)
-// and exit. Built-in commands: echo, printf (%s and \n), true, test and [
-// (-L -w -r -e -f ! = !=), mkdir -p, cat, cp, cmp -s, sed 'Ns|re|text|' (one
+// with single and double quotes, "$VAR", "${VAR}" and "$(simple command)"
+// inside double quotes, ;, ||, { ...; }, if ...; then ...; [else ...;] fi
+// on one line, the one-line `case "WORD" in PATTERN) ;; *) LIST;; esac`
+// (an unquoted pattern with ? and *), redirections >, >>, >&2 and </dev/null,
+// NAME="..." assignments, name() { ... } functions over several lines,
+// set -eu, umask, trap (EXIT runs on exit) and exit. Built-in commands:
+// echo, printf (%s and \n), true, test and [ (-L -w -r -e -f ! = !=),
+// mkdir [-p] [-m MODE], cat, cp, cmp -s, sed 'Ns|re|text|' (one
 // substitution on one line, basic regular expressions without groups),
-// id -u, and sudo -n (allowed when Options.Sudo). Any other command runs
-// the server's Options.Commands handler. Nothing is ever deleted: the
-// shell has no rm.
+// stat -c (%u %a %A, a link is not followed), id -u, env VAR=x... CMD, and
+// sudo -n (allowed when Options.Sudo). Any other command runs the server's
+// Options.Commands handler, with the script's own text as stdin unless
+// redirected from /dev/null. Nothing is ever deleted: the shell has no rm.
 //
-// Permissions: root (UID 0, or a command run with sudo -n) writes every
-// file; the user writes under Home and the paths of Options.Writable.
+// Ownership: Meta gives the owner and mode of a file or folder; a path
+// not in Meta belongs to the user under Home (0644, folders 0755) and to
+// root elsewhere. Root (UID 0, or a command run with sudo -n) writes every
+// file; the user writes a file it owns with u+w, the paths of
+// Options.Writable, and creates files in folders it owns with u+w. Files
+// and folders the script creates belong to whoever creates them, with the
+// umask applied. The state (folders, Meta) stays across runs of one Shell,
+// which is not safe for concurrent runs.
 type Shell struct {
 	// UID is the user's id; 0 is root.
 	UID int
@@ -36,9 +45,19 @@ type Shell struct {
 	// Links are symbolic links (path → target): test -L sees them, cat and
 	// cp follow them, as a real system would.
 	Links map[string]string
+	// Meta is the owner and mode of files and folders.
+	Meta map[string]Meta
 
-	mu  sync.Mutex
-	ran []string
+	dirs map[string]bool
+	mu   sync.Mutex
+	ran  []string
+}
+
+// Meta is the owner and permission bits of a file or folder.
+type Meta struct {
+	UID  int
+	Mode uint32
+	Dir  bool
 }
 
 // Ran lists the commands the shell ran, words joined by spaces, sudo -n
@@ -64,10 +83,12 @@ type interp struct {
 	errexit bool
 	nounset bool
 	dirs    map[string]bool
+	stdin   io.Reader
 	stdout  io.Writer
 	stderr  io.Writer
 	status  int
 	depth   int
+	umask   uint32
 }
 
 // Run runs script and returns its exit status.
@@ -76,8 +97,14 @@ func (sh *Shell) Run(s *Server, script string, stdout, stderr io.Writer) int {
 	if home == "" {
 		home = "/home/demo"
 	}
+	if sh.dirs == nil {
+		sh.dirs = map[string]bool{}
+	}
+	if sh.Meta == nil {
+		sh.Meta = map[string]Meta{}
+	}
 	x := &interp{sh: sh, s: s, home: home, vars: map[string]string{"HOME": home}, funcs: map[string][]string{},
-		traps: map[string]string{}, dirs: map[string]bool{}, stdout: stdout, stderr: stderr}
+		traps: map[string]string{}, dirs: sh.dirs, stdin: strings.NewReader(script), stdout: stdout, stderr: stderr, umask: 022}
 	code, exited := x.protect(func() { x.runLines(strings.Split(script, "\n")) })
 	if !exited {
 		code = x.status
@@ -111,7 +138,10 @@ func (x *interp) fail(format string, a ...any) {
 	panic(exitSignal{2})
 }
 
-var funcDef = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\(\) \{$`)
+var (
+	funcDef = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\(\) \{$`)
+	caseRe  = regexp.MustCompile(`^case "(.*)" in ([A-Za-z0-9?*-]+)\) ;; \*\) (.*);; esac$`)
+)
 
 func (x *interp) runLines(lines []string) {
 	for i := 0; i < len(lines); i++ {
@@ -129,23 +159,62 @@ func (x *interp) runLines(lines []string) {
 			i = j
 			continue
 		}
-		toks, err := tokenize(line)
-		if err != nil {
-			x.fail("%v: %q", err, line)
-		}
-		if len(toks) == 0 {
+		if m := caseRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			word := x.expandDouble(m[1])
+			if !globMatch(m[2], word) {
+				x.status = x.runList(x.parseLine(m[3]), false)
+			} else {
+				x.status = 0
+			}
 			continue
 		}
-		p := &parser{toks: toks}
-		list, err := p.list(nil)
-		if err == nil && p.i != len(p.toks) {
-			err = fmt.Errorf("unexpected %q", p.toks[p.i].text)
-		}
-		if err != nil {
-			x.fail("%v: %q", err, line)
+		list := x.parseLine(line)
+		if list == nil {
+			continue
 		}
 		x.status = x.runList(list, false)
 	}
+}
+
+// parseLine parses one line; nil for an empty or comment line.
+func (x *interp) parseLine(line string) [][]node {
+	toks, err := tokenize(line)
+	if err != nil {
+		x.fail("%v: %q", err, line)
+	}
+	if len(toks) == 0 {
+		return nil
+	}
+	p := &parser{toks: toks}
+	list, err := p.list(nil)
+	if err == nil && p.i != len(p.toks) {
+		err = fmt.Errorf("unexpected %q", p.toks[p.i].text)
+	}
+	if err != nil {
+		x.fail("%v: %q", err, line)
+	}
+	return list
+}
+
+// globMatch matches a case pattern with ? and * and literal characters.
+func globMatch(pat, s string) bool {
+	if pat == "" {
+		return s == ""
+	}
+	switch pat[0] {
+	case '*':
+		for i := 0; i <= len(s); i++ {
+			if globMatch(pat[1:], s[i:]) {
+				return true
+			}
+		}
+		return false
+	case '?':
+		return s != "" && globMatch(pat[1:], s[1:])
+	case '[', '\\':
+		return false // not supported: never matches, the default branch runs
+	}
+	return s != "" && s[0] == pat[0] && globMatch(pat[1:], s[1:])
 }
 
 // --- tokens -------------------------------------------------------------
@@ -262,7 +331,10 @@ func tokenize(line string) ([]token, error) {
 			default:
 				toks = append(toks, token{op: ">", text: ">"})
 			}
-		case c == '&' || c == '<' || c == '(' || c == ')' || c == '`' || c == '*' || c == '?':
+		case c == '<':
+			flush()
+			toks = append(toks, token{op: "<", text: "<"})
+		case c == '&' || c == '(' || c == ')' || c == '`' || c == '*' || c == '?':
 			return nil, fmt.Errorf("unsupported %q", c)
 		case c == '$':
 			return nil, errors.New("unquoted expansion")
@@ -291,7 +363,7 @@ type simple struct {
 
 type group struct{ list [][]node }
 
-type ifNode struct{ cond, body [][]node }
+type ifNode struct{ cond, body, alt [][]node }
 
 type parser struct {
 	toks []token
@@ -369,12 +441,19 @@ func (p *parser) command(stop []string) (node, error) {
 		if err := p.expect("then"); err != nil {
 			return nil, err
 		}
-		body, err := p.list([]string{"fi"})
+		body, err := p.list([]string{"else", "fi"})
 		if err != nil {
 			return nil, err
 		}
-		return ifNode{cond, body}, p.expect("fi")
-	case "then", "fi", "}":
+		var alt [][]node
+		if p.peekWord() == "else" {
+			p.i++
+			if alt, err = p.list([]string{"fi"}); err != nil {
+				return nil, err
+			}
+		}
+		return ifNode{cond, body, alt}, p.expect("fi")
+	case "then", "else", "fi", "}":
 		return nil, fmt.Errorf("unexpected %q", p.peekWord())
 	}
 	var c simple
@@ -389,7 +468,7 @@ func (p *parser) command(stop []string) (node, error) {
 		case ">&2":
 			c.redirs = append(c.redirs, t)
 			p.i++
-		case ">", ">>":
+		case ">", ">>", "<":
 			if p.i+1 >= len(p.toks) || p.toks[p.i+1].op != "" {
 				return nil, errors.New("redirection without a file")
 			}
@@ -448,6 +527,9 @@ func (x *interp) runNode(n node, noErr bool) int {
 		if x.runList(n.cond, true) == 0 {
 			return x.runList(n.body, noErr)
 		}
+		if n.alt != nil {
+			return x.runList(n.alt, noErr)
+		}
 		return 0
 	case simple:
 		st := x.runSimple(n)
@@ -484,9 +566,13 @@ func (x *interp) expandDouble(s string) string {
 		case c == '$':
 			rest := s[i+1:]
 			switch {
-			case strings.HasPrefix(rest, "(id -u)"):
-				b.WriteString(strconv.Itoa(x.sh.UID))
-				i += len("(id -u)")
+			case strings.HasPrefix(rest, "("):
+				j := strings.IndexByte(rest, ')')
+				if j < 0 || strings.ContainsAny(rest[1:j], "(`") {
+					x.fail("unsupported command substitution")
+				}
+				b.WriteString(x.capture(rest[1:j]))
+				i += j + 1
 			case strings.HasPrefix(rest, "{"):
 				j := strings.IndexByte(rest, '}')
 				if j < 0 || !varRe.MatchString(rest[1:j]) || varRe.FindString(rest[1:j]) != rest[1:j] {
@@ -507,6 +593,27 @@ func (x *interp) expandDouble(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// capture runs `id` or `stat` (the only command substitutions the grammar
+// uses) and returns its output without the
+// trailing new lines; its failure does not stop the script.
+func (x *interp) capture(cmd string) string {
+	list := x.parseLine(cmd)
+	if len(list) != 1 || len(list[0]) != 1 {
+		x.fail("unsupported command substitution %q", cmd)
+	}
+	c, ok := list[0][0].(simple)
+	if !ok || len(c.redirs) > 0 || (c.words[0].bare() != "id" && c.words[0].bare() != "stat") {
+		x.fail("unsupported command substitution %q", cmd)
+	}
+	var buf bytes.Buffer
+	out := x.stdout
+	x.stdout = &buf
+	st := x.status
+	x.runSimple(c)
+	x.stdout, x.status = out, st
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 func (x *interp) expand(t token) string {
@@ -551,6 +658,14 @@ func (x *interp) runSimple(c simple) int {
 	appendTo := false
 	for i := 0; i < len(c.redirs); i++ {
 		switch c.redirs[i].op {
+		case "<":
+			if x.expand(c.redirs[i+1]) != "/dev/null" {
+				x.fail("only </dev/null is supported")
+			}
+			i++
+			in := x.stdin
+			x.stdin = strings.NewReader("")
+			defer func() { x.stdin = in }()
 		case ">&2":
 			out = x.stderr
 		case ">", ">>":
@@ -562,18 +677,17 @@ func (x *interp) runSimple(c simple) int {
 		}
 	}
 	if file != "" {
-		if !x.canCreate(file, false) {
+		if !x.canCreate(file, x.sh.UID == 0) {
 			fmt.Fprintf(errw, "sh: cannot create %s: Permission denied\n", file)
 			return 2
 		}
 	}
+	saved := x.stdout
+	x.stdout = out
 	st := x.command(argv, out, errw)
+	x.stdout = saved
 	if file != "" {
-		prev, _ := x.s.File(file)
-		if !appendTo {
-			prev = ""
-		}
-		x.s.SetFile(file, prev+buf.String())
+		x.writeFile(file, buf.String(), appendTo, x.sh.UID == 0)
 	}
 	return st
 }
@@ -625,9 +739,11 @@ func (x *interp) command(argv []string, out, errw io.Writer) int {
 		}
 		return 0
 	case "umask":
-		if len(argv) != 2 || strings.Trim(argv[1], "01234567") != "" {
+		n, err := strconv.ParseUint(argv[len(argv)-1], 8, 32)
+		if len(argv) != 2 || err != nil || n > 0777 {
 			x.fail("bad umask")
 		}
+		x.umask = uint32(n)
 		return 0
 	case "trap":
 		if len(argv) < 3 {
@@ -659,18 +775,18 @@ func (x *interp) command(argv []string, out, errw io.Writer) int {
 		fmt.Fprintln(out, uid)
 		return 0
 	case "mkdir":
-		if len(argv) != 3 || argv[1] != "-p" {
-			x.fail("only mkdir -p DIR is supported")
+		return x.mkdir(argv[1:], root, errw)
+	case "stat":
+		return x.stat(argv[1:], out, errw)
+	case "env":
+		i := 1
+		for i < len(argv) && assignRe.MatchString(argv[i]) {
+			i++
 		}
-		d := strings.TrimRight(argv[2], "/")
-		if !root && !x.underHome(d) {
-			fmt.Fprintf(errw, "mkdir: cannot create directory %s: Permission denied\n", d)
-			return 1
+		if i == len(argv) {
+			x.fail("env without a command")
 		}
-		for p := d; p != "" && p != "/"; p = parent(p) {
-			x.dirs[p] = true
-		}
-		return 0
+		return x.command(argv[i:], out, errw)
 	case "cat":
 		if len(argv) != 2 {
 			x.fail("only cat FILE is supported")
@@ -696,7 +812,7 @@ func (x *interp) command(argv []string, out, errw io.Writer) int {
 			fmt.Fprintf(errw, "cp: cannot create regular file %s: Permission denied\n", argv[2])
 			return 1
 		}
-		x.s.SetFile(dst, v)
+		x.writeFile(dst, v, false, root)
 		return 0
 	case "cmp":
 		if len(argv) != 4 || argv[1] != "-s" {
@@ -738,7 +854,7 @@ func (x *interp) command(argv []string, out, errw io.Writer) int {
 		fmt.Fprintf(errw, "sh: %s: not found\n", argv[0])
 		return 127
 	}
-	return h(Exec{Ctx: context.Background(), Args: argv, Stdin: strings.NewReader(""), Stdout: out, Stderr: errw})
+	return h(Exec{Ctx: context.Background(), Args: argv, Stdin: x.stdin, Stdout: out, Stderr: errw})
 }
 
 func parent(p string) string {
@@ -754,7 +870,7 @@ func (x *interp) underHome(p string) bool {
 }
 
 func (x *interp) dirExists(d string) bool {
-	if d == "/" || d == x.home || x.dirs[d] {
+	if d == "/" || d == x.home || x.dirs[d] || x.sh.Meta[d].Dir {
 		return true
 	}
 	x.s.mu.Lock()
@@ -784,9 +900,31 @@ func (x *interp) resolve(p string) string {
 	return p
 }
 
+// meta returns the owner and mode of p (not following a link).
+func (x *interp) meta(p string) Meta {
+	if m, ok := x.sh.Meta[p]; ok {
+		return m
+	}
+	dir := !x.fileExists(p) && x.dirExists(p)
+	m := Meta{Mode: 0o644, Dir: dir}
+	if dir {
+		m.Mode = 0o755
+	}
+	if x.underHome(p) {
+		m.UID = x.sh.UID
+	}
+	return m
+}
+
+// owns tells whether the user may write p, which it owns with u+w.
+func (x *interp) owns(p string) bool {
+	m := x.meta(p)
+	return m.UID == x.sh.UID && m.Mode&0o200 != 0
+}
+
 func (x *interp) writable(p string, root bool) bool {
 	p = x.resolve(p)
-	return root || x.underHome(p) || x.s.opts.Writable[p]
+	return root || x.s.opts.Writable[p] || x.owns(p)
 }
 
 // canCreate tells whether p may be written: an existing writable file, or
@@ -795,10 +933,140 @@ func (x *interp) canCreate(p string, root bool) bool {
 	if !strings.HasPrefix(p, "/") {
 		return false
 	}
+	p = x.resolve(p)
 	if x.fileExists(p) {
 		return x.writable(p, root)
 	}
-	return x.dirExists(parent(p)) && (root || x.underHome(p))
+	return x.dirExists(parent(p)) && (root || x.owns(parent(p)))
+}
+
+// writeFile writes p (a link followed); a new file belongs to its writer.
+func (x *interp) writeFile(p, content string, appendTo, root bool) {
+	p = x.resolve(p)
+	prev, existed := x.s.File(p)
+	if !appendTo {
+		prev = ""
+	}
+	if !existed {
+		uid := x.sh.UID
+		if root {
+			uid = 0
+		}
+		x.sh.Meta[p] = Meta{UID: uid, Mode: 0o666 &^ x.umask}
+	}
+	x.s.SetFile(p, prev+content)
+}
+
+// mkdir runs mkdir [-p] [-m MODE] DIR.
+func (x *interp) mkdir(args []string, root bool, errw io.Writer) int {
+	parents, mode := false, uint32(0o777)&^x.umask
+	for len(args) > 1 {
+		switch args[0] {
+		case "-p":
+			parents, args = true, args[1:]
+		case "-m":
+			n, err := strconv.ParseUint(args[1], 8, 32)
+			if err != nil || n > 0o777 {
+				x.fail("mkdir: bad mode")
+			}
+			mode, args = uint32(n), args[2:]
+		default:
+			x.fail("mkdir: unsupported %q", args[0])
+		}
+	}
+	if len(args) != 1 || !strings.HasPrefix(args[0], "/") {
+		x.fail("mkdir: one absolute folder")
+	}
+	d := strings.TrimRight(args[0], "/")
+	uid := x.sh.UID
+	if root {
+		uid = 0
+	}
+	make1 := func(p string, m uint32) bool {
+		if !x.dirExists(parent(p)) || !(root || x.owns(parent(p))) {
+			fmt.Fprintf(errw, "mkdir: cannot create directory %s: Permission denied\n", p)
+			return false
+		}
+		x.dirs[p] = true
+		x.sh.Meta[p] = Meta{UID: uid, Mode: m, Dir: true}
+		return true
+	}
+	if !parents {
+		if x.dirExists(d) || x.fileExists(d) || x.sh.Links[d] != "" {
+			fmt.Fprintf(errw, "mkdir: cannot create directory %s: File exists\n", d)
+			return 1
+		}
+		if !make1(d, mode) {
+			return 1
+		}
+		return 0
+	}
+	var todo []string
+	for p := d; p != "/" && !x.dirExists(p); p = parent(p) {
+		todo = append([]string{p}, todo...)
+	}
+	for _, p := range todo {
+		m := uint32(0o777) &^ x.umask
+		if p == d {
+			m = mode
+		}
+		if !make1(p, m) {
+			return 1
+		}
+	}
+	return 0
+}
+
+// stat runs stat -c FORMAT PATH with %u, %a and %A; a link is described
+// itself, never followed.
+func (x *interp) stat(args []string, out, errw io.Writer) int {
+	if len(args) != 3 || args[0] != "-c" {
+		x.fail("only stat -c FORMAT PATH is supported")
+	}
+	p := args[2]
+	var m Meta
+	typ := byte('-')
+	switch {
+	case x.sh.Links[p] != "":
+		m, typ = Meta{UID: x.meta(p).UID, Mode: 0o777}, 'l'
+	case x.fileExists(p) || x.dirExists(p):
+		m = x.meta(p)
+		if m.Dir {
+			typ = 'd'
+		}
+	default:
+		fmt.Fprintf(errw, "stat: cannot statx '%s': No such file or directory\n", p)
+		return 1
+	}
+	sym := []byte{typ}
+	for i := 8; i >= 0; i-- {
+		c := "rwx"[(8-i)%3]
+		if m.Mode&(1<<uint(i)) == 0 {
+			c = '-'
+		}
+		sym = append(sym, c)
+	}
+	f := args[1]
+	var b strings.Builder
+	for i := 0; i < len(f); i++ {
+		if f[i] != '%' || i+1 >= len(f) {
+			b.WriteByte(f[i])
+			continue
+		}
+		i++
+		switch f[i] {
+		case 'u':
+			b.WriteString(strconv.Itoa(m.UID))
+		case 'a':
+			b.WriteString(strconv.FormatUint(uint64(m.Mode), 8))
+		case 'A':
+			b.Write(sym)
+		default:
+			x.fail("stat: unsupported %%%c", f[i])
+		}
+	}
+	fmt.Fprintln(out, b.String())
+	return 0
 }
 
 func (x *interp) test(args []string, root bool) int {
