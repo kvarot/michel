@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="prod-demo" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="prod-demo">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/var/www/app" local="$PROJECT_DIR$" />
+            <mapping deploy="/var/www/other" local="$PROJECT_DIR$/sub" web="/x" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="nested-demo">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/srv/demo" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+  </component>
+</project>

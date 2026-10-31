@@ -1,0 +1,19 @@
+# fabricated fixture
+Include conf.d/*.conf
+Include missing.conf
+
+Host *
+    ServerAliveInterval 30
+
+Host srv-demo
+    HostName example.test
+    User deploy
+    Port 2222
+    IdentityFile ~/.ssh/id_ed25519
+
+Host ip-demo
+    HostName 192.0.2.10
+    User deploy
+
+Host web-?? *.internal !skip
+    User nobody
