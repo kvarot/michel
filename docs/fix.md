@@ -31,8 +31,18 @@ Each project has its own level (`fix_level`, 0 to 3, default 1), set on the page
 
 Level 1 is enough to fix from the page: **Fix** is a click, not a setting. Levels 2 and 3 only add the initiative, and need the project's AI consent; without it, Michel stays at level 1 and says so.
 
-- **Eligible at level 2**: an open finding of a dependency (not deferred or ignored), with a known fixed version, without an attempt in progress or a refused proposal. Exploited flaws (KEV) first, then by severity. `scan --all` puts them in a queue; `michel serve` takes them in order, **one attempt at a time per project**, and **at most 3 attempts started alone per day and per project**. If `serve` is not running, nothing starts.
-- **Automatic rule (level 3)**: the box "Apply safe minor updates on my behalf" of the project (`--auto-fix-minor`). Michel (never the agent) applies without a click only when **all** of these hold: the change touches only `composer.json`/`composer.lock` or `package.json`/`package-lock.json` (or `yarn.lock`, `pnpm-lock.yaml`), no code; the jump is patch or minor, not major; the risk score is below the project's `auto_fix_below` (default 30, see [remediation-risk.md](remediation-risk.md)); the re-scan of the copy no longer sees the flaw **and** the tests passed (not merely not run); and the agent changed nothing after Michel's own update: what is applied is exactly the update Michel ran, read from the proposal's commit. Otherwise the proposal waits for you. "Apply" means "create the branch", never merge or deploy.
+**Which findings are handled alone at level 2**: an open finding of a dependency (not deferred or ignored), with a known fixed version, without an attempt in progress or a refused proposal. Exploited flaws (KEV) first, then by severity. `scan --all` puts them in a queue; `michel serve` takes them in order, **one attempt at a time per project**, and **at most 3 attempts started alone per day and per project**. If `serve` is not running, nothing starts.
+
+**Automatic rule (level 3)**: it only counts if you checked the box "Apply safe minor updates on my behalf" of the project (`--auto-fix-minor`). Michel (never the agent) then creates the branch without asking you, only when all six points hold:
+
+- the change touches only dependency files (`composer.json` and `composer.lock`, or `package.json` and `package-lock.json`, or `yarn.lock`, `pnpm-lock.yaml`), no code;
+- the jump is small: a patch or a minor version, not a major one (for example not 7 to 8);
+- the risk score is below the project's `auto_fix_below` (default 30, see [remediation-risk.md](remediation-risk.md));
+- the re-scan of the copy no longer sees the flaw;
+- the tests passed ("not run" is not enough);
+- the agent changed nothing after Michel's own update: what is applied is exactly that update, read from the proposal's commit.
+
+Otherwise the proposal waits for you. "Apply" means "create the branch", never merge or deploy.
 
 ## The consent screen: what leaves your computer
 
@@ -46,7 +56,15 @@ Claude Code sends what it reads to Anthropic: it is an external AI provider in t
   - the package registries, purpose `fix.install`: `repo.packagist.org`, `packagist.org`, `api.github.com`, `codeload.github.com` (the archives Composer downloads), `registry.npmjs.org`;
 - that accepting turns on external AI providers in your policy (`ai.external_providers_enabled`), when it is off.
 
-When you accept, Michel writes one rule per host in `sovereignty.network.allow` of your policy file (with a `config.yaml.bak` copy), turns `ai.external_providers_enabled` on if needed, reloads the policy without restart, stores the project's consent and records `ai.consent` in the audit log (hosts, purposes, classification, who). A project classified `health` is always refused, consent or not.
+When you accept, Michel:
+
+1. writes one rule per host in `sovereignty.network.allow` of your policy file (with a `config.yaml.bak` copy);
+2. turns `ai.external_providers_enabled` on if needed;
+3. reloads the policy, without restart;
+4. stores the project's consent;
+5. records `ai.consent` in the audit log (hosts, purposes, classification, who).
+
+A project classified `health` is always refused, consent or not.
 
 ### When your policy is `strict_local`
 
@@ -59,7 +77,7 @@ The agent never works in your folder. For each attempt Michel makes, in its data
 1. a **private mirror** of your repository (`<data>/fix-mirrors/<project>/<attempt>.git`, `git clone --bare --local`, which only reads your repository). The agent never sees it;
 2. the **agent's copy** (`<data>/worktrees/<project>/<attempt>/`): a fresh git repository filled with the files of your last commit, **without history**, without remote and without any absolute path, in one commit "michel: base".
 
-Left out of the copy: the files that are not committed (so the git-ignored ones), `.env*`, `*.pem`, `*.key`, `id_*` at any depth, ignoring case, the folders the project excludes (`michel project set <name> --exclude <folder>`), symbolic links and special files. A copy is capped at 30,000 files, 256 MiB per file and 4 GiB in all; a larger project is refused (see "Troubleshooting"). During the whole preparation Michel writes nothing in your project (tested).
+The copy holds only the files of your last commit. So left out are: whatever git ignores or does not track, `.env*`, `*.pem`, `*.key`, `id_*` files (in every folder, ignoring case), the folders you excluded (`michel project set <name> --exclude <folder>`), symbolic links and special files. A copy is capped at 30,000 files, 256 MiB per file and 4 GiB in all; a larger project is refused (see "Troubleshooting"). During the preparation Michel writes nothing in your project (checked by a test).
 
 Before the agent starts, Michel runs its secret detectors on the files of the copy. A secret written in your code is reported in the conversation ("2 secrets seem written in your code (…): the agent can read them") with the relative files, so that you can keep them out: move them into an excluded folder (`--exclude` takes folder names, not files), or take the secret out of the code (into a `.env` file, which is never copied).
 
@@ -90,7 +108,7 @@ At the start, on the copy still as you committed it (before the agent sees it), 
 
 There is no update for a yarn or pnpm lockfile: the agent works from the project's files as they are.
 
-Its result is Michel's first message in the conversation. When the agent proposes (`propose_fix`), Michel freezes the copy once (one snapshot: later writes of the agent are ignored), rebuilds that snapshot in a scratch folder (`<data>/fix-tmp/<attempt>/`, never the agent's copy), and there:
+Its result is Michel's first message in the conversation. When the agent proposes (`propose_fix`), Michel takes one snapshot of the copy, once and for all (later writes of the agent are ignored), rebuilds that snapshot in a scratch folder (`<data>/fix-tmp/<attempt>/`, never the agent's copy), and there:
 
 1. installs the dependencies (`composer install --no-scripts --no-plugins` or `npm ci --ignore-scripts`), from scratch;
 2. runs the project's tests, if you declared a command (`michel project set <name> --test-cmd "vendor/bin/phpunit"`, split into words without a shell);
@@ -100,15 +118,15 @@ Only **Composer and npm** are installed. A yarn or pnpm project is read and can 
 
 ## The proposal and the validation by fingerprint
 
-A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy, the risk, and a SHA-256 fingerprint of the whole. If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
+A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy, the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
 
 Michel refuses a change that touches a file outside the copy (`..`, absolute path, link), a protected file or an excluded file: the attempt is `failed`, the cause is said in plain words, nothing is applied.
 
-**Approve** carries the fingerprint of the proposal you read. If the agent replaced it in between, Michel applies nothing (409) and shows you the new one. On the command line, `michel fix approve` without `--hash` approves the proposal `michel fix status` last showed, and refuses when it changed since.
+**Approve** carries the fingerprint of the proposal you read. If the agent replaced it in between, the fingerprint no longer matches: Michel applies nothing (error code 409) and shows you the new one. On the command line, `michel fix approve` without `--hash` approves the proposal `michel fix status` last showed, and refuses when it changed since.
 
 ## The branch, then you deploy
 
-Applying = Michel builds **one commit** of its own in the mirror (author Michel, parent = your real commit, the agent's own commits are ignored), then fetches it from your repository into the branch `michel/fix-<short id>`. No checkout, no merge: your current branch, your working tree and your index do not move (tested even with a dirty tree or another branch). It is the only write Michel makes in your project, and only after your approval: objects and one ref in its `.git`.
+Applying = Michel builds **one commit** of its own in the mirror (author Michel, parent = your real commit, the agent's own commits are ignored), then fetches it from your repository into the branch `michel/fix-<short id>`. No checkout, no merge: your current branch, your working tree and your index do not move (checked by a test, even with modified files or another branch checked out). It is the only write Michel makes in your project, and only after your approval: objects and one ref in its `.git`.
 
 The page then says: "The branch michel/fix-… is ready. Merge it, then deploy with PhpStorm as usual." Michel never merges and never deploys.
 
@@ -117,13 +135,13 @@ The page then says: "The branch michel/fix-… is ready. Merge it, then deploy w
 - Tests `passed` and a clean re-scan **in the copy** are required for an automatic application (level 3), and shown for the others.
 - **`proven_fixed`**: after you merged, a scan of your project (`michel scan`) no longer sees the flaw **and** the branch's commit is in the current branch of your repository (Michel checks it read-only, `git merge-base --is-ancestor`).
 - The flaw gone without that commit, or the commit merged while the flaw is still seen: the attempt is `inconclusive`, with the reason.
-- Michel does not rerun the tests after the merge. A local scan sees the merge, not the deployment: Michel says "fixed in your code" and reminds you to deploy; it does not claim the server is up to date.
+- Michel does not rerun the tests after the merge, because it never runs anything in your folder: the tests ran on the copy, before the merge. A local scan sees the merge, not the deployment: Michel says "fixed in your code" and reminds you to deploy; it does not claim the server is up to date.
 
-The states of an attempt: `preparing` → `proposed` → `approved` or `refused` → `applied` → `proven_fixed` or `inconclusive`; `failed` from `preparing` (with its cause); `superseded` when a newer proposal replaces one.
+The states you will see on the page: `preparing` → `proposed` → `approved` or `refused` → `applied` → `proven_fixed` or `inconclusive`; `failed` from `preparing` (with its cause); `superseded` when a newer proposal replaces one.
 
 ## Masking, and its limit
 
-Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks secrets: AWS keys, GitHub tokens, PEM keys, `.env`-style values, password/secret/token/key assignments, passwords in connection URLs; the absolute paths of your computer become relative paths. A secret becomes a token `[secret-<random>-N]`; the table token → value stays in Michel's secret store (DPAPI-encrypted on Windows, a file readable by you only elsewhere) and is never sent. The audit records how many values were masked and of which kind, never the values.
+Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks secrets: AWS keys, GitHub tokens, PEM keys, `.env`-style values, password/secret/token/key assignments, passwords in connection URLs; the absolute paths of your computer become relative paths. Each secret is replaced by a token `[secret-<random>-N]`. The table linking the tokens to the real values stays in Michel's secret store (DPAPI-encrypted on Windows, a file readable by you only elsewhere) and is never sent. The audit records how many values were masked and of which kind, never the values.
 
 - The page and the API never unmask: a secret shows as a token there.
 - Michel **never** unmasks into a commit: a proposal that holds a token is refused (the agent may have copied it from the brief); if a fix really needs a secret value in code, you add it by hand.
@@ -132,10 +150,11 @@ Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks
 ## Residual risks
 
 - **Install and tests run with your rights, without a sandbox.** `composer`/`npm` and your tests run on the copy as you, on your computer; when the agent changed code, the tests run that code. Michel hardens what it can (no install scripts, no plugins, settings allowlists, folders reset before each install, scratch folder, a Michel home folder, the proxy), but it is not an isolated environment: a hostile project or a hostile change could reach what you can reach. An isolated environment (Docker) is planned for a later plan.
-- **A tool that ignores the proxy.** Claude Code, git, composer, npm and the tests get `HTTPS_PROXY`/`HTTP_PROXY` toward Michel's allow proxy. A program that opens its own connections is neither stopped nor recorded. It is a safeguard, not a guarantee.
-- **Claude Code changes.** The isolation relies on options of Claude Code (tested with version 2.1.314): `--setting-sources ""`, `--strict-mcp-config`, `--restricted`, `--tools`, the permission rules, the variables that turn off `CLAUDE.md`, memory and the non-essential traffic. Michel refuses a version whose help lacks these options, but cannot check that a future version still honours them the same way. Claude Code still reads its login in your profile folder.
+- **A tool that ignores the proxy.** Claude Code, git, composer, npm and the tests get `HTTPS_PROXY`/`HTTP_PROXY` toward Michel's allow proxy. But a program can ignore that proxy and open its own connections: Michel would neither stop nor record it. The proxy is a safeguard, not a guarantee.
+- **Claude Code changes.** Michel relies on options of Claude Code to keep the agent away from your settings. It refuses a version that lacks them, but cannot guarantee that a future version honours them the same way. Claude Code still reads its login in your user folder (your profile).
+  - Options used (tested with version 2.1.314): `--setting-sources ""`, `--strict-mcp-config`, `--restricted`, `--tools`, the permission rules, and the variables that turn off `CLAUDE.md`, memory and the non-essential traffic.
 - **Anthropic reads the copy's code**, as said on the consent screen.
-- **The agent's text is untrusted.** It is shown, never executed; its proposal is checked by Michel, and you decide.
+- **The agent's text must not be taken at its word.** It is shown, never executed; its proposal is checked by Michel, and you decide.
 
 ## Troubleshooting
 
@@ -149,8 +168,10 @@ Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks
 | "This project is classified health" | Never sent to an external AI. Read the brief and fix by hand. |
 | "This project is not tracked by git" / "no commit yet" | Michel copies with git: put the project in git (and make a first commit). The brief stays available. |
 | "Your project is too large" | Exclude big folders (`--exclude`), or fix by hand from the brief. |
-| "…would make the install run programs from the project itself" | A project setting (npm, Composer) is outside what Michel accepts; nothing ran. Fix by hand, or remove the setting. |
-| "Tests: not run" | No test command: `michel project set <name> --test-cmd "…"`. A yarn or pnpm project, or an install refused: the page says which; check your site yourself before merging. |
+| "…would make the install run programs from the project itself" | A setting of your project (npm, Composer) would run code during the install; Michel does not accept it, so nothing ran. Fix by hand, or remove that setting. |
+| "Tests: not run", no test command | Set one: `michel project set <name> --test-cmd "…"`. |
+| "Tests: not run", yarn or pnpm project | Michel does not install with yarn or pnpm: check your site yourself before merging. |
+| "Tests: not run", install refused | The page says which setting blocks: remove it, or check your site yourself before merging. |
 | "Michel refused the agent's change" | The agent touched a file outside the copy or a protected file. Nothing was applied; try again. |
 | "The proposal changed since you read it" | Read the new one, then approve it. |
 | "A fix is already in progress on this project" | Finish or refuse it first. |
