@@ -767,10 +767,16 @@ func (r *Repo) Claim(ctx context.Context, id string, deadline time.Time) (bool, 
 	return n == 1, nil
 }
 
-// StaleRunning lists the running attempts whose run deadline (or, for a
-// record without one, updated_at plus fallback) is before cutoff.
-func (r *Repo) StaleRunning(ctx context.Context, cutoff time.Time, fallback time.Duration) ([]Attempt, error) {
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, run_deadline FROM fix_attempt WHERE state = ?`, string(StateRunning))
+// RunEnd is an attempt that is running or applied, with the end of its
+// run's bound (zero when the record has none).
+type RunEnd struct {
+	Attempt  Attempt
+	Deadline time.Time
+}
+
+// RunEnds lists the running and applied attempts with their run deadline.
+func (r *Repo) RunEnds(ctx context.Context) ([]RunEnd, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, run_deadline FROM fix_attempt WHERE state IN (?, ?)`, string(StateRunning), string(StateApplied))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
 	}
@@ -784,24 +790,23 @@ func (r *Repo) StaleRunning(ctx context.Context, cutoff time.Time, fallback time
 		}
 		list = append(list, x)
 	}
+	// Closed before reading the attempts: the store has one connection.
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	var out []Attempt
+	var out []RunEnd
 	for _, x := range list {
 		a, err := r.GetAttempt(ctx, x.id)
 		if err != nil {
 			return nil, err
 		}
-		end := a.UpdatedAt.Add(fallback)
+		e := RunEnd{Attempt: a}
 		if x.deadline != "" {
-			if end, err = parseTime(x.deadline); err != nil {
+			if e.Deadline, err = parseTime(x.deadline); err != nil {
 				return nil, err
 			}
 		}
-		if end.Before(cutoff) {
-			out = append(out, a)
-		}
+		out = append(out, e)
 	}
 	return out, nil
 }
@@ -827,7 +832,7 @@ func (r *Repo) SetBackupKeyFingerprint(ctx context.Context, old, fp string) (boo
 	var res sql.Result
 	var err error
 	if old == "" {
-		res, err = r.s.DB().ExecContext(ctx, `INSERT INTO server_backup_key (id, fingerprint) SELECT 1, ? WHERE NOT EXISTS (SELECT 1 FROM server_backup_key WHERE id = 1)`, fp)
+		res, err = r.s.DB().ExecContext(ctx, `INSERT INTO server_backup_key (id, fingerprint) VALUES (1, ?) ON CONFLICT (id) DO NOTHING`, fp)
 	} else {
 		res, err = r.s.DB().ExecContext(ctx, `UPDATE server_backup_key SET fingerprint = ? WHERE id = 1 AND fingerprint = ?`, fp, old)
 	}

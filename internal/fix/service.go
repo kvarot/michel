@@ -142,6 +142,13 @@ type Deps struct {
 	ConfigApplyTimeout  time.Duration
 	PackageApplyTimeout time.Duration
 	RecordTimeout       time.Duration
+	// SiteCheckTimeout bounds one site check (0: DefaultSiteCheckTimeout),
+	// CheckTimeout one recollection (0: DefaultCheckTimeout).
+	SiteCheckTimeout time.Duration
+	CheckTimeout     time.Duration
+	// BackupKeyWait is how long a process waits for the backup key another
+	// one is writing before it takes the key for lost (0: 10 s).
+	BackupKeyWait time.Duration
 }
 
 // DefaultMaxTurns caps the agentic turns of a session when Deps.MaxTurns

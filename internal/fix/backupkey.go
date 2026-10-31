@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/kvarot/michel/internal/secret"
 )
 
 // The server backups kept on the workstation are sealed with AES-256-GCM
@@ -30,50 +32,136 @@ var errBackupTampered = errors.New("a stored backup does not match its hash")
 
 // backupKey returns the key that seals the backups. The secret store
 // holds the key; the database holds its fingerprint, in one row that only
-// one process can write first (a conditional insert), so two processes
-// never seal with two keys: the loser waits for the winner's key to show
-// in the store. A key lost from the store (store wiped) is replaced the
-// same way (conditional update); the backups sealed with the lost key no
-// longer open, which is fail closed (they are still on the server).
+// one process writes first (INSERT ... ON CONFLICT DO NOTHING), so two
+// processes never seal with two keys.
+//
+// A process that finds the row waits (up to BackupKeyWait, as long as ctx
+// allows) for the key with that fingerprint to show in the store. The key
+// is replaced only when the store keeps saying it has no such secret
+// (secret.ErrNotFound) past that wait: the store was wiped, the backups
+// sealed with the lost key no longer open (they are still on the server).
+// Any other read error, or a key with another fingerprint, fails closed for
+// the caller (that one backup is not kept) and leaves the key alone. A
+// secret that exists is never written over.
 func (d Deps) backupKey(ctx context.Context) ([]byte, error) {
 	if d.Secrets == nil {
 		return nil, errNoKeyStore
 	}
 	repo := d.repo()
-	for try := 0; try < 3; try++ {
-		fp, err := repo.BackupKeyFingerprint(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if fp != "" {
-			// Wait a little for the key of the process that made it.
-			for wait := 0; wait < 50; wait++ {
-				if k, err := d.Secrets.Get(backupKeyName); err == nil && keyFingerprint(k) == fp {
-					return k, nil
-				}
-				time.Sleep(20 * time.Millisecond)
+	fp, err := repo.BackupKeyFingerprint(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if fp == "" {
+		cur, gerr := d.Secrets.Get(backupKeyName)
+		switch {
+		case gerr == nil && len(cur) == 32:
+			// A key without its record: record it, never replace it.
+			if _, err := repo.SetBackupKeyFingerprint(ctx, "", keyFingerprint(cur)); err != nil {
+				return nil, err
+			}
+		case gerr == nil:
+			return nil, errKeyUnusable
+		case !errors.Is(gerr, secret.ErrNotFound):
+			return nil, fmt.Errorf("cannot read the backup key: %w", gerr)
+		default:
+			k, err := newKey()
+			if err != nil {
+				return nil, err
+			}
+			won, err := repo.SetBackupKeyFingerprint(ctx, "", keyFingerprint(k))
+			if err != nil {
+				return nil, err
+			}
+			if won {
+				return d.storeKey(k)
 			}
 		}
-		k := make([]byte, 32)
-		if _, err := rand.Read(k); err != nil {
-			return nil, err
+		if fp, err = repo.BackupKeyFingerprint(ctx); err != nil || fp == "" {
+			return nil, errors.Join(errors.New("cannot agree on the backup key"), err)
 		}
-		won, err := repo.SetBackupKeyFingerprint(ctx, fp, keyFingerprint(k))
+	}
+	k, err := d.waitKey(ctx, fp)
+	if err == nil || !errors.Is(err, secret.ErrNotFound) {
+		return k, err
+	}
+	// The key stayed missing: replace it, once, by a compare and swap on
+	// its fingerprint.
+	k, err = newKey()
+	if err != nil {
+		return nil, err
+	}
+	won, err := repo.SetBackupKeyFingerprint(ctx, fp, keyFingerprint(k))
+	if err != nil {
+		return nil, err
+	}
+	if !won {
+		// Another process replaced it first: wait for its key.
+		nfp, err := repo.BackupKeyFingerprint(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if !won {
-			continue
-		}
-		if err := d.Secrets.Set(backupKeyName, k); err != nil {
-			return nil, fmt.Errorf("cannot save the backup key: %w", err)
-		}
-		if got, err := d.Secrets.Get(backupKeyName); err != nil || keyFingerprint(got) != keyFingerprint(k) {
-			return nil, fmt.Errorf("cannot read the backup key back: %v", err)
-		}
-		return k, nil
+		return d.waitKey(ctx, nfp)
 	}
-	return nil, errors.New("cannot agree on the backup key")
+	k, err = d.storeKey(k)
+	if err == nil {
+		_ = keep("server_fix.backup_key", "", d.record(ctx, "server_fix.backup_key", "", "rotated", map[string]any{"reason": "key missing from the secret store"}))
+	}
+	return k, err
+}
+
+var errKeyUnusable = errors.New("the backup key in the secret store is not the recorded one: no backup is kept")
+
+func newKey() ([]byte, error) {
+	k := make([]byte, 32)
+	_, err := rand.Read(k)
+	return k, err
+}
+
+// storeKey writes the key this process won the record for, never over an
+// existing secret, and reads it back.
+func (d Deps) storeKey(k []byte) ([]byte, error) {
+	if _, err := d.Secrets.Get(backupKeyName); !errors.Is(err, secret.ErrNotFound) {
+		return nil, errors.Join(errKeyUnusable, err)
+	}
+	if err := d.Secrets.Set(backupKeyName, k); err != nil {
+		return nil, fmt.Errorf("cannot save the backup key: %w", err)
+	}
+	got, err := d.Secrets.Get(backupKeyName)
+	if err != nil || keyFingerprint(got) != keyFingerprint(k) {
+		return nil, fmt.Errorf("cannot read the backup key back: %v", err)
+	}
+	return k, nil
+}
+
+// waitKey waits for the key with fingerprint fp in the store. It returns
+// an error wrapping secret.ErrNotFound only when the store said so until
+// the wait ended; any other error at once.
+func (d Deps) waitKey(ctx context.Context, fp string) ([]byte, error) {
+	wait := d.BackupKeyWait
+	if wait <= 0 {
+		wait = 10 * time.Second
+	}
+	end := time.Now().Add(wait)
+	for {
+		k, err := d.Secrets.Get(backupKeyName)
+		switch {
+		case err == nil && keyFingerprint(k) == fp:
+			return k, nil
+		case err == nil:
+			return nil, errKeyUnusable
+		case !errors.Is(err, secret.ErrNotFound):
+			return nil, fmt.Errorf("cannot read the backup key: %w", err)
+		}
+		if time.Now().After(end) {
+			return nil, fmt.Errorf("the backup key is missing from the secret store: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 // keyFingerprint names a key without revealing it.

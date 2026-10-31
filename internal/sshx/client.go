@@ -82,8 +82,10 @@ func (d Deps) now() time.Time {
 type Result struct {
 	Stdout, Stderr []byte
 	StderrTail     []byte
-	Exit           int
-	Truncated      bool
+	// StderrCut tells that the error stream itself went past MaxOutput.
+	StderrCut bool
+	Exit      int
+	Truncated bool
 }
 
 // Client is an authenticated SSH connection to one target.
@@ -383,6 +385,7 @@ func (c *Client) RunWith(ctx context.Context, argv []string, stdin io.Reader, o 
 	res.Stderr, t2 = errOut.bytes()
 	res.StderrTail = errOut.last()
 	res.Truncated = t1 || t2
+	res.StderrCut = t2
 	var exit *ssh.ExitError
 	switch {
 	case runErr == nil:

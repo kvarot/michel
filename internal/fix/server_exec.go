@@ -117,12 +117,62 @@ func keep(what string, attemptID string, err error) error {
 	return err
 }
 
-func (r *serverRun) saveSteps(ctx context.Context) error {
+// fresh is a context of its own for one step after the script: never
+// cancelled by the caller, never cut by the steps before it, bounded by d.
+func (r *serverRun) fresh(d time.Duration) (context.Context, context.CancelFunc) {
+	base := r.bg
+	if base == nil {
+		base = context.Background()
+	}
+	return context.WithTimeout(base, d)
+}
+
+// The bounds of the steps after the script.
+const (
+	DefaultSiteCheckTimeout = 30 * time.Second
+	DefaultCheckTimeout     = 5 * time.Minute
+)
+
+func (d Deps) siteCheckTimeout() time.Duration {
+	if d.SiteCheckTimeout > 0 {
+		return d.SiteCheckTimeout
+	}
+	return DefaultSiteCheckTimeout
+}
+
+func (d Deps) checkTimeout() time.Duration {
+	if d.CheckTimeout > 0 {
+		return d.CheckTimeout
+	}
+	return DefaultCheckTimeout
+}
+
+// check runs one recollection under its own bound.
+func (r *serverRun) check() (servercheck.CheckResult, error) {
+	ctx, cancel := r.fresh(r.d.checkTimeout())
+	defer cancel()
+	return r.d.CheckServer(ctx, r.t.ID)
+}
+
+// alert sends an alert under a context of its own (after the state moved).
+func (r *serverRun) alert(in servercheck.AlertInput) {
+	ctx, cancel := r.fresh(r.d.recordTimeout())
+	defer cancel()
+	r.d.alert(ctx, in)
+}
+
+func (r *serverRun) saveSteps(_ context.Context) error {
+	ctx, cancel := r.fresh(r.d.recordTimeout())
+	defer cancel()
 	return keep("steps", r.a.ID, r.d.repo().SetSteps(ctx, r.prop.ID, r.steps))
 }
 
-// move changes the attempt's state; a failure is logged and audited.
-func (r *serverRun) move(ctx context.Context, from []State, to State, cause string) error {
+// move changes the attempt's state under a context of its own, so a slow
+// step before it never leaves the attempt half way; a failure is logged
+// and audited.
+func (r *serverRun) move(_ context.Context, from []State, to State, cause string) error {
+	ctx, cancel := r.fresh(r.d.recordTimeout())
+	defer cancel()
 	err := r.d.repo().SetState(ctx, r.a.ID, from, to, cause)
 	if err != nil {
 		keep("state "+string(to), r.a.ID, err)
@@ -131,8 +181,10 @@ func (r *serverRun) move(ctx context.Context, from []State, to State, cause stri
 	return err
 }
 
-// audit records an event; a failure is logged.
-func (r *serverRun) audit(ctx context.Context, action, result string, ev map[string]any) error {
+// audit records an event under a context of its own; a failure is logged.
+func (r *serverRun) audit(_ context.Context, action, result string, ev map[string]any) error {
+	ctx, cancel := r.fresh(r.d.recordTimeout())
+	defer cancel()
 	return keep(action, r.a.ID, r.d.record(ctx, action, r.a.ID, result, ev))
 }
 
@@ -304,14 +356,11 @@ func (r *serverRun) run(ctx context.Context) error {
 			_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "not started"})
 			return errors.Join(err, r.move(ctx, []State{StateRunning}, StateApproved, ""))
 		}
-		post, cancel := context.WithTimeout(ctx, d.recordTimeout())
-		defer cancel()
-		return r.unknown(post, c)
+		return r.unknown(ctx, c)
 	}
-	// From here on, everything Michel does is bounded: a hung alert, site
-	// or check never holds the attempt.
-	ctx, cancel := context.WithTimeout(ctx, d.recordTimeout())
-	defer cancel()
+	// From here on each step has its own bound (site check, recollection,
+	// undo, recording): a slow one never stops the next, and the attempt
+	// always ends in a final state.
 	code := res.Exit
 	// php -c exits 0 on ini warnings: for the CLI test, anything PHP says on
 	// its error output is a failure (the script cannot tell). The output
@@ -325,11 +374,11 @@ func (r *serverRun) run(ctx context.Context) error {
 		ferr := r.fail(ctx, e, "exit "+strconv.Itoa(code))
 		switch {
 		case errors.Is(e, ErrServerRollbackFailed):
-			d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
+			r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
 		case errors.Is(e, ErrServerRolledBack):
-			d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRolledBack})
+			r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRolledBack})
 		case errors.Is(e, ErrPackageFailed):
-			d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
+			r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
 		}
 		switch {
 		case errors.Is(e, ErrServerLineMoved):
@@ -369,7 +418,7 @@ func (r *serverRun) unknown(ctx context.Context, c *sshx.Client) error {
 	c.Close()
 	r.step("apply", detailUnknown, false)
 	err := r.move(ctx, []State{StateRunning}, StateUnknown, r.d.causeOf(ErrServerUnknownState))
-	r.d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUnknownState, Urgent: true, Backups: r.backupList()})
+	r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUnknownState, Urgent: true, Backups: r.backupList()})
 	_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "error": "fix.server.unknown_state"})
 	r.recollect(ctx)
@@ -381,7 +430,7 @@ func (r *serverRun) unknown(ctx context.Context, c *sshx.Client) error {
 // snapshot.
 func (r *serverRun) siteDownAfterUpgrade(ctx context.Context) error {
 	err := r.move(ctx, []State{StateApplied}, StateFailed, CauseSiteDownAfterUpgrade)
-	r.d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
+	r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
 	_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "error": "fix.server.site_down_after_upgrade"})
 	r.recollect(ctx)
@@ -435,7 +484,7 @@ const scriptRolledBack = "echec: fichiers remis"
 // script's last line (its outcome) is.
 func classifyResult(res sshx.Result, pkg bool) error {
 	stderr := res.Stderr
-	if res.Truncated && len(res.StderrTail) > 0 {
+	if res.StderrCut && len(res.StderrTail) > 0 {
 		stderr = append(append(append([]byte(nil), res.Stderr...), '\n'), res.StderrTail...)
 	}
 	return classifyExit(res.Exit, stderr, pkg)
@@ -534,7 +583,10 @@ func (r *serverRun) checkSite(ctx context.Context) (ok bool, err error) {
 			r.step(string(serverfix.OpCheckSite), detailNoSiteCheck, false)
 			return true, errNoSiteCheck
 		}
-		if err := r.d.SiteCheck(ctx, r.t.SiteURL); err != nil {
+		sctx, cancel := r.fresh(r.d.siteCheckTimeout())
+		err := r.d.SiteCheck(sctx, r.t.SiteURL)
+		cancel()
+		if err != nil {
 			r.step(string(serverfix.OpCheckSite), detailSiteDown, false)
 			return false, err
 		}
@@ -565,7 +617,10 @@ func (r *serverRun) undo(ctx context.Context, c *sshx.Client, reason string) err
 	c.Close()
 	siteBack := true
 	if d.SiteCheck != nil && r.t.SiteURL != "" {
-		if err := d.SiteCheck(ctx, r.t.SiteURL); err != nil {
+		sctx, cancel := r.fresh(d.siteCheckTimeout())
+		err := d.SiteCheck(sctx, r.t.SiteURL)
+		cancel()
+		if err != nil {
 			siteBack = false
 			r.step(string(serverfix.OpCheckSite), detailSiteDown, false)
 		} else {
@@ -582,11 +637,11 @@ func (r *serverRun) undo(ctx context.Context, c *sshx.Client, reason string) err
 	if !undone {
 		serr = r.move(ctx, []State{StateApplied}, StateFailed, d.causeOf(ErrServerRollbackFailed))
 		_ = r.audit(ctx, "server_fix.rollback", "error", ev)
-		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
+		r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
 	} else {
 		serr = r.move(ctx, []State{StateApplied}, StateFailed, CauseRolledBack)
 		_ = r.audit(ctx, "server_fix.rollback", "ok", ev)
-		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRolledBack, Urgent: !siteBack})
+		r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRolledBack, Urgent: !siteBack})
 	}
 	r.recollect(ctx)
 	if !undone {
@@ -599,7 +654,7 @@ func (r *serverRun) undo(ctx context.Context, c *sshx.Client, reason string) err
 // is; its outcome changes nothing of the attempt. The steps are saved.
 func (r *serverRun) recollect(ctx context.Context) {
 	if r.d.CheckServer != nil {
-		_, err := r.d.CheckServer(ctx, r.t.ID)
+		_, err := r.check()
 		r.step(StepRecollect, map[bool]string{true: detailDone, false: detailCheckFailed}[err == nil], err == nil)
 	}
 	_ = r.saveSteps(ctx)
@@ -624,7 +679,7 @@ func (r *serverRun) repropose(ctx context.Context) {
 	if d.CheckServer == nil {
 		return
 	}
-	if _, err := d.CheckServer(ctx, r.t.ID); err != nil {
+	if _, err := r.check(); err != nil {
 		r.step(StepRecollect, detailCheckFailed, false)
 		_ = r.saveSteps(ctx)
 		return
@@ -639,7 +694,9 @@ func (r *serverRun) repropose(ctx context.Context) {
 	if r.a.Work.Server != nil {
 		w = *r.a.Work.Server
 	}
-	na, err := d.proposeServer(ctx, r.t, list[0], w)
+	pctx, cancel := r.fresh(d.checkTimeout())
+	defer cancel()
+	na, err := d.proposeServer(pctx, r.t, list[0], w)
 	if err != nil {
 		_ = r.audit(ctx, "server_fix.repropose", "error", map[string]any{"previous_attempt_id": r.a.ID, "target_id": r.t.ID, "error": serverErrorKey(err)})
 		return
@@ -694,6 +751,8 @@ func (r *serverRun) fetchBackups(ctx context.Context, c *sshx.Client) {
 		return
 	}
 	d := r.d
+	ctx, cancel := r.fresh(d.recordTimeout())
+	defer cancel()
 	have, err := d.backups(ctx, r.a.ID)
 	if err != nil {
 		keep("backups", r.a.ID, err)
@@ -757,7 +816,7 @@ func (r *serverRun) prove(ctx context.Context) error {
 	if d.CheckServer == nil {
 		return end(detailCheckFailed, false, StateInconclusive, i18n.T(lang, "fix.server.check_failed"))
 	}
-	res, err := d.CheckServer(ctx, r.t.ID)
+	res, err := r.check()
 	if err != nil {
 		return end(detailCheckFailed, false, StateInconclusive, i18n.T(lang, "fix.server.check_failed"))
 	}
@@ -820,7 +879,9 @@ func (r *serverRun) promote(ctx context.Context) {
 		_ = r.audit(ctx, "server_fix.promote", "refused", ev)
 		return
 	}
-	na, err := d.proposeServer(ctx, pt, list[0], ServerWork{TargetID: pt.ID})
+	pctx, cancel := r.fresh(d.checkTimeout())
+	defer cancel()
+	na, err := d.proposeServer(pctx, pt, list[0], ServerWork{TargetID: pt.ID})
 	result := "ok"
 	if err != nil {
 		result, ev["error"] = "error", serverErrorKey(err)
@@ -863,11 +924,13 @@ func AppliedByMe(ctx context.Context, d Deps, attemptID string) error {
 	if err := d.repo().SetState(ctx, a.ID, []State{StateApproved}, StateApplied, ""); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.recordTimeout())
-	defer cancel()
+	r.bg = context.WithoutCancel(ctx)
+	ctx = r.bg
 	_ = r.audit(ctx, "server_fix.apply", "ok", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "executor": "user", "author": d.actor()})
-	if c, err := sshx.Dial(ctx, d.SSH, r.t); err == nil {
+	dctx, dcancel := r.fresh(d.recordTimeout())
+	defer dcancel()
+	if c, err := sshx.Dial(dctx, d.SSH, r.t); err == nil {
 		r.fetchBackups(ctx, c)
 		c.Close()
 	}
@@ -877,7 +940,7 @@ func AppliedByMe(ctx context.Context, d Deps, attemptID string) error {
 			return r.siteDownAfterUpgrade(ctx)
 		}
 		serr := r.move(ctx, []State{StateApplied}, StateFailed, d.causeOf(ErrServerSiteDown))
-		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUndoNow, Urgent: true, Backups: r.backupList()})
+		r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUndoNow, Urgent: true, Backups: r.backupList()})
 		_ = r.saveSteps(ctx)
 		_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "fix.server.site_down_user"})
 		return errors.Join(ErrServerSiteDown, serr)

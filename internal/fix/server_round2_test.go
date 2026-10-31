@@ -191,7 +191,7 @@ func TestBadBackupRowSkipped(t *testing.T) {
 
 // Minor 5: the outcome line is read from the tail of a cut error stream.
 func TestOutcomeReadFromTheTail(t *testing.T) {
-	res := sshx.Result{Exit: 1, Stderr: make([]byte, sshx.MaxOutput), Truncated: true, StderrTail: []byte("...\n" + scriptRolledBack + "\n")}
+	res := sshx.Result{Exit: 1, Stderr: make([]byte, sshx.MaxOutput), Truncated: true, StderrCut: true, StderrTail: []byte("...\n" + scriptRolledBack + "\n")}
 	if err := classifyResult(res, false); !errors.Is(err, ErrServerRolledBack) {
 		t.Errorf("cut stream: %v", err)
 	}
