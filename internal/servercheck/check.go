@@ -306,8 +306,9 @@ func matchPackages(ctx context.Context, d CheckDeps, inv target.Inventory, res *
 		return vulnmatch.Result{}, nil, err
 	}
 	res.ReleaseKnown, res.Unjudged, res.SkippedAdvisories = m.ReleaseKnown, len(m.Unjudged), m.Skipped
-	if !m.ReleaseKnown {
-		// No advisory names this release: absence proves nothing.
+	if !m.ReleaseKnown || m.Skipped > 0 {
+		// No advisory names this release, or some could not be read: absence
+		// proves nothing.
 		return m, keep, nil
 	}
 	return m, nil, nil

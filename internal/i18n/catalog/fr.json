@@ -115,7 +115,7 @@
   "cli.db.update.done": "%s mis à jour : %d octets",
   "cli.db.update.failed": "La mise à jour de la base a échoué pour %s : %v. Si une ancienne base existait pour cet écosystème, elle est conservée. Vérifie ton réseau et ta politique, puis relance « michel db update ».",
   "cli.db.update.failed_kept": "La mise à jour de la base a échoué pour %s : %v. Déjà installées et conservées : %s. Si une ancienne base existait pour cet écosystème, elle est conservée. Vérifie ton réseau et ta politique, puis relance « michel db update ».",
-  "cli.db.update.rematch_failed": "Les bases sont à jour, mais Michel n'a pas pu réexaminer tes serveurs avec : %v. La prochaine vérification de chaque serveur le fera.",
+  "cli.db.update.rematch_failed": "Les bases sont à jour, mais Michel n'a pas pu réexaminer tes serveurs. Raison : %v. La prochaine vérification de chaque serveur le fera.",
   "cli.db.update.rematched.one": "Tes serveurs ont été réexaminés avec les nouvelles bases : %d nouveau problème",
   "cli.db.update.rematched.other": "Tes serveurs ont été réexaminés avec les nouvelles bases : %d nouveaux problèmes",
   "cli.decide.audit_event": "inscrit au journal d'audit (événement %s)",

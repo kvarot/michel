@@ -46,7 +46,13 @@ type host struct {
 	// makes its -v run past the time limit; findBroken makes command -v
 	// fail.
 	fpm, fpmSlow, findBroken bool
+	// userIni is the content of demoUserIni ("" = no such file);
+	// userIniDenied makes it unreadable for the SSH user.
+	userIni       string
+	userIniDenied bool
 }
+
+const demoUserIni = "/var/www/demo/.user.ini"
 
 const fpmBin = "/usr/sbin/php-fpm8.2"
 
@@ -153,6 +159,22 @@ func (h *host) commands() map[string]sshtest.Handler {
 		return 0
 	}
 	out["readlink"] = func(e sshtest.Exec) int { io.WriteString(e.Stdout, e.Args[len(e.Args)-1]+"\n"); return 0 }
+	out["head"] = func(e sshtest.Exec) int {
+		p := e.Args[len(e.Args)-1]
+		h.mu.Lock()
+		ini, denied := h.userIni, h.userIniDenied
+		h.mu.Unlock()
+		switch {
+		case p == demoUserIni && denied:
+			fmt.Fprintf(e.Stderr, "head: cannot open '%s' for reading: Permission denied\n", p)
+		case p == demoUserIni && ini != "":
+			io.WriteString(e.Stdout, ini)
+			return 0
+		default:
+			fmt.Fprintf(e.Stderr, "head: cannot open '%s' for reading: No such file or directory\n", p)
+		}
+		return 1
+	}
 	out["php"] = func(e sshtest.Exec) int {
 		v, ini, _ := h.get()
 		switch e.Args[1] {
@@ -202,7 +224,9 @@ func testRules() (serverrules.Set, error) {
 			Advised: "0", Severity: "high", Key: "serverrules.allow_url_include"},
 			{ID: "session_upload_progress_off", Directive: "session.upload_progress.enabled", Risky: "on", Changeable: "perdir",
 				Advised: "0", Severity: "medium", MissingIsRisky: true, Context: []string{"sapi:fpm"},
-				Mitigates: []string{"CVE-2026-109618"}, Mitigation: true, Key: "serverrules.session_upload_progress_off"}},
+				Mitigates: []string{"CVE-2026-109618"}, Mitigation: true, Key: "serverrules.session_upload_progress_off"},
+			{ID: "display_errors_prod", Directive: "display_errors", Risky: "on", Changeable: "all", Advised: "0", Severity: "medium",
+				Context: []string{"prod", "sapi:fpm"}, Key: "serverrules.display_errors_prod"}},
 		Upstream: []serverrules.UpstreamAdvisory{{ID: "PHP2SHELL", Aliases: []string{"CVE-2026-109618", "CVE-2026-109619"}, Severity: "critical",
 			CVSS: 9.2, Key: "serverrules.php2shell", Branches: []serverrules.BranchFix{{Branch: "8.3", Fixed: "8.3.36"}}}},
 	}, nil
@@ -918,5 +942,61 @@ func TestSchedulerLogNamesNoHost(t *testing.T) {
 	err = fmt.Errorf("x: %w: deploy@192.0.2.10", sshx.ErrNoKeyAccepted)
 	if r := reasonOf(err); strings.Contains(r, "192.0.2.10") || r != "no_key_accepted" {
 		t.Fatalf("reason %q", r)
+	}
+}
+
+func TestUnreadableUserIniKeepsFPMFindings(t *testing.T) {
+	e := newEnv(t)
+	writeDB(t, e.deps.OSVRoot, phpDB())
+	h := fpmHost()
+	h.change(func(h *host) { h.userIni = "display_errors = On\n" })
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	if err := e.deps.Repo.Link(context.Background(), target.Link{TargetID: tg.ID, ProjectID: "01PROJECTDEMO", RemoteDir: "/var/www/demo"}); err != nil {
+		t.Fatal(err)
+	}
+	e.check(tg.ID)
+	if st := e.status(tg.ID, "display_errors_prod"); st != scan.StatusNew {
+		t.Fatalf("the .user.ini line did not open a finding: %s", st)
+	}
+	// Unreadable: what it said may still hold.
+	h.change(func(h *host) { h.userIniDenied = true })
+	e.advance(time.Hour)
+	if res := e.check(tg.ID); res.Gone != 0 || e.status(tg.ID, "display_errors_prod") == scan.StatusGone {
+		t.Fatalf("an unreadable .user.ini closed findings: %+v", res)
+	}
+	// Removed: that is a fix, the finding closes.
+	h.change(func(h *host) { h.userIniDenied, h.userIni = false, "" })
+	e.advance(time.Hour)
+	e.check(tg.ID)
+	if st := e.status(tg.ID, "display_errors_prod"); st != scan.StatusGone {
+		t.Fatalf("a removed .user.ini kept its finding: %s", st)
+	}
+}
+
+func TestSkippedAdvisoryKeepsDistroMitigations(t *testing.T) {
+	e := newEnv(t)
+	writeDB(t, e.deps.OSVRoot, phpDB())
+	_, tg := e.server("srv-demo", fpmHost(), target.EnvProd)
+	e.check(tg.ID)
+	e.takeAlerts()
+	// The PHP advisory file is now unreadable: it may still apply.
+	db := phpDB()
+	db["DSA-0000-2001.json"] = "{not json"
+	writeDB(t, e.deps.OSVRoot, db)
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	if res.SkippedAdvisories != 1 || res.Gone != 0 || res.Clean() {
+		t.Fatalf("result %+v", res)
+	}
+	for _, id := range []string{"session_upload_progress_off", "DSA-0000-2001"} {
+		if st := e.status(tg.ID, id); st == scan.StatusGone {
+			t.Fatalf("%s closed on a skipped advisory", id)
+		}
+	}
+	writeDB(t, e.deps.OSVRoot, phpDB())
+	e.advance(time.Hour)
+	e.check(tg.ID)
+	if a := e.takeAlerts(); len(a) != 0 {
+		t.Fatalf("alerted again: %+v", a)
 	}
 }

@@ -879,3 +879,22 @@ func restart(t *testing.T, e *env, srv *sshtest.Server) *env {
 	t.Cleanup(func() { c.Close() })
 	return &env{srv: srv, client: c, tgt: tg, st: e.st, deps: e.deps}
 }
+
+func TestDashCommandV127IsNotAFailure(t *testing.T) {
+	// dash and busybox ash answer 127 as soon as one name is missing.
+	h := debian(t)
+	cmds := h.commands()
+	inner := cmds["command"]
+	cmds["command"] = func(e sshtest.Exec) int {
+		inner(e)
+		return 127
+	}
+	e := restart(t, start(t, h), sshtest.New(t, sshtest.Options{Commands: cmds}))
+	inv, err := collect.Run(context.Background(), e.deps, e.client, e.tgt, demoLinks)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if hasUnseen(inv, "discovery", collect.ReasonProbe) || len(runtimeOf(inv, "cli")) != 1 || len(runtimeOf(inv, "fpm")) != 1 {
+		t.Fatalf("exit 127 with names found is a normal answer: unseen %+v, php %+v", inv.Unseen, inv.PHP)
+	}
+}

@@ -228,10 +228,11 @@ func (c *collector) find() map[string]string {
 	found := map[string]string{}
 	failed := false
 	for _, argv := range [][]string{cmdFind(), cmdFindSbin()} {
-		// Exit 1 as soon as one name is missing; above 1 (or no answer in
-		// time) the shell could not look at all.
+		// A missing name gives exit 1 (bash, zsh) or 127 (dash, busybox ash);
+		// any other status, or no answer in time, means the shell could not
+		// look at all.
 		res, _, broken := c.probe(argv)
-		if (broken || res.Exit > 1) && c.err == nil {
+		if (broken || (res.Exit != 0 && res.Exit != 1 && res.Exit != 127)) && c.err == nil {
 			failed = true
 		}
 		for _, p := range parseFound(string(res.Stdout)) {
