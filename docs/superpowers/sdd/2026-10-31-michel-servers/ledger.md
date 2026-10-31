@@ -107,3 +107,14 @@ Task 7: fix round 2/5 (N1-N4 addressed; N3 also protects os-package findings on 
 Task 7: complete (commits cd66b8d..5313ca9, re-review clean after 2 rounds)
 Task 7: minor (deferred, final wave): exit 127 with empty stdout (shell lacking `command`) silently = "not installed" → only cli:/fpm: config findings could close; harden with a `command -v sh` sentinel
 Task 7: minor (deferred): ReasonTimeout branch in judge effectively dead; unreadable .user.ini keeps all fpm: findings of the server open (broad, document in docs/servers)
+Task 8: dispatched (BASE e726bed, implementer af0106e74c034224d, sonnet)
+Task 8: implementer DONE_WITH_CONCERNS (commit 0ece193; migration 0013_sms_count; signedPost shared with webhook; Alert wired via internal/cli/servercheck.go)
+Ruling: Free Mobile `user` (account login number) stays a plain policy field, only the API key goes to secret.Store — it is an identifier like a mail address, useless without the key — costs: the login number is readable in the policy file.
+Task 8: ⚠️ carry to T13: server link is <page_url>/#/servers/<id> (hash routing) — route must exist
+Task 8: ⚠️ carry to T10: digest counts rolled back = fix_attempt state failed + cause digest.CauseRolledBack for target id — T10 must write exactly that
+Task 8: automated security review (MEDIUM, notify/server.go): SendServerAlert ignores channel project scope — a channel limited to some projects (e.g. a client's webhook) receives server alerts; Filter excludes scoped channels for digest. Accepted → joins Task 8 fix round (skip Scoped notifiers with Projects(), or explicit per-channel server opt-in).
+Task 8: review — spec ✅, Needs fixes (1 Important: notify build failure drops alert silently; + controller Important: Rematch never alerts, Task 7 spec requires it; + security MEDIUM scoped channels) → fix round 1 (+ minors local-time day, SMS ≤160, concurrent Take test, url override doc); minor deferred: failed urgent alert never re-sent (digest shows it)
+Task 8: fix round 1/5 (security scoped skip, build-failure audit, minors; rematch alert already via judge→alertNew, verified by controller check.go:176/267; commits 0ece193..b6158d4) → re-review
+Task 8: minor (deferred): skipped (cap) or failed urgent alert never re-sent — findings fresh once; digest lists them
+Task 8: complete (commits e726bed..b6158d4, re-review clean)
+Task 8: minor (deferred): SMS 160 counted in runes; accented FR → UCS-2 70/segment, worst case 2-3 segments (cap counts one); scoped-skip test covers webhook only
