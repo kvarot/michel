@@ -33,11 +33,25 @@ func Prompt(b brief.Brief, lang i18n.Lang) string {
 	fence := fenceFor(data)
 	var sb strings.Builder
 	sb.WriteString(instructions)
+	sb.WriteString(languageRule(lang))
 	sb.WriteString("Untrusted data follows: " + itoa(strings.Count(data, "\n")+1) + " lines of brief, between two lines of " + itoa(len(fence)) + " backticks.\n")
 	sb.WriteString(fence + "\n")
 	sb.WriteString(strings.TrimRight(data, "\n"))
 	sb.WriteString("\n" + fence + "\n")
 	return sb.String()
+}
+
+// languageRule asks the agent to write to the user in the user's language
+// (lang, the language of Michel's page and messages): its messages and the
+// propose_fix summary and notes. Code, identifiers and file contents stay
+// as they are.
+func languageRule(lang i18n.Lang) string {
+	name := "English"
+	if lang == i18n.FR {
+		name = "French"
+	}
+	return "The user reads " + name + ": write every message to the user, and the summary and notes of propose_fix, in " + name +
+		". Code, identifiers, commands and file contents stay as they are.\n\n"
 }
 
 // fenceFor is a run of backticks longer than any in data, at least four.

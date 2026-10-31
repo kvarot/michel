@@ -813,8 +813,19 @@ func TestApplyRefusesBranchWithMaskTokens(t *testing.T) {
 	if ref := gitT(t, f.env, f.proj.Path, "for-each-ref", "refs/heads/michel/"); ref != "" {
 		t.Errorf("a branch was created: %s", ref)
 	}
-	if got := f.attempt(a.ID); got.State != StateRefused {
-		t.Errorf("state = %s, want refused", got.State)
+	// Michel's refusal, not the user's: failed with Michel's cause, audited
+	// as a refused apply (final review C3).
+	got := f.attempt(a.ID)
+	if got.State != StateFailed || got.Cause != i18n.T(i18n.EN, "fix.cause.apply_refused") || got.CauseDetail == "" {
+		t.Errorf("after Michel's refusal: state %s, cause %q, detail %q; want failed with fix.cause.apply_refused", got.State, got.Cause, got.CauseDetail)
+	}
+	if ev := f.audits("fix.apply"); len(ev) != 1 || ev[0].Result != "refused" {
+		t.Errorf("fix.apply audit = %+v", ev)
+	}
+	// The level 2 queue may try this finding again: the user said no to
+	// nothing.
+	if tried, err := f.d.alreadyTried(context.Background(), f.finding); err != nil || tried {
+		t.Errorf("alreadyTried after Michel's refusal = %v, %v; want false", tried, err)
 	}
 }
 

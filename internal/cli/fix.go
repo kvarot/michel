@@ -54,6 +54,8 @@ func fixDeps(cmd *cobra.Command, deps *Deps, secrets secret.Store, actor string)
 		DataDir: dataDir, OSVRoot: dbRoot(cmd, deps), Lang: deps.Lang,
 		MCPCommand: mcp, Work: workcopy.Deps{DataDir: dataDir},
 		Now: deps.Now, Actor: actor,
+		// A session ends at its time limit or at its turn cap (spec § 7.1).
+		MaxTurns: fix.DefaultMaxTurns,
 	}
 	d.Notify = func(ctx context.Context, waiting int) {
 		nd, err := notifyDeps(cmd, deps, false)

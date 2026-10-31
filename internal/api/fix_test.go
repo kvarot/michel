@@ -514,11 +514,12 @@ func TestEventsNeverShowMaskFragment(t *testing.T) {
 	ch, _, cancel := openStream(t, ff.srv, a.ID, "")
 	defer cancel()
 	secret := fakeAWS()
-	// The agent quotes the secret in two chunks and whole; a raw secret
-	// that reached the store (an older row) is masked again on the way
-	// out.
-	ag.emit(agent.Event{Kind: agent.KindText, Text: "Found AWS_KEY=" + secret[:10]})
-	ag.emit(agent.Event{Kind: agent.KindText, Text: secret[10:] + " in .env"})
+	// The agent quotes the secret whole; a raw secret that reached the
+	// store (an older row) is masked again on the way out. Agent text is
+	// masked per event (Claude Code -p sends whole content blocks): a
+	// secret cut across two events would not be recognised, so this test
+	// does not claim it is (final review I10).
+	ag.emit(agent.Event{Kind: agent.KindText, Text: "Found AWS_KEY=" + secret + " in .env"})
 	ag.emit(agent.Event{Kind: agent.KindText, Text: "The key " + secret + " is used in src/app.php."})
 	if _, err := fix.NewRepo(ff.st).AddMessage(context.Background(), fix.Message{AttemptID: a.ID, Role: fix.RoleAgent,
 		Text: "raw " + secret + " and the folder " + ff.proj.Path}); err != nil {

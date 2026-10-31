@@ -107,14 +107,33 @@ type Deps struct {
 	// Sessions holds the running agents of this process; nil means a
 	// package-wide registry.
 	Sessions *Sessions
-	// Timeout and MaxTurns bound a session (0: agent.DefaultTimeout, no
-	// turn cap). WorkerInterval is the pause between two looks at the
+	// Timeout and MaxTurns bound a session (0: agent.DefaultTimeout,
+	// DefaultMaxTurns). WorkerInterval is the pause between two looks at the
 	// queue (0: 30 s). PollInterval is how often a running session's state
 	// is read (0: 1 s).
 	Timeout        time.Duration
 	MaxTurns       int
 	WorkerInterval time.Duration
 	PollInterval   time.Duration
+}
+
+// DefaultMaxTurns caps the agentic turns of a session when Deps.MaxTurns
+// is 0 (spec § 7.1), on top of the session timeout.
+const DefaultMaxTurns = 50
+
+func (d Deps) maxTurns() int {
+	if d.MaxTurns > 0 {
+		return d.MaxTurns
+	}
+	return DefaultMaxTurns
+}
+
+// timeout is the longest a session runs.
+func (d Deps) timeout() time.Duration {
+	if d.Timeout > 0 {
+		return d.Timeout
+	}
+	return agent.DefaultTimeout
 }
 
 func (d Deps) now() time.Time {
@@ -200,13 +219,35 @@ type Sessions struct {
 	proposing map[string]*sync.Mutex
 }
 
-// running is one attempt's session: the agent, its proxy, its display
-// masker and the signal of its end.
+// running is one attempt's session: the agent, its proxy, its masker and
+// the signal of its end.
 type running struct {
 	sess       Session
 	masker     *mask.Masker
 	closeProxy func()
 	done       chan struct{}
+	// mu serializes mask (a Mask and the Save of the table it grew); saved
+	// is the size of the table last saved.
+	mu    sync.Mutex
+	saved int
+}
+
+// mask masks text with the session's masker and, when that made a new
+// token, saves the table at once: the page's display masker (another
+// masker loaded from the store) then numbers its own tokens after it, so
+// that one token never stands for two values (final review I8). The
+// process that runs the session is the only one that saves its table;
+// michel mcp masks with a fresh masker of its own (controller ruling 18).
+func (r *running) mask(st secret.Store, attemptID, text string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := r.masker.Mask(text)
+	if n := r.masker.Len(); n != r.saved && st != nil {
+		if r.masker.Save(st, attemptID) == nil {
+			r.saved = n
+		}
+	}
+	return out
 }
 
 // NewSessions returns an empty registry.
@@ -427,6 +468,10 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		return Attempt{}, err
 	}
 	lang := d.lang()
+	wd := d.work()
+	// c is the copy once prepared: until SetWork records it in the attempt,
+	// cleanup cannot find it, so fail removes it itself (final review I6).
+	var c workcopy.Copy
 	fail := func(key string, cause error) (Attempt, error) {
 		text := i18n.T(lang, plainCause(key, cause))
 		if repo.SetState(ctx, a.ID, []State{StatePreparing}, StateFailed, text) == nil {
@@ -434,10 +479,12 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		}
 		got, _ := repo.GetAttempt(ctx, a.ID)
 		d.cleanup(ctx, got, true)
+		if got.Work.Copy.Dir == "" && c.Dir != "" {
+			_ = workcopy.Remove(wd, c)
+		}
 		return got, cause
 	}
-	wd := d.work()
-	c, err := workcopy.Prepare(ctx, wd, p, a.ID)
+	c, err = workcopy.Prepare(ctx, wd, p, a.ID)
 	if err != nil {
 		if errors.Is(err, workcopy.ErrNotGitRepo) {
 			err = fmt.Errorf("%w: %v", ErrNotGit, err)
@@ -487,6 +534,12 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		}
 		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: text})
 	}
+	// The update's output may have given the masker new tokens.
+	if d.Secrets != nil {
+		if err := m.Save(d.Secrets, a.ID); err != nil {
+			return fail("fix.cause.prepare_failed", err)
+		}
+	}
 	if !updateFailed {
 		if w.Tree0, err = workcopy.TreeHash(ctx, wd, c); err != nil {
 			return fail("fix.cause.prepare_failed", err)
@@ -515,7 +568,7 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 	spec := agent.Spec{
 		Dir: c.Dir, Prompt: Prompt(b, lang), MCPCommand: d.MCPCommand,
 		MCPEnv:  map[string]string{EnvAttempt: a.ID, EnvToken: token},
-		Timeout: d.Timeout, MaxTurns: d.MaxTurns,
+		Timeout: d.Timeout, MaxTurns: d.maxTurns(),
 	}
 	// The session outlives the request that started it.
 	sess, err := d.startAgent(context.WithoutCancel(ctx), ad, spec)
@@ -534,16 +587,10 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		closeProxy()
 		return fail("fix.cause.prepare_failed", err)
 	}
-	if n := len(c.SecretHits); n > 0 {
-		files := []string{}
-		for _, h := range c.SecretHits {
-			if f := scan.SanitizeText(h.File); !slices.Contains(files, f) && len(files) < 5 {
-				files = append(files, f)
-			}
-		}
-		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: i18n.N(lang, "fix.msg.secret_hits", n, strings.Join(files, ", "))})
+	if text := secretHitsMessage(lang, c.SecretHits); text != "" {
+		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: text})
 	}
-	r := &running{sess: sess, masker: m, closeProxy: closeProxy, done: make(chan struct{})}
+	r := &running{sess: sess, masker: m, saved: m.Len(), closeProxy: closeProxy, done: make(chan struct{})}
 	d.sessions().add(a.ID, r)
 	go d.run(a.ID, r)
 	got, err := repo.GetAttempt(ctx, a.ID)
@@ -551,6 +598,34 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		return a, err
 	}
 	return got, nil
+}
+
+// secretHitsMessage tells the user, in plain words, that secrets seem
+// written in the copy's files (at most five files named) and what to do:
+// move the secret out of the code, or exclude the folder that holds it
+// (project.Exclude takes folder names, not paths: the folders are named).
+// "" when there is none.
+func secretHitsMessage(lang i18n.Lang, hits []mask.Hit) string {
+	n := len(hits)
+	if n == 0 {
+		return ""
+	}
+	files, folders := []string{}, []string{}
+	for _, h := range hits {
+		f := scan.SanitizeText(h.File)
+		if !slices.Contains(files, f) && len(files) < 5 {
+			files = append(files, f)
+			if dir := path.Dir(f); dir != "." {
+				if name := path.Base(dir); !slices.Contains(folders, name) {
+					folders = append(folders, name)
+				}
+			}
+		}
+	}
+	if len(folders) == 0 {
+		return i18n.N(lang, "fix.msg.secret_hits", n, strings.Join(files, ", "))
+	}
+	return i18n.N(lang, "fix.msg.secret_hits_folder", n, strings.Join(files, ", "), strings.Join(folders, ", "))
 }
 
 // causeKey maps an error event of the agent to a catalog key.
@@ -591,15 +666,18 @@ func (d Deps) run(id string, r *running) {
 			switch ev.Kind {
 			case agent.KindText:
 				if strings.TrimSpace(ev.Text) != "" {
-					_, _ = repo.AddMessage(ctx, Message{AttemptID: id, Role: RoleAgent, Text: r.masker.Mask(ev.Text)})
+					// Masked per event: Claude Code -p sends whole content
+					// blocks, so a secret is not cut across two events in
+					// practice; a secret that is cut is not recognised.
+					_, _ = repo.AddMessage(ctx, Message{AttemptID: id, Role: RoleAgent, Text: r.mask(d.Secrets, id, ev.Text)})
 				}
 			case agent.KindTool:
-				_, _ = repo.AddMessage(ctx, Message{AttemptID: id, Role: RoleTool, Text: strings.TrimSpace(ev.Tool + " " + r.masker.Mask(ev.Text))})
+				_, _ = repo.AddMessage(ctx, Message{AttemptID: id, Role: RoleTool, Text: strings.TrimSpace(ev.Tool + " " + r.mask(d.Secrets, id, ev.Text))})
 			case agent.KindError:
 				if k := causeKey(ev.Text); k != "" {
 					cause = i18n.T(lang, k)
 				} else {
-					cause = r.masker.Mask(ev.Text)
+					cause = r.mask(d.Secrets, id, ev.Text)
 				}
 				_, _ = repo.AddMessage(ctx, Message{AttemptID: id, Role: RoleMichel, Text: i18n.T(lang, "fix.msg.agent_error", cause)})
 			}
@@ -726,7 +804,7 @@ func SendMessage(ctx context.Context, d Deps, attemptID, text string) error {
 	if text == "" {
 		return errors.New("the message is empty")
 	}
-	masked := r.masker.Mask(text)
+	masked := r.mask(d.Secrets, attemptID, text)
 	if _, err := repo.AddMessage(ctx, Message{AttemptID: attemptID, Role: RoleUser, Text: masked}); err != nil {
 		return err
 	}
@@ -862,12 +940,11 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	if c.Dir == "" {
 		return Proposal{}, errors.New("the attempt has no work copy")
 	}
+	// Propose runs in michel mcp, not in the process of the session that
+	// owns the saved table: a fresh masker of its own nonce, never saved
+	// (controller ruling 18, final review I8), so that its tokens never
+	// collide with the session's. The page never unmasks (ruling 38).
 	m := mask.New()
-	if d.Secrets != nil {
-		if loaded, err := mask.Load(d.Secrets, attemptID); err == nil {
-			m = loaded
-		}
-	}
 	dirs := []string{c.Dir, c.Mirror, d.DataDir}
 	tell := func(text string) string { return shown(m, dirs, text) }
 	summary := tell(in.Summary)
@@ -882,6 +959,11 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 			_ = repo.SetCauseDetail(ctx, attemptID, auditDetail(d, cause))
 		}
 		got, _ := repo.GetAttempt(ctx, attemptID)
+		// In michel mcp (where Propose runs for a real agent) no session
+		// runs in this process, so this Close does nothing: the process of
+		// the session (serve or fix prepare) sees the failed state within a
+		// poll (PollInterval) and closes its agent. In-process callers
+		// (tests) close it here.
 		d.sessions().Close(attemptID)
 		d.cleanup(ctx, got, true)
 		_ = d.record(ctx, "fix.propose", attemptID, "refused", map[string]any{"attempt_id": attemptID, "finding_id": fi.ID, "reason": key, "detail": auditDetail(d, cause)})
@@ -1359,7 +1441,7 @@ func Approve(ctx context.Context, d Deps, attemptID, hash string) error {
 // Apply creates the branch michel/fix-<id> in the user's repository from the
 // approved proposal's commit (state approved): the agent's session is
 // closed first, a patch holding a mask token is refused (ErrMaskToken, the
-// attempt is refused), nothing else of the repository is touched. The
+// attempt fails with Michel's cause), nothing else of the repository is touched. The
 // attempt becomes applied; the copy, the mirror, the skill and the token
 // go.
 func Apply(ctx context.Context, d Deps, attemptID string) error {
@@ -1398,10 +1480,15 @@ func (d Deps) applyLocked(ctx context.Context, a Attempt) error {
 		return ErrStaleProposal
 	}
 	branch := Branch(a.ID)
-	if mask.HasToken(string(prop.DiffRaw)) || mask.HasToken(prop.Diff) {
-		cause := i18n.T(lang, "fix.cause.mask_token")
-		_ = repo.SetState(ctx, a.ID, []State{StateApproved}, StateRefused, cause)
-		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: i18n.T(lang, "fix.msg.mask_token")})
+	// Only the raw patch, the bytes that reach the branch, is checked:
+	// prop.Diff is the masked display copy and holds tokens by design
+	// (final review C1). A refusal here is Michel's, not the user's: the
+	// attempt fails with its cause (final review C3).
+	if mask.HasToken(string(prop.DiffRaw)) {
+		cause := i18n.T(lang, "fix.cause.apply_refused")
+		if repo.SetState(ctx, a.ID, []State{StateApproved}, StateFailed, cause) == nil {
+			_ = repo.SetCauseDetail(ctx, a.ID, auditDetail(d, ErrMaskToken))
+		}
 		_ = actor.record(ctx, "fix.apply", a.ID, "refused", map[string]any{"attempt_id": a.ID, "hash": prop.Hash, "reason": "mask token in the change"})
 		d.cleanup(ctx, a, true)
 		return ErrMaskToken
@@ -1443,11 +1530,11 @@ func Refuse(ctx context.Context, d Deps, attemptID, reason string) error {
 	}
 	reason = strings.TrimSpace(scan.SanitizeText(reason))
 	if r, ok := d.sessions().get(attemptID); ok {
-		reason = r.masker.Mask(reason)
-	} else if d.Secrets != nil {
-		if m, err := mask.Load(d.Secrets, attemptID); err == nil {
-			reason = m.Mask(reason)
-		}
+		reason = r.mask(d.Secrets, attemptID, reason)
+	} else {
+		// The session (if any) runs elsewhere and owns the saved table: a
+		// fresh masker of its own nonce, never saved (final review I8).
+		reason = mask.New().Mask(reason)
 	}
 	cause := reason
 	if cause == "" {
@@ -1550,33 +1637,66 @@ func finished(s State) bool {
 	return false
 }
 
-// Sweep is run when michel serve starts: it purges the messages older than
-// MessageRetention, removes the generated files of the agents
-// (<data>/agent) and the temporary files (<data>/fix-tmp), fails the
-// attempts left preparing by a previous serve (their agent is gone), applies
-// the approved ones, and removes the copies and mirrors of finished or
-// unknown attempts.
+// sweepMargin is added to the session timeout before a preparing attempt
+// of another process is taken for abandoned.
+const sweepMargin = 5 * time.Minute
+
+// liveElsewhere reports whether a preparing attempt may still have its
+// agent in another process (michel fix prepare while serve starts): its
+// token is still in the secret store and it changed less than a session
+// timeout (plus a margin) ago.
+func (d Deps) liveElsewhere(a Attempt) bool {
+	if d.Secrets == nil {
+		return false
+	}
+	if _, err := d.Secrets.Get(tokenName(a.ID)); err != nil {
+		return false
+	}
+	return d.now().Sub(a.UpdatedAt) < d.timeout()+sweepMargin
+}
+
+// Sweep is run when michel serve starts (and by michel fix clean): it
+// purges the messages older than MessageRetention, fails the attempts left
+// preparing by a stopped process (their agent is gone), applies the
+// approved ones, and removes the generated files of the agents
+// (<data>/agent/<id>), the temporary files (<data>/fix-tmp/<id>) and the
+// copies and mirrors of finished or unknown attempts. A preparing attempt
+// whose agent may still run in another process (liveElsewhere) is left as
+// it is, files included (final review I5).
 func Sweep(ctx context.Context, d Deps) error {
 	repo := d.repo()
 	lang := d.lang()
 	if err := d.purge(ctx); err != nil {
 		return err
 	}
-	for _, sub := range []string{"agent", "fix-tmp"} {
-		if err := os.RemoveAll(filepath.Join(d.DataDir, sub)); err != nil {
-			return fmt.Errorf("Michel cannot clean its data folder: %w", noPath(err))
-		}
-	}
 	preparing, err := repo.ListAttempts(ctx, "", string(StatePreparing))
 	if err != nil {
 		return err
 	}
+	live := map[string]bool{}
 	for _, a := range preparing {
-		if _, live := d.sessions().get(a.ID); live {
+		if _, here := d.sessions().get(a.ID); here || d.liveElsewhere(a) {
+			live[a.ID] = true
 			continue
 		}
 		_ = repo.SetState(ctx, a.ID, []State{StatePreparing}, StateFailed, i18n.T(lang, "fix.cause.restarted"))
 		d.cleanup(ctx, a, true)
+	}
+	for _, sub := range []string{"agent", "fix-tmp"} {
+		dir := filepath.Join(d.DataDir, sub)
+		entries, err := os.ReadDir(dir)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("Michel cannot clean its data folder: %w", noPath(err))
+		}
+		for _, e := range entries {
+			if live[strings.ToUpper(e.Name())] || live[e.Name()] {
+				continue
+			}
+			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+				return fmt.Errorf("Michel cannot clean its data folder: %w", noPath(err))
+			}
+		}
+		_ = os.Remove(dir) // only when empty
 	}
 	approved, err := repo.ListAttempts(ctx, "", string(StateApproved))
 	if err != nil {
