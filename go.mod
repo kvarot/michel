@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	deps.dev/util/semver v0.0.0-20260727054525-2946ae4a6141
 	github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29
+	github.com/google/osv-scalibr v0.5.4-0.20261009010329-5be78a00e3c2
 	github.com/google/osv-scanner/v2 v2.7.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/ossf/osv-schema/bindings/go v0.0.0-20260902031056-b388a18021a3
@@ -77,7 +78,6 @@ require (
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-containerregistry v0.21.8 // indirect
-	github.com/google/osv-scalibr v0.5.4-0.20261009010329-5be78a00e3c2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/ianlancetaylor/demangle v0.0.0-20260724033716-83e58baca724 // indirect
 	github.com/icholy/digest v1.2.0 // indirect
