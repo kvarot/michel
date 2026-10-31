@@ -498,6 +498,7 @@
   "collect.unseen.fpm": "Michel saw only the command line PHP, not the PHP that runs the site (PHP-FPM). The site may use another version or other settings.",
   "collect.unseen.kernel": "Michel could not read the version of the system kernel.",
   "collect.unseen.missing": "This file does not exist on the server.",
+  "collect.unseen.not_read": "Michel could not read this file.",
   "collect.unseen.os": "Michel could not tell which system runs on this server (the file /etc/os-release is missing or unreadable).",
   "collect.unseen.packages": "Michel could not list the installed packages: no package manager it knows answered (common on shared hosting). Updates of the system cannot be checked.",
   "collect.unseen.php": "Michel found no PHP on this server for the SSH user, or could not read its version.",

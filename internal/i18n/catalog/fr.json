@@ -498,6 +498,7 @@
   "collect.unseen.fpm": "Michel n'a pu examiner que le PHP utilisé en ligne de commande, pas celui qui fait fonctionner ton site (PHP-FPM). Ton site peut donc tourner avec une autre version ou d'autres réglages.",
   "collect.unseen.kernel": "Michel n'a pas pu lire la version du système de base (le noyau) de ce serveur.",
   "collect.unseen.missing": "Ce fichier n'existe pas sur le serveur.",
+  "collect.unseen.not_read": "Michel n'a pas pu lire ce fichier.",
   "collect.unseen.os": "Michel n'a pas pu savoir quel système fonctionne sur ce serveur (le fichier /etc/os-release est absent ou illisible).",
   "collect.unseen.packages": "Michel n'a pas pu lister les logiciels installés sur le serveur : il n'a trouvé aucun outil d'installation qu'il connaît (c'est fréquent sur un hébergement mutualisé). Il ne peut donc pas vérifier si des mises à jour du système sont à faire.",
   "collect.unseen.php": "Michel n'a pas trouvé PHP sur ce serveur avec l'accès SSH que tu lui as donné, ou n'a pas pu en lire la version.",

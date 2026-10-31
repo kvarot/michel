@@ -265,14 +265,42 @@ type PHPInfo struct {
 var directiveNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.\-]*$`)
 
 // ParsePHPInfo reads the text output of phpinfo(): the configuration file
-// lines and the "name => local => master" directive lines. Every other
-// table (environment, variables) is ignored.
+// lines of its header and the "name => local => master" lines of the
+// directive tables. A directive line is taken only after a
+// "Directive => Local Value => Master Value" header and up to the next
+// blank line; nothing is read after the Environment or PHP Variables
+// headers (their values are the server's, and may hold " => ").
 func ParsePHPInfo(s string) PHPInfo {
 	info := PHPInfo{Directives: map[string]string{}}
 	ls := lines(s)
+	inTable := false
 	for i, l := range ls {
+		t := strings.TrimSpace(l)
+		switch t {
+		case "Environment", "PHP Variables":
+			return info
+		case "Directive => Local Value => Master Value":
+			inTable = true
+			continue
+		case "":
+			inTable = false
+			continue
+		}
 		parts := strings.Split(l, " => ")
 		switch {
+		case inTable:
+			if len(parts) != 3 {
+				continue
+			}
+			name := strings.TrimSpace(parts[0])
+			if !directiveNameRe.MatchString(name) {
+				continue
+			}
+			v := strings.TrimSpace(parts[1])
+			if v == "no value" {
+				v = ""
+			}
+			info.Directives[name] = v
 		case len(parts) == 2:
 			k, v := strings.TrimSpace(parts[0]), parts[1]
 			switch k {
@@ -285,16 +313,6 @@ func ParsePHPInfo(s string) PHPInfo {
 					info.ScannedFiles = fileList(v, continuation(ls[i+1:]))
 				}
 			}
-		case len(parts) == 3:
-			name := strings.TrimSpace(parts[0])
-			if name == "Directive" || !directiveNameRe.MatchString(name) {
-				continue
-			}
-			v := strings.TrimSpace(parts[1])
-			if v == "no value" {
-				v = ""
-			}
-			info.Directives[name] = v
 		}
 	}
 	return info
@@ -342,17 +360,49 @@ func poolDir(fpmConf, loadedIni string) string {
 	}
 }
 
-// secretPrefixesOK are directive families whose names hold "key" or
-// "secret" by accident and never hold a secret.
-var secretPrefixesOK = []string{"session.", "opcache.", "xdebug.", "apc.", "apcu.", "highlight."}
+// harmlessNames are directive names whose words look secret but whose
+// value never is.
+var harmlessNames = map[string]bool{
+	"xdebug.idekey":                    true,
+	"mysqlnd.sha256_server_public_key": true,
+	"highlight.keyword":                true,
+}
 
-var poolWrapperRe = regexp.MustCompile(`^php_(?:admin_)?(?:value|flag)\[(.*)\]$`)
+var (
+	poolWrapperRe = regexp.MustCompile(`^php_(?:admin_)?(?:value|flag)\[(.*)\]$`)
+	segmentSep    = regexp.MustCompile(`[._\-\[\]]+`)
+	// secretParam is a credential passed as a parameter inside a value
+	// (session.save_path = "tcp://redis:6379?auth=..."); its value is
+	// replaced by maskedPart before anything else.
+	secretParam = regexp.MustCompile(`(?i)([?&;,\s](?:auth|password|passwd|pass|pwd|secret|token|key)=)([^&;,\s"']*)`)
+)
 
-// isSecret reports whether a directive holds a secret: its name says so
-// (*password*, *_pw, *secret*, *key*, *token*, *dsn*, except the families
-// of secretPrefixesOK), it is an env[...] of a FPM pool, or a detector of
-// internal/mask sees a secret in its value (DSN with a password...).
-func isSecret(name, value string) bool {
+// maskedPart stands for a credential removed from inside a value.
+const maskedPart = "[masked]"
+
+// secretSegment reports whether one word of a directive name says it holds
+// a secret. Words are compared whole (or as a known suffix), so pcre.jit or
+// session.use_only_cookies are not caught.
+func secretSegment(w string) bool {
+	for _, sub := range []string{"password", "passwd", "secret", "credential", "token", "license", "dsn"} {
+		if strings.Contains(w, sub) {
+			return true
+		}
+	}
+	switch w {
+	case "pw", "pwd", "pass", "passphrase", "auth", "key":
+		return true
+	}
+	return strings.HasPrefix(w, "auth") || strings.HasSuffix(w, "key") && w != "monkey" && w != "hotkey"
+}
+
+// SecretName is secretName, for tests and for callers that show a name.
+func SecretName(name string) bool { return secretName(name) }
+
+// secretName reports whether a directive name says it holds a secret: one
+// of its words (secretSegment), or an env[...] of a FPM pool. The check runs
+// for every name; only harmlessNames are exempt.
+func secretName(name string) bool {
 	inner := name
 	if m := poolWrapperRe.FindStringSubmatch(name); m != nil {
 		inner = m[1]
@@ -361,36 +411,43 @@ func isSecret(name, value string) bool {
 	if strings.HasPrefix(lower, "env[") {
 		return true
 	}
-	ok := false
-	for _, p := range secretPrefixesOK {
-		if strings.HasPrefix(lower, p) {
-			ok = true
-			break
-		}
+	if harmlessNames[lower] {
+		return false
 	}
-	if !ok {
-		for _, w := range []string{"password", "passwd", "secret", "key", "token", "dsn"} {
-			if strings.Contains(lower, w) {
-				return true
-			}
-		}
-		if strings.HasSuffix(lower, "_pw") || strings.HasSuffix(lower, "_pass") {
+	for _, w := range segmentSep.Split(lower, -1) {
+		if w != "" && secretSegment(w) {
 			return true
 		}
 	}
+	return false
+}
+
+// maskParams replaces the credentials passed as parameters inside v.
+func maskParams(v string) string {
+	return secretParam.ReplaceAllString(" "+v, "${1}"+maskedPart)[1:]
+}
+
+// isSecret reports whether a directive holds a secret: its name says so
+// (secretName), or a detector of internal/mask still sees a secret in its
+// value once maskParams ran (DSN with a password, private key...).
+func isSecret(name, value string) bool {
+	if secretName(name) {
+		return true
+	}
 	m := mask.New()
-	m.Mask(value)
+	m.Mask(maskParams(value))
 	return m.Len() > 0
 }
 
-// directive builds a stored directive: a secret value is never kept.
-func directive(sapi, name, value, file string, line int) target.Directive {
+// directive builds a stored directive: a secret value is never kept, and
+// a credential inside a value is replaced by maskedPart.
+func directive(sapi, binary, name, value, file string, line int) target.Directive {
 	name = scan.SanitizeText(name)
-	d := target.Directive{SAPI: sapi, Name: name, File: file, Line: line}
+	d := target.Directive{SAPI: sapi, Binary: binary, Name: name, File: file, Line: line}
 	if isSecret(name, value) {
 		d.Secret = true
 		return d
 	}
-	d.Value = text(value)
+	d.Value = text(maskParams(value))
 	return d
 }

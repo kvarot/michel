@@ -68,20 +68,56 @@ func isHealth(t target.Target) bool {
 	return t.Kind == target.KindHDS || t.Classification == policy.ClassHealth
 }
 
-// CheckPath says whether Michel may read p on t as a path the user added:
-// ErrRefusedPath for a path no server allows, ErrHealthPath for a path that
-// is not a configuration file on a server holding health data. The links
-// are the deployment folders of the projects on t; they are not a reason
-// to allow a non-configuration file on a health server.
-func CheckPath(t target.Target, links []target.Link, p string) error {
-	_ = links
-	if baseRefusal(p) != "" {
+// secretFile matches files that hold keys or passwords, never read even
+// when they look like configuration.
+var secretFile = regexp.MustCompile(`(?i)(^id_|\.key$|\.pem$|\.p12$|\.pfx$|^shadow-?$|^gshadow-?$|^\.?htpasswd$)`)
+
+// homeRefusal refuses the home folders of other users: /root and /home/<x>
+// are read only when x is the SSH user, or when the path is under the
+// deployment folder of a linked project.
+func homeRefusal(t target.Target, links []target.Link, p string) bool {
+	for _, l := range links {
+		if dir := cleanPath(l.RemoteDir); dir != "" && dir != "/" && strings.HasPrefix(p, dir+"/") {
+			return false
+		}
+	}
+	switch {
+	case strings.HasPrefix(p, "/root/"):
+		return t.User != "root"
+	case strings.HasPrefix(p, "/home/"):
+		return t.User == "" || !strings.HasPrefix(p, "/home/"+t.User+"/")
+	}
+	return false
+}
+
+// refusal applies every rule to p, for a path the user added as for a
+// path PHP, FPM or a link reports: the base rules, configuration files only
+// (ErrHealthPath on a server holding health data, ErrRefusedPath
+// elsewhere), no key or password file, no home folder of another user.
+func refusal(t target.Target, links []target.Link, p string) error {
+	if baseRefusal(p) != "" || secretFile.MatchString(path.Base(p)) {
 		return ErrRefusedPath
 	}
-	if isHealth(t) && !isConfig(p) {
-		return ErrHealthPath
+	if !isConfig(p) {
+		if isHealth(t) {
+			return ErrHealthPath
+		}
+		return ErrRefusedPath
+	}
+	if homeRefusal(t, links, p) {
+		return ErrRefusedPath
 	}
 	return nil
+}
+
+// CheckPath says whether Michel may read p on t as a path the user added.
+// Only configuration files are read, on every server: ErrHealthPath for any
+// other file on a server holding health data, ErrRefusedPath for any other
+// file elsewhere and for logs, data bases, folders, key or password files
+// and the home folders of other users. links are the deployment folders of
+// the projects on t: a configuration file under one of them is allowed.
+func CheckPath(t target.Target, links []target.Link, p string) error {
+	return refusal(t, links, p)
 }
 
 // iniLine is one "name = value" line of a configuration file.
@@ -160,9 +196,10 @@ func (f *fileReader) iniChain(loaded string, scanned []string) []readFile {
 	return out
 }
 
-// get reads p once. A file PHP or FPM reports must be a configuration file
-// and pass the base rules; otherwise it is refused. A missing file is said
-// only when say is true.
+// get reads p once. Every file, whoever reports it, goes through refusal;
+// a refused file is said, never read. A missing file is said only when say
+// is true. Commands run with the C locale, so the error text is English;
+// a failure whose cause cannot be told is ReasonNotRead.
 func (f *fileReader) get(p string, say bool) *readFile {
 	if r, ok := f.read[p]; ok {
 		return r
@@ -174,7 +211,7 @@ func (f *fileReader) get(p string, say bool) *readFile {
 		return nil
 	}
 	f.done[p] = true
-	if baseRefusal(p) != "" || (isHealth(f.c.t) && !isConfig(p)) {
+	if refusal(f.c.t, f.c.links, p) != nil {
 		f.c.unseen(cleanPath(p), ReasonRefused)
 		return nil
 	}
@@ -189,8 +226,10 @@ func (f *fileReader) get(p string, say bool) *readFile {
 			if say {
 				f.c.unseen(p, ReasonMissing)
 			}
-		default:
+		case strings.Contains(msg, "permission denied"):
 			f.c.unseen(p, ReasonUnreadable)
+		default:
+			f.c.unseen(p, ReasonNotRead)
 		}
 		return nil
 	}

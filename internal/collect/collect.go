@@ -51,6 +51,7 @@ const (
 	ReasonPackages   = "collect.unseen.packages"
 	ReasonWeb        = "collect.unseen.web"
 	ReasonUnreadable = "collect.unseen.unreadable"
+	ReasonNotRead    = "collect.unseen.not_read"
 	ReasonMissing    = "collect.unseen.missing"
 	ReasonTooBig     = "collect.unseen.too_big"
 	ReasonRefused    = "collect.unseen.refused"
@@ -96,12 +97,13 @@ func (e errStop) Unwrap() error { return e.err }
 
 // collector holds one collection.
 type collector struct {
-	ctx context.Context
-	r   Runner
-	t   target.Target
-	inv *target.Inventory
-	pm  string // package manager that answered: dpkg, rpm, apk or ""
-	err error  // first stop
+	ctx   context.Context
+	r     Runner
+	t     target.Target
+	links []target.Link
+	inv   *target.Inventory
+	pm    string // package manager that answered: dpkg, rpm, apk or ""
+	err   error  // first stop
 
 	resolved map[string]string // readlink -f, by binary
 }
@@ -135,7 +137,7 @@ func (c *collector) run(argv []string) (sshx.Result, bool) {
 		c.err = fmt.Errorf("collect: command outside the closed list refused: %s", argv[0])
 		return sshx.Result{}, false
 	}
-	res, err := c.r.Run(c.ctx, argv, nil)
+	res, err := c.r.Run(c.ctx, withLocale(argv), nil)
 	if err != nil {
 		if errors.Is(err, sshx.ErrCommandTimeout) && c.ctx.Err() == nil {
 			return res, false
@@ -158,7 +160,7 @@ func Run(ctx context.Context, d Deps, r Runner, t target.Target, links []target.
 	ctx, cancel := context.WithTimeout(ctx, MaxDuration)
 	defer cancel()
 	inv := target.Inventory{TargetID: t.ID, At: d.now()}
-	c := &collector{ctx: ctx, r: r, t: t, inv: &inv}
+	c := &collector{ctx: ctx, r: r, t: t, links: links, inv: &inv}
 
 	c.system()
 	found := c.find()
@@ -302,7 +304,7 @@ func (c *collector) cli(found map[string]string, files *fileReader) {
 	if len(values) == 0 {
 		c.unseen(bin, ReasonDirectives)
 	}
-	c.addDirectives("cli", values, read)
+	c.addDirectives("cli", bin, values, read)
 	c.inv.PHP = append(c.inv.PHP, rt)
 }
 
@@ -353,7 +355,7 @@ func (c *collector) fpm(found map[string]string, files *fileReader) {
 		if len(info.Directives) == 0 {
 			c.unseen(bin, ReasonDirectives)
 		}
-		c.addDirectives("fpm", info.Directives, read)
+		c.addDirectives("fpm", bin, info.Directives, read)
 		if dir := poolDir(conf, rt.LoadedIni); dir != "" {
 			for _, name := range pools {
 				p := dir + name + ".conf"
@@ -363,7 +365,7 @@ func (c *collector) fpm(found map[string]string, files *fileReader) {
 				}
 				rt.PoolFiles = append(rt.PoolFiles, p)
 				for _, l := range f.lines {
-					c.inv.Directives = append(c.inv.Directives, directive("fpm", l.name, l.value, p, l.line))
+					c.inv.Directives = append(c.inv.Directives, directive("fpm", bin, l.name, l.value, p, l.line))
 				}
 			}
 		}
@@ -378,7 +380,7 @@ func (c *collector) fpm(found map[string]string, files *fileReader) {
 
 // addDirectives stores the effective values of one SAPI, sorted by name,
 // each placed in the file that sets it when one of read does.
-func (c *collector) addDirectives(sapi string, values map[string]string, read []readFile) {
+func (c *collector) addDirectives(sapi, binary string, values map[string]string, read []readFile) {
 	names := make([]string, 0, len(values))
 	for k := range values {
 		names = append(names, k)
@@ -386,7 +388,7 @@ func (c *collector) addDirectives(sapi string, values map[string]string, read []
 	sort.Strings(names)
 	for _, n := range names {
 		file, line := locate(read, n)
-		c.inv.Directives = append(c.inv.Directives, directive(sapi, n, values[n], file, line))
+		c.inv.Directives = append(c.inv.Directives, directive(sapi, binary, n, values[n], file, line))
 	}
 }
 
@@ -412,6 +414,16 @@ func (c *collector) web(found map[string]string) {
 	}
 }
 
+func (c *collector) runtimes(sapi string) []target.PHPRuntime {
+	var out []target.PHPRuntime
+	for _, r := range c.inv.PHP {
+		if r.SAPI == sapi {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func hasWeb(ws []target.WebServer, name string) bool {
 	for _, w := range ws {
 		if w.Name == name {
@@ -422,6 +434,12 @@ func hasWeb(ws []target.WebServer, name string) bool {
 }
 
 func (c *collector) userInis(links []target.Link, files *fileReader) {
+	// A .user.ini applies to the FPM that serves the folder: known only when
+	// one FPM was seen.
+	fpmBin := ""
+	if fpms := c.runtimes("fpm"); len(fpms) == 1 {
+		fpmBin = fpms[0].Binary
+	}
 	for _, l := range links {
 		dir := cleanPath(l.RemoteDir)
 		if dir == "" || dir == "/" {
@@ -433,7 +451,7 @@ func (c *collector) userInis(links []target.Link, files *fileReader) {
 				continue
 			}
 			for _, il := range f.lines {
-				c.inv.Directives = append(c.inv.Directives, directive("user_ini", il.name, il.value, p, il.line))
+				c.inv.Directives = append(c.inv.Directives, directive("user_ini", fpmBin, il.name, il.value, p, il.line))
 			}
 		}
 	}

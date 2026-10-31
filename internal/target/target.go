@@ -141,8 +141,14 @@ type Package struct {
 
 // Directive is one configuration directive read in a file. Secret marks a
 // value that was masked before storage.
+//
+// Binary is the PHP binary the directive belongs to (the CLI one or one
+// FPM), so several FPM versions on one server can be told apart; a
+// .user.ini directive (SAPI user_ini) has the FPM binary when exactly one
+// FPM was seen, else "".
 type Directive struct {
 	SAPI   string
+	Binary string
 	Name   string
 	Value  string
 	File   string

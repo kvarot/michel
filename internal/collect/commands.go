@@ -65,7 +65,7 @@ func cmdFindSbin() []string {
 }
 
 // Commands returns the fixed part of the closed list for t, in the order a
-// collection runs them. The rest is built from what these print, through
+// collection runs them, as they are sent (with the env LC_ALL=C prefix). The rest is built from what these print, through
 // the same closed shapes: `<fpm> -v|-m|-i|-tt` for each FPM binary found,
 // `<web> -v` for each web server found, `readlink -f`, `dpkg -S` or
 // `rpm -qf` on a PHP binary, and `head -c 262145 <file>` for each allowed
@@ -73,12 +73,34 @@ func cmdFindSbin() []string {
 // door open for a per-kind list without changing callers.
 func Commands(t target.Target) [][]string {
 	_ = t
+	var out [][]string
+	for _, argv := range fixedCommands() {
+		out = append(out, withLocale(argv))
+	}
+	return out
+}
+
+func fixedCommands() [][]string {
 	return [][]string{
 		cmdOSRelease, cmdKernel, cmdFind(), cmdFindSbin(),
 		cmdDpkg, cmdRPM, cmdAPK,
 		cmdPHPV, cmdPHPM, cmdPHPIni, cmdPHPR,
 		{"nginx", "-v"}, {"apache2", "-v"}, {"httpd", "-v"},
 	}
+}
+
+// localeC is put before every command but `command -v` (a shell builtin
+// that env cannot run, whose output is paths only): error texts are then
+// the English ones Michel reads, whatever the server's language. It works
+// without AcceptEnv in sshd.
+var localeC = []string{"env", "LC_ALL=C", "LANG=C"}
+
+// withLocale returns argv as it is sent to the server.
+func withLocale(argv []string) []string {
+	if len(argv) > 0 && argv[0] == "command" {
+		return argv
+	}
+	return append(append([]string(nil), localeC...), argv...)
 }
 
 func cmdRead(p string) []string { return []string{"head", "-c", strconv.Itoa(MaxFileSize + 1), p} }
@@ -101,9 +123,10 @@ func isPHPBinary(p string) bool {
 	return binaryRe.MatchString(p) && path.Clean(p) == p
 }
 
-// allowed reports whether argv is one of the closed shapes.
+// allowed reports whether argv (before withLocale) is one of the closed
+// shapes.
 func allowed(argv []string) bool {
-	for _, fixed := range Commands(target.Target{}) {
+	for _, fixed := range fixedCommands() {
 		if equal(argv, fixed) {
 			return true
 		}

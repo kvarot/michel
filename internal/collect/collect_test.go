@@ -57,6 +57,7 @@ type host struct {
 	kernel   string
 	osRel    string
 	headsFor []string // records every head path, to count read attempts
+	french   bool     // the server answers in French when the locale is not forced
 }
 
 type fpmOut struct{ v, i, tt, m string }
@@ -103,6 +104,16 @@ func (h *host) commands() map[string]sshtest.Handler {
 		n, _ := strconv.Atoi(e.Args[2])
 		p := e.Args[3]
 		h.headsFor = append(h.headsFor, p)
+		if h.french {
+			// A server that ignored LC_ALL=C: a cause Michel cannot tell.
+			fmt.Fprintf(e.Stderr, "head: impossible d'ouvrir '%s' en lecture: Permission non accordée\n", p)
+			if h.denied[p] {
+				return 1
+			}
+			if _, ok := h.files[p]; !ok {
+				return 1
+			}
+		}
 		if h.denied[p] {
 			fmt.Fprintf(e.Stderr, "head: cannot open '%s' for reading: Permission denied\n", p)
 			return 1
@@ -197,6 +208,22 @@ func (h *host) commands() map[string]sshtest.Handler {
 		if _, ok := out[name]; !ok {
 			out[name] = notFound
 		}
+	}
+	// env LC_ALL=C LANG=C <argv>: run argv.
+	out["env"] = func(e sshtest.Exec) int {
+		i := 1
+		for i < len(e.Args) && strings.Contains(e.Args[i], "=") {
+			i++
+		}
+		if i >= len(e.Args) {
+			return 2
+		}
+		inner, ok := out[e.Args[i]]
+		if !ok {
+			return notFound(sshtest.Exec{Args: e.Args[i:], Stderr: e.Stderr})
+		}
+		e.Args = e.Args[i:]
+		return inner(e)
 	}
 	return out
 }
@@ -456,7 +483,7 @@ func TestCollectSharedHostingNoPackages(t *testing.T) {
 		t.Fatalf("unseen %+v", inv.Unseen)
 	}
 	for _, l := range e.srv.Log() {
-		if strings.HasPrefix(l, "'dpkg' '-S'") || strings.HasPrefix(l, "'rpm' '-qf'") {
+		if strings.Contains(l, "'dpkg' '-S'") || strings.Contains(l, "'rpm' '-qf'") {
 			t.Fatalf("owner asked with no package manager: %s", l)
 		}
 	}
@@ -581,15 +608,21 @@ func TestHealthTargetRefusesNonConfigPath(t *testing.T) {
 			t.Fatalf("%s refused: %v", p, err)
 		}
 	}
-	// Logs, data bases and relative paths are refused for every server.
-	vps := target.Target{Kind: target.KindVPS, Classification: policy.ClassInternal}
-	for _, p := range []string{"/var/log/nginx/access.log", "/var/www/demo/db.sqlite", "/var/lib/mysql/ibdata1", "etc/php.ini", "/etc/../root/x.ini", "/etc/php/"} {
-		if err := collect.CheckPath(vps, nil, p); !errors.Is(err, collect.ErrRefusedPath) {
+	// Every server: configuration files only; never logs, data bases,
+	// relative paths, folders, key or password files, other users' homes.
+	vps := target.Target{Kind: target.KindVPS, Classification: policy.ClassInternal, User: "deploy"}
+	otherLinks := []target.Link{{RemoteDir: "/home/client1/www"}}
+	for _, p := range []string{"/var/log/nginx/access.log", "/var/www/demo/db.sqlite", "/var/lib/mysql/ibdata1", "etc/php.ini",
+		"/etc/../root/x.ini", "/etc/php/", "/home/deploy/notes.txt", "/home/other/app.ini", "/root/app.ini", "/etc/shadow",
+		"/etc/ssl/private/site.key", "/home/deploy/.ssh/id_ed25519", "/etc/ssl/certs/site.pem", "/home/client2/www/.user.ini"} {
+		if err := collect.CheckPath(vps, otherLinks, p); !errors.Is(err, collect.ErrRefusedPath) {
 			t.Fatalf("%s: %v", p, err)
 		}
 	}
-	if err := collect.CheckPath(vps, nil, "/home/deploy/notes.txt"); err != nil {
-		t.Fatalf("a vps path refused: %v", err)
+	for _, p := range []string{"/home/deploy/app.ini", "/home/client1/www/.user.ini", "/etc/nginx/sites-enabled/demo.conf"} {
+		if err := collect.CheckPath(vps, otherLinks, p); err != nil {
+			t.Fatalf("%s refused on a vps: %v", p, err)
+		}
 	}
 
 	// Run does not read a refused extra path: it says so.
@@ -610,21 +643,24 @@ func TestHealthTargetRefusesNonConfigPath(t *testing.T) {
 }
 
 // allowedShapes is the closed list, written independently of the code.
+// envC is the locale prefix every command but command -v carries.
+const envC = `'env' 'LC_ALL=C' 'LANG=C' `
+
 var allowedShapes = []*regexp.Regexp{
-	regexp.MustCompile(`^'cat' '/etc/os-release'$`),
-	regexp.MustCompile(`^'uname' '-r'$`),
 	regexp.MustCompile(`^'command' '-v'( '(/usr/sbin/)?(php|php-fpm(8\.[1-5])?|nginx|apache2|httpd)')+$`),
-	regexp.MustCompile(`^'php' '(-v|-m|--ini)'$`),
-	regexp.MustCompile(`^'php' '-r' '[^']+'$`),
-	regexp.MustCompile(`^'/[a-z0-9/]+/php-fpm(8\.[1-5])?' '(-v|-i|-m|-tt)'$`),
-	regexp.MustCompile(`^'(/usr/sbin/)?(nginx|apache2|httpd)' '-v'$`),
-	regexp.MustCompile(`^'dpkg-query' '-W' '-f' '[^']+'$`),
-	regexp.MustCompile(`^'rpm' '-qa' '--qf' '[^']+'$`),
-	regexp.MustCompile(`^'apk' 'info' '-v'$`),
-	regexp.MustCompile(`^'readlink' '-f' '/[^']+'$`),
-	regexp.MustCompile(`^'dpkg' '-S' '/[^']+'$`),
-	regexp.MustCompile(`^'rpm' '-qf' '--qf' '[^']+' '/[^']+'$`),
-	regexp.MustCompile(`^'head' '-c' '262145' '/[^']+\.(ini|conf)'$`),
+	regexp.MustCompile(`^` + envC + `'cat' '/etc/os-release'$`),
+	regexp.MustCompile(`^` + envC + `'uname' '-r'$`),
+	regexp.MustCompile(`^` + envC + `'php' '(-v|-m|--ini)'$`),
+	regexp.MustCompile(`^` + envC + `'php' '-r' '[^']+'$`),
+	regexp.MustCompile(`^` + envC + `'/[a-z0-9/]+/php-fpm(8\.[1-5])?' '(-v|-i|-m|-tt)'$`),
+	regexp.MustCompile(`^` + envC + `'(/usr/sbin/)?(nginx|apache2|httpd)' '-v'$`),
+	regexp.MustCompile(`^` + envC + `'dpkg-query' '-W' '-f' '[^']+'$`),
+	regexp.MustCompile(`^` + envC + `'rpm' '-qa' '--qf' '[^']+'$`),
+	regexp.MustCompile(`^` + envC + `'apk' 'info' '-v'$`),
+	regexp.MustCompile(`^` + envC + `'readlink' '-f' '/[^']+'$`),
+	regexp.MustCompile(`^` + envC + `'dpkg' '-S' '/[^']+'$`),
+	regexp.MustCompile(`^` + envC + `'rpm' '-qf' '--qf' '[^']+' '/[^']+'$`),
+	regexp.MustCompile(`^` + envC + `'head' '-c' '262145' '/[^']+\.(ini|conf)'$`),
 }
 
 func TestCommandsAreClosedList(t *testing.T) {
