@@ -5,6 +5,11 @@ sovereignty:
   data_classification: sensitive # public | internal | confidential | sensitive | health
   ai:
     provider_policy: local_only
+    # The fix agent (Claude Code, docs/fix.md) is an external provider. A project's AI consent
+    # (Fix page or 'michel fix consent <project> --yes') turns this on and adds its network rules.
+    # strict_local refuses it: only the explicit button of the page's consent screen switches
+    # mode to standard and this to true (keeping config.yaml.bak). Fix levels are set per
+    # project ('michel project set <name> --fix-level 0..3'), not here.
     external_providers_enabled: false
     model_downloads_enabled: false
     automatic_model_updates: false
@@ -15,9 +20,15 @@ sovereignty:
     # 'michel source enable <key>' adds the rule a source needs here, after your consent
     # (keeping a copy of this file as config.yaml.bak); 'michel source disable <key> --forget' removes it.
     # Purposes: osv.db, source.enrich, source.feed, source.repo, source.discover, notify.email,
-    # notify.webhook. plugin.<key> is never allowed. Hosts of each source: docs/sources.md.
+    # notify.webhook, fix.install, agent.claude. plugin.<key> is never allowed. Hosts of each
+    # source: docs/sources.md; of the fix agent: docs/security/network-egress.md.
     # Example written by 'michel source enable enrich.kev':
     #   - {host: www.cisa.gov, purpose: source.enrich}
+    # Rules written by a project's AI consent for the fix agent (docs/fix.md):
+    #   - {host: api.anthropic.com, purpose: agent.claude}
+    #   - {host: platform.claude.com, purpose: agent.claude}
+    #   - {host: repo.packagist.org, purpose: fix.install}   # also packagist.org, api.github.com,
+    #                                                        # codeload.github.com, registry.npmjs.org
     allow: []                   # each rule needs a host and a purpose
   audit:
     enabled: true

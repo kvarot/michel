@@ -913,6 +913,9 @@ func TestProveNeedsMerge(t *testing.T) {
 
 func TestWorkerCapsThreePerDay(t *testing.T) {
 	f := newFixture(t)
+	// The attempts must be created on the fixture's day, which StartedToday
+	// counts: with the store's wall clock the test only passed on that day.
+	f.d.Repo.Now = f.d.Now
 	f.consent()
 	p := f.proj
 	p.FixLevel = 2
