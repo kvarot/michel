@@ -17,7 +17,8 @@ import (
 // that grammar uses and fails on anything else (exit 2): simple commands
 // with single and double quotes, "$VAR", "${VAR}" and "$(simple command)"
 // inside double quotes, ;, ||, { ...; }, if ...; then ...; [else ...;] fi
-// on one line, the one-line `case "WORD" in PATTERN) ;; *) LIST;; esac`
+// on one line, the one-line `case "WORD" in PATTERN) ;; *) LIST;; esac` and
+// `case "WORD" in BAD) LIST;; GOOD) ;; *) LIST;; esac`
 // (an unquoted pattern with ? and *), redirections >, >>, >&2 and </dev/null,
 // NAME="..." assignments, name() { ... } functions over several lines,
 // set -eu, umask, trap (EXIT runs on exit) and exit. Built-in commands:
@@ -142,6 +143,9 @@ func (x *interp) fail(format string, a ...any) {
 var (
 	funcDef = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\(\) \{$`)
 	caseRe  = regexp.MustCompile(`^case "(.*)" in ([A-Za-z0-9/._?*-]+)\) ;; \*\) (.*);; esac$`)
+	// case2Re is `case "WORD" in BAD) LIST;; GOOD) ;; *) LIST;; esac`: the
+	// first matching pattern wins, as in POSIX sh.
+	case2Re = regexp.MustCompile(`^case "(.*)" in ([A-Za-z0-9/._?*-]+)\) (.*?);; ([A-Za-z0-9/._?*-]+)\) ;; \*\) (.*);; esac$`)
 )
 
 func (x *interp) runLines(lines []string) {
@@ -158,6 +162,18 @@ func (x *interp) runLines(lines []string) {
 			}
 			x.funcs[m[1]] = body
 			i = j
+			continue
+		}
+		if m := case2Re.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			word := x.expandDouble(m[1])
+			switch {
+			case globMatch(m[2], word):
+				x.status = x.runList(x.parseLine(m[3]), false)
+			case globMatch(m[4], word):
+				x.status = 0
+			default:
+				x.status = x.runList(x.parseLine(m[5]), false)
+			}
 			continue
 		}
 		if m := caseRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
@@ -871,6 +887,10 @@ func (x *interp) command(argv []string, out, errw io.Writer) int {
 	h, ok := x.s.opts.Commands[cmd]
 	if !ok {
 		h, ok = x.s.opts.Commands[argv[0]]
+	}
+	if !ok && strings.HasPrefix(argv[0], "/") {
+		// A path runs the file its links end at, as exec does.
+		h, ok = x.s.opts.Commands[x.resolve(argv[0])]
 	}
 	if !ok {
 		fmt.Fprintf(errw, "sh: %s: not found\n", argv[0])

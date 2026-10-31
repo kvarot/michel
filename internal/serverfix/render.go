@@ -120,7 +120,7 @@ var Grammar = []string{
 	gStat + gDir + gSafeDir,
 	gStat + gPath + gSafeFile,
 	`case "\$\(stat -L -c '%u %A' (?:` + gFPM + `|` + gCLI + `)` + gSafeFile,
-	`case "\$\(readlink -f (?:` + gFPM + `|` + gCLI + `)\)" in /usr/(?:local/)?s?bin/php\*\) ;; \*\) echo "` + msgUnsafeFile + `" >&2; exit 7;; esac`,
+	`case "\$\(readlink -f (?:` + gFPM + `|` + gCLI + `)\)" in /usr/(?:local/)?s?bin/php\*/\*\) echo "` + msgUnsafeFile + `" >&2; exit 7;; /usr/(?:local/)?s?bin/php\*\) ;; \*\) echo "` + msgUnsafeFile + `" >&2; exit 7;; esac`,
 	gStat + `"\$B"\)" in 0\?d\?\?\?------\) ;; \*\) echo "` + msgUnsafeBak + `" >&2; exit 7;; esac`,
 	gStat + gBak + `\)" in 0\?-\?\?\?------\) ;; \*\) echo "` + msgUnsafeBak + `" >&2; exit 7;; esac`,
 	`\[ ! -L ` + gPath + ` \] \|\| \{ echo "` + msgLink + `" >&2; exit 6; \}`,
@@ -400,7 +400,11 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 			}
 			// The real file sits in the same checked folder (Debian's
 			// alternatives end there), never in a folder nobody checked.
-			s.l(`case "$(readlink -f `, q(a.Binary), `)" in `, path.Dir(a.Binary), `/php*) ;; *) echo "`+msgUnsafeFile+`" >&2; exit 7;; esac`)
+			// php*/* comes first: a case * matches "/" (even after [!/]),
+			// so php* alone would let in a file below a php* subfolder.
+			bad := `) echo "` + msgUnsafeFile + `" >&2; exit 7;; `
+			dir := path.Dir(a.Binary)
+			s.l(`case "$(readlink -f `, q(a.Binary), `)" in `, dir, `/php*/*`, bad, dir, `/php*) ;; *`, bad, `esac`)
 			s.l(`case "$(stat -L -c '%u %A' `, q(a.Binary), `)" in 0?-????-??-?) ;; *) echo "`+msgUnsafeFile+`" >&2; exit 7;; esac`)
 		}
 	}

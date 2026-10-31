@@ -2,6 +2,7 @@ package serverrules
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -64,7 +65,6 @@ func branchOf(v string) string {
 	return fmt.Sprintf("%d.%d", n[0], n[1])
 }
 
-// isOn reads a PHP boolean: on/true/yes, or any integer other than 0.
 // iniValue is a raw ini value as PHP reads it: a quoted value is what is
 // between its quotes, anything after them ignored; otherwise an inline `;`
 // comment is cut (collect keeps it) and spaces are trimmed.
@@ -81,6 +81,7 @@ func iniValue(v string) string {
 	return strings.TrimSpace(v)
 }
 
+// isOn reads a PHP boolean: on/true/yes, or any integer other than 0.
 func isOn(v string) bool {
 	v = strings.ToLower(strings.TrimSpace(iniValue(v)))
 	switch v {
@@ -251,18 +252,32 @@ func riskyValue(r ConfigRule, value string) bool {
 	case "off":
 		return !isOn(value)
 	default:
-		// Empty, or a path list holding "/" (which restricts nothing).
-		v := iniValue(value)
-		if v == "" {
+		return riskyPathList(iniValue(value))
+	}
+}
+
+// riskyPathList says whether an open_basedir-like path list may restrict
+// nothing: empty, or an entry that is empty, relative, holds a "." or ".."
+// segment, or cleans to "/" (fail closed: Michel never guesses).
+func riskyPathList(v string) bool {
+	if v == "" {
+		return true
+	}
+	for _, part := range strings.Split(v, ":") {
+		part = strings.TrimSpace(part)
+		if !strings.HasPrefix(part, "/") {
 			return true
 		}
-		for _, part := range strings.Split(v, ":") {
-			if strings.TrimSpace(part) == "/" {
+		for _, seg := range strings.Split(part, "/") {
+			if seg == "." || seg == ".." {
 				return true
 			}
 		}
-		return false
+		if path.Clean(part) == "/" {
+			return true
+		}
 	}
+	return false
 }
 
 // riskySource looks for a risky effective value of the rule's directive for

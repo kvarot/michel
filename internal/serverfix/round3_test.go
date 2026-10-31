@@ -29,7 +29,7 @@ func TestBinaryRealPathChecked(t *testing.T) {
 	if code, stderr := h.run(b.Apply); code != 7 || h.file(t, fpmIni) != iniText {
 		t.Errorf("link into a user folder: exit %d %q", code, stderr)
 	}
-	if !strings.Contains(b.Apply, `case "$(readlink -f '`+fpmBin+`')" in /usr/sbin/php*) ;;`) {
+	if !strings.Contains(b.Apply, `case "$(readlink -f '`+fpmBin+`')" in /usr/sbin/php*/*) echo "fichier non sur" >&2; exit 7;; /usr/sbin/php*) ;;`) {
 		t.Errorf("no real path check:\n%s", b.Apply)
 	}
 	// A link in the same system folder passes.
