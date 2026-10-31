@@ -93,13 +93,23 @@ type Inventory struct {
 	Directives []Directive
 	Files      []FileSeen
 	Unseen     []Unseen
+	// Site holds the HTTP headers of the site (SiteURL), when they were read.
+	Site SiteHeaders
 }
 
-// OSInfo identifies the operating system (from os-release).
+// SiteHeaders are the headers of the site that name its software.
+type SiteHeaders struct {
+	Server    string
+	PoweredBy string
+}
+
+// OSInfo identifies the operating system (from os-release) and its kernel
+// (uname -r).
 type OSInfo struct {
 	ID        string
 	VersionID string
 	Pretty    string
+	Kernel    string
 }
 
 // PHPRuntime is one PHP installation: the command line one or a FPM one.

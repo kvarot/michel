@@ -1,0 +1,6 @@
+[31-Oct-2026 10:00:00] NOTICE: [global]
+[31-Oct-2026 10:00:00] NOTICE: 	pid = /run/php/php8.2-fpm.pid
+[31-Oct-2026 10:00:00] NOTICE: [www]
+[31-Oct-2026 10:00:00] NOTICE: 	user = www-data
+[31-Oct-2026 10:00:00] NOTICE: 	env[DATABASE_URL] = mysql://u:p@db/x
+[31-Oct-2026 10:00:00] NOTICE: configuration file /etc/php/8.2/fpm/php-fpm.conf test is successful
