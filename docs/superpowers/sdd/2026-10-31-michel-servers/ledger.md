@@ -1,0 +1,37 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-10-31-michel-servers.md
+
+Spec: docs/superpowers/specs/2026-10-31-michel-plan6-servers-design.md (reachable).
+Branch: feat/servers (created in Task 1 from docs/plan6-design tip b1bd375).
+
+## Preflight scan
+
+| tasks | shared file / interface | produced vs consumed | finding |
+|---|---|---|---|
+| 1 / 4 | `internal/target/target.go` inventory types | T1 declares `Inventory` whose field types are "detailed in Task 4" | gap: T1 cannot compile without them → R1 |
+| 1 / 5 | `scan.KindServerPackage/Config` | T1 test filters `server_%` kinds; T5 defines constants | order → R2 |
+| 2 / 9 | `sshtest` `sh -s` interpreter "limited to Task 9 grammar" | T2 runs before T9 defines grammar | conflict → R3 |
+| 2 / 7 / 1 | package graph `target` ↔ `sshx` ↔ `collect` | T7 puts `Check` in `target` using `sshx`,`collect`, which import `target` | import cycle → R4 |
+| 7 / 8 / 10 / 11 | `target.AlertInput` | defined T7, consumed T8/T10/T11 | renamed by R4 |
+| 1 / 13 | `server_fix_level` drop vs web FixSettings/api.js | T1 drops column + API field, web still may send it until T13 | breakage window → R5 |
+| 9 / 10 / 13 | `serverfix.Bundle`, sshtest shell | T9 produces, T10 executes on sshtest, T13 demo | consistent after R3 |
+| 10 / 11 | `internal/fix/*` | sequential edits, T11 extends T10 types | ok |
+| 6 / 7 | `vulnmatch.Match/Findings`, `ErrSourceDisabled` | T6 produces, T7 consumes | ok |
+| 5 / 7 | `serverrules.Rules/Evaluate` | ok | ok |
+| 12 / 2,4,9,10,11 | typed errors → i18n | ok | ok |
+
+Per task self-consistency: T1 ok after R1/R2; T2 ok after R3; T3 ok; T4 ok (tests use sshtest command handlers only); T5 ok; T6 ok (fixture zip fabricated); T7 ok after R4; T8 ok; T9 ok after R3 (adds sshtest shell); T10 ok; T11 ok; T12 ok; T13 ok (demo cmd uses T9 shell); T14 ok.
+
+Ruling R1: Task 1 defines every inventory type listed in Task 4's Interfaces (OSInfo, PHPRuntime, WebServer, Package, Directive, FileSeen, Unseen) — the struct must exist to store it — costs: Task 4 may need field tweaks.
+Ruling R2: Task 1 adds `scan.KindServerPackage="server_package"`, `scan.KindServerConfig="server_config"` in scan/normalize.go; Task 5 adds only `Mitigation`, `SAPI` fields — costs: none.
+Ruling R3: Task 2's sshtest offers `Options.Commands` handlers and an empty shell hook; Task 9 adds `internal/sshx/sshtest/shell.go`, a mini POSIX interpreter for exactly the grammar it renders — costs: Task 9 grows one file.
+Ruling R4: check/schedule/rematch/alerts move to new package `internal/servercheck` (`servercheck.CheckDeps`, `Check`, `CheckResult`, `Rematch`, `Scheduler`, `AlertInput`, `Urgent`); `internal/target` stays a leaf (types, repo, discovery) imported by sshx/collect — avoids import cycle — costs: names differ from plan text.
+Ruling R5: Task 1 also removes `server_fix_level` from web (api.js payloads, FixSettings grayed row stays as text only, no field sent) so the UI never sends a now-rejected field — costs: small web diff in Task 1.
+Ruling R6: boundary_test.go "dirs walked" list gets each new package in the task that creates it (sshx T2, collect T4, serverfix T9), not in Task 1 (dirs absent then) — costs: none.
+
+## Progress
+Task 1: dispatched (BASE b1bd375, implementer a36f57809ba8bfb44, sonnet)
+Task 1: complete (commits b1bd375..8b2997c, review clean; ⚠️ web grep verified by controller: no server_fix_level in web/src)
+Task 1: minor (deferred): target.Repo.Add stores FixLevel 0 / CheckInterval 0 when unset (spec default 1 / 24h) — Task 12 API/CLI add must apply defaults (carried to T12 dispatch)
+Task 1: minor (deferred): PreprodID not validated (exists, not self)
+Task 1: minor (deferred): target Remove leaves orphan findings; target_project rows not cleaned on project purge; FindByIDPrefix cross-kind
+Task 1: minor (deferred): no test that project view/digest counts ignore server findings
