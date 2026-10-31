@@ -53,6 +53,9 @@ Deux peurs guident tout le design (Kévin) : **un bug en prod**, et pire, **un e
 9. Vérification **une fois par jour**, mais **l'utilisateur décide**.
 10. Rappel du plan 5 (2026-10-30) : autonomie serveur au choix de l'utilisateur, séparée du code ; défaut « préparé, validé avant d'agir » ; connexion SSH depuis le poste ; déploiement du code par PhpStorm, que Michel ne court-circuite pas.
 
+11. Après relecture builder, « Go » sur mes recommandations : au plan 6, Michel **ne modifie que les réglages PHP** (`php.ini` chargé, pool PHP-FPM, `.user.ini`) ; pour nginx et apache, il signale et explique quoi changer, sans écrire.
+12. PHP2Shell (recherche faite par Claude, Kévin n'avait plus le lien) = **CVE-2026-109618 et CVE-2026-109619**, cas de réception du plan (§ 7.2).
+
 Les choix techniques ci-dessous sont les miens (Claude), marqués « mon choix », à contester au § 13.
 
 ## 4. Le serveur dans Michel : `Target`
@@ -114,9 +117,18 @@ Le PHP de la ligne de commande n'est pas toujours celui du site (FPM, autre vers
 ### 7.1 Sources
 - Paquets du système : bases OSV des distributions déjà au catalogue du plan 4 (Debian, Ubuntu, Alpine, AlmaLinux, Rocky, Red Hat…), désactivées par défaut ; **Michel propose d'activer celle du système vu** sur le serveur (même écran d'accord que le plan 4). Correspondance par paquet source et version de la distribution.
 - PHP amont (mutualisé et PHP compilé, hors paquets de distribution) : nouvelle source au catalogue (mon choix : versions et fin de support depuis php.net ; failles par CPE `php:php` depuis une base publique, NVD ou équivalent ; le builder choisit, dans les règles de consentement du plan 4).
-- Règles de configuration : **jeu de règles embarqué et versionné** dans Michel (comme le catalogue), déterministe, chacune avec : directive, valeur à risque, valeur conseillée, gravité, explication en clair FR/EN, contexte (prod seulement, SAPI…). Exemples : `display_errors=On` en prod, `expose_php=On`, `allow_url_include=On`, `open_basedir` vide en mutualisé, `session.cookie_secure=Off` avec HTTPS. Une faille combinée « version + réglage » (type PHP2Shell, qui dépend de la version **et** de la façon dont PHP est branché) est une règle qui exige les deux.
+- Règles de configuration : **jeu de règles embarqué et versionné** dans Michel (comme le catalogue), déterministe, chacune avec : directive, valeur à risque, valeur conseillée, gravité, explication en clair FR/EN, contexte (prod seulement, SAPI…). Exemples : `display_errors=On` en prod, `expose_php=On`, `allow_url_include=On`, `open_basedir` vide en mutualisé, `session.cookie_secure=Off` avec HTTPS. Une règle peut combiner « version + réglage » (faille qui n'existe qu'avec un réglage donné) ; PHP2Shell, lui, dépend de la version seule (§ 7.2).
 
-### 7.2 Résultat
+### 7.2 Cas de réception : PHP2Shell
+Sources publiques (octobre 2026) : PHP2Shell = CVE-2026-109618 (épuisement mémoire pendant l'analyse d'un POST multipart) et CVE-2026-109619 (état périmé dans un worker après une erreur fatale), CVSS v4 9.2, exécution de code à distance sans authentification, **dans le KEV de la CISA depuis le 26 octobre 2026**. Corrigé le 21 octobre 2026 dans PHP **8.5.12, 8.4.27, 8.3.36 et 8.2.35**. Les éditeurs citent des réglages provisoires (`session.upload_progress.enabled=0`, et sur 8.5 `fatal_error_backtraces=0`) ; les mainteneurs de PHP disent qu'aucun réglage ne protège complètement et que **seule la mise à jour est sûre**.
+
+Ce que le plan doit montrer, de bout en bout, sur un serveur de test :
+- **Version amont** (mutualisé, PHP compilé) : PHP 8.3.35 → finding `server_package` grave, KEV, alerte urgente (SMS si `prod`). La correction proposée est la mise à jour (paquet si distribution, sinon explication « change la version dans le panneau de ton hébergeur ») ; jamais présentée comme réglée par un réglage.
+- **Paquet de distribution** : version jugée d'après la base OSV de la distribution (les distributions corrigent sans changer le numéro amont), pas d'après `php -v` seul.
+- **Réglage provisoire** : en attendant la mise à jour, Michel peut proposer `session.upload_progress.enabled=0` (script `set_directive` + test + rechargement + vérification du site + `annuler`), étiqueté « réduit le risque, ne corrige pas » ; la faille reste ouverte jusqu'à la version corrigée. `memory_limit=-1`, cité par certains, **n'est pas proposé** (mon choix : il ouvre un autre risque, l'épuisement de la mémoire du serveur).
+- Les numéros de CVE, versions et réglages viennent des sources (OSV, KEV, règles embarquées versionnées), jamais codés en dur hors du jeu de règles ; le builder revérifie ces valeurs au moment du plan.
+
+### 7.3 Résultat
 - Nouveaux types de `Finding` (mon choix de noms) : `server_package` (paquet ou PHP vulnérable), `server_config` (réglage à risque), même cycle de statuts que les findings de code (plan 3) ; `proven_fixed` seulement quand une nouvelle collecte ne voit plus le problème (§ 8.5).
 - Fiche serveur : « touché / pas touché / pas pu tout voir », la liste des failles en voix de Michel, et la liste « non vu » (§ 5.3).
 - Croisement code ↔ serveur : une faille de code d'un projet lié affiche « déployé sur : serveur X (prod) ».
@@ -129,8 +141,8 @@ Un script n'est jamais du texte libre. C'est une **suite d'actions typées**, d'
 | action | ce qu'elle fait | annulation |
 |---|---|---|
 | `backup_file` | copie un fichier de config dans `~/.michel/backups/<correction>/` sur le serveur, et rapatrie la copie sur le poste | — |
-| `set_directive` | met une directive à une valeur dans un fichier de config autorisé (ini, conf nginx/apache, `.user.ini`, `.htaccess`) | remet le fichier sauvegardé |
-| `test_config` | `php-fpm -t`, `nginx -t`, `apachectl configtest` ; échec = arrêt avant tout rechargement | — |
+| `set_directive` | met une directive PHP à une valeur dans un fichier autorisé : `php.ini` chargé, pool PHP-FPM, `.user.ini` (décision Kévin : pas de nginx/apache ni `.htaccess` au plan 6, signalés et expliqués seulement) | remet le fichier sauvegardé |
+| `test_config` | `php-fpm -t` (et `php -n -c <fichier> -r ''` pour un ini) ; échec = arrêt avant tout rechargement | — |
 | `reload_service` | `systemctl reload <service>` (ou équivalent), jamais `restart` sauf service qui ne sait pas recharger, signalé | rechargement après remise des fichiers |
 | `package_upgrade` | met à jour **un** paquet vers **une** version exacte (`apt-get install --only-upgrade paquet=version`, équivalents dnf/apk) | réinstalle l'ancienne version si la distribution la garde, sinon « retour par snapshot » dit d'avance |
 | `check_site` | requête GET sur `site_url` depuis le poste : code HTTP et page attendue | — |
@@ -218,6 +230,7 @@ Un script n'est jamais du texte libre. C'est une **suite d'actions typées**, d'
 11. Recomparaison sans connexion quand les bases changent (§ 6.4).
 12. SMS par webhook (Free Mobile ou générique), réservé à l'urgent, plafonné (§ 10).
 13. Après relecture builder (§ 8.1 bis) : script serveur auto-protégé par `trap`, vérification du site par Michel ; `sudo -n` seulement si autorisé ; prod reconstruite et revalidée après la préprod ; mise à jour refusée si elle retire un paquet, retour par snapshot seulement ; directive modifiée là où PHP la lit, sinon ligne ajoutée ; sauvegardes serveur jamais supprimées par Michel.
+14. PHP2Shell : réglage provisoire `session.upload_progress.enabled=0` proposé comme « réduit le risque », `memory_limit=-1` jamais proposé (§ 7.2).
 
 ## 14. Laissé au builder
 
