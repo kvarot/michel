@@ -50,3 +50,23 @@ Task 2: fix round 1/5 (1 addressed, 0 open — host key algorithms from known_ho
 Task 2: minor (deferred): known_hosts listing only types the server lacks → generic "no common algorithm" instead of typed ErrHostKeyChanged (still refused pre-auth)
 Task 2: minor (deferred): @cert-authority entries ignored when deriving algorithms
 Task 2: complete (commits cc531d5..2b50f6d, review clean)
+Task 3: dispatched (BASE e4f1aa0, implementer a48ebb893bfa50113, sonnet)
+Task 3: complete (commits e4f1aa0..b50ec2e, review clean)
+Task 3: minor (deferred, LIKELY MUST-FIX before merge — real PhpStorm recall): webServers.xml servers using a saved SSH configuration carry only sshConfigId/sshConfig="user@host:22", skipped today
+Task 3: minor (deferred): ~/.ssh/config scanner error fails all Discover while broken .idea skipped silently; include errors swallowed
+Task 3: minor (deferred): HostName/User/Port last-wins (OpenSSH first-wins); Host * defaults not applied
+Task 3: minor (deferred): Known matching case-sensitive & exact on user; HOME with [ breaks Include glob; ~\ not handled; unparsable deployment.xml silently drops RemoteDir; include-depth test weak
+Task 4: dispatched (BASE b50ec2e, implementer a13329831690433be, opus)
+Task 4: automated security review (2 MEDIUM, collect/parse.go): (a) secretPrefixesOK skips name check for session./opcache./… — session.save_path "tcp://h:6379?auth=pw" leaks; word list lacks auth/credential/pw/license; (b) php -i 3-part lines parsed outside directive sections (Environment / PHP Variables). Both accepted as real → join Task 4 fix round with reviewer findings.
+Task 4: review — Needs fixes (3 Important: user paths not limited to config / /home of others; missing-vs-unreadable relies on English locale; FPM directives not tied to a runtime) + 2 security MEDIUM → fix round 1
+Task 4: minor (deferred): truncation checked only for packages (php -i / php -r truncation silent); symlinked .ini followed on health; ErrRefusedPath/ErrHealthPath capitalized English bypassing i18n; test ignores rows.Scan errors; directive name length unbounded; Alpine has no package owner lookup (inventory implies "compiled")
+Task 4: ⚠️ php-fpm -tt as non-root may touch log/pid; -tt stderr carries env[] values — verify nothing logs sshx stderr (final review)
+Task 4: fix round 1/5 (4 addressed, 1 open — maskParams misses phpredis auth[]= form; commits 74745ea..a4f7dbd)
+Task 4: minor (deferred): homeRefusal — linked RemoteDir "/home" or "/root" would open every home; not_read shown for optional .user.ini probes if LC_ALL ignored; refused text redundant tail; id_* over-refusal; .cnf readable (hashed only)
+Task 4: automated security review of a4f7dbd (2 MEDIUM: secretSegment only *key suffix; symlinked config bypasses name-only path check) accepted → added to fix round 2
+Task 4: fix round 2/5 (3 addressed, 1 new open — readlink -f gated by binaryRe aborts whole collection on config path with space; commits a4f7dbd..7af4096)
+Task 4: minor (deferred): readlink failure on missing parent → not_read instead of missing; secretParam doesn't match authtoken=/api_key= params; unseen() raw p vs cleanPath
+Task 4: fix round 3/5 (regression addressed — readlink gated like head, shape refusal is per-file Unseen; commits 7af4096..f2c10ef)
+Ruling: Task 4 parent-folder "missing" vs "not_read" (GNU readlink -f silent) stays deferred Minor — it was a Minor (round-1 re-review) the controller folded into round 3; display-only, no security impact — costs: on GNU servers an absent folder shows "Michel n'a pas pu lire ce fichier" instead of "absent"; also the test mock prints "No such file" unlike GNU readlink (fix mock in final wave).
+Task 4: minor (deferred): runFile refusal uses raw p (unreachable); runFile/run doc comments misplaced in collect.go; collect.go ~520 lines
+Task 4: complete (commits b50ec2e..f2c10ef, review clean after 3 rounds; 1 minor ruled deferred)
