@@ -64,6 +64,14 @@ type Copy struct {
 	// Exclude repeats the project's excluded folder names, so that a new
 	// file under one of them never becomes part of the change.
 	Exclude []string
+	// InstallDirs are the folders Michel's own installs fill in the copy
+	// (vendor next to a composer.json or composer.lock, node_modules next
+	// to a package.json or package-lock.json) under which Base tracks no
+	// file (slash paths, sorted). Michel's output, never the agent's (it
+	// cannot write there) nor the user's: removed from the copy after
+	// Michel's update and left out of every add, tree and archive, so that
+	// it never becomes part of a change.
+	InstallDirs []string `json:",omitempty"`
 	// SecretHits are the secrets the detectors found in the files of the
 	// copy (file, line and kind, never the value).
 	SecretHits []mask.Hit
@@ -130,8 +138,9 @@ func IsGitRepo(path string) bool {
 
 // excludePathspecs keep the excluded files out of git add in the copy: a
 // file the agent creates there (a new .env, a key) never becomes part of
-// the change.
-func excludePathspecs(exclude []string) []string {
+// the change. installDirs (Copy.InstallDirs) are left out too: what
+// Michel's install writes there is never part of a change.
+func excludePathspecs(exclude, installDirs []string) []string {
 	out := []string{"."}
 	for _, p := range excludedFiles {
 		out = append(out, ":(exclude,glob,icase)**/"+p)
@@ -139,7 +148,79 @@ func excludePathspecs(exclude []string) []string {
 	for _, n := range exclude {
 		out = append(out, ":(exclude,glob,icase)**/"+n+"/**")
 	}
+	for _, d := range installDirs {
+		out = append(out, ":(exclude,glob,icase)"+d+"/**")
+	}
 	return out
+}
+
+// pathspecs are the pathspecs of every add, tree and archive of c.
+func (c Copy) pathspecs() []string { return excludePathspecs(c.Exclude, c.InstallDirs) }
+
+// installOutputs maps a manifest or lockfile name to the folder its
+// install fills next to it.
+var installOutputs = map[string]string{
+	"composer.json": "vendor", "composer.lock": "vendor",
+	"package.json": "node_modules", "package-lock.json": "node_modules",
+}
+
+// installDirs lists, from the files tracked by Base (slash paths), the
+// install output folders next to a manifest or lockfile under which Base
+// tracks no file (Copy.InstallDirs), sorted. A folder whose name could
+// not be a plain pathspec is left out (its files then stay visible).
+func installDirs(tracked []string) []string {
+	cand := map[string]bool{}
+	for _, name := range tracked {
+		out, ok := installOutputs[strings.ToLower(path.Base(name))]
+		if !ok {
+			continue
+		}
+		if dir := path.Dir(name); dir != "." {
+			out = dir + "/" + out
+		}
+		cand[out] = true
+	}
+	dirs := []string{}
+	for f := range cand {
+		plain := true
+		for _, seg := range strings.Split(f, "/") {
+			if !safeSegment(seg) || strings.ContainsAny(seg, "[]*?!") {
+				plain = false
+			}
+		}
+		if !plain {
+			continue
+		}
+		prefix := strings.ToLower(f) + "/"
+		if slices.ContainsFunc(tracked, func(n string) bool { return strings.HasPrefix(strings.ToLower(n), prefix) }) {
+			continue // the user's own files: they stay part of the copy
+		}
+		dirs = append(dirs, f)
+	}
+	slices.Sort(dirs)
+	return dirs
+}
+
+// removeInstallOutput deletes the folders dirs (Copy.InstallDirs) from the
+// copy through its root: a link (or junction) is removed itself, never
+// followed.
+func removeInstallOutput(root *os.Root, dirs []string) error {
+	var errs []error
+	for _, d := range dirs {
+		info, err := root.Lstat(d)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			err = root.Remove(d)
+		} else {
+			err = root.RemoveAll(d)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("Michel cannot remove %s from the copy: %w", d, noPath(err)))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // isExcluded reports whether the slash path of a file, rel, is left out of
@@ -176,16 +257,18 @@ func inExcludedFolder(segs, exclude []string) bool {
 // checkTreeSize refuses a Base tree over the limits of a copy, before
 // anything is archived: git ls-tree -r -l of the mirror. It returns the
 // excluded files of the tree (slash paths, sorted), which the archive will
-// not hold, and the number of files the copy will hold.
-func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, exclude []string) (excluded []string, files int, err error) {
+// not hold, the number of files the copy will hold, and the install output
+// folders Base tracks nothing under (installDirs).
+func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, exclude []string) (excluded []string, files int, outputs []string, err error) {
 	out, stderr, err := h.git(ctx, d, mirror, mirror, nil, nil, "ls-tree", "-r", "-l", "-z", "--full-tree", base)
 	if err != nil {
-		return nil, 0, gitErr("ls-tree", err, stderr)
+		return nil, 0, nil, gitErr("ls-tree", err, stderr)
 	}
 	if len(out) >= maxGitOutput || len(out) > listingCap() {
-		return nil, 0, ErrCopyTooLarge
+		return nil, 0, nil, ErrCopyTooLarge
 	}
 	var total int64
+	var tracked []string
 	excluded = []string{}
 	for _, e := range strings.Split(string(out), "\x00") {
 		meta, name, ok := strings.Cut(e, "\t")
@@ -196,22 +279,23 @@ func (h home) checkTreeSize(ctx context.Context, d Deps, mirror, base string, ex
 		if len(f) != 4 || f[1] != "blob" {
 			continue
 		}
+		tracked = append(tracked, name)
 		if isExcluded(name, exclude) {
 			excluded = append(excluded, name)
 			continue
 		}
 		size, err := strconv.ParseInt(f[3], 10, 64)
 		if err != nil {
-			return nil, 0, errors.New("git ls-tree returned an unexpected listing")
+			return nil, 0, nil, errors.New("git ls-tree returned an unexpected listing")
 		}
 		files++
 		total += size
 		if size > maxCopyFile || total > maxCopyTotal || files > maxCopyFiles {
-			return nil, 0, ErrCopyTooLarge
+			return nil, 0, nil, ErrCopyTooLarge
 		}
 	}
 	slices.Sort(excluded)
-	return excluded, files, nil
+	return excluded, files, installDirs(tracked), nil
 }
 
 // validFolderName reports whether n is a plain folder name (project.Exclude
@@ -290,17 +374,18 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	if err := writeAttributes(c.Mirror); err != nil {
 		return fail(err)
 	}
-	excluded, files, err := h.checkTreeSize(ctx, d, c.Mirror, base, exclude)
+	excluded, files, outputs, err := h.checkTreeSize(ctx, d, c.Mirror, base, exclude)
 	if err != nil {
 		return fail(err)
 	}
+	c.InstallDirs = outputs
 	// The archive holds only the counted files: the excluded ones are left
 	// out by pathspec (extract leaves them out again, should one slip
 	// through). With no file to copy (an empty tree, or only excluded
 	// files) git archive would fail on the pathspec: the copy starts empty.
 	if files > 0 {
 		if _, stderr, err := h.git(ctx, d, tmp, c.Mirror, nil, nil, "archive",
-			append([]string{"--format=tar", "-o", archive, base, "--"}, excludePathspecs(exclude)...)...); err != nil {
+			append([]string{"--format=tar", "-o", archive, base, "--"}, c.pathspecs()...)...); err != nil {
 			return fail(gitErr("archive", err, stderr))
 		}
 	}
@@ -319,7 +404,7 @@ func Prepare(ctx context.Context, d Deps, p project.Project, attemptID string) (
 	excluded = append(excluded, slipped...)
 	slices.Sort(excluded)
 	c.Excluded = slices.Compact(excluded)
-	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(exclude)...)...); err != nil {
+	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, c.pathspecs()...)...); err != nil {
 		return fail(gitErr("add", err, stderr))
 	}
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, michelIdent(d),

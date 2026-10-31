@@ -93,7 +93,14 @@ func Update(ctx context.Context, d Deps, c Copy, ecosystem, manifestRel string, 
 	if argv[0] == "npm" {
 		args = append(args, "--userconfig", p.h.npmrc())
 	}
-	return p.run(ctx, d, argv[0], args)
+	err = p.run(ctx, d, argv[0], args)
+	// What the update installed (vendor, node_modules) is Michel's output,
+	// not part of the change: it goes, whether the command succeeded or
+	// failed. Michel installs again in the scratch worktree at Propose. A
+	// folder that cannot be removed stays out of the change anyway (the
+	// pathspecs of c leave it out).
+	_ = removeInstallOutput(p.root, c.InstallDirs)
+	return err
 }
 
 // TreeHash is the tree id of the copy's content as a change would commit
@@ -114,7 +121,7 @@ func TreeHash(ctx context.Context, d Deps, c Copy) (string, error) {
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "read-tree", c.Root); err != nil {
 		return "", gitErr("read-tree", err, stderr)
 	}
-	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(c.Exclude)...)...); err != nil {
+	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, c.pathspecs()...)...); err != nil {
 		return "", gitErr("add", err, stderr)
 	}
 	out, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "write-tree")

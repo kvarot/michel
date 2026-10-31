@@ -112,7 +112,7 @@ func Materialize(ctx context.Context, d Deps, c Copy, tree string) (run Copy, cl
 	// Any failure (an unknown or corrupt object included) fails closed:
 	// never an empty scratch folder taken for the snapshot.
 	if _, stderr, err := h.git(ctx, d, tmpPath(d, attemptID), c.Dir, nil, nil, "archive",
-		append([]string{"--format=tar", "-o", archive, tree, "--"}, excludePathspecs(c.Exclude)...)...); err != nil {
+		append([]string{"--format=tar", "-o", archive, tree, "--"}, c.pathspecs()...)...); err != nil {
 		return fail(gitErr("archive", err, stderr))
 	}
 	if _, _, err := extract(archive, dir, c.Exclude); err != nil {

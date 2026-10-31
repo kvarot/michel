@@ -232,7 +232,7 @@ func (h home) stage(ctx context.Context, d Deps, c Copy) error {
 	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "read-tree", c.Root); err != nil {
 		return gitErr("read-tree", err, stderr)
 	}
-	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, excludePathspecs(c.Exclude)...)...); err != nil {
+	if _, stderr, err := h.git(ctx, d, c.Dir, c.Dir, nil, nil, "add", append([]string{"-A", "--"}, c.pathspecs()...)...); err != nil {
 		return gitErr("add", err, stderr)
 	}
 	return nil
