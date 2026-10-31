@@ -25,7 +25,7 @@ import (
 // mkdir [-p] [-m MODE], cat, cp, cmp -s, sed 'Ns|re|text|' (one
 // substitution on one line, basic regular expressions without groups),
 // stat [-L] -c (%u %a %A; a link is followed only with -L), export NAME,
-// unset NAME, id -u, env VAR=x... CMD, and
+// unset NAME, readlink -f, id -u, env VAR=x... CMD, and
 // sudo -n (allowed when Options.Sudo). Any other command runs the server's
 // Options.Commands handler, with the script's own text as stdin unless
 // redirected from /dev/null. Nothing is ever deleted: the shell has no rm.
@@ -141,7 +141,7 @@ func (x *interp) fail(format string, a ...any) {
 
 var (
 	funcDef = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\(\) \{$`)
-	caseRe  = regexp.MustCompile(`^case "(.*)" in ([A-Za-z0-9?*-]+)\) ;; \*\) (.*);; esac$`)
+	caseRe  = regexp.MustCompile(`^case "(.*)" in ([A-Za-z0-9/._?*-]+)\) ;; \*\) (.*);; esac$`)
 )
 
 func (x *interp) runLines(lines []string) {
@@ -596,7 +596,7 @@ func (x *interp) expandDouble(s string) string {
 	return b.String()
 }
 
-// capture runs `id` or `stat` (the only command substitutions the grammar
+// capture runs `id`, `stat` or `readlink` (the only command substitutions the grammar
 // uses) and returns its output without the
 // trailing new lines; its failure does not stop the script.
 func (x *interp) capture(cmd string) string {
@@ -605,7 +605,7 @@ func (x *interp) capture(cmd string) string {
 		x.fail("unsupported command substitution %q", cmd)
 	}
 	c, ok := list[0][0].(simple)
-	if !ok || len(c.redirs) > 0 || (c.words[0].bare() != "id" && c.words[0].bare() != "stat") {
+	if !ok || len(c.redirs) > 0 || (c.words[0].bare() != "id" && c.words[0].bare() != "stat" && c.words[0].bare() != "readlink") {
 		x.fail("unsupported command substitution %q", cmd)
 	}
 	var buf bytes.Buffer
@@ -794,6 +794,12 @@ func (x *interp) command(argv []string, out, errw io.Writer) int {
 		return x.mkdir(argv[1:], root, errw)
 	case "stat":
 		return x.stat(argv[1:], out, errw)
+	case "readlink":
+		if len(argv) != 3 || argv[1] != "-f" {
+			x.fail("only readlink -f PATH is supported")
+		}
+		fmt.Fprintln(out, x.resolve(argv[2]))
+		return 0
 	case "env":
 		i := 1
 		for i < len(argv) && assignRe.MatchString(argv[i]) {

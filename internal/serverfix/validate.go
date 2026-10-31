@@ -56,7 +56,11 @@ var rootTreeParts = []string{
 }
 
 const (
-	treeChars = `[A-Za-z0-9._/@+-]*`
+	// treeSeg is one path segment, never "." or "..".
+	treeSeg = `(?:[A-Za-z0-9_@+-][A-Za-z0-9._@+-]*|\.[A-Za-z0-9_@+-][A-Za-z0-9._@+-]*|\.\.[A-Za-z0-9._@+-]+)`
+	// treeChars is the rest of a path under a tree: folders, then the start
+	// of the file name (treeExt ends it).
+	treeChars = `(?:` + treeSeg + `/)*[A-Za-z0-9._@+-]*`
 	treeExt   = `\.(?:ini|conf)`
 )
 
@@ -112,13 +116,21 @@ func allowedFile(t target.Target, inv target.Inventory, p string) error {
 	if err := pathRefusal(t, p); err != nil {
 		return err
 	}
-	// Each file by its role: an ini file ends in .ini, a pool in .conf.
+	// Each file by its role: an ini file ends in .ini, a pool in .conf,
+	// and no runtime may list as an ini file what another lists as a pool
+	// (a forged inventory would have root parse a pool as a php.ini).
 	ok := contains(userInis(inv), p)
 	ini, conf := strings.HasSuffix(p, ".ini"), strings.HasSuffix(p, ".conf")
+	asIni, asPool := false, false
 	for _, rt := range inv.PHP {
-		if ini && (p == rt.LoadedIni || contains(rt.ScannedFiles, p)) || conf && contains(rt.PoolFiles, p) {
-			ok = true
-		}
+		asIni = asIni || p == rt.LoadedIni || contains(rt.ScannedFiles, p)
+		asPool = asPool || contains(rt.PoolFiles, p)
+	}
+	if asIni && asPool {
+		return fmt.Errorf("%w: %q is listed both as an ini file and as a pool", ErrPathNotAllowed, p)
+	}
+	if ini && asIni || conf && asPool {
+		ok = true
 	}
 	if !ok || !readByCollect(inv, p) {
 		return fmt.Errorf("%w: %q was not read as PHP configuration", ErrPathNotAllowed, p)
@@ -405,6 +417,16 @@ func Validate(p Plan, t target.Target, inv target.Inventory) (Plan, error) {
 			}
 			if err := allowedFile(t, inv, loc.path); err != nil {
 				return Plan{}, err
+			}
+			if loc.rt != nil {
+				// The file has the role the write needs, in this runtime.
+				pool := poolKeyRe.MatchString(loc.key)
+				switch {
+				case pool && !(loc.rt.SAPI == SAPIFPM && contains(loc.rt.PoolFiles, loc.path) && strings.HasSuffix(loc.path, ".conf")):
+					return Plan{}, fmt.Errorf("%w: %q is not a pool of this PHP-FPM", ErrPathNotAllowed, loc.path)
+				case !pool && !((loc.path == loc.rt.LoadedIni || contains(loc.rt.ScannedFiles, loc.path)) && strings.HasSuffix(loc.path, ".ini")):
+					return Plan{}, fmt.Errorf("%w: %q is not an ini file of this PHP", ErrPathNotAllowed, loc.path)
+				}
 			}
 			if debianConfD.MatchString(loc.path) {
 				return Plan{}, fmt.Errorf("%w: %s", ErrLinkedFile, loc.path)

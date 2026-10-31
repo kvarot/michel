@@ -65,12 +65,24 @@ func branchOf(v string) string {
 }
 
 // isOn reads a PHP boolean: on/true/yes, or any integer other than 0.
-func isOn(v string) bool {
-	// An inline comment is not part of the value (collect keeps it).
+// iniValue is a raw ini value as PHP reads it: a quoted value is what is
+// between its quotes, anything after them ignored; otherwise an inline `;`
+// comment is cut (collect keeps it) and spaces are trimmed.
+func iniValue(v string) string {
+	v = strings.TrimSpace(v)
+	if v != "" && (v[0] == '"' || v[0] == '\'') {
+		if j := strings.IndexByte(v[1:], v[0]); j >= 0 {
+			return v[1 : 1+j]
+		}
+	}
 	if i := strings.IndexByte(v, ';'); i >= 0 {
 		v = v[:i]
 	}
-	v = strings.ToLower(strings.TrimSpace(v))
+	return strings.TrimSpace(v)
+}
+
+func isOn(v string) bool {
+	v = strings.ToLower(strings.TrimSpace(iniValue(v)))
 	switch v {
 	case "on", "true", "yes":
 		return true
@@ -239,7 +251,17 @@ func riskyValue(r ConfigRule, value string) bool {
 	case "off":
 		return !isOn(value)
 	default:
-		return strings.TrimSpace(value) == ""
+		// Empty, or a path list holding "/" (which restricts nothing).
+		v := iniValue(value)
+		if v == "" {
+			return true
+		}
+		for _, part := range strings.Split(v, ":") {
+			if strings.TrimSpace(part) == "/" {
+				return true
+			}
+		}
+		return false
 	}
 }
 

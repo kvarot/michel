@@ -57,7 +57,7 @@ const (
 // as Validate: a written file is in PHP's own trees (rootTreeParts) or is a
 // .user.ini, a key is a directive of the embedded rules.
 const (
-	gUserIni  = `/[A-Za-z0-9._/@+-]*/\.user\.ini`
+	gUserIni  = `/(?:` + treeSeg + `/)+\.user\.ini`
 	gDir      = `'/[A-Za-z0-9._/@+-]+'`
 	gFPM      = `'/usr/(?:local/)?s?bin/php-fpm[0-9.]*'`
 	gCLI      = `'/usr/(?:local/)?s?bin/php[0-9.]*'`
@@ -120,6 +120,7 @@ var Grammar = []string{
 	gStat + gDir + gSafeDir,
 	gStat + gPath + gSafeFile,
 	`case "\$\(stat -L -c '%u %A' (?:` + gFPM + `|` + gCLI + `)` + gSafeFile,
+	`case "\$\(readlink -f (?:` + gFPM + `|` + gCLI + `)\)" in /usr/(?:local/)?s?bin/php\*\) ;; \*\) echo "` + msgUnsafeFile + `" >&2; exit 7;; esac`,
 	gStat + `"\$B"\)" in 0\?d\?\?\?------\) ;; \*\) echo "` + msgUnsafeBak + `" >&2; exit 7;; esac`,
 	gStat + gBak + `\)" in 0\?-\?\?\?------\) ;; \*\) echo "` + msgUnsafeBak + `" >&2; exit 7;; esac`,
 	`\[ ! -L ` + gPath + ` \] \|\| \{ echo "` + msgLink + `" >&2; exit 6; \}`,
@@ -336,14 +337,13 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 		s.l("# michel correction ", correctionID, ": ", what)
 		s.l("set -eu")
 		s.l("umask 077")
-		if !userMode {
-			// Root trusts nothing it inherits: commands from the system
-			// folders, no PHP ini override (a kept PHP_INI_SCAN_DIR would
-			// make root load an extension).
-			s.l("PATH=/usr/sbin:/usr/bin:/sbin:/bin")
-			s.l("export PATH")
-			s.l("unset PHPRC PHP_INI_SCAN_DIR")
-		}
+		// The script trusts nothing it inherits: commands from the system
+		// folders (the root and not-root guards included), no PHP ini
+		// override (a kept PHP_INI_SCAN_DIR would make root load an
+		// extension).
+		s.l("PATH=/usr/sbin:/usr/bin:/sbin:/bin")
+		s.l("export PATH")
+		s.l("unset PHPRC PHP_INI_SCAN_DIR")
 	}
 	start := func(s *script) {
 		s.l("main() {")
@@ -398,6 +398,9 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 					safeDir(s, d)
 				}
 			}
+			// The real file sits in the same checked folder (Debian's
+			// alternatives end there), never in a folder nobody checked.
+			s.l(`case "$(readlink -f `, q(a.Binary), `)" in `, path.Dir(a.Binary), `/php*) ;; *) echo "`+msgUnsafeFile+`" >&2; exit 7;; esac`)
 			s.l(`case "$(stat -L -c '%u %A' `, q(a.Binary), `)" in 0?-????-??-?) ;; *) echo "`+msgUnsafeFile+`" >&2; exit 7;; esac`)
 		}
 	}
