@@ -233,8 +233,8 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 	ins, err := tx.PrepareContext(ctx, `INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id,
 		aliases, severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status,
 		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary, status_changed_at, kind, malicious,
-		kev, kev_added, epss, epss_percentile, cvss_enriched, source_key, rule_id, location, fingerprint)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		kev, kev_added, epss, epss_percentile, cvss_enriched, source_key, rule_id, location, fingerprint, mitigation, sapi)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
 	}
@@ -275,7 +275,7 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 			if _, err := ins.ExecContext(ctx, f.ID, projectID, f.ManifestRelPath, f.Ecosystem, f.Package, f.OSVID,
 				jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion, jsonList(f.FixedVersions), jsonList(f.DepGroups),
 				StatusNew, scanID, scanID, ts, ts, f.Summary, ts, kindOf(f), boolInt(f.Malicious),
-				boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, sourceKey, f.RuleID, f.Location, f.Fingerprint); err != nil {
+				boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, sourceKey, f.RuleID, f.Location, f.Fingerprint, boolInt(f.Mitigation), f.SAPI); err != nil {
 				return 0, 0, 0, 0, nil, fmt.Errorf("cannot save finding %s: %w", label(f), err)
 			}
 			newN++
@@ -339,21 +339,21 @@ func NewRepo(s *store.Store) *Repo { return &Repo{s: s} }
 // findingColumns are the columns scanFinding reads, in order.
 const findingColumns = `id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases, severity_label, cvss_score,
 	installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary, kind, malicious,
-	kev, kev_added, epss, epss_percentile, cvss_enriched, source_key, rule_id, location, fingerprint`
+	kev, kev_added, epss, epss_percentile, cvss_enriched, source_key, rule_id, location, fingerprint, mitigation, sapi`
 
 // scanFinding reads one row of findingColumns.
 func scanFinding(rows *sql.Rows) (Finding, error) {
 	var f Finding
 	var cvss sql.NullFloat64
 	var aliases, fixed, groups string
-	var malicious, kev int
+	var malicious, kev, mitigation int
 	if err := rows.Scan(&f.ID, &f.ProjectID, &f.ManifestRelPath, &f.Ecosystem, &f.Package, &f.OSVID, &aliases,
 		&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary,
 		&f.Kind, &malicious, &kev, &f.KEVAdded, &f.EPSS, &f.EPSSPercentile, &f.CVSSEnriched,
-		&f.SourceKey, &f.RuleID, &f.Location, &f.Fingerprint); err != nil {
+		&f.SourceKey, &f.RuleID, &f.Location, &f.Fingerprint, &mitigation, &f.SAPI); err != nil {
 		return Finding{}, err
 	}
-	f.CVSS, f.Malicious, f.KEV = cvss.Float64, malicious != 0, kev != 0
+	f.CVSS, f.Malicious, f.KEV, f.Mitigation = cvss.Float64, malicious != 0, kev != 0, mitigation != 0
 	_ = json.Unmarshal([]byte(aliases), &f.Aliases)
 	_ = json.Unmarshal([]byte(fixed), &f.FixedVersions)
 	_ = json.Unmarshal([]byte(groups), &f.DepGroups)

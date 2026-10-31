@@ -30,6 +30,11 @@ type Finding struct {
 	Summary          string   `json:"summary"`
 	// Kind is the sort of finding: KindDependency for a vulnerable package.
 	Kind string `json:"kind"`
+	// Mitigation marks a server finding that only holds a flaw back (a
+	// setting that blocks its path): it never closes the upstream finding.
+	// SAPI is the PHP SAPI ("cli", "fpm") a server finding is about.
+	Mitigation bool   `json:"mitigation,omitempty"`
+	SAPI       string `json:"sapi,omitempty"`
 	// Malicious marks an OSV MAL- advisory: the package itself is malware.
 	Malicious bool `json:"malicious"`
 	// KEV is true when one of the finding's CVEs is on CISA's Known
