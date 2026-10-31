@@ -77,6 +77,10 @@ func (e *env) bindServer(t *testing.T, token string) (fix.Attempt, target.Target
 	if err := fix.SetAttemptToken(e.secrets, a.ID, "good-token"); err != nil {
 		t.Fatal(err)
 	}
+	// The server's AI consent (its record, as GiveServerConsent writes it).
+	if err := fix.NewRepo(e.st).SetConsent(ctx, "server:"+tg.ID, fix.AgentHosts); err != nil {
+		t.Fatal(err)
+	}
 	e.d.Attempt, e.d.Token = a.ID, token
 	return a, tg
 }
@@ -165,7 +169,8 @@ func TestServerToolsOnlyForServerAttempts(t *testing.T) {
 	// Without a valid token nothing is proposed nor read.
 	e.d.Token = "bad-token"
 	resps, _ = session(t, e.d, call(2, "propose_server_fix", map[string]any{"summary": "x", "actions": act(nil)}),
-		call(3, "get_server_inventory", map[string]any{}))
+		call(3, "get_server_inventory", map[string]any{}),
+		call(4, "get_attempt", map[string]any{}))
 	for _, r := range resps {
 		if !result(t, r).IsError {
 			t.Errorf("bad token: %s", r.Result)

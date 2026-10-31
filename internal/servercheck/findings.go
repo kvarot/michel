@@ -28,6 +28,9 @@ const (
 	// AlertUnknownState: a fix script ran past its bound or lost its
 	// connection: Michel cannot tell what changed.
 	AlertUnknownState = "unknown_state"
+	// AlertAutoNotRun: a fix approved by the level 3 rules could not be
+	// started (server unreachable); Michel tries again after the next check.
+	AlertAutoNotRun = "auto_not_run"
 )
 
 // AlertInput is what Alert is told: the server, the findings concerned and

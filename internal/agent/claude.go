@@ -41,6 +41,10 @@ type Spec struct {
 	// MaxTurns caps Claude Code's agentic turns (--max-turns); 0 means no
 	// cap besides Timeout.
 	MaxTurns int
+	// NoFileTools starts the session with no built-in tool at all: only
+	// the tools of Michel's MCP server (a server fix's agent has no file to
+	// read).
+	NoFileTools bool
 }
 
 // DefaultTimeout is the time a fix attempt's session may run.
@@ -52,6 +56,14 @@ const DefaultTimeout = 20 * time.Minute
 // exists in it.
 const tools = "Read,Edit,Write,Glob,Grep"
 
+// toolsOf is the --tools value of s: none for a NoFileTools session.
+func toolsOf(s Spec) string {
+	if s.NoFileTools {
+		return ""
+	}
+	return tools
+}
+
 // mcpServer is the name of Michel's server in the generated MCP config.
 const mcpServer = "michel"
 
@@ -59,6 +71,9 @@ const mcpServer = "michel"
 // the tools of Michel's MCP server when there is one.
 func allowRules(s Spec) []string {
 	rules := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob", "Grep"}
+	if s.NoFileTools {
+		rules = nil
+	}
 	if len(s.MCPCommand) > 0 {
 		rules = append(rules, "mcp__"+mcpServer+"__*")
 	}
@@ -74,8 +89,13 @@ var protected = []string{"vendor/**", "node_modules/**", ".git/**", ".claude/**"
 // denyRules are refused whatever else allows them: Bash, the web tools,
 // writes to the protected paths, and reads of the user's Claude Code files
 // (login, settings) and keys.
-func denyRules() []string {
+func denyRules(s Spec) []string {
 	rules := []string{"Bash", "WebFetch", "WebSearch"}
+	if s.NoFileTools {
+		// No built-in tool is loaded (--tools ""); the file tools are
+		// refused as well, whatever a setting says.
+		rules = append(rules, "Read", "Edit", "Write", "Glob", "Grep")
+	}
 	for _, tool := range []string{"Edit", "Write"} {
 		for _, p := range protected {
 			rules = append(rules, tool+"(./"+p+")", tool+"(./**/"+p+")")
@@ -94,7 +114,7 @@ func generated(s Spec) (settings, mcp []byte, err error) {
 		"permissions": map[string]any{
 			"defaultMode":                  "dontAsk",
 			"allow":                        allowRules(s),
-			"deny":                         denyRules(),
+			"deny":                         denyRules(s),
 			"disableBypassPermissionsMode": "disable",
 		},
 		"disableAllHooks":            true,
@@ -183,7 +203,7 @@ func argv(s Spec, mcpPath, settingsPath string) ([]string, error) {
 	a := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--mcp-config", mcpPath, "--strict-mcp-config",
 		"--settings", settingsPath, "--setting-sources", "",
-		"--restricted", "--tools", tools,
+		"--restricted", "--tools", toolsOf(s),
 		"--permission-mode", "dontAsk", "--permission-prompts", "none",
 		"--disable-slash-commands",
 		"--allowedTools"}
@@ -191,7 +211,7 @@ func argv(s Spec, mcpPath, settingsPath string) ([]string, error) {
 	// The deny rules too: --print silently ignores a settings file that
 	// fails validation, so argv carries every permission.
 	a = append(a, "--disallowedTools")
-	a = append(a, denyRules()...)
+	a = append(a, denyRules(s)...)
 	if s.ResumeID != "" {
 		if !sessionID.MatchString(s.ResumeID) {
 			return nil, errors.New("the session to resume is not a Claude Code session id")

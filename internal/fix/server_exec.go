@@ -881,7 +881,7 @@ func (r *serverRun) promote(ctx context.Context) {
 	}
 	pctx, cancel := r.fresh(d.checkTimeout())
 	defer cancel()
-	na, err := d.proposeAgain(pctx, r.a, r.sf, pt, list[0], ServerWork{TargetID: pt.ID})
+	na, err := d.proposeAgain(pctx, r.a, r.sf, pt, list[0], ServerWork{TargetID: pt.ID, PreprodAttemptID: r.a.ID})
 	result := "ok"
 	if err != nil {
 		result, ev["error"] = "error", serverErrorKey(err)
@@ -952,7 +952,7 @@ func AppliedByMe(ctx context.Context, d Deps, attemptID string) error {
 func (d Deps) simulateOnce(ctx context.Context, t target.Target, v serverfix.Plan) error {
 	c, err := sshx.Dial(ctx, d.SSH, t)
 	if err != nil {
-		return fmt.Errorf("cannot connect to server %s: %w", t.Name, err)
+		return fmt.Errorf("%w: %s: %w", errUnreachable, t.Name, err)
 	}
 	defer c.Close()
 	return simulate(ctx, c, v, t)

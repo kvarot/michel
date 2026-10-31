@@ -126,7 +126,14 @@ func WorkOnce(ctx context.Context, d Deps) (bool, error) {
 		if err != nil || !ok {
 			return false, err
 		}
-		n, err := repo.StartedToday(ctx, projectID, d.now())
+		// A server's agents may run on its preprod: they count too.
+		counted := []string{projectID}
+		if d.Targets != nil {
+			if t, err := d.Targets.Get(ctx, projectID); err == nil && t.PreprodID != "" {
+				counted = append(counted, t.PreprodID)
+			}
+		}
+		n, err := repo.StartedToday(ctx, projectID, d.now(), counted[1:]...)
 		if err != nil {
 			return false, err
 		}

@@ -251,6 +251,12 @@ type Sessions struct {
 	m         map[string]*running
 	lock      map[string]*sync.Mutex
 	proposing map[string]*sync.Mutex
+	// The level 3 runner's memory (ApplyAutoServer) and the agents' package
+	// simulations, per attempt.
+	autoErr     map[string]string
+	autoTried   map[string]time.Time
+	autoAlerted map[string]bool
+	sims        map[string]int
 }
 
 // running is one attempt's session: the agent, its proxy, its masker and
@@ -286,7 +292,8 @@ func (r *running) mask(st secret.Store, attemptID, text string) string {
 
 // NewSessions returns an empty registry.
 func NewSessions() *Sessions {
-	return &Sessions{m: map[string]*running{}, lock: map[string]*sync.Mutex{}, proposing: map[string]*sync.Mutex{}}
+	return &Sessions{m: map[string]*running{}, lock: map[string]*sync.Mutex{}, proposing: map[string]*sync.Mutex{},
+		autoErr: map[string]string{}, autoTried: map[string]time.Time{}, autoAlerted: map[string]bool{}, sims: map[string]int{}}
 }
 
 // proposeLock is the mutex held for a whole Propose of one attempt: two
@@ -825,8 +832,9 @@ func (d Deps) cleanup(ctx context.Context, a Attempt, removeCopy bool) {
 		_ = workcopy.Remove(d.work(), a.Work.Copy)
 	}
 	// A server agent's empty working folder.
-	if removeCopy && a.Work.Server != nil && d.DataDir != "" && filepath.IsAbs(d.DataDir) && idFolder.MatchString(a.ID) {
-		_ = os.RemoveAll(filepath.Join(d.DataDir, "fix-tmp", a.ID))
+	if removeCopy && a.Work.Server != nil && d.DataDir != "" && filepath.IsAbs(d.DataDir) && idFolder.MatchString(a.ID) && idFolder.MatchString(a.ProjectID) {
+		_ = os.RemoveAll(serverAgentDir(d.DataDir, a.ProjectID, a.ID))
+		_ = os.Remove(filepath.Join(d.DataDir, "worktrees", a.ProjectID))
 	}
 }
 

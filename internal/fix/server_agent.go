@@ -63,6 +63,9 @@ const (
 	maxServerSummary = 4000
 	// maxInventoryPackages bounds the packages listed to the agent.
 	maxInventoryPackages = 4000
+	// MaxAgentSimulations caps the package simulations (each one an SSH
+	// session) an agent's proposals may cause for one attempt.
+	MaxAgentSimulations = 3
 )
 
 // ErrAgentActionRefused is matched by a ServerRefusal: Michel refused an
@@ -101,6 +104,8 @@ func refusalOf(err error) *ServerRefusal {
 		{serverfix.ErrDowngrade, "downgrade"},
 		{serverfix.ErrAmbiguous, "ambiguous"},
 		{serverfix.ErrUntestableBinary, "untestable"},
+		{errUnreachable, "unreachable"},
+		{errSimulationLimit, "simulation_limit"},
 		{ErrSimulationRefused, "simulation"},
 		{serverfix.ErrSimulation, "simulation"},
 	} {
@@ -114,14 +119,34 @@ func refusalOf(err error) *ServerRefusal {
 	return &ServerRefusal{Key: "fix.server.agent_refused.malformed"}
 }
 
+var (
+	// errUnreachable: Michel could not connect to the server.
+	errUnreachable = errors.New("Michel cannot reach the server")
+	// errSimulationLimit: the attempt used its package simulations.
+	errSimulationLimit = errors.New("too many package simulations for this attempt")
+)
+
+// simulation counts one package simulation of attempt id and tells whether
+// it is within MaxAgentSimulations.
+func (s *Sessions) simulation(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sims[id] >= MaxAgentSimulations {
+		return false
+	}
+	s.sims[id]++
+	return true
+}
+
 // agentOrigin tells whether an attempt's origin is the agent's.
 func agentOrigin(origin string) bool { return origin == OriginAgent || origin == OriginAgentAuto }
 
-// serverAgentDir is the agent's working folder for a server attempt: an
-// empty folder of Michel's data folder (the agent has no file of the
-// server to read). Sweep removes it with the other temporary files.
-func serverAgentDir(dataDir, attemptID string) string {
-	return filepath.Join(dataDir, "fix-tmp", attemptID, "server")
+// serverAgentDir is the agent's working folder for a server attempt,
+// <data>/worktrees/<server>/<attempt>, where the agent driver accepts a
+// session: an empty folder (the agent has no file tool and no file of the
+// server). Sweep removes what a stopped process left.
+func serverAgentDir(dataDir, targetID, attemptID string) string {
+	return filepath.Join(dataDir, "worktrees", targetID, attemptID)
 }
 
 // StartServerAgent starts Claude Code to help with a fix of a server
@@ -222,7 +247,7 @@ func (d Deps) startServerAgent(ctx context.Context, findingID, origin string) (A
 		d.cleanup(ctx, got, true)
 		return got, cause
 	}
-	dir := serverAgentDir(d.DataDir, a.ID)
+	dir := serverAgentDir(d.DataDir, on.ID, a.ID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fail("fix.cause.prepare_failed", noPath(err))
 	}
@@ -249,6 +274,8 @@ func (d Deps) startServerAgent(ctx context.Context, findingID, origin string) (A
 		Dir: dir, Prompt: ServerPrompt(view, lang), MCPCommand: d.MCPCommand,
 		MCPEnv:  map[string]string{EnvAttempt: a.ID, EnvToken: token},
 		Timeout: d.Timeout, MaxTurns: d.maxTurns(),
+		// Everything the agent needs comes from Michel's MCP tools.
+		NoFileTools: true,
 	}
 	sess, err := d.startAgent(context.WithoutCancel(ctx), ad, spec)
 	if err != nil {
@@ -313,6 +340,13 @@ func ProposeServer(ctx context.Context, d Deps, attemptID string, in ServerPropo
 		_ = d.record(ctx, "server_fix.propose", a.ID, "refused", map[string]any{"attempt_id": a.ID, "target_id": t.ID, "reason": "health"})
 		return Proposal{}, ErrHealthForbidden
 	}
+	// The consent may have been withdrawn since the session started.
+	if ok, err := d.serverConsentOK(ctx, t); err != nil {
+		return Proposal{}, err
+	} else if !ok {
+		_ = d.record(ctx, "server_fix.propose", a.ID, "refused", map[string]any{"attempt_id": a.ID, "target_id": t.ID, "reason": "consent"})
+		return Proposal{}, ErrConsentRequired
+	}
 	f, err := d.exactFinding(ctx, a.FindingID)
 	if err != nil {
 		return Proposal{}, err
@@ -350,8 +384,10 @@ func ProposeServer(ctx context.Context, d Deps, attemptID string, in ServerPropo
 	}
 	req := make([]serverfix.Action, 0, len(in.Actions))
 	for _, x := range in.Actions {
+		// The ops of the agent's tool only: Michel adds the backups, the
+		// tests and the site check itself.
 		switch serverfix.Op(x.Op) {
-		case serverfix.OpSetDirective, serverfix.OpReload, serverfix.OpPackageUpgrade, serverfix.OpBackup, serverfix.OpTestConfig, serverfix.OpCheckSite:
+		case serverfix.OpSetDirective, serverfix.OpReload, serverfix.OpPackageUpgrade:
 		default:
 			return refuse(serverfix.ErrBadAction)
 		}
@@ -365,6 +401,11 @@ func ProposeServer(ctx context.Context, d Deps, attemptID string, in ServerPropo
 		return refuse(err)
 	}
 	if v.NeedsSnapshot {
+		// Each simulation is an SSH session the agent causes: a few per
+		// attempt at most.
+		if !d.sessions().simulation(a.ID) {
+			return refuse(errSimulationLimit)
+		}
 		if err := d.simulateOnce(ctx, t, v); err != nil {
 			return refuse(err)
 		}
@@ -689,6 +730,11 @@ func ServerInventoryOf(ctx context.Context, st *store.Store, attemptID string, h
 	}
 	if healthTarget(t) {
 		return ServerInventoryView{}, ErrHealthForbidden
+	}
+	if _, _, ok, err := NewRepo(st).Consent(ctx, serverConsentKey(t.ID)); err != nil {
+		return ServerInventoryView{}, err
+	} else if !ok {
+		return ServerInventoryView{}, ErrConsentRequired
 	}
 	inv, ok, err := repo.LatestInventory(ctx, t.ID)
 	if err != nil {

@@ -58,6 +58,10 @@ type ServerWork struct {
 	TargetID      string `json:"target_id"`
 	ProdTargetID  string `json:"prod_target_id,omitempty"`
 	ProdFindingID string `json:"prod_finding_id,omitempty"`
+	// PreprodAttemptID is, for a production fix built once a preprod fix was
+	// proven, that preprod attempt: the only proof that opens the level 3
+	// rules for this fix.
+	PreprodAttemptID string `json:"preprod_attempt_id,omitempty"`
 }
 
 // ServerFix is the validated server fix a proposal carries next to its
@@ -643,6 +647,11 @@ func SnapshotDone(ctx context.Context, d Deps, attemptID, actor string) error {
 // a package upgrade needs the snapshot acknowledged.
 func (d Deps) approveServer(ctx context.Context, a Attempt, prop Proposal, hash string) error {
 	repo := d.repo()
+	// A rule never approves an agent's fix: the user alone does.
+	if d.actor() == ActorAuto && agentOrigin(a.Origin) {
+		_ = d.record(ctx, "server_fix.approve", a.ID, "refused", map[string]any{"attempt_id": a.ID, "reason": "agent fix approved by a rule"})
+		return fmt.Errorf("%w: an agent's fix is approved by the user only", ErrBadTransition)
+	}
 	if hash == "" || prop.Hash != hash {
 		_ = d.record(ctx, "server_fix.approve", a.ID, "refused", map[string]any{"attempt_id": a.ID, "reason": "stale proposal", "current_hash": prop.Hash})
 		return ErrStaleProposal

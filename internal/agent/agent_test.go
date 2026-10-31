@@ -396,7 +396,7 @@ func TestLaunchLoadsNoProjectOrUserSettings(t *testing.T) {
 		t.Errorf("a %s hook ran", e.Name())
 	}
 	for _, a := range r.Args {
-		if slices.Contains(denyRules(), a) {
+		if slices.Contains(denyRules(Spec{}), a) {
 			continue // a rule refusing that file, not a file to load
 		}
 		if strings.Contains(a, ".claude") || strings.Contains(a, ".mcp.json") || strings.Contains(a, "CLAUDE.md") {

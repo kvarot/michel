@@ -539,12 +539,38 @@ func (r *Repo) NextQueued(ctx context.Context, except ...string) (findingID, pro
 }
 
 // StartedToday counts the attempts Michel started alone (origin
-// agent.claude.auto) for the project on the UTC day of now.
-func (r *Repo) StartedToday(ctx context.Context, projectID string, now time.Time) (int, error) {
+// agent.claude.auto) for the project on the UTC day of now, plus those made
+// for it on the servers of also (a production server's agents run on its
+// preprod).
+func (r *Repo) StartedToday(ctx context.Context, projectID string, now time.Time, also ...string) (int, error) {
 	day := now.UTC().Truncate(24 * time.Hour)
-	var n int
-	err := r.s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM fix_attempt WHERE project_id = ? AND origin = ? AND created_at >= ? AND created_at < ?`,
-		projectID, OriginAgentAuto, ts(day), ts(day.Add(24*time.Hour))).Scan(&n)
+	q := `SELECT project_id, work_json FROM fix_attempt WHERE project_id IN (?` + strings.Repeat(",?", len(also)) + `) AND origin = ? AND created_at >= ? AND created_at < ?`
+	args := []any{projectID}
+	for _, a := range also {
+		args = append(args, a)
+	}
+	args = append(args, OriginAgentAuto, ts(day), ts(day.Add(24*time.Hour)))
+	rows, err := r.s.DB().QueryContext(ctx, q, args...)
+	if err != nil {
+		return 0, fmt.Errorf("cannot count today's fix attempts: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var pid, work string
+		if err := rows.Scan(&pid, &work); err != nil {
+			return 0, fmt.Errorf("cannot count today's fix attempts: %w", err)
+		}
+		if pid == projectID {
+			n++
+			continue
+		}
+		var w Work
+		if json.Unmarshal([]byte(work), &w) == nil && w.Server != nil && w.Server.ProdTargetID == projectID {
+			n++
+		}
+	}
+	err = rows.Err()
 	if err != nil {
 		return 0, fmt.Errorf("cannot count today's fix attempts: %w", err)
 	}

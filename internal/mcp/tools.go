@@ -520,6 +520,10 @@ func (s *server) getServerAttempt(ctx context.Context, args json.RawMessage) (an
 	if err := decode(args, &struct{}{}); err != nil {
 		return nil, err
 	}
+	// A server session has no reason to read without its token.
+	if !s.serverBound() {
+		return nil, errServerUnbound
+	}
 	repo := fix.NewRepo(s.d.Store)
 	a, err := repo.GetAttempt(ctx, s.d.Attempt)
 	if err != nil {

@@ -38,6 +38,8 @@ func serverMessage(lang i18n.Lang, in servercheck.AlertInput, pageURL string) (t
 		body = i18n.T(lang, "notify.server.undo_now", name)
 	case servercheck.AlertRestoreSnapshot:
 		body = i18n.T(lang, "notify.server.restore_snapshot", name)
+	case servercheck.AlertAutoNotRun:
+		body = i18n.T(lang, "notify.server.auto_not_run", name)
 	case servercheck.AlertUnknownState:
 		body = i18n.T(lang, "notify.server.unknown_state", name)
 	default:

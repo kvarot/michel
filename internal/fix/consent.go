@@ -166,6 +166,40 @@ func ServerConsent(ctx context.Context, d Deps, targetID string) (bool, error) {
 	return ok, err
 }
 
+// RevokeServerConsent forgets the AI consent of server targetID and
+// records ai.consent_revoked. The agents this process runs on that server
+// are stopped; any other one can no longer read the inventory nor propose
+// (both check the consent at each call), and no agent starts without a new
+// consent. The policy's allow rules stay: other consents may use them.
+func RevokeServerConsent(ctx context.Context, d Deps, targetID string) error {
+	if err := d.repo().DeleteConsent(ctx, serverConsentKey(targetID)); err != nil {
+		return err
+	}
+	stopped := 0
+	if list, err := d.repo().ListAttempts(ctx, targetID, string(StatePreparing)); err == nil {
+		for _, a := range list {
+			if a.Work.Server != nil && agentOrigin(a.Origin) {
+				if _, ok := d.sessions().get(a.ID); ok {
+					d.sessions().Close(a.ID)
+					stopped++
+				}
+			}
+		}
+	}
+	return d.record(ctx, "ai.consent_revoked", targetID, "ok", map[string]any{
+		"target_id": targetID, "kind": "server", "sessions_stopped": stopped, "author": d.actor(),
+	})
+}
+
+// leavingTarget is the server whose inventory an agent would read for a
+// fix of t: its preprod when it has one (the fix is tried there first).
+func (d Deps) leavingTarget(ctx context.Context, t target.Target) (target.Target, error) {
+	if t.PreprodID == "" {
+		return t, nil
+	}
+	return d.Targets.Get(ctx, t.PreprodID)
+}
+
 // GiveServerConsent records the AI consent of one server: it refuses a
 // health server (ErrHealthForbidden) and a strict_local policy
 // (ErrStrictLocal), writes the missing allow rules of AgentHosts, turns
