@@ -715,6 +715,8 @@
   "serverrules.session_cookie_secure.title": "The session cookie can travel without encryption",
   "serverrules.session_upload_progress_off.explain": "This feature is one way the PHP2Shell flaw can be reached. Setting session.upload_progress.enabled to 0 blocks that path but does not fix PHP: you still need to update it.",
   "serverrules.session_upload_progress_off.title": "Upload progress tracking is on",
+  "serverrules.version_unknown.explain": "Michel could not read the version of this PHP, so it cannot tell whether it has the PHP2Shell flaw. Check the version by hand and update PHP if it is older than the fixed one.",
+  "serverrules.version_unknown.title": "The PHP version could not be read",
   "source.consent.discover": "Michel will ask %s which public projects are the most followed on a few topics. Only the names of these topics leave, plus your GitHub token if you gave one (GitHub then knows it is you).",
   "source.consent.enrichment": "Michel will contact %s to download a public list about vulnerabilities. Nothing from your projects leaves: it is a download.",
   "source.consent.enrichment_on_demand": "Michel will send the CVE numbers of your findings (the official code of each vulnerability) to %s. Nothing else leaves.",

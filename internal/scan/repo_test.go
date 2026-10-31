@@ -104,3 +104,17 @@ func TestServerFindingKeepsMitigationAndSAPI(t *testing.T) {
 		t.Fatalf("read back %+v", got)
 	}
 }
+
+func TestServerFindingMitigationRefreshedOnUpdate(t *testing.T) {
+	e := newEnv(t, "project-a")
+	f := Finding{ID: FindingID(e.proj.ID, "fpm:/b", "php-config", "x", "r"), ProjectID: e.proj.ID, Kind: KindServerConfig,
+		SeverityLabel: "medium", Summary: "m", Mitigation: false, SAPI: "fpm"}
+	e.applyExternal(t, "server", "run-1", []Finding{f})
+	f.Mitigation, f.SAPI = true, "cli"
+	e.applyExternal(t, "server", "run-2", []Finding{f})
+	var m int
+	var sapi string
+	if err := e.st.DB().QueryRow(`SELECT mitigation, sapi FROM finding WHERE id = ?`, f.ID).Scan(&m, &sapi); err != nil || m != 1 || sapi != "cli" {
+		t.Fatalf("mitigation %d sapi %q err %v", m, sapi, err)
+	}
+}

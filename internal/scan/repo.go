@@ -241,7 +241,7 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 	defer ins.Close()
 	upd, err := tx.PrepareContext(ctx, `UPDATE finding SET aliases=?, severity_label=?, cvss_score=?, installed_version=?,
 		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=?, malicious=?,
-		kev=?, kev_added=?, epss=?, epss_percentile=?, cvss_enriched=?, location=?,
+		kev=?, kev_added=?, epss=?, epss_percentile=?, cvss_enriched=?, location=?, mitigation=?, sapi=?,
 		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id=?`)
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
@@ -303,7 +303,7 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 		}
 		if _, err := upd.ExecContext(ctx, jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion,
 			jsonList(f.FixedVersions), jsonList(f.DepGroups), status, scanID, ts, f.Summary, boolInt(f.Malicious),
-			boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, f.Location, status, ts, f.ID); err != nil {
+			boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, f.Location, boolInt(f.Mitigation), f.SAPI, status, ts, f.ID); err != nil {
 			return 0, 0, 0, 0, nil, fmt.Errorf("cannot update finding %s: %w", label(f), err)
 		}
 		if k.status == StatusGone {

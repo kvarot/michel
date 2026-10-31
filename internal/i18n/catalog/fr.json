@@ -715,6 +715,8 @@
   "serverrules.session_cookie_secure.title": "Ton site peut envoyer le cookie de connexion sans protection",
   "serverrules.session_upload_progress_off.explain": "Quand session.upload_progress.enabled est activé, un attaquant peut s'en servir pour exploiter la faille PHP2Shell. Avec la valeur 0, cette porte d'entrée est fermée, mais la faille elle-même reste : il faut aussi mettre PHP à jour.",
   "serverrules.session_upload_progress_off.title": "Une fonction de suivi des envois de fichiers est activée, et elle peut servir à une attaque",
+  "serverrules.version_unknown.explain": "Michel n'a pas pu lire la version de ce PHP, il ne peut donc pas savoir si la faille PHP2Shell est présente. Vérifie la version à la main, et mets PHP à jour si elle est plus ancienne que la version corrigée.",
+  "serverrules.version_unknown.title": "La version de PHP n'a pas pu être lue",
   "source.consent.discover": "Michel va demander à %s quels sont les projets publics les plus populaires sur quelques sujets. Seuls les noms de ces sujets sont envoyés, ainsi que ton jeton GitHub si tu en as enregistré un (GitHub saura alors que c'est toi).",
   "source.consent.enrichment": "Michel va contacter %s pour télécharger une liste publique sur les failles. Rien de tes projets ne part : c'est un téléchargement.",
   "source.consent.enrichment_on_demand": "Michel enverra à %s les numéros CVE de tes failles (le code officiel de chaque faille). Rien d'autre ne part.",

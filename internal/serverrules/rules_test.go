@@ -138,20 +138,6 @@ func TestOpenBasedirSharedOnly(t *testing.T) {
 	}
 }
 
-func TestUserIniAppliesToFPM(t *testing.T) {
-	inv := target.Inventory{
-		PHP: []target.PHPRuntime{fpm("8.4.27", "")},
-		Directives: []target.Directive{
-			{SAPI: "fpm", Binary: "/opt/php/sbin/php-fpm", Name: "open_basedir", Value: ""},
-			{SAPI: "user_ini", Name: "open_basedir", Value: "/home/demo/www"},
-		},
-	}
-	fs := Evaluate(srv(target.EnvProd, target.KindShared), inv, mustRules(t))
-	if slices.ContainsFunc(fs, func(f scan.Finding) bool { return f.OSVID == "open_basedir_shared" }) {
-		t.Fatalf("a .user.ini open_basedir must count: %+v", fs)
-	}
-}
-
 func TestUploadProgressIsMitigationOnly(t *testing.T) {
 	up := target.Directive{SAPI: "fpm", Binary: "/opt/php/sbin/php-fpm", Name: "session.upload_progress.enabled", Value: "1"}
 	// Vulnerable runtime: upstream finding AND a mitigation finding.

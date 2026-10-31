@@ -2,6 +2,7 @@ package serverrules
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -63,12 +64,15 @@ func branchOf(v string) string {
 	return fmt.Sprintf("%d.%d", n[0], n[1])
 }
 
+// isOn reads a PHP boolean: on/true/yes, or any integer other than 0.
 func isOn(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "on", "true", "yes":
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "on", "true", "yes":
 		return true
 	}
-	return false
+	n, err := strconv.Atoi(v)
+	return err == nil && n != 0
 }
 
 // judge says whether a version is affected by an advisory: on a listed
@@ -97,14 +101,21 @@ func judge(a UpstreamAdvisory, version [3]int) (fixed string, vulnerable bool) {
 // and per rule. A runtime installed from a distribution package is not judged
 // on its upstream version (distributions fix without changing it; the
 // vulnerability matcher handles those), only on its settings, and a
-// mitigation setting is reported only for a runtime known to be vulnerable.
+// mitigation setting is reported only for a runtime known (or unable to be
+// ruled out) to be vulnerable. A compiled runtime whose version cannot be
+// read gets a visible finding instead of being skipped.
 func Evaluate(t target.Target, inv target.Inventory, s Set) []scan.Finding {
 	var out []scan.Finding
 	for _, rt := range inv.PHP {
 		key := rt.SAPI + ":" + rt.Binary
 		ver, okVer := parseVersion(rt.Version)
 		var open []UpstreamAdvisory
-		if rt.FromPackage == "" && okVer {
+		switch {
+		case rt.FromPackage != "":
+		case !okVer:
+			open = s.Upstream
+			out = append(out, unknownVersionFinding(t, rt, key, s))
+		default:
 			for _, a := range s.Upstream {
 				if fixed, bad := judge(a, ver); bad {
 					open = append(open, a)
@@ -113,8 +124,12 @@ func Evaluate(t target.Target, inv target.Inventory, s Set) []scan.Finding {
 			}
 			for _, b := range s.EOL {
 				if b.Branch == branchOf(rt.Version) {
-					out = append(out, eolFinding(t, rt, key, b))
+					out = append(out, eolFinding(t, rt, key, b.Branch))
 				}
+			}
+			if lim, ok := parseVersion(s.EOLBefore); ok && compare([3]int{ver[0], ver[1], 0}, [3]int{lim[0], lim[1], 0}) < 0 &&
+				!slices.ContainsFunc(s.EOL, func(b Branch) bool { return b.Branch == branchOf(rt.Version) }) {
+				out = append(out, eolFinding(t, rt, key, branchOf(rt.Version)))
 			}
 		}
 		for _, r := range s.Config {
@@ -124,6 +139,26 @@ func Evaluate(t target.Target, inv target.Inventory, s Set) []scan.Finding {
 		}
 	}
 	return out
+}
+
+func unknownVersionFinding(t target.Target, rt target.PHPRuntime, key string, s Set) scan.Finding {
+	var aliases []string
+	for _, a := range s.Upstream {
+		aliases = append(aliases, a.Aliases...)
+	}
+	return scan.Finding{
+		ID:              scan.FindingID(t.ID, key, ecoUpstream, "php", "PHP-VERSION-UNKNOWN"),
+		ProjectID:       t.ID,
+		ManifestRelPath: key,
+		Ecosystem:       ecoUpstream,
+		Package:         "php",
+		OSVID:           "PHP-VERSION-UNKNOWN",
+		Aliases:         aliases,
+		SeverityLabel:   "high",
+		Summary:         "PHP version could not be read; PHP2Shell cannot be ruled out",
+		Kind:            scan.KindServerPackage,
+		SAPI:            rt.SAPI,
+	}
 }
 
 func upstreamFinding(t target.Target, rt target.PHPRuntime, key string, a UpstreamAdvisory, fixed string) scan.Finding {
@@ -145,8 +180,8 @@ func upstreamFinding(t target.Target, rt target.PHPRuntime, key string, a Upstre
 	}
 }
 
-func eolFinding(t target.Target, rt target.PHPRuntime, key string, b Branch) scan.Finding {
-	id := "EOL-" + b.Branch
+func eolFinding(t target.Target, rt target.PHPRuntime, key, branch string) scan.Finding {
+	id := "EOL-" + branch
 	return scan.Finding{
 		ID:               scan.FindingID(t.ID, key, ecoUpstream, "php", id),
 		ProjectID:        t.ID,
@@ -162,27 +197,80 @@ func eolFinding(t target.Target, rt target.PHPRuntime, key string, b Branch) sca
 	}
 }
 
-// directiveValue finds the value of a directive for a runtime. Directives
-// match by binary and SAPI; a .user.ini directive applies to the FPM runtime
-// (an empty binary meaning the only FPM) and wins over the ini files. Masked
-// (secret) values are never read.
-func directiveValue(inv target.Inventory, rt target.PHPRuntime, name string) (d target.Directive, found bool) {
-	for _, x := range inv.Directives {
-		if x.Name != name || x.Secret {
-			continue
-		}
-		switch {
-		case x.SAPI == "user_ini" && rt.SAPI == "fpm" && (x.Binary == "" || x.Binary == rt.Binary):
-		case x.SAPI == rt.SAPI && x.Binary == rt.Binary:
-			if found && d.SAPI == "user_ini" {
+var poolRe = regexp.MustCompile(`^php_(admin_)?(value|flag)\[(.+)\]$`)
+
+// riskyValue says whether a value of the rule's directive is the risky one.
+func riskyValue(r ConfigRule, value string) bool {
+	switch r.Risky {
+	case "on":
+		return isOn(value)
+	case "off":
+		return !isOn(value)
+	default:
+		return strings.TrimSpace(value) == ""
+	}
+}
+
+// riskySource looks for a risky effective value of the rule's directive for
+// a runtime. Each PHP-FPM pool is judged on its own: the ini value, then the
+// pool's php_value/php_flag (not for a system directive), then its
+// php_admin_value/php_admin_flag, which is final. A .user.ini line can only
+// add risk: it never clears a finding (Michel does not know which folders
+// of the server a runtime serves, so one safe .user.ini proves nothing), it
+// is ignored for a system directive or one fixed by php_admin_*, and a line
+// without a binary counts for every FPM. Masked values are never read.
+func riskySource(inv target.Inventory, rt target.PHPRuntime, r ConfigRule) (src target.Directive, found, risky bool) {
+	scopes := rt.PoolFiles
+	if len(scopes) == 0 || rt.SAPI != "fpm" {
+		scopes = []string{""}
+	}
+	for _, scope := range scopes {
+		var cur, admin target.Directive
+		var have, haveAdmin bool
+		for _, x := range inv.Directives {
+			if x.Secret || x.SAPI != rt.SAPI || x.Binary != rt.Binary {
 				continue
 			}
-		default:
+			if x.Name == r.Directive {
+				cur, have = x, true
+				continue
+			}
+			if scope == "" || x.File != scope {
+				continue
+			}
+			m := poolRe.FindStringSubmatch(x.Name)
+			if m == nil || m[3] != r.Directive {
+				continue
+			}
+			switch {
+			case m[1] != "":
+				admin, haveAdmin = x, true
+			case r.Changeable != "system":
+				cur, have = x, true
+			}
+		}
+		if haveAdmin {
+			cur, have = admin, true
+		}
+		if have && riskyValue(r, cur.Value) {
+			return cur, true, true
+		}
+		if !have && r.MissingIsRisky {
+			return target.Directive{}, false, true
+		}
+		if haveAdmin || r.Changeable == "system" {
 			continue
 		}
-		d, found = x, true
+		for _, x := range inv.Directives {
+			if x.Secret || x.SAPI != "user_ini" || x.Name != r.Directive || (x.Binary != "" && x.Binary != rt.Binary) {
+				continue
+			}
+			if riskyValue(r, x.Value) {
+				return x, true, true
+			}
+		}
 	}
-	return d, found
+	return target.Directive{}, false, false
 }
 
 func contextHolds(t target.Target, rt target.PHPRuntime, ctx []string) bool {
@@ -222,25 +310,7 @@ func configFinding(t target.Target, inv target.Inventory, rt target.PHPRuntime, 
 	if r.Mitigation && !mitigatesOpen(r, open) {
 		return scan.Finding{}, false
 	}
-	d, found := directiveValue(inv, rt, r.Directive)
-	value := d.Value
-	if !found {
-		if !r.MissingIsRisky {
-			return scan.Finding{}, false
-		}
-		if r.Risky == "on" {
-			value = "1" // PHP's own default is the risky one
-		}
-	}
-	var risky bool
-	switch r.Risky {
-	case "on":
-		risky = isOn(value)
-	case "off":
-		risky = !isOn(value)
-	case "empty":
-		risky = strings.TrimSpace(value) == ""
-	}
+	d, found, risky := riskySource(inv, rt, r)
 	if !risky {
 		return scan.Finding{}, false
 	}

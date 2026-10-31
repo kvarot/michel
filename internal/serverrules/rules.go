@@ -17,7 +17,7 @@ import (
 
 // Version is the version of the embedded rules. It must equal the version:
 // line of rules.yaml; bump both whenever a rule changes.
-const Version = 1
+const Version = 2
 
 //go:embed rules.yaml
 var rulesYAML []byte
@@ -30,6 +30,7 @@ type ConfigRule struct {
 	ID             string   `yaml:"id"`
 	Directive      string   `yaml:"directive"`
 	Risky          string   `yaml:"risky"`
+	Changeable     string   `yaml:"changeable"`
 	Advised        string   `yaml:"advised"`
 	Severity       string   `yaml:"severity"`
 	MissingIsRisky bool     `yaml:"missing_is_risky"`
@@ -67,6 +68,8 @@ type Set struct {
 	Config   []ConfigRule       `yaml:"config"`
 	Upstream []UpstreamAdvisory `yaml:"upstream"`
 	EOL      []Branch           `yaml:"eol"`
+	// EOLBefore is the oldest branch still supported: older ones are end of life.
+	EOLBefore string `yaml:"eol_before"`
 }
 
 type rulesFile struct {
@@ -105,7 +108,23 @@ func parse(raw []byte) (Set, error) {
 		if !slices.Contains([]string{"on", "off", "empty"}, r.Risky) {
 			return Set{}, fmt.Errorf("server rule %q has an unknown risky value %q", r.ID, r.Risky)
 		}
+		if !slices.Contains([]string{"system", "perdir", "all"}, r.Changeable) {
+			return Set{}, fmt.Errorf("server rule %q has an unknown changeable value %q", r.ID, r.Changeable)
+		}
+		if !slices.Contains([]string{"critical", "high", "medium", "low"}, r.Severity) {
+			return Set{}, fmt.Errorf("server rule %q has an unknown severity %q", r.ID, r.Severity)
+		}
+		for _, c := range r.Context {
+			if !slices.Contains([]string{"prod", "shared", "https", "sapi:cli", "sapi:fpm"}, c) {
+				return Set{}, fmt.Errorf("server rule %q has an unknown context %q", r.ID, c)
+			}
+		}
 		ids[r.ID] = true
+	}
+	if f.EOLBefore != "" {
+		if _, ok := parseVersion(f.EOLBefore); !ok {
+			return Set{}, fmt.Errorf("the embedded server rules have a bad eol_before %q", f.EOLBefore)
+		}
 	}
 	for _, a := range f.Upstream {
 		if a.ID == "" || a.Key == "" || len(a.Branches) == 0 {
@@ -119,6 +138,13 @@ func parse(raw []byte) (Set, error) {
 		for _, b := range a.Branches {
 			if _, ok := parseVersion(b.Fixed); !ok || branchOf(b.Fixed) != b.Branch {
 				return Set{}, fmt.Errorf("server advisory %q has a bad fix %q for branch %q", a.ID, b.Fixed, b.Branch)
+			}
+		}
+	}
+	for _, r := range f.Config {
+		for _, m := range r.Mitigates {
+			if !slices.ContainsFunc(f.Upstream, func(a UpstreamAdvisory) bool { return a.ID == m || slices.Contains(a.Aliases, m) }) {
+				return Set{}, fmt.Errorf("server rule %q mitigates the unknown advisory %q", r.ID, m)
 			}
 		}
 	}
