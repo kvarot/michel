@@ -146,8 +146,8 @@ func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 // projectView counts p's findings the way the digest does.
 func (s *server) projectView(ctx context.Context, p project.Project) (ProjectView, error) {
 	v := ProjectView{Name: scan.SanitizeText(p.Name), Classification: string(p.Classification), FixLevel: p.FixLevel,
-		ServerFixLevel: p.ServerFixLevel, AutoFixMinor: p.AutoFixMinor,
-		Open: map[string]int{}, Decided: map[string]int{}, LastScanStatus: "never"}
+		AutoFixMinor: p.AutoFixMinor,
+		Open:         map[string]int{}, Decided: map[string]int{}, LastScanStatus: "never"}
 	for _, sev := range severities {
 		v.Open[sev] = 0
 	}
@@ -187,9 +187,8 @@ func (s *server) projectView(ctx context.Context, p project.Project) (ProjectVie
 // projectPatch is the body of PATCH /projects/{name}: only the fields sent
 // change.
 type projectPatch struct {
-	FixLevel       *int  `json:"fix_level"`
-	ServerFixLevel *int  `json:"server_fix_level"`
-	AutoFixMinor   *bool `json:"auto_fix_minor"`
+	FixLevel     *int  `json:"fix_level"`
+	AutoFixMinor *bool `json:"auto_fix_minor"`
 }
 
 // patchProject changes the fix levels and the automatic minor fixes of a
@@ -200,15 +199,13 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 	if !s.readJSONHint(w, r, &body, i18n.T(lang, "api.project.patch.bad_json_hint")) {
 		return
 	}
-	if body.FixLevel == nil && body.ServerFixLevel == nil && body.AutoFixMinor == nil {
+	if body.FixLevel == nil && body.AutoFixMinor == nil {
 		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.nothing"), i18n.T(lang, "api.project.patch.bad_json_hint"))
 		return
 	}
-	for _, l := range []*int{body.FixLevel, body.ServerFixLevel} {
-		if l != nil && (*l < 0 || *l > 3) {
-			s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.bad_level"), i18n.T(lang, "api.project.patch.bad_level_hint"))
-			return
-		}
+	if l := body.FixLevel; l != nil && (*l < 0 || *l > 3) {
+		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.bad_level"), i18n.T(lang, "api.project.patch.bad_level_hint"))
+		return
 	}
 	p, found, err := s.activeProject(ctx, r.PathValue("name"))
 	if err != nil {
@@ -222,9 +219,6 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 	ev := map[string]any{}
 	if body.FixLevel != nil {
 		p.FixLevel, ev["fix_level"] = *body.FixLevel, *body.FixLevel
-	}
-	if body.ServerFixLevel != nil {
-		p.ServerFixLevel, ev["server_fix_level"] = *body.ServerFixLevel, *body.ServerFixLevel
 	}
 	if body.AutoFixMinor != nil {
 		p.AutoFixMinor, ev["auto_fix_minor"] = *body.AutoFixMinor, *body.AutoFixMinor

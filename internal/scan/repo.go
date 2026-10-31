@@ -365,7 +365,7 @@ func scanFinding(rows *sql.Rows) (Finding, error) {
 // (EffectiveSeverity). An empty status means everything except "gone"; "all"
 // means everything; "actionable" means new or pending.
 func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Finding, error) {
-	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ?`
+	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ? AND kind NOT IN ('server_package', 'server_config')`
 	args := []any{projectID}
 	switch status {
 	case "all":

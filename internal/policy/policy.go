@@ -174,6 +174,14 @@ const (
 	PurposeAgentClaude = "agent.claude"
 )
 
+// Purposes of the servers checked over SSH: the SSH session itself, the GET
+// of the site, and the SMS gateway for urgent alerts.
+const (
+	PurposeTargetSSH  = "target.ssh"
+	PurposeTargetHTTP = "target.http"
+	PurposeNotifySMS  = "notify.sms"
+)
+
 // Channel types.
 const (
 	ChannelEmail   = "email"

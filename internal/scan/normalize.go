@@ -59,6 +59,13 @@ type Finding struct {
 // KindDependency is the kind of a finding on a package of a lockfile.
 const KindDependency = "dependency"
 
+// Kinds of the findings on a server: a vulnerable system package, and an
+// unsafe configuration directive. Their project_id column holds the target id.
+const (
+	KindServerPackage = "server_package"
+	KindServerConfig  = "server_config"
+)
+
 // IsMalicious tells whether an OSV id is a malicious-package advisory.
 func IsMalicious(osvID string) bool { return strings.HasPrefix(osvID, "MAL-") }
 
