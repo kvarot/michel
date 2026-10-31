@@ -257,25 +257,49 @@ func TestTargetAddDefaultsAndPreprod(t *testing.T) {
 		}
 	}
 	// A preprod that has a preprod, and a server that is a preprod, make chains.
-	pre := tf.addNamed("pre", "192.0.2.40")
+	prodAsPre := tf.addNamed("prod2", "192.0.2.39")
+	if code, body := tf.send("PATCH", "/api/v1/targets/"+v.ID, `{"preprod":"prod2"}`); code != http.StatusBadRequest || !strings.Contains(body, "preprod_role") {
+		t.Errorf("a production server as preprod = %d %s", code, body)
+	}
+	_ = prodAsPre
+	pre := tf.addNamed("pre", "192.0.2.40", "preprod")
 	if code, body := tf.send("PATCH", "/api/v1/targets/"+v.ID, `{"preprod":"pre"}`); code != http.StatusOK {
 		t.Fatalf("set preprod = %d %s", code, body)
 	}
 	if got := tf.view(v.ID); got.Preprod == nil || got.Preprod.ID != pre.ID {
 		t.Errorf("preprod = %+v", got.Preprod)
 	}
-	chain := tf.addNamed("chain", "192.0.2.41")
-	if code, body := tf.send("PATCH", "/api/v1/targets/"+chain.ID, `{"preprod":"srv-demo"}`); code != http.StatusBadRequest || !strings.Contains(body, "preprod_chain") {
+	pre2 := tf.addNamed("pre2", "192.0.2.42", "preprod")
+	if code, body := tf.send("PATCH", "/api/v1/targets/"+pre2.ID, `{"preprod":"pre"}`); code != http.StatusOK {
+		t.Fatalf("pre2 gets a preprod = %d %s", code, body)
+	}
+	chain := tf.addNamed("chain", "192.0.2.41", "dev")
+	if code, body := tf.send("PATCH", "/api/v1/targets/"+chain.ID, `{"preprod":"pre2"}`); code != http.StatusBadRequest || !strings.Contains(body, "preprod_chain") {
 		t.Errorf("preprod that has a preprod = %d %s", code, body)
 	}
 	if code, body := tf.send("PATCH", "/api/v1/targets/"+pre.ID, `{"preprod":"chain"}`); code != http.StatusBadRequest || !strings.Contains(body, "preprod_chain") {
 		t.Errorf("server that is a preprod gets one = %d %s", code, body)
 	}
+	// A server that is somebody's preprod cannot turn production.
+	if code, body := tf.send("PATCH", "/api/v1/targets/"+pre.ID, `{"env":"prod"}`); code != http.StatusBadRequest || !strings.Contains(body, "preprod_role") {
+		t.Errorf("preprod turned production = %d %s", code, body)
+	}
+	// Removing the preprod leaves no dangling name.
+	if code, _ := tf.send("DELETE", "/api/v1/targets/"+pre.ID, ""); code != http.StatusOK {
+		t.Fatalf("delete preprod = %d", code)
+	}
+	if got := tf.view(v.ID); got.Preprod != nil {
+		t.Errorf("dangling preprod = %+v", got.Preprod)
+	}
 }
 
-func (tf *targetFixture) addNamed(name, host string) TargetView {
+func (tf *targetFixture) addNamed(name, host string, env ...string) TargetView {
 	tf.t.Helper()
-	code, body := tf.send("POST", "/api/v1/targets", `{"name":"`+name+`","host":"`+host+`","user":"deploy"}`)
+	extra := ""
+	if len(env) > 0 {
+		extra = `,"env":"` + env[0] + `"`
+	}
+	code, body := tf.send("POST", "/api/v1/targets", `{"name":"`+name+`","host":"`+host+`","user":"deploy"`+extra+`}`)
 	if code != http.StatusCreated {
 		tf.t.Fatalf("add %s = %d %s", name, code, body)
 	}

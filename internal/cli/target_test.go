@@ -258,7 +258,7 @@ func TestSSHDepsUseTheAgentPipeOfThePolicy(t *testing.T) {
 func TestTargetSetAndRemove(t *testing.T) {
 	e := newTargetEnv(t)
 	for _, n := range []string{"alpha", "beta"} {
-		if _, _, _, err := run(t, e.dir, "target", "add", "192.0.2.2"+map[string]string{"alpha": "0", "beta": "1"}[n], "--user", "deploy", "--name", n); err != nil {
+		if _, _, _, err := run(t, e.dir, "target", "add", "192.0.2.2"+map[string]string{"alpha": "0", "beta": "1"}[n], "--user", "deploy", "--name", n, "--env", map[string]string{"alpha": "prod", "beta": "preprod"}[n]); err != nil {
 			t.Fatal(err)
 		}
 	}

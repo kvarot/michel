@@ -1000,3 +1000,33 @@ func TestSkippedAdvisoryKeepsDistroMitigations(t *testing.T) {
 		t.Fatalf("alerted again: %+v", a)
 	}
 }
+
+func TestTargetLockIsTriedAndRespectsTheContext(t *testing.T) {
+	unlock, ok := TryLock("srv-lock")
+	if !ok {
+		t.Fatal("a free server was busy")
+	}
+	if _, ok := TryLock("srv-lock"); ok {
+		t.Error("a held server was free")
+	}
+	if _, ok := TryLock("other-lock"); !ok {
+		t.Error("another server was busy")
+	}
+	// A waiting check gives up with its context instead of waiting for the holder.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := lockTarget(ctx, "srv-lock"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("waiting = %v", err)
+	}
+	unlock()
+	u2, err := lockTarget(context.Background(), "srv-lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u2()
+	if u3, ok := TryLock("srv-lock"); !ok {
+		t.Error("released server was busy")
+	} else {
+		u3()
+	}
+}

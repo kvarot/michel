@@ -123,7 +123,10 @@ func Check(ctx context.Context, d CheckDeps, targetID string) (CheckResult, erro
 	}
 	// One check of a server at a time, wherever it was started (the
 	// scheduler, the page, the command line of this process).
-	unlock := lockTarget(t.ID)
+	unlock, err := lockTarget(ctx, t.ID)
+	if err != nil {
+		return CheckResult{}, err
+	}
 	defer func() {
 		if unlock != nil {
 			unlock()
@@ -343,15 +346,39 @@ func (d CheckDeps) record(ctx context.Context, action, targetID string, res Chec
 	}
 }
 
-// checkLocks holds one mutex per server id.
+// checkLocks holds one slot (a channel of one) per server id. The lock lives
+// in this process: a check of the same server run by another process (a
+// second michel command) is not seen.
 var checkLocks sync.Map
 
-// lockTarget takes the check lock of server id and returns its release.
-func lockTarget(id string) func() {
-	m, _ := checkLocks.LoadOrStore(id, &sync.Mutex{})
-	mu := m.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+func slotOf(id string) chan struct{} {
+	m, _ := checkLocks.LoadOrStore(id, make(chan struct{}, 1))
+	return m.(chan struct{})
+}
+
+// lockTarget takes the check lock of server id, or gives up when ctx ends.
+func lockTarget(ctx context.Context, id string) (func(), error) {
+	c := slotOf(id)
+	select {
+	case c <- struct{}{}:
+		return func() { <-c }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// TryLock takes the check lock of server id when nobody holds it (no check
+// of it is running in this process) and says so; the caller holds it while
+// it does something a running check must not meet, such as removing the
+// server.
+func TryLock(id string) (unlock func(), ok bool) {
+	c := slotOf(id)
+	select {
+	case c <- struct{}{}:
+		return func() { <-c }, true
+	default:
+		return nil, false
+	}
 }
 
 // ErrInactive: the server is turned off in Michel; it is not checked.

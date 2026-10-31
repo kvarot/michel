@@ -44,7 +44,7 @@ func Discover(ctx context.Context, home string, projects []project.Project, exis
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		cs, err := ParsePhpStorm(p.Path)
+		cs, err := ParsePhpStormWith(p.Path, IDEOptionFiles(home))
 		if err != nil {
 			continue // a broken file in one project must not hide the others
 		}

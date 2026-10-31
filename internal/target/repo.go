@@ -229,10 +229,12 @@ func (r *Repo) Update(ctx context.Context, t Target) error {
 	if err := normalize(&t); err != nil {
 		return err
 	}
-	res, err := r.s.DB().ExecContext(ctx, `UPDATE target SET host = ?, port = ?, ssh_user = ?, alias = ?, kind = ?, env = ?,
+	// A server that moved is not the one whose fingerprint was confirmed: the
+	// pin goes with the old address (the right-hand sides see the old row).
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE target SET host_key = CASE WHEN host = ? AND port = ? THEN host_key ELSE '' END, host = ?, port = ?, ssh_user = ?, alias = ?, kind = ?, env = ?,
 		classification = ?, fix_level = ?, check_interval_s = ?, preprod_id = ?, executor = ?, sudo = ?, site_url = ?,
 		auto_config = ?, active = ?, last_check_at = ? WHERE id = ?`,
-		t.Host, t.Port, t.User, t.Alias, string(t.Kind), string(t.Env), string(t.Classification), t.FixLevel,
+		t.Host, t.Port, t.Host, t.Port, t.User, t.Alias, string(t.Kind), string(t.Env), string(t.Classification), t.FixLevel,
 		int64(t.CheckInterval/time.Second), t.PreprodID, string(t.Executor), string(t.Sudo), t.SiteURL,
 		boolInt(t.AutoConfig), boolInt(t.Active), ts(t.LastCheckAt), t.ID)
 	if err != nil {
@@ -267,6 +269,8 @@ func (r *Repo) Remove(ctx context.Context, id string) error {
 	for _, q := range []string{
 		`DELETE FROM target_project WHERE target_id = ?`,
 		`DELETE FROM target_inventory WHERE target_id = ?`,
+		// A server that was another one's preprod leaves no dangling name.
+		`UPDATE target SET preprod_id = '' WHERE preprod_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {
 			return fmt.Errorf("cannot remove the server: %w", err)
@@ -295,6 +299,9 @@ func (r *Repo) IsTargetID(ctx context.Context, id string) bool {
 // Link ties a server to a project; linking the same pair again replaces the
 // remote directory.
 func (r *Repo) Link(ctx context.Context, l Link) error {
+	if err := ValidateRemoteDir(l.RemoteDir); err != nil {
+		return err
+	}
 	if !r.IsTargetID(ctx, l.TargetID) {
 		return fmt.Errorf("%w: %s", ErrNotFound, l.TargetID)
 	}

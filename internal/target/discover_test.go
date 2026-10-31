@@ -230,3 +230,55 @@ func TestDiscoverIgnoresPasswordFields(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePhpStormResolvesSavedSSHConfigs(t *testing.T) {
+	root := t.TempDir()
+	idea := filepath.Join(root, ".idea")
+	home := t.TempDir()
+	opts := filepath.Join(home, ".config", "JetBrains", "PhpStorm2026.1", "options")
+	for p, c := range map[string]string{
+		filepath.Join(idea, "webServers.xml"): `<project><component name="WebServers"><option name="servers">` +
+			`<webServer name="by-attr"><fileTransfer accessType="SFTP" sshConfig="deploy@192.0.2.30:2200"/></webServer>` +
+			`<webServer name="by-id"><fileTransfer accessType="SFTP" sshConfigId="cfg-1"/></webServer>` +
+			`<webServer name="by-user-id"><fileTransfer accessType="SFTP" sshConfigId="cfg-2" userName="other"/></webServer>` +
+			`<webServer name="dangling"><fileTransfer accessType="SFTP" sshConfigId="cfg-9"/></webServer>` +
+			`</option></component></project>`,
+		filepath.Join(idea, "sshConfigs.xml"): `<project><component name="SshConfigManager"><configs>` +
+			`<sshConfig id="cfg-1" host="192.0.2.31" port="2222" username="web" keyPath="/secret/id" password="hunter2"/></configs></component></project>`,
+		filepath.Join(opts, "sshConfigs.xml"): `<application><component name="SshConfigManager"><configs>` +
+			`<sshConfig id="cfg-2" host="192.0.2.32" username="ide"/></configs></component></application>`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cs, err := ParsePhpStormWith(root, IDEOptionFiles(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs) != 3 {
+		t.Fatalf("want 3 resolved servers (the dangling one skipped), got %+v", cs)
+	}
+	if a := byAlias(cs, "by-attr"); a == nil || a.Host != "192.0.2.30" || a.Port != 2200 || a.User != "deploy" {
+		t.Errorf("by-attr = %+v", a)
+	}
+	if a := byAlias(cs, "by-id"); a == nil || a.Host != "192.0.2.31" || a.Port != 2222 || a.User != "web" {
+		t.Errorf("by-id = %+v", a)
+	}
+	if a := byAlias(cs, "by-user-id"); a == nil || a.Host != "192.0.2.32" || a.Port != 22 || a.User != "other" {
+		t.Errorf("by-user-id = %+v", a)
+	}
+	for _, c := range cs {
+		if strings.Contains(fmt.Sprintf("%+v", c), "hunter2") || strings.Contains(fmt.Sprintf("%+v", c), "/secret") {
+			t.Errorf("credentials leaked: %+v", c)
+		}
+	}
+	// Discover finds them through HOME.
+	got, err := Discover(context.Background(), home, []project.Project{{ID: "P1", Name: "demo", Path: root}}, nil)
+	if err != nil || len(got) != 3 {
+		t.Errorf("discover = %+v %v", got, err)
+	}
+}

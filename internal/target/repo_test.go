@@ -81,10 +81,10 @@ func TestLinkTargetProject(t *testing.T) {
 	if err := r.Link(ctx, Link{TargetID: a.ID, ProjectID: "P1", RemoteDir: "/srv/demo"}); err != nil {
 		t.Fatal(err) // same pair: the directory is replaced
 	}
-	if err := r.Link(ctx, Link{TargetID: b.ID, ProjectID: "P1"}); err != nil {
+	if err := r.Link(ctx, Link{TargetID: b.ID, ProjectID: "P1", RemoteDir: "/srv/other"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Link(ctx, Link{TargetID: "nope", ProjectID: "P1"}); !errors.Is(err, ErrNotFound) {
+	if err := r.Link(ctx, Link{TargetID: "nope", ProjectID: "P1", RemoteDir: "/srv/x"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown target: %v", err)
 	}
 	links, err := r.Links(ctx, a.ID)

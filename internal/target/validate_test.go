@@ -37,14 +37,14 @@ func TestValidateSiteURL(t *testing.T) {
 func TestResolvePreprod(t *testing.T) {
 	r, _ := newRepo(t)
 	ctx := context.Background()
-	mk := func(name string) Target {
-		x, err := r.Add(ctx, Target{Name: name, Host: name + ".example.test", User: "d", Kind: KindVPS})
+	mk := func(name string, env Env) Target {
+		x, err := r.Add(ctx, Target{Name: name, Host: name + ".example.test", User: "d", Kind: KindVPS, Env: env})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return x
 	}
-	prod, pre, other := mk("prod"), mk("pre"), mk("other")
+	prod, pre, other := mk("prod", EnvProd), mk("pre", EnvPreprod), mk("other", EnvDev)
 	if id, err := r.ResolvePreprod(ctx, prod, ""); id != "" || err != nil {
 		t.Errorf("none = %q %v", id, err)
 	}
@@ -63,11 +63,19 @@ func TestResolvePreprod(t *testing.T) {
 	if _, err := r.ResolvePreprod(ctx, Target{Name: "new"}, "new"); err == nil {
 		t.Log("a server not stored yet is not itself")
 	}
+	if _, err := r.ResolvePreprod(ctx, other, "prod"); !errors.Is(err, ErrPreprodRole) {
+		t.Errorf("a production server as preprod = %v", err)
+	}
 	prod.PreprodID = pre.ID
 	if err := r.Update(ctx, prod); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.ResolvePreprod(ctx, other, "prod"); !errors.Is(err, ErrPreprodChain) {
+	pre2 := mk("pre2", EnvPreprod)
+	pre2.PreprodID = pre.ID
+	if err := r.Update(ctx, pre2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ResolvePreprod(ctx, other, "pre2"); !errors.Is(err, ErrPreprodChain) {
 		t.Errorf("preprod that has a preprod = %v", err)
 	}
 	if _, err := r.ResolvePreprod(ctx, pre, "other"); !errors.Is(err, ErrPreprodChain) {
@@ -85,5 +93,89 @@ func TestAllowRules(t *testing.T) {
 	}
 	if got := AllowRules(Target{Host: "192.0.2.5"}); len(got) != 1 {
 		t.Errorf("no site = %+v", got)
+	}
+}
+
+func TestValidateHostAndRemoteDir(t *testing.T) {
+	for in, ok := range map[string]bool{"example.test": true, "192.0.2.10": true, "srv-1.example.test": true, "*.example.test": false,
+		"a@b": false, "a b": false, "a/b": false, "a:22": false, "::1": false, "": false, "-x.test": false} {
+		if err := ValidateHost(in); (err == nil) != ok {
+			t.Errorf("ValidateHost(%q) = %v", in, err)
+		}
+	}
+	for in, ok := range map[string]bool{"/var/www/site": true, "/var/www/site/": true, "/home/deploy/site": true, "/srv": true,
+		"/": false, "/home": false, "/home/": false, "/root": false, "/root/": false, "/home/deploy": false, "/home/deploy/": false,
+		"var/www": false, "": false, "/var/../etc": false, "/var//www": false, "/a/./b": false, "/x y": true, "/x	y": false} {
+		if err := ValidateRemoteDir(in); (err == nil) != ok {
+			t.Errorf("ValidateRemoteDir(%q) = %v", in, err)
+		}
+	}
+	if ValidateSiteURL("https://*.example.test/") == nil {
+		t.Error("a wildcard site host was accepted")
+	}
+}
+
+func TestLinkRefusesAFolderThatIsNotBelow(t *testing.T) {
+	r, _ := newRepo(t)
+	ctx := context.Background()
+	x, err := r.Add(ctx, Target{Name: "a", Host: "a.example.test", User: "d", Kind: KindVPS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"/", "/home", "/root", "/home/d", "relative", "/a/../b", ""} {
+		if err := r.Link(ctx, Link{TargetID: x.ID, ProjectID: "P", RemoteDir: dir}); !errors.Is(err, ErrInvalidRemoteDir) {
+			t.Errorf("Link(%q) = %v", dir, err)
+		}
+	}
+	if err := r.Link(ctx, Link{TargetID: x.ID, ProjectID: "P", RemoteDir: "/home/d/site"}); err != nil {
+		t.Errorf("Link below a home folder = %v", err)
+	}
+}
+
+func TestReleasedRulesKeepWhatAnotherServerUses(t *testing.T) {
+	a := Target{Host: "h.example.test", SiteURL: "https://www.example.test/"}
+	b := Target{Host: "h.example.test", SiteURL: "https://other.example.test/"}
+	c := Target{Host: "c.example.test", SiteURL: "https://www.example.test/"}
+	got := ReleasedRules(a, []Target{b})
+	if len(got) != 1 || got[0].Host != "www.example.test" {
+		t.Errorf("shared ssh host kept, own site released: %+v", got)
+	}
+	if got := ReleasedRules(a, []Target{b, c}); len(got) != 0 {
+		t.Errorf("everything shared: %+v", got)
+	}
+	if got := ReleasedRules(a, nil); len(got) != 2 {
+		t.Errorf("alone: %+v", got)
+	}
+}
+
+func TestUpdateClearsThePinWhenTheServerMovesAndRemoveClearsPreprod(t *testing.T) {
+	r, _ := newRepo(t)
+	ctx := context.Background()
+	x, _ := r.Add(ctx, Target{Name: "x", Host: "x.example.test", User: "d", Kind: KindVPS})
+	pre, _ := r.Add(ctx, Target{Name: "pre", Host: "p.example.test", User: "d", Kind: KindVPS, Env: EnvPreprod})
+	if err := r.SetHostKey(ctx, x.ID, "SHA256:abc"); err != nil {
+		t.Fatal(err)
+	}
+	x, _ = r.Get(ctx, x.ID)
+	x.FixLevel = 2
+	if err := r.Update(ctx, x); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Get(ctx, x.ID); got.HostKey != "SHA256:abc" {
+		t.Errorf("the pin went with a setting change: %q", got.HostKey)
+	}
+	x.Host = "y.example.test"
+	x.PreprodID = pre.ID
+	if err := r.Update(ctx, x); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Get(ctx, x.ID); got.HostKey != "" || got.PreprodID != pre.ID {
+		t.Errorf("after a move: %+v", got)
+	}
+	if err := r.Remove(ctx, pre.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Get(ctx, x.ID); got.PreprodID != "" {
+		t.Errorf("dangling preprod: %q", got.PreprodID)
 	}
 }

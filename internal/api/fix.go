@@ -16,6 +16,7 @@ import (
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/servererr"
 	"github.com/kvarot/michel/internal/target"
 )
 
@@ -584,14 +585,7 @@ func (s *server) fixApprove(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.detached(r)
 	defer cancel()
 	if err := fix.Apply(ctx, d, a.ID); err != nil {
-		if fix.ErrorKey(err) != "" {
-			s.fixRefused(w, r, lang, err, nil)
-			return
-		}
-		// The approval stands: Michel applies it again at its next start.
-		detail := mask.New().Mask(noPaths(err.Error()))
-		writeJSON(w, http.StatusBadGateway, FixErrorBody{Error: i18n.T(lang, "api.fix.apply_failed"),
-			Hint: i18n.T(lang, "api.fix.apply_failed_hint"), Code: "api.fix.apply_failed", Detail: detail})
+		s.applyFailed(w, r, lang, a, err)
 		return
 	}
 	s.answerAttempt(w, r, http.StatusOK, a.ID)
@@ -811,4 +805,27 @@ func (s *server) aiConsentGive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// applyFailed answers an Apply that failed after the approval. A refusal of
+// the fix service keeps its status and sentence. For a server fix, a refusal
+// of SSH is answered in clear, never with the error's text (it names the
+// user, the host, the agent) and without a repository branch; for a code
+// fix, the approval stands and Michel applies it again at its next start.
+func (s *server) applyFailed(w http.ResponseWriter, r *http.Request, lang i18n.Lang, a fix.Attempt, err error) {
+	if fix.ErrorKey(err) != "" {
+		s.fixRefused(w, r, lang, err, nil)
+		return
+	}
+	if a.Work.Server != nil {
+		if st, k := targetFailure(err); k != "" {
+			s.failedBody(w, st, lang, k, k+"_hint")
+			return
+		}
+		s.failedBody(w, http.StatusBadGateway, lang, servererr.Unreachable, servererr.Unreachable+"_hint")
+		return
+	}
+	detail := mask.New().Mask(noPaths(err.Error()))
+	writeJSON(w, http.StatusBadGateway, FixErrorBody{Error: i18n.T(lang, "api.fix.apply_failed"),
+		Hint: i18n.T(lang, "api.fix.apply_failed_hint"), Code: "api.fix.apply_failed", Detail: detail})
 }

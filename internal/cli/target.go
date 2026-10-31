@@ -217,20 +217,44 @@ func newTargetDiscoverCmd(deps *Deps) *cobra.Command {
 	}
 }
 
-// allowTarget writes the network rules the server needs into the policy file
-// and hands them to the gateway: adding a server is the user's opt-in.
-func allowTarget(cmd *cobra.Command, deps *Deps, t target.Target) (int, error) {
+// changeRules writes the network rules to add, then removes those to remove,
+// in the policy file, and hands the reloaded policy to the gateway: adding a
+// server is the user's opt-in, removing it takes the opt-in back. It returns
+// the rules to add that were not in force yet.
+func changeRules(cmd *cobra.Command, deps *Deps, add, remove []policy.AllowRule) ([]policy.AllowRule, error) {
 	sd := sourceDeps(cmd, deps)
-	n, err := policy.AddAllowRules(sd.PolicyPath, target.AllowRules(t)...)
-	if err != nil {
-		return 0, err
+	fresh := target.NewRules(deps.Policy.Sovereignty.Network.Allow, add)
+	if len(add) > 0 {
+		if _, err := policy.AddAllowRules(sd.PolicyPath, add...); err != nil {
+			return nil, err
+		}
+	}
+	if len(remove) > 0 {
+		if _, err := policy.RemoveAllowRules(sd.PolicyPath, remove...); err != nil {
+			return fresh, err
+		}
 	}
 	p, err := sd.Reload()
 	if err != nil {
-		return n, err
+		return fresh, err
 	}
 	deps.Gateway.SetRules(p.Sovereignty.Network.Allow)
-	return n, nil
+	return fresh, nil
+}
+
+// otherTargets are the servers other than id.
+func otherTargets(ctx context.Context, repo *target.Repo, id string) ([]target.Target, error) {
+	all, err := repo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0:0]
+	for _, t := range all {
+		if t.ID != id {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 func newTargetAddCmd(deps *Deps) *cobra.Command {
@@ -265,6 +289,14 @@ func newTargetAddCmd(deps *Deps) *cobra.Command {
 						t.User = c.User
 					}
 					for _, l := range c.Projects {
+						// A folder the registry would refuse (none, the root, a
+						// home folder itself) is not linked: say so.
+						if target.ValidateRemoteDir(l.RemoteDir) != nil {
+							if l.RemoteDir != "" {
+								fmt.Fprintln(deps.Stderr, deps.T("cli.target.add.link_skipped", l.RemoteDir))
+							}
+							continue
+						}
 						links = append(links, target.Link{ProjectID: l.ProjectID, RemoteDir: l.RemoteDir})
 					}
 					break
@@ -289,7 +321,7 @@ func newTargetAddCmd(deps *Deps) *cobra.Command {
 			if t.CheckInterval, err = target.ParseInterval(interval); err != nil {
 				return targetFailure(deps, err, false)
 			}
-			if err := target.ValidateSiteURL(t.SiteURL); err != nil {
+			if err := target.Check(t); err != nil {
 				return targetFailure(deps, err, false)
 			}
 			if t.PreprodID, err = repo.ResolvePreprod(ctx, t, preprod); err != nil {
@@ -306,7 +338,8 @@ func newTargetAddCmd(deps *Deps) *cobra.Command {
 					return targetFailure(deps, err, false)
 				}
 			}
-			n, err := allowTarget(cmd, deps, added)
+			fresh, err := changeRules(cmd, deps, target.AllowRules(added), nil)
+			n := len(fresh)
 			if err != nil {
 				_ = repo.Remove(ctx, added.ID)
 				return deps.Wrapf("cli.target.add.allow_failed", err)
@@ -341,6 +374,7 @@ func newTargetAddCmd(deps *Deps) *cobra.Command {
 
 func newTargetTrustCmd(deps *Deps) *cobra.Command {
 	var fingerprint string
+	var replace bool
 	c := &cobra.Command{
 		Use:   "trust <id>",
 		Short: "Show a server's fingerprint, or confirm it with --fingerprint",
@@ -371,6 +405,10 @@ func newTargetTrustCmd(deps *Deps) *cobra.Command {
 				_ = targetRecord(cmd, deps, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "fingerprint mismatch"})
 				return deps.Errorf("cli.target.trust.mismatch", t.Name)
 			}
+			if t.HostKey != "" && t.HostKey != fp && !replace {
+				_ = targetRecord(cmd, deps, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "key changed, replace not asked"})
+				return deps.Errorf("cli.target.trust.changed", t.Name)
+			}
 			if err := repo.SetHostKey(cmd.Context(), t.ID, fp); err != nil {
 				return targetFailure(deps, err, false)
 			}
@@ -383,6 +421,7 @@ func newTargetTrustCmd(deps *Deps) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&fingerprint, "fingerprint", "", "the fingerprint you read and compared (SHA256:...)")
+	c.Flags().BoolVar(&replace, "replace", false, "accept this fingerprint in place of the one already confirmed (the key of the server changed)")
 	return c
 }
 
@@ -399,7 +438,18 @@ func newTargetCheckCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := servercheck.Check(cmd.Context(), serverCheckDeps(cmd, deps), t.ID)
+			cd := serverCheckDeps(cmd, deps)
+			// As in michel serve, a server checked to its end has its findings
+			// queued for the fix levels 2 and 3.
+			if secrets, err := openSecrets(cmd, deps); err == nil {
+				fd := fixDeps(cmd, deps, secrets, "cli")
+				cd.OnChecked = func(ctx context.Context, targetID string) {
+					if _, err := fix.QueueEligibleServer(ctx, fd, targetID); err != nil {
+						fmt.Fprintln(deps.Stderr, deps.T("cli.target.check.queue_failed"))
+					}
+				}
+			}
+			res, err := servercheck.Check(cmd.Context(), cd, t.ID)
 			if err != nil {
 				return targetFailure(deps, err, true)
 			}
@@ -469,7 +519,10 @@ func newTargetSetCmd(deps *Deps) *cobra.Command {
 					return targetFailure(deps, err, false)
 				}
 			}
-			if err := target.ValidateSiteURL(t.SiteURL); err != nil {
+			if err := target.Check(t); err != nil {
+				return targetFailure(deps, err, false)
+			}
+			if err := repo.CheckEnv(ctx, t); err != nil {
 				return targetFailure(deps, err, false)
 			}
 			if fl.Changed("preprod") {
@@ -477,16 +530,32 @@ func newTargetSetCmd(deps *Deps) *cobra.Command {
 					return targetFailure(deps, err, false)
 				}
 			}
-			if err := repo.Update(ctx, t); err != nil {
-				return targetFailure(deps, err, false)
-			}
-			rules := 0
-			if t.SiteURL != old.SiteURL {
-				if rules, err = allowTarget(cmd, deps, t); err != nil {
+			// The new rule goes in first (a refusal changes nothing), and comes
+			// out again if the update fails; the old site's rule goes after,
+			// unless another server uses it.
+			var fresh []policy.AllowRule
+			siteMoved := t.SiteURL != old.SiteURL
+			if siteMoved {
+				if fresh, err = changeRules(cmd, deps, target.AllowRules(t), nil); err != nil {
 					return deps.Wrapf("cli.target.set.allow_failed", err)
 				}
 			}
-			if err := targetRecord(cmd, deps, "target.update", t.ID, "ok", map[string]any{"name": t.Name, "changed": fields, "rules_written": rules}); err != nil {
+			if err := repo.Update(ctx, t); err != nil {
+				if len(fresh) > 0 {
+					_, _ = changeRules(cmd, deps, nil, fresh)
+				}
+				return targetFailure(deps, err, false)
+			}
+			released := 0
+			if siteMoved {
+				if others, err := otherTargets(ctx, repo, t.ID); err == nil {
+					gone := target.ReleasedRules(old, append(others, t))
+					if _, err := changeRules(cmd, deps, nil, gone); err == nil {
+						released = len(gone)
+					}
+				}
+			}
+			if err := targetRecord(cmd, deps, "target.update", t.ID, "ok", map[string]any{"name": t.Name, "changed": fields, "rules_written": len(fresh), "rules_removed": released}); err != nil {
 				return err
 			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.target.set.done", t.Name, strings.Join(fields, ", ")))
@@ -517,19 +586,40 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			for _, st := range []fix.State{fix.StateRunning, fix.StatePreparing} {
-				list, err := fix.NewRepo(deps.Store).ListAttempts(ctx, t.ID, string(st))
-				if err != nil {
-					return targetFailure(deps, err, false)
-				}
-				if len(list) > 0 {
-					return deps.Errorf("cli.target.remove.busy", t.Name)
-				}
+			unlock, free := servercheck.TryLock(t.ID)
+			if !free {
+				return deps.Errorf("cli.target.remove.busy", t.Name)
 			}
-			if err := target.NewRepo(deps.Store).Remove(ctx, t.ID); err != nil {
+			defer unlock()
+			repo := target.NewRepo(deps.Store)
+			busy, err := fix.NewRepo(deps.Store).TargetBusy(ctx, t.ID)
+			if err != nil {
 				return targetFailure(deps, err, false)
 			}
-			if err := targetRecord(cmd, deps, "target.remove", t.ID, "ok", map[string]any{"name": t.Name}); err != nil {
+			if busy {
+				return deps.Errorf("cli.target.remove.busy", t.Name)
+			}
+			others, err := otherTargets(ctx, repo, t.ID)
+			if err != nil {
+				return targetFailure(deps, err, false)
+			}
+			dependents := 0
+			for _, o := range others {
+				if o.PreprodID == t.ID {
+					dependents++
+				}
+			}
+			if err := repo.Remove(ctx, t.ID); err != nil {
+				return targetFailure(deps, err, false)
+			}
+			// The opt-in goes with the server, except for what another uses.
+			removed := 0
+			if gone := target.ReleasedRules(t, others); len(gone) > 0 {
+				if _, err := changeRules(cmd, deps, nil, gone); err == nil {
+					removed = len(gone)
+				}
+			}
+			if err := targetRecord(cmd, deps, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "preprod_cleared": dependents}); err != nil {
 				return err
 			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.target.remove.done", t.Name))

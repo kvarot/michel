@@ -880,3 +880,18 @@ func (r *Repo) SetBackupKeyFingerprint(ctx context.Context, old, fp string) (boo
 	n, err := res.RowsAffected()
 	return n == 1, err
 }
+
+// TargetBusy tells whether server targetID has a fix that must end before the
+// server can leave Michel: being prepared, running, of unknown outcome, or
+// approved and waiting to run.
+func (r *Repo) TargetBusy(ctx context.Context, targetID string) (bool, error) {
+	var one int
+	err := r.s.DB().QueryRowContext(ctx, `SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN ('preparing','running','unknown','approved') LIMIT 1`, targetID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("cannot read the fix attempts: %w", err)
+	}
+	return true, nil
+}
