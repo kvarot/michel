@@ -24,7 +24,8 @@ import (
 // echo, printf (%s and \n), true, test and [ (-L -w -r -e -f ! = !=),
 // mkdir [-p] [-m MODE], cat, cp, cmp -s, sed 'Ns|re|text|' (one
 // substitution on one line, basic regular expressions without groups),
-// stat -c (%u %a %A, a link is not followed), id -u, env VAR=x... CMD, and
+// stat [-L] -c (%u %a %A; a link is followed only with -L), export NAME,
+// unset NAME, id -u, env VAR=x... CMD, and
 // sudo -n (allowed when Options.Sudo). Any other command runs the server's
 // Options.Commands handler, with the script's own text as stdin unless
 // redirected from /dev/null. Nothing is ever deleted: the shell has no rm.
@@ -719,6 +720,21 @@ func (x *interp) command(argv []string, out, errw io.Writer) int {
 		return x.printf(argv[1:], out)
 	case "true":
 		return 0
+	case "export":
+		for _, a := range argv[1:] {
+			if !varRe.MatchString(a) || varRe.FindString(a) != a {
+				x.fail("export: only names are supported")
+			}
+		}
+		return 0
+	case "unset":
+		for _, a := range argv[1:] {
+			if !varRe.MatchString(a) || varRe.FindString(a) != a {
+				x.fail("unset: bad name")
+			}
+			delete(x.vars, a)
+		}
+		return 0
 	case "exit":
 		code := x.status
 		if len(argv) > 1 {
@@ -1002,7 +1018,8 @@ func (x *interp) mkdir(args []string, root bool, errw io.Writer) int {
 		return 0
 	}
 	var todo []string
-	for p := d; p != "/" && !x.dirExists(p); p = parent(p) {
+	// An existing link counts as there (mkdir -p follows it, creates nothing).
+	for p := d; p != "/" && !x.dirExists(p) && x.sh.Links[p] == ""; p = parent(p) {
 		todo = append([]string{p}, todo...)
 	}
 	for _, p := range todo {
@@ -1020,10 +1037,17 @@ func (x *interp) mkdir(args []string, root bool, errw io.Writer) int {
 // stat runs stat -c FORMAT PATH with %u, %a and %A; a link is described
 // itself, never followed.
 func (x *interp) stat(args []string, out, errw io.Writer) int {
+	follow := len(args) == 4 && args[0] == "-L"
+	if follow {
+		args = args[1:]
+	}
 	if len(args) != 3 || args[0] != "-c" {
-		x.fail("only stat -c FORMAT PATH is supported")
+		x.fail("only stat [-L] -c FORMAT PATH is supported")
 	}
 	p := args[2]
+	if follow {
+		p = x.resolve(p)
+	}
 	var m Meta
 	typ := byte('-')
 	switch {

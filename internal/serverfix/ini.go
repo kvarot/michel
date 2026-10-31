@@ -47,6 +47,15 @@ func checkValue(directive, v string) error {
 // checkAdvised refuses a value the rule itself judges risky (an empty
 // open_basedir included): a fix never makes things worse.
 func checkAdvised(r serverrules.ConfigRule, v string) error {
+	// A boolean takes a canonical value only (PHP would read "1x" or "1.0"
+	// as On), or the rule's advised one.
+	if (r.Risky == "on" || r.Risky == "off") && v != r.Advised {
+		switch strings.ToLower(v) {
+		case "0", "1", "on", "off":
+		default:
+			return fmt.Errorf("%w: %s takes On, Off, 1 or 0, not %q", ErrBadValue, r.Directive, v)
+		}
+	}
 	if serverrules.RiskyValue(r, v) {
 		return fmt.Errorf("%w: %s = %q is the risky value", ErrBadValue, r.Directive, v)
 	}

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kvarot/michel/internal/serverrules"
 	"github.com/kvarot/michel/internal/target"
 )
 
@@ -29,6 +30,7 @@ const (
 	msgNoBackup   = "sauvegarde absente"
 	msgUnsafeBak  = "sauvegarde non sure"
 	msgUnsafeDir  = "dossier non sur"
+	msgUnsafeFile = "fichier non sur"
 	msgNoLine     = "ligne introuvable"
 	msgRolled     = "echec: fichiers remis"
 	msgRollFailed = "retour en arriere incomplet"
@@ -41,33 +43,53 @@ const (
 // Exit codes the scripts use, for Task 10.
 const (
 	ExitNotRoot      = 3 // wrong user (not root, or root for a .user.ini)
-	ExitApplied      = 4 // already applied, or backup missing on undo
+	ExitApplied      = 4 // already applied (Apply), or a backup missing (Undo)
 	ExitLineMoved    = 5 // the line changed since the collection
 	ExitLink         = 6 // a target file is a symbolic link
-	ExitUnsafe       = 7 // a folder or backup is not root-owned and closed
+	ExitUnsafe       = 7 // a folder, file, binary or backup is not root's and closed
 	ExitRollbackFail = 8 // the rollback itself failed: urgent alert
 )
 
 // Building blocks of the grammar. A case pattern is unquoted: quoted, its
-// ? would be a literal character; ? also stands for the space of stat. A quoted path, binary, service or
-// package never holds a quote: the character sets refuse it upstream.
+// ? would be a literal character; ? also stands for the space of stat. A
+// quoted path, binary, service or package never holds a quote: the
+// character sets refuse it upstream. Paths and keys follow the same rules
+// as Validate: a written file is in PHP's own trees (rootTreeParts) or is a
+// .user.ini, a key is a directive of the embedded rules.
 const (
-	gPath    = `'/[A-Za-z0-9._/@+-]+\.(?:ini|conf)'`
-	gDir     = `'/[A-Za-z0-9._/@+-]+'`
-	gFPM     = `'/usr/(?:local/)?s?bin/php-fpm[0-9.]*'`
-	gCLI     = `'/usr/(?:local/)?s?bin/php[0-9.]*'`
-	gBak     = `"\$B/[0-9]+(?:\.[0-9]+)?"`
-	gKey     = `[A-Za-z0-9_.\[\]]+`
-	gKeyRe   = `(?:[A-Za-z0-9_]|\\[.\[\]])+`
-	gVal     = `[A-Za-z0-9_./:,@+%-]*`
-	gSvc     = `'[A-Za-z0-9][A-Za-z0-9._@-]*'`
-	gPkg     = `[A-Za-z0-9][A-Za-z0-9.+_-]*`
-	gVer     = `[0-9][A-Za-z0-9.+~:_-]*`
-	gID      = `[A-Za-z0-9_-]+`
-	gReload  = `(?:systemctl reload ` + gSvc + `|rc-service ` + gSvc + ` reload)`
-	gStat    = `case "\$\(stat -c '%u %A' `
-	gSafeDir = `\)" in 0\?d\?\?\?\?-\?\?-\?\) ;; \*\) echo "` + msgUnsafeDir + `" >&2; exit 7;; esac`
+	gUserIni  = `/[A-Za-z0-9._/@+-]*/\.user\.ini`
+	gDir      = `'/[A-Za-z0-9._/@+-]+'`
+	gFPM      = `'/usr/(?:local/)?s?bin/php-fpm[0-9.]*'`
+	gCLI      = `'/usr/(?:local/)?s?bin/php[0-9.]*'`
+	gBak      = `"\$B/[0-9]+(?:\.[0-9]+)?"`
+	gVal      = `[A-Za-z0-9_./:,@+%-]*`
+	gSvc      = `'[A-Za-z0-9][A-Za-z0-9._@-]*'`
+	gPkg      = `[A-Za-z0-9][A-Za-z0-9.+_-]*`
+	gVer      = `[0-9][A-Za-z0-9.+~:_-]*`
+	gID       = `[A-Za-z0-9_-]+`
+	gReload   = `(?:systemctl reload ` + gSvc + `|rc-service ` + gSvc + ` reload)`
+	gStat     = `case "\$\(stat -c '%u %A' `
+	gSafeDir  = `\)" in 0\?d\?\?\?\?-\?\?-\?\) ;; \*\) echo "` + msgUnsafeDir + `" >&2; exit 7;; esac`
+	gSafeFile = `\)" in 0\?-\?\?\?\?-\?\?-\?\) ;; \*\) echo "` + msgUnsafeFile + `" >&2; exit 7;; esac`
 )
+
+// gPath is a file a script reads or writes; gKey a key as written in the
+// file, gKeyRe the same key as the escaped basic regular expression of sed.
+var gPath, gKey, gKeyRe = func() (string, string, string) {
+	set, err := serverrules.Rules()
+	if err != nil {
+		panic(err)
+	}
+	var plain, escaped []string
+	for _, r := range set.Config {
+		plain = append(plain, regexp.QuoteMeta(r.Directive))
+		escaped = append(escaped, strings.ReplaceAll(regexp.QuoteMeta(r.Directive), `\.`, `\\\.`))
+	}
+	n, e := `(?:`+strings.Join(plain, "|")+`)`, `(?:`+strings.Join(escaped, "|")+`)`
+	return `'(?:` + rootTreeRe + `|` + gUserIni + `)'`,
+		`(?:` + n + `|php_(?:admin_)?(?:value|flag)\[` + n + `\])`,
+		`(?:` + e + `|php_(?:admin_)?(?:value|flag)\\\[` + e + `\\\])`
+}()
 
 // Grammar lists the templates every non-empty line of a rendered script
 // matches, whole line. Lint refuses any other line. It checks lines one by
@@ -78,6 +100,9 @@ var Grammar = []string{
 	`# [a-z ,]+`,
 	`set -eu`,
 	`umask 077`,
+	`PATH=/usr/sbin:/usr/bin:/sbin:/bin`,
+	`export PATH`,
+	`unset PHPRC PHP_INI_SCAN_DIR`,
 	`rollback\(\) \{`,
 	`  trap - EXIT`,
 	`  R=0`,
@@ -93,11 +118,14 @@ var Grammar = []string{
 	`B="` + RootBackups + `/` + gID + `"`,
 	`B="\$HOME/\.michel/backups/` + gID + `"`,
 	gStat + gDir + gSafeDir,
+	gStat + gPath + gSafeFile,
+	`case "\$\(stat -L -c '%u %A' (?:` + gFPM + `|` + gCLI + `)` + gSafeFile,
 	gStat + `"\$B"\)" in 0\?d\?\?\?------\) ;; \*\) echo "` + msgUnsafeBak + `" >&2; exit 7;; esac`,
 	gStat + gBak + `\)" in 0\?-\?\?\?------\) ;; \*\) echo "` + msgUnsafeBak + `" >&2; exit 7;; esac`,
 	`\[ ! -L ` + gPath + ` \] \|\| \{ echo "` + msgLink + `" >&2; exit 6; \}`,
 	`\[ -w ` + gPath + ` \] \|\| \{ echo "` + msgOwner + `" >&2; exit 3; \}`,
 	`\[ -f ` + gBak + ` \] \|\| \{ echo "` + msgNoBackup + `" >&2; exit 4; \}`,
+	`mkdir -p -m 700 '` + path.Dir(RootBackups) + `'`,
 	`mkdir -p -m 700 '` + RootBackups + `'`,
 	`mkdir -p -m 700 "\$HOME/\.michel/backups"`,
 	`mkdir -m 700 "\$B" \|\| \{ echo "` + msgApplied + `" >&2; exit 4; \}`,
@@ -308,6 +336,14 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 		s.l("# michel correction ", correctionID, ": ", what)
 		s.l("set -eu")
 		s.l("umask 077")
+		if !userMode {
+			// Root trusts nothing it inherits: commands from the system
+			// folders, no PHP ini override (a kept PHP_INI_SCAN_DIR would
+			// make root load an extension).
+			s.l("PATH=/usr/sbin:/usr/bin:/sbin:/bin")
+			s.l("export PATH")
+			s.l("unset PHPRC PHP_INI_SCAN_DIR")
+		}
 	}
 	start := func(s *script) {
 		s.l("main() {")
@@ -344,7 +380,25 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 			linkCheck(s, f)
 			if userMode {
 				s.l("[ -w ", q(f), ` ] || { echo "`+msgOwner+`" >&2; exit 3; }`)
+			} else {
+				s.l(`case "$(stat -c '%u %A' `, q(f), `)" in 0?-????-??-?) ;; *) echo "`+msgUnsafeFile+`" >&2; exit 7;; esac`)
 			}
+		}
+		// The PHP binaries root runs: their folders and the real file
+		// (through a link such as Debian's alternatives) root's and closed.
+		seenBin := map[string]bool{}
+		for _, a := range tests {
+			if userMode || seenBin[a.Binary] {
+				continue
+			}
+			seenBin[a.Binary] = true
+			for _, d := range ancestors(a.Binary) {
+				if !seenDir[d] {
+					seenDir[d] = true
+					safeDir(s, d)
+				}
+			}
+			s.l(`case "$(stat -L -c '%u %A' `, q(a.Binary), `)" in 0?-????-??-?) ;; *) echo "`+msgUnsafeFile+`" >&2; exit 7;; esac`)
 		}
 	}
 	reloadLine := func(a Action) string {
@@ -393,8 +447,12 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 		if userMode {
 			ap.l(`mkdir -p -m 700 "$HOME/.michel/backups"`)
 		} else {
-			ap.l("mkdir -p -m 700 '", RootBackups, "'")
+			// Each level is checked before the next one is made, so root
+			// never creates a folder through a link.
 			for _, d := range append(ancestors(RootBackups), RootBackups) {
+				if d == path.Dir(RootBackups) || d == RootBackups {
+					ap.l("mkdir -p -m 700 '", d, "'")
+				}
 				if !seenDir[d] {
 					seenDir[d] = true
 					safeDir(&ap, d)
@@ -463,11 +521,10 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 	start(&un)
 	if len(files) > 0 {
 		un.l("# checks before any change")
-		if userMode {
-			for i := range files {
-				un.l("[ -f ", bak(i+1), ` ] || { echo "`+msgNoBackup+`" >&2; exit 4; }`)
-			}
-		} else {
+		for i := range files {
+			un.l("[ -f ", bak(i+1), ` ] || { echo "`+msgNoBackup+`" >&2; exit 4; }`)
+		}
+		if !userMode {
 			for _, d := range append(ancestors(RootBackups), RootBackups) {
 				safeDir(&un, d)
 			}

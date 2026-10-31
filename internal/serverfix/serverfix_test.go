@@ -474,7 +474,7 @@ func newHarness(t *testing.T, sh *sshtest.Shell) *harness {
 	h := &harness{sh: sh}
 	h.srv = sshtest.New(t, sshtest.Options{
 		Files: map[string]string{fpmIni: iniText, cliIni: iniText, pool: poolText, userIni: userText, opcache: opText,
-			"/etc/shadow": shadow},
+			"/etc/shadow": shadow, fpmBin: "ELF", cliBin: "ELF", "/var/lib/dpkg/status": ""},
 		Shell: sh.Func(),
 		Commands: map[string]sshtest.Handler{
 			fpmBin: func(e sshtest.Exec) int {

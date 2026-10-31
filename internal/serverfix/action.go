@@ -10,8 +10,13 @@
 //     a scanned ini file, a PHP-FPM pool or a .user.ini), backed up first;
 //   - every value, path, service and package is checked against a strict
 //     character set before it reaches a script, then single-quoted;
-//   - shell redirections only ever write into the backup folder
-//     $HOME/.michel/backups/<correction>, never into a configuration file;
+//   - a fix touching php.ini, a pool or a package is a root bundle: it runs
+//     wholly as root, writes only PHP's own configuration trees, checks
+//     every parent folder and the file itself (root's, closed) and keeps
+//     its backups in /var/lib/michel/backups/<correction>; a .user.ini fix
+//     runs as the SSH user with ~/.michel/backups/<correction>;
+//   - a configuration file is written only by `cat staged > file`, from a
+//     staged copy in the backup folder, after its backup;
 //   - backups on the server are never deleted by any script.
 package serverfix
 
@@ -127,8 +132,8 @@ var (
 	// ErrUnknownPackage: the package is not installed on the server, its
 	// version is malformed, or the system's package manager is unknown.
 	ErrUnknownPackage = errors.New("serverfix: unknown package")
-	// ErrMajorUpgrade: the upgrade changes the PHP branch; it is only ever
-	// a proposal, never a script.
+	// ErrMajorUpgrade: the upgrade changes the PHP branch, or the major
+	// version of any package; it is only ever a proposal, never a script.
 	ErrMajorUpgrade = errors.New("serverfix: this upgrade changes the PHP branch, it can only be proposed")
 	// ErrBadAction: an unknown op, a missing field, an empty plan or a plan
 	// for another server.
@@ -141,6 +146,9 @@ var (
 	// /usr/local/sbin), so Michel cannot test the configuration as root;
 	// the fix can only be offered with executor user.
 	ErrUntestableBinary = errors.New("serverfix: the PHP binary is not a system one, the configuration cannot be tested")
+	// ErrLinkedFile: the file is a link Michel does not write through
+	// (Debian's conf.d files link into mods-available).
+	ErrLinkedFile = errors.New("serverfix: this file is a link, Michel does not write through it")
 	// ErrDowngrade: the version is not strictly newer than the installed one.
 	ErrDowngrade = errors.New("serverfix: the version is not newer than the installed one")
 	// ErrNotValidated: Render was given a plan Validate did not return.

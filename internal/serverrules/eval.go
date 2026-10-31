@@ -66,13 +66,25 @@ func branchOf(v string) string {
 
 // isOn reads a PHP boolean: on/true/yes, or any integer other than 0.
 func isOn(v string) bool {
+	// An inline comment is not part of the value (collect keeps it).
+	if i := strings.IndexByte(v, ';'); i >= 0 {
+		v = v[:i]
+	}
 	v = strings.ToLower(strings.TrimSpace(v))
 	switch v {
 	case "on", "true", "yes":
 		return true
 	}
-	n, err := strconv.Atoi(v)
-	return err == nil && n != 0
+	// PHP's zend_ini_parse_bool falls back to atoi: an optional sign, then
+	// the leading digits; the rest is ignored ("1x", "1.0" are On).
+	if v != "" && (v[0] == '+' || v[0] == '-') {
+		v = v[1:]
+	}
+	i := 0
+	for i < len(v) && v[i] >= '0' && v[i] <= '9' {
+		i++
+	}
+	return strings.TrimLeft(v[:i], "0") != ""
 }
 
 // judge says whether a version is affected by an advisory: on a listed

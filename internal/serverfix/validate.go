@@ -30,14 +30,45 @@ var refusedDirs = []string{
 	"/proc/", "/sys/", "/dev/", "/run/", "/var/log/", "/var/backups/", "/var/lib/", "/boot/",
 }
 
-// rootTrees are the only trees root writes into: system configuration
-// folders that root owns. The script checks every parent folder again
-// (owned by root, not writable by group or others) before any change.
-//   - /etc/ (Debian, Ubuntu, Alpine, RHEL php.ini and pools; /etc/opt too)
-//   - /usr/local/etc/ (PHP built from source, BSD layout)
-//   - /opt/remi/phpNN/root/etc/ (Remi's software collections)
-//   - /opt/cpanel/ea-phpNN/root/etc/ (cPanel EasyApache)
-var rootTrees = regexp.MustCompile(`^(/etc/|/usr/local/etc/|/opt/remi/php[0-9]+/root/etc/|/opt/cpanel/ea-php[0-9]+/root/etc/)`)
+// rootTreeParts are the only files root writes: PHP's own configuration
+// trees, nothing else under /etc. The script checks every parent folder
+// and the file itself again (owned by root, not writable by group or
+// others) before any change.
+//   - /etc/php/ (Debian, Ubuntu), /etc/php[0-9]+/ (Alpine)
+//   - /etc/php.ini, /etc/php.d/, /etc/php-fpm.conf, /etc/php-fpm.d/ (RHEL)
+//   - /usr/local/etc/php.ini, /usr/local/etc/php/, /usr/local/etc/php-fpm.conf,
+//     /usr/local/etc/php-fpm.d/ (PHP built from source, official images)
+//   - /opt/remi/php[0-9]+/root/etc/, /etc/opt/remi/php[0-9]+/ (Remi's
+//     software collections)
+var rootTreeParts = []string{
+	`/etc/php/` + treeChars + treeExt,
+	`/etc/php[0-9]+/` + treeChars + treeExt,
+	`/etc/php\.ini`,
+	`/etc/php\.d/` + treeChars + treeExt,
+	`/etc/php-fpm\.conf`,
+	`/etc/php-fpm\.d/` + treeChars + treeExt,
+	`/usr/local/etc/php\.ini`,
+	`/usr/local/etc/php/` + treeChars + treeExt,
+	`/usr/local/etc/php-fpm\.conf`,
+	`/usr/local/etc/php-fpm\.d/` + treeChars + treeExt,
+	`/opt/remi/php[0-9]+/root/etc/` + treeChars + treeExt,
+	`/etc/opt/remi/php[0-9]+/` + treeChars + treeExt,
+}
+
+const (
+	treeChars = `[A-Za-z0-9._/@+-]*`
+	treeExt   = `\.(?:ini|conf)`
+)
+
+// rootTreeRe is the alternation of rootTreeParts, unanchored, shared by
+// Validate and the grammar.
+var rootTreeRe = `(?:` + strings.Join(rootTreeParts, "|") + `)`
+
+var rootTrees = regexp.MustCompile(`^` + rootTreeRe + `$`)
+
+// debianConfD matches Debian's conf.d files: links into mods-available,
+// which Michel never writes through.
+var debianConfD = regexp.MustCompile(`^/etc/php/[0-9.]+/[a-z0-9]+/conf\.d/`)
 
 // pathRefusal checks a path on its own: absolute, clean, no "..", plain
 // characters, a configuration file, no key file, no system folder. A file
@@ -50,7 +81,7 @@ func pathRefusal(t target.Target, p string) error {
 	case !configFile.MatchString(path.Base(p)) || secretFile.MatchString(path.Base(p)):
 		return fmt.Errorf("%w: not a configuration file", ErrPathNotAllowed)
 	case !isUserIni(p) && !rootTrees.MatchString(p):
-		return fmt.Errorf("%w: root writes only in system configuration folders", ErrPathNotAllowed)
+		return fmt.Errorf("%w: root writes only in PHP's own configuration folders", ErrPathNotAllowed)
 	case strings.HasPrefix(p, "/root/"):
 		return fmt.Errorf("%w: /root", ErrPathNotAllowed)
 	case strings.HasPrefix(p, "/home/") && (t.User == "" || !strings.HasPrefix(p, "/home/"+t.User+"/")):
@@ -81,9 +112,11 @@ func allowedFile(t target.Target, inv target.Inventory, p string) error {
 	if err := pathRefusal(t, p); err != nil {
 		return err
 	}
+	// Each file by its role: an ini file ends in .ini, a pool in .conf.
 	ok := contains(userInis(inv), p)
+	ini, conf := strings.HasSuffix(p, ".ini"), strings.HasSuffix(p, ".conf")
 	for _, rt := range inv.PHP {
-		if p == rt.LoadedIni || contains(rt.ScannedFiles, p) || contains(rt.PoolFiles, p) {
+		if ini && (p == rt.LoadedIni || contains(rt.ScannedFiles, p)) || conf && contains(rt.PoolFiles, p) {
 			ok = true
 		}
 	}
@@ -372,6 +405,9 @@ func Validate(p Plan, t target.Target, inv target.Inventory) (Plan, error) {
 			}
 			if err := allowedFile(t, inv, loc.path); err != nil {
 				return Plan{}, err
+			}
+			if debianConfD.MatchString(loc.path) {
+				return Plan{}, fmt.Errorf("%w: %s", ErrLinkedFile, loc.path)
 			}
 			if !checkKey(loc.key) {
 				return Plan{}, fmt.Errorf("%w: %q", ErrUnknownDirective, loc.key)
