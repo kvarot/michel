@@ -297,7 +297,7 @@ func TestServerAlertHasNoDetail(t *testing.T) {
 	if title != "Michel · alerte serveur" || text != "Serveur srv-demo : 1 faille grave" {
 		t.Errorf("fr = %q %q", title, text)
 	}
-	for _, k := range []string{servercheck.AlertRollbackFailed, servercheck.AlertRolledBack, servercheck.AlertAppliedAuto} {
+	for _, k := range []string{servercheck.AlertRollbackFailed, servercheck.AlertRolledBack, servercheck.AlertAppliedAuto, servercheck.AlertUndoNow} {
 		for _, l := range []i18n.Lang{i18n.EN, i18n.FR} {
 			_, tx := serverMessage(l, servercheck.AlertInput{Target: demoServer(), Kind: k}, "")
 			if strings.HasPrefix(tx, "!") || !strings.Contains(tx, "srv-demo") {

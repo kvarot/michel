@@ -505,3 +505,21 @@ func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, er
 	}
 	return out, rows.Err()
 }
+
+// ListServerFindings returns every finding of a server (any status), by id.
+func (r *Repo) ListServerFindings(ctx context.Context, targetID string) ([]Finding, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+findingColumns+` FROM finding WHERE project_id = ? AND source_key = '' AND kind IN ('server_package', 'server_config') ORDER BY id`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the findings of the server: %w", err)
+	}
+	defer rows.Close()
+	out := []Finding{}
+	for rows.Next() {
+		f, err := scanFinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}

@@ -22,6 +22,8 @@ var dynamicPrefixes = []string{
 	// fix.consent.* are rendered by the page and the CLI from ConsentText.What;
 	// fix.cause.* from the agent's end causes.
 	"fix.consent.", "fix.cause.",
+	// fix.server.* are named by the error table of a server fix (ErrorKey).
+	"fix.server.",
 	// collect.unseen.* are the reasons stored in an inventory's Unseen lines;
 	// collect.secret_value is shown in place of a masked directive value.
 	"collect.unseen.", "collect.secret_value",

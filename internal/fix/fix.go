@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/kvarot/michel/internal/serverfix"
 	"github.com/kvarot/michel/internal/workcopy"
 )
 
@@ -95,6 +96,9 @@ type Work struct {
 	// the agent touched anything: a proposal applied without a click must
 	// commit that very tree (controller ruling 36).
 	Tree0 string `json:"tree0"`
+	// Server is set for a fix of a server finding (the attempt's ProjectID
+	// is then the server's id).
+	Server *ServerWork `json:"server,omitempty"`
 }
 
 // Plan is the closed update Michel runs in the copy at proposal time,
@@ -149,6 +153,13 @@ type Proposal struct {
 	ToVersion   string       `json:"to_version"`
 	CreatedAt   time.Time    `json:"created_at"`
 	Superseded  bool         `json:"superseded"`
+	// Scripts are the validated scripts of a server fix (nil for a code
+	// fix); Server says where and how they run. For a server fix Hash is
+	// serverHash(Scripts.Hash, Server), see ServerFix.
+	Scripts *serverfix.Bundle `json:"scripts,omitempty"`
+	Server  *ServerFix        `json:"server,omitempty"`
+	// Steps are the steps of a server fix as Michel ran them.
+	Steps []StepResult `json:"steps"`
 }
 
 // ProposeInput is what the agent gives to the propose_fix tool. It lives

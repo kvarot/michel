@@ -29,7 +29,10 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/secret"
+	"github.com/kvarot/michel/internal/servercheck"
+	"github.com/kvarot/michel/internal/sshx"
 	"github.com/kvarot/michel/internal/store"
+	"github.com/kvarot/michel/internal/target"
 	"github.com/kvarot/michel/internal/workcopy"
 )
 
@@ -115,6 +118,24 @@ type Deps struct {
 	MaxTurns       int
 	WorkerInterval time.Duration
 	PollInterval   time.Duration
+
+	// Server fixes (StartServer, Apply and AppliedByMe of a server finding).
+	//
+	// Targets is the server registry; SSH the client's services (every
+	// connection goes through the egress gateway and the strict host key
+	// check). CheckServer checks a server again (servercheck.Check in
+	// michel serve). SiteCheck makes the GET of check_site from the
+	// workstation (purpose target.http): nil means "no site check
+	// possible", a fix with a check_site is then not proven. Alert tells
+	// the user (servercheck.AlertInput kinds rolled_back, rollback_failed,
+	// undo_now); nil tells no one. OnStep, when set, is told each step of a
+	// run as it is known.
+	Targets     *target.Repo
+	SSH         sshx.Deps
+	CheckServer func(ctx context.Context, targetID string) (servercheck.CheckResult, error)
+	SiteCheck   func(ctx context.Context, url string) error
+	Alert       func(ctx context.Context, in servercheck.AlertInput)
+	OnStep      func(attemptID string, s StepResult)
 }
 
 // DefaultMaxTurns caps the agentic turns of a session when Deps.MaxTurns
@@ -765,7 +786,9 @@ func (d Deps) applyApproved(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if a.State != StateApproved {
+	// A server fix never runs at a restart: it runs when the user (or a
+	// level 3 rule, at the time) asked for it, never later on its own.
+	if a.State != StateApproved || a.Work.Server != nil {
 		return nil
 	}
 	d.applyAuto(ctx, a)
@@ -1426,6 +1449,9 @@ func Approve(ctx context.Context, d Deps, attemptID, hash string) error {
 	if !ok {
 		return ErrNoProposal
 	}
+	if a.Work.Server != nil {
+		return d.approveServer(ctx, a, prop, hash)
+	}
 	if hash == "" || prop.Hash != hash {
 		_ = d.record(ctx, "fix.approve", attemptID, "refused", map[string]any{"attempt_id": attemptID, "reason": "stale proposal", "current_hash": prop.Hash})
 		return ErrStaleProposal
@@ -1455,6 +1481,9 @@ func Apply(ctx context.Context, d Deps, attemptID string) error {
 	}
 	if a.State != StateApproved {
 		return fmt.Errorf("%w (the attempt is %s)", ErrBadTransition, a.State)
+	}
+	if a.Work.Server != nil {
+		return d.applyServer(ctx, a)
 	}
 	return d.applyLocked(ctx, a)
 }
@@ -1766,6 +1795,9 @@ func (d Deps) purge(ctx context.Context) error {
 	repo := d.repo()
 	before := d.now().Add(-MessageRetention)
 	if _, err := repo.PurgeMessages(ctx, before); err != nil {
+		return err
+	}
+	if _, err := repo.PurgeBackups(ctx, d.now().Add(-BackupRetention)); err != nil {
 		return err
 	}
 	if d.Secrets == nil {

@@ -60,6 +60,8 @@ func ErrorKey(err error) string {
 	switch {
 	case err == nil:
 		return ""
+	case serverErrorKey(err) != "":
+		return serverErrorKey(err)
 	case errors.Is(err, ErrNotGit):
 		return "fix.err.not_git"
 	case errors.Is(err, ErrConsentRequired):
@@ -136,6 +138,9 @@ func Explain(lang i18n.Lang, err error) string {
 		text = i18n.T(lang, "fix.err.bad_state")
 	case "fix.err.not_found":
 		text = i18n.T(lang, "fix.err.not_found")
+	default:
+		// fix.server.*: the text of the key as it is.
+		text = i18n.T(lang, ErrorKey(err))
 	}
 	return text
 }

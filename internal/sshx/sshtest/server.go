@@ -56,6 +56,10 @@ type Options struct {
 	Sudo bool
 	// Shell runs `sh -s`; nil means `sh -s` is unsupported (exit 127).
 	Shell ShellFunc
+	// RootShell runs `sudo -n sh -s` when Sudo is set (a Shell with UID
+	// 0); nil means it is unsupported (exit 127). Without Sudo, any
+	// `sudo -n` command fails as a real sudo asking for a password does.
+	RootShell ShellFunc
 	// HostKeyTypes lists the host keys the server holds, among "ed25519",
 	// "ecdsa" (P-256) and "rsa" (2048 bits); empty means ed25519 only.
 	HostKeyTypes []string
@@ -350,6 +354,25 @@ func (s *Server) run(ctx context.Context, cmd string, ch stream) int {
 	if err != nil || len(args) == 0 {
 		fmt.Fprintf(stderr, "sshtest: cannot parse command: %v\n", err)
 		return 2
+	}
+	if len(args) == 4 && args[0] == "sudo" && args[1] == "-n" && args[2] == "sh" && args[3] == "-s" {
+		if !s.opts.Sudo {
+			io.WriteString(stderr, "sudo: a password is required\n")
+			return 1
+		}
+		if s.opts.RootShell == nil {
+			io.WriteString(stderr, "sshtest: sudo -n sh -s unsupported\n")
+			return 127
+		}
+		script, err := io.ReadAll(ch)
+		if err != nil {
+			return 2
+		}
+		return s.opts.RootShell(s, string(script), ch, stderr)
+	}
+	if len(args) >= 2 && args[0] == "sudo" && args[1] == "-n" && !s.opts.Sudo {
+		io.WriteString(stderr, "sudo: a password is required\n")
+		return 1
 	}
 	if len(args) == 2 && args[0] == "sh" && args[1] == "-s" {
 		if s.opts.Shell == nil {

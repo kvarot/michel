@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kvarot/michel/internal/secret"
+	"github.com/kvarot/michel/internal/serverfix"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/oklog/ulid/v2"
 )
@@ -249,7 +251,38 @@ func (r *Repo) SetRun(ctx context.Context, id, cloneDir, sessionID string) error
 	return nil
 }
 
-const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version, commands`
+const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version, commands, scripts, steps`
+
+// serverRecord is what the scripts column holds for a server fix.
+type serverRecord struct {
+	Bundle serverfix.Bundle `json:"bundle"`
+	Server ServerFix        `json:"server"`
+}
+
+func scriptsJSON(p Proposal) (string, error) {
+	if p.Scripts == nil && p.Server == nil {
+		return "", nil
+	}
+	if p.Scripts == nil || p.Server == nil {
+		return "", errors.New("cannot save the proposal: a server fix needs both its scripts and its server record")
+	}
+	b, err := json.Marshal(serverRecord{Bundle: *p.Scripts, Server: *p.Server})
+	if err != nil {
+		return "", fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	return string(b), nil
+}
+
+func stepsJSON(steps []StepResult) (string, error) {
+	if steps == nil {
+		steps = []StepResult{}
+	}
+	b, err := json.Marshal(steps)
+	if err != nil {
+		return "", fmt.Errorf("cannot save the steps: %w", err)
+	}
+	return string(b), nil
+}
 
 // AddProposal stores p for its attempt and marks the attempt's previous
 // proposals Superseded, in one transaction that also checks the attempt is
@@ -278,6 +311,14 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
+	scripts, err := scriptsJSON(p)
+	if err != nil {
+		return Proposal{}, err
+	}
+	stepsDone, err := stepsJSON(p.Steps)
+	if err != nil {
+		return Proposal{}, err
+	}
 	tx, err := r.s.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
@@ -301,9 +342,9 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)`,
 		p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
-		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds)); err != nil {
+		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds), scripts, stepsDone); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -329,10 +370,23 @@ func b2i(b bool) int {
 func scanProposal(s scanner) (Proposal, error) {
 	var p Proposal
 	var err error
-	var files, steps, created, raw, cmds string
+	var files, steps, created, raw, cmds, scripts, ran string
 	var rescan, superseded int
-	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion, &cmds); err != nil {
+	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion, &cmds, &scripts, &ran); err != nil {
 		return Proposal{}, err
+	}
+	if scripts != "" {
+		var rec serverRecord
+		if err := json.Unmarshal([]byte(scripts), &rec); err != nil {
+			return Proposal{}, fmt.Errorf("proposal %s has unreadable scripts: %w", p.ID, err)
+		}
+		p.Scripts, p.Server = &rec.Bundle, &rec.Server
+	}
+	if err := json.Unmarshal([]byte(ran), &p.Steps); err != nil {
+		return Proposal{}, fmt.Errorf("proposal %s has unreadable steps: %w", p.ID, err)
+	}
+	if p.Steps == nil {
+		p.Steps = []StepResult{}
 	}
 	if p.DiffRaw, err = base64.StdEncoding.DecodeString(raw); err != nil {
 		return Proposal{}, fmt.Errorf("proposal %s has an unreadable patch: %w", p.ID, err)
@@ -580,4 +634,119 @@ func (r *Repo) DeleteConsent(ctx context.Context, projectID string) error {
 		return fmt.Errorf("cannot delete the consent: %w", err)
 	}
 	return nil
+}
+
+// SetSteps records the steps Michel ran for a server proposal.
+func (r *Repo) SetSteps(ctx context.Context, proposalID string, steps []StepResult) error {
+	js, err := stepsJSON(steps)
+	if err != nil {
+		return err
+	}
+	if _, err := r.s.DB().ExecContext(ctx, `UPDATE fix_proposal SET steps = ? WHERE id = ?`, js, proposalID); err != nil {
+		return fmt.Errorf("cannot save the steps: %w", err)
+	}
+	return nil
+}
+
+// AckSnapshot records that the user made a snapshot of the server before a
+// package upgrade of the attempt (the latest acknowledgement wins).
+func (r *Repo) AckSnapshot(ctx context.Context, attemptID, actor string) error {
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot record the snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM server_snapshot_ack WHERE attempt_id = ?`, attemptID); err != nil {
+		return fmt.Errorf("cannot record the snapshot: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO server_snapshot_ack (attempt_id, at, actor) VALUES (?,?,?)`, attemptID, ts(r.now()), actor); err != nil {
+		return fmt.Errorf("cannot record the snapshot: %w", err)
+	}
+	return tx.Commit()
+}
+
+// SnapshotAck tells whether, when and by whom the snapshot of the attempt
+// was acknowledged.
+func (r *Repo) SnapshotAck(ctx context.Context, attemptID string) (at time.Time, actor string, ok bool, err error) {
+	var when string
+	err = r.s.DB().QueryRowContext(ctx, `SELECT at, actor FROM server_snapshot_ack WHERE attempt_id = ?`, attemptID).Scan(&when, &actor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, "", false, nil
+	}
+	if err != nil {
+		return time.Time{}, "", false, fmt.Errorf("cannot read the snapshot: %w", err)
+	}
+	at, err = parseTime(when)
+	return at, actor, err == nil, err
+}
+
+// ServerBackup is the copy of a server file a fix backed up, kept on the
+// workstation (encrypted at rest with secret.Protect).
+type ServerBackup struct {
+	ID         string
+	AttemptID  string
+	TargetID   string
+	RemotePath string
+	SHA256     string
+	Content    []byte
+	CreatedAt  time.Time
+}
+
+// AddBackup stores the content of a backup, protected.
+func (r *Repo) AddBackup(ctx context.Context, b ServerBackup) (ServerBackup, error) {
+	now := r.now()
+	id, err := r.newID(now)
+	if err != nil {
+		return ServerBackup{}, err
+	}
+	blob, err := secret.Protect(b.Content)
+	if err != nil {
+		return ServerBackup{}, fmt.Errorf("cannot protect the backup: %w", err)
+	}
+	b.ID, b.CreatedAt = id, now
+	if _, err := r.s.DB().ExecContext(ctx, `INSERT INTO server_backup (id, attempt_id, target_id, remote_path, sha256, blob, created_at) VALUES (?,?,?,?,?,?,?)`,
+		b.ID, b.AttemptID, b.TargetID, b.RemotePath, b.SHA256, base64.StdEncoding.EncodeToString(blob), ts(now)); err != nil {
+		return ServerBackup{}, fmt.Errorf("cannot save the backup: %w", err)
+	}
+	return b, nil
+}
+
+// Backups returns the backups of an attempt, oldest first, decrypted.
+func (r *Repo) Backups(ctx context.Context, attemptID string) ([]ServerBackup, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, attempt_id, target_id, remote_path, sha256, blob, created_at FROM server_backup WHERE attempt_id = ? ORDER BY created_at, id`, attemptID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the backups: %w", err)
+	}
+	defer rows.Close()
+	var out []ServerBackup
+	for rows.Next() {
+		var b ServerBackup
+		var blob, created string
+		if err := rows.Scan(&b.ID, &b.AttemptID, &b.TargetID, &b.RemotePath, &b.SHA256, &blob, &created); err != nil {
+			return nil, err
+		}
+		raw, err := base64.StdEncoding.DecodeString(blob)
+		if err != nil {
+			return nil, fmt.Errorf("backup %s is unreadable: %w", b.ID, err)
+		}
+		if b.Content, err = secret.Unprotect(raw); err != nil {
+			return nil, fmt.Errorf("backup %s cannot be decrypted: %w", b.ID, err)
+		}
+		if b.CreatedAt, err = parseTime(created); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// PurgeBackups deletes the workstation copies of the backups made before
+// before. The backups on the servers are never touched.
+func (r *Repo) PurgeBackups(ctx context.Context, before time.Time) (int, error) {
+	res, err := r.s.DB().ExecContext(ctx, `DELETE FROM server_backup WHERE created_at < ?`, ts(before))
+	if err != nil {
+		return 0, fmt.Errorf("cannot purge the backups: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }

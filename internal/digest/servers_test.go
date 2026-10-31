@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/target"
 )
@@ -72,5 +73,12 @@ func TestDigestServersSection(t *testing.T) {
 	text, _ = RenderText(d)
 	if len(d.Servers) != 0 || strings.Contains(text, "Servers") {
 		t.Errorf("inactive servers listed: %+v", d.Servers)
+	}
+}
+
+// The fix service stores this very cause on a rolled back server fix.
+func TestRolledBackCauseIsTheFixServices(t *testing.T) {
+	if CauseRolledBack != fix.CauseRolledBack {
+		t.Errorf("digest %q, fix %q", CauseRolledBack, fix.CauseRolledBack)
 	}
 }

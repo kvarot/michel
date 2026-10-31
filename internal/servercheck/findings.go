@@ -19,15 +19,22 @@ const (
 	AlertRollbackFailed = "rollback_failed"
 	AlertRolledBack     = "rolled_back"
 	AlertAppliedAuto    = "applied_auto"
+	// AlertUndoNow: a fix the user ran broke the site; the user must run
+	// the undo script now (Michel never runs a script it was not allowed to).
+	AlertUndoNow = "undo_now"
 )
 
 // AlertInput is what Alert is told: the server, the findings concerned and
 // whether one of them is urgent (Urgent). Kind is one of the Alert* kinds.
+// Backups lists, for a fix that could not be undone, the backup files on the
+// server and the file each one restores ("backup -> file"): for the page
+// only, never put in a message.
 type AlertInput struct {
-	Target target.Target
-	New    []scan.Finding
-	Urgent bool
-	Kind   string
+	Target  target.Target
+	New     []scan.Finding
+	Urgent  bool
+	Kind    string
+	Backups []string
 }
 
 // Urgent tells whether f on t must be fixed now: t is a production server
