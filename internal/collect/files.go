@@ -218,10 +218,16 @@ func (f *fileReader) get(p string, say bool) *readFile {
 	// The name is not enough: a php.ini may be a link to /etc/shadow or to
 	// another user's home. Resolve it on the server, apply the rules to the
 	// real file too, and read the real file.
-	rl, ok := f.c.run([]string{"readlink", "-f", p})
+	rl, ok, refused := f.c.runFile([]string{"readlink", "-f", p})
+	if refused {
+		f.c.unseen(p, ReasonRefused)
+		return nil
+	}
 	if !ok {
 		if f.c.err == nil && say {
-			f.c.unseen(p, ReasonNotRead)
+			// GNU readlink -f fails silently when a parent folder is
+			// missing: that cause cannot be told, so it is not_read.
+			f.c.unseen(p, failure(rl.Stderr))
 		}
 		return nil
 	}
@@ -234,21 +240,17 @@ func (f *fileReader) get(p string, say bool) *readFile {
 		f.c.unseen(p, ReasonRefused)
 		return nil
 	}
-	res, ok := f.c.run(cmdRead(resolved))
+	res, ok, refused := f.c.runFile(cmdRead(resolved))
+	if refused {
+		f.c.unseen(p, ReasonRefused)
+		return nil
+	}
 	if !ok {
 		if f.c.err != nil {
 			return nil
 		}
-		msg := strings.ToLower(scan.SanitizeText(string(res.Stderr)))
-		switch {
-		case strings.Contains(msg, "no such file"):
-			if say {
-				f.c.unseen(p, ReasonMissing)
-			}
-		case strings.Contains(msg, "permission denied"):
-			f.c.unseen(p, ReasonUnreadable)
-		default:
-			f.c.unseen(p, ReasonNotRead)
+		if why := failure(res.Stderr); why != ReasonMissing || say {
+			f.c.unseen(p, why)
 		}
 		return nil
 	}
@@ -261,4 +263,17 @@ func (f *fileReader) get(p string, say bool) *readFile {
 	r := &readFile{path: p, lines: parseIni(string(res.Stdout))}
 	f.read[p] = r
 	return r
+}
+
+// failure names the cause of a failed read from its error text (C locale):
+// missing, unreadable, or not_read when it cannot be told.
+func failure(stderr []byte) string {
+	msg := strings.ToLower(scan.SanitizeText(string(stderr)))
+	switch {
+	case strings.Contains(msg, "no such file"):
+		return ReasonMissing
+	case strings.Contains(msg, "permission denied"):
+		return ReasonUnreadable
+	}
+	return ReasonNotRead
 }

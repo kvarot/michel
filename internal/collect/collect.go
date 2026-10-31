@@ -128,6 +128,17 @@ func (c *collector) resolve(bin string) string {
 
 // run runs argv if it is in the closed list. ok is false when the command
 // could not run (not found, failure); res is then still filled when it ran.
+// runFile runs a command on a file path: a path whose shape the closed
+// list refuses is an Unseen line for that file (refused is true), never a
+// stop of the collection.
+func (c *collector) runFile(argv []string) (res sshx.Result, ok, refused bool) {
+	if c.err == nil && !allowed(argv) {
+		return sshx.Result{}, false, true
+	}
+	res, ok = c.run(argv)
+	return res, ok, false
+}
+
 func (c *collector) run(argv []string) (sshx.Result, bool) {
 	if c.err != nil {
 		return sshx.Result{}, false

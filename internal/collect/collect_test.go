@@ -56,8 +56,9 @@ type host struct {
 	apache2  string
 	kernel   string
 	osRel    string
-	headsFor []string // records every head path, to count read attempts
-	french   bool     // the server answers in French when the locale is not forced
+	headsFor []string        // records every head path, to count read attempts
+	french   bool            // the server answers in French when the locale is not forced
+	noParent map[string]bool // readlink -f fails: a parent folder is missing
 }
 
 type fpmOut struct{ v, i, tt, m string }
@@ -91,6 +92,10 @@ func (h *host) commands() map[string]sshtest.Handler {
 	}
 	out["readlink"] = func(e sshtest.Exec) int {
 		p := e.Args[len(e.Args)-1]
+		if h.noParent[p] {
+			fmt.Fprintf(e.Stderr, "readlink: %s: No such file or directory\n", p)
+			return 1
+		}
 		if r, ok := h.links[p]; ok {
 			p = r
 		}

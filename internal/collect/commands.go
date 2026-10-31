@@ -137,7 +137,8 @@ func allowed(argv []string) bool {
 	case len(argv) == 2 && isWebBinary(argv[0]):
 		return argv[1] == "-v"
 	case len(argv) == 3 && argv[0] == "readlink" && argv[1] == "-f":
-		return isPHPBinary(argv[2])
+		// A binary, or a file head may read: the same rule as head.
+		return isPHPBinary(argv[2]) || baseRefusal(argv[2]) == ""
 	case len(argv) == 3 && argv[0] == "dpkg" && argv[1] == "-S":
 		return isPHPBinary(argv[2])
 	case len(argv) == 5 && argv[0] == "rpm" && argv[1] == "-qf" && argv[2] == "--qf" && argv[3] == rpmName:

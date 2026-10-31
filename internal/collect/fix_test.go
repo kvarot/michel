@@ -1,6 +1,7 @@
 package collect_test
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -211,5 +212,29 @@ func TestLinkedConfigFileResolvedBeforeRead(t *testing.T) {
 	}
 	if !read {
 		t.Fatal("the real file was not read")
+	}
+}
+
+func TestPathWithSpaceReadAndCollectionContinues(t *testing.T) {
+	h := debian(t)
+	h.files["/home/deploy/my site/.user.ini"] = "display_errors = Off\n"
+	h.noParent = map[string]bool{"/etc/php/8.2/fpm/gone/extra.ini": true}
+	e := start(t, h)
+	e.deps.ExtraPaths = []string{"/etc/php/8.2/fpm/gone/extra.ini", "/etc/nginx/nginx (old).conf"}
+	links := []target.Link{{TargetID: "01TARGETDEMO", RemoteDir: "/home/deploy/my site"}}
+	inv, err := collect.Run(context.Background(), e.deps, e.client, e.tgt, links)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	d, ok := directive(inv, "user_ini", "display_errors")
+	if !ok || d.File != "/home/deploy/my site/.user.ini" || d.Value != "Off" {
+		t.Fatalf("user_ini %+v", d)
+	}
+	if !hasUnseen(inv, "/etc/php/8.2/fpm/gone/extra.ini", "collect.unseen.missing") {
+		t.Fatalf("unseen %+v", inv.Unseen)
+	}
+	// The collection went on to the end: the paren path was handled too.
+	if !hasUnseen(inv, "/etc/nginx/nginx (old).conf", "collect.unseen.missing") {
+		t.Fatalf("unseen %+v", inv.Unseen)
 	}
 }
