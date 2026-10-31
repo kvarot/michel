@@ -90,3 +90,20 @@ Task 6: fix round 1/5 (I1-I5 + M2 part, M6, M7 addressed; M1, M2 Pro, M4, M5 ski
 Task 6: complete (commits 9d8e545..b8a9e0c, re-review clean)
 Task 6: minor (deferred, T7 input): surface ReleaseKnown=false, Unjudged, Skipped>0 — zero hits with any of these is not "clean"; Uncertain only in summary prose (no structured flag)
 Task 6: minor (deferred): Rocky test lacks Fixed/Uncertain asserts; no real Alma/Rocky record checked
+Ruling: Task 7 code lives in internal/servercheck (R4); files check.go/findings.go/schedule.go/check_test.go there; names servercheck.CheckDeps/Check/CheckResult/Rematch/Scheduler/AlertInput/Urgent.
+Ruling: Task 7 closes Task 5 M5 — Check passes distro vulnmatch hits whose Aliases include CVE-2026-109618/109619 to serverrules so PHP2Shell mitigation advice is evaluated for distro runtimes too (minimal additive signature change) — spec 7.2 wants mitigation advice whatever the install source — costs: small serverrules API change.
+Ruling: Task 7 unfixed distro advisories (no Fixed version) are stored as findings but never Urgent unless KEV — avoids daily alert floods from Debian unfixed CVEs while keeping them visible — costs: a critical unfixed non-KEV CVE alerts only in the digest.
+Ruling: Task 7 CheckResult gains Unjudged int, ReleaseKnown bool, SkippedAdvisories int; zero findings with ReleaseKnown=false or Unjudged>0 is not shown "clean" — fail visible — costs: brief struct grows.
+Task 7: dispatched (BASE cd66b8d, implementer a056179903c44726c, opus)
+Task 7: implementer DONE_WITH_CONCERNS (commit ea6d4f4; ApplyServerFindings gains ServerApply{Unread,Enriched} + superseded; CheckDeps gains Audit, Lookup; EvaluateWith Options{DistroOpen})
+Ruling: "seulement à la main" (spec) = CheckInterval < 0 (stored -1), Due skips it; 0 = default 24h — my T7 ruling 8 had erased manual-only — costs: Task 12 API/CLI must map "manual" to -1 → added to T7 fix round + carry to T12.
+Task 7: ⚠️ carry to T10: apply turns missing findings into gone — must not overwrite proven_fixed
+Task 7: ⚠️ carry to T8: Alert nil in michel serve until alert channel exists
+Task 7: review — spec ❌ (manual-only missing), Needs fixes (3 Important: I1 manual-only; I2 distro mitigation findings gone when packages unjudged; I3 partial collection closes PHP findings then re-alerts) → fix round 1 (+ minors: db update rematch, inactive target, PHP-VERSION-UNKNOWN urgent in prod, no user@host in scheduler log)
+Task 7: fix round 1/5 (I1-I3 + minors db-update rematch, ErrInactive, PHP-VERSION-UNKNOWN urgent, scheduler log, stale rematch guard, no re-alert on decided, RematchError; M8 skipped with reason; commits ea6d4f4..f181756) → re-review
+Task 7: ⚠️ carry to T12: API/CLI "manual" → CheckInterval -1 (target.ManualOnly)
+Task 7: re-review round 1 — I1-I3 + M1-M7 addressed; new N1 Important (command -v exit 127 on dash/busybox = discovery failed forever), N2-N4 minor → fix round 2
+Task 7: fix round 2/5 (N1-N4 addressed; N3 also protects os-package findings on Skipped>0; commits f181756..5313ca9) → re-review
+Task 7: complete (commits cd66b8d..5313ca9, re-review clean after 2 rounds)
+Task 7: minor (deferred, final wave): exit 127 with empty stdout (shell lacking `command`) silently = "not installed" → only cli:/fpm: config findings could close; harden with a `command -v sh` sentinel
+Task 7: minor (deferred): ReasonTimeout branch in judge effectively dead; unreadable .user.ini keeps all fpm: findings of the server open (broad, document in docs/servers)
