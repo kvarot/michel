@@ -12,6 +12,9 @@ import (
 	"github.com/kvarot/michel/internal/servercheck"
 )
 
+// maxNameRunes bounds the server name in an alert, so an SMS stays short.
+const maxNameRunes = 40
+
 // serverMessage is the text of a server alert: the server's name and, for a
 // new finding, how many grave ones. Never a version, a path, a setting or an
 // advisory: the page tells the rest.
@@ -20,6 +23,9 @@ func serverMessage(lang i18n.Lang, in servercheck.AlertInput, pageURL string) (t
 		lang = i18n.EN
 	}
 	name := scan.SanitizeText(in.Target.Name)
+	if r := []rune(name); len(r) > maxNameRunes {
+		name = string(r[:maxNameRunes-1]) + "…"
+	}
 	title = i18n.T(lang, "notify.server.title", digest.DefaultAssistant)
 	switch in.Kind {
 	case servercheck.AlertRollbackFailed:
@@ -56,6 +62,13 @@ func SendServerAlert(ctx context.Context, ns []Notifier, in servercheck.AlertInp
 	out := make([]Delivery, 0, len(ns))
 	for _, n := range ns {
 		host, purpose := Target(n)
+		if sc, ok := n.(Scoped); ok && len(sc.Projects()) > 0 {
+			// A channel limited to some projects (a client's) must not hear
+			// about the servers, as the digest does not show them.
+			out = append(out, Delivery{ChannelResult: digest.ChannelResult{Name: n.Name(), Type: n.Type(), Result: ResultSkipped},
+				Host: host, Purpose: purpose})
+			continue
+		}
 		skipped := func(reason string) Delivery {
 			return Delivery{ChannelResult: digest.ChannelResult{Name: n.Name(), Type: n.Type(), Result: ResultSkipped, Error: reason},
 				Host: host, Purpose: purpose}

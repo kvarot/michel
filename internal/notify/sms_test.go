@@ -349,3 +349,65 @@ func TestSMSChannelValidation(t *testing.T) {
 		t.Errorf("build: %v", err)
 	}
 }
+
+func TestServerAlertSkipsScopedChannels(t *testing.T) {
+	hook := startHook(t, http.StatusOK, "")
+	deps := smsDeps(t, nil, memSecrets{}, nil, 3)
+	scoped, err := New(policy.ChannelConfig{Name: "client", Type: "webhook", URL: hook.URL + "/m", Format: "slack", Projects: []string{"demo"}}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := New(policy.ChannelConfig{Name: "mine", Type: "webhook", URL: hook.URL + "/m", Format: "slack"}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := servercheck.AlertInput{Target: demoServer(), Urgent: true, Kind: servercheck.AlertNew}
+	out := SendServerAlert(context.Background(), []Notifier{scoped, open}, in, "", alertNow)
+	if out[0].Result != ResultSkipped || out[1].Result != ResultOK {
+		t.Fatalf("deliveries = %+v", out)
+	}
+}
+
+func TestSMSBodyIsShort(t *testing.T) {
+	srv := startSMS(t, http.StatusOK)
+	n, _ := New(freeMobile(srv.URL, true), smsDeps(t, nil, memSecrets{"fm-key": "k"}, newStoreCounter(t), 3))
+	long := demoServer()
+	long.Name = strings.Repeat("a-very-long-server-name-", 20)
+	out := SendServerAlert(context.Background(), []Notifier{n}, servercheck.AlertInput{Target: long, Kind: servercheck.AlertRollbackFailed}, "http://127.0.0.1:7331/#/servers/01SRVDEMO", alertNow)
+	if out[0].Result != ResultOK {
+		t.Fatalf("%+v", out)
+	}
+	msg := srv.reqs[0].URL.Query().Get("msg")
+	if len([]rune(msg)) > 160 {
+		t.Errorf("sms is %d characters: %q", len([]rune(msg)), msg)
+	}
+	if !strings.Contains(msg, "…") || !strings.Contains(msg, "#/servers/01SRVDEMO") {
+		t.Errorf("msg = %q", msg)
+	}
+}
+
+func TestSMSCounterConcurrentTake(t *testing.T) {
+	c := newStoreCounter(t)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	won := 0
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := c.Take(context.Background(), alertNow, 1)
+			if err != nil {
+				t.Error(err)
+			}
+			if ok {
+				mu.Lock()
+				won++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if won != 1 {
+		t.Fatalf("%d goroutines won a cap of 1", won)
+	}
+}

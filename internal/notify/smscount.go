@@ -18,10 +18,12 @@ type SMSCounter interface {
 }
 
 // StoreCounter keeps the count in the store (table sms_count, one row per
-// UTC day).
+// local day).
 type StoreCounter struct{ S *store.Store }
 
-func day(now time.Time) string { return now.UTC().Format("2006-01-02") }
+// day is the calendar day of now in local time: the cap resets at the
+// user's midnight, not at UTC midnight.
+func day(now time.Time) string { return now.In(time.Local).Format("2006-01-02") }
 
 // Take implements SMSCounter. The increment is one conditional UPDATE, so two
 // processes never go above max.
