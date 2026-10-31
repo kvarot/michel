@@ -58,6 +58,10 @@ const (
 	ReasonTruncated  = "collect.unseen.truncated"
 	ReasonTimeout    = "collect.unseen.timeout"
 	ReasonSite       = "collect.unseen.site"
+	// ReasonProbe: a command that asks what is installed failed or ran past its
+	// time limit. Unlike ReasonPHP or ReasonFPM (nothing found), what it asks
+	// about may be there: its absence proves nothing.
+	ReasonProbe = "collect.unseen.probe"
 )
 
 // SecretValueKey is the i18n key of the text shown instead of a secret
@@ -140,23 +144,31 @@ func (c *collector) runFile(argv []string) (res sshx.Result, ok, refused bool) {
 }
 
 func (c *collector) run(argv []string) (sshx.Result, bool) {
+	res, ok, _ := c.probe(argv)
+	return res, ok
+}
+
+// probe is run that also tells when the command could not answer: it ran
+// past its time limit (the collection goes on) or did not complete.
+func (c *collector) probe(argv []string) (res sshx.Result, ok, broken bool) {
 	if c.err != nil {
-		return sshx.Result{}, false
+		return sshx.Result{}, false, false
 	}
 	if !allowed(argv) {
 		// A programming error: the closed list is built in this package.
 		c.err = fmt.Errorf("collect: command outside the closed list refused: %s", argv[0])
-		return sshx.Result{}, false
+		return sshx.Result{}, false, false
 	}
-	res, err := c.r.Run(c.ctx, withLocale(argv), nil)
+	var err error
+	res, err = c.r.Run(c.ctx, withLocale(argv), nil)
 	if err != nil {
 		if errors.Is(err, sshx.ErrCommandTimeout) && c.ctx.Err() == nil {
-			return res, false
+			return res, false, true
 		}
 		c.err = err
-		return res, false
+		return res, false, true
 	}
-	return res, res.Exit == 0
+	return res, res.Exit == 0, false
 }
 
 func (c *collector) unseen(what, reason string) {
@@ -214,8 +226,14 @@ func (c *collector) system() {
 // find returns the binaries `command -v` printed, by name or path asked.
 func (c *collector) find() map[string]string {
 	found := map[string]string{}
+	failed := false
 	for _, argv := range [][]string{cmdFind(), cmdFindSbin()} {
-		res, _ := c.run(argv) // non-zero as soon as one name is missing
+		// Exit 1 as soon as one name is missing; above 1 (or no answer in
+		// time) the shell could not look at all.
+		res, _, broken := c.probe(argv)
+		if (broken || res.Exit > 1) && c.err == nil {
+			failed = true
+		}
 		for _, p := range parseFound(string(res.Stdout)) {
 			for _, asked := range argv[2:] {
 				if asked == p || (!strings.HasPrefix(asked, "/") && strings.HasSuffix(p, "/"+asked)) {
@@ -225,6 +243,10 @@ func (c *collector) find() map[string]string {
 				}
 			}
 		}
+	}
+	if failed {
+		// What was not found may still be installed.
+		c.unseen("discovery", ReasonProbe)
 	}
 	return found
 }
@@ -283,6 +305,8 @@ func (c *collector) cli(found map[string]string, files *fileReader) {
 	rt := target.PHPRuntime{SAPI: "cli", Binary: bin}
 	if res, ok := c.run(cmdPHPV); ok {
 		rt.Version = parsePHPVersion(string(res.Stdout))
+	} else if c.err == nil {
+		c.unseen(bin, ReasonProbe)
 	}
 	if res, ok := c.run(cmdPHPM); ok {
 		rt.Modules = parseModules(string(res.Stdout))
@@ -338,6 +362,9 @@ func (c *collector) fpm(found map[string]string, files *fileReader) {
 		rt := target.PHPRuntime{SAPI: "fpm", Binary: bin}
 		res, ok := c.run([]string{bin, "-v"})
 		if !ok {
+			if c.err == nil {
+				c.unseen(bin, ReasonProbe)
+			}
 			continue
 		}
 		rt.Version = parsePHPVersion(string(res.Stdout))

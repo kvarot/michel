@@ -110,7 +110,7 @@ func normalize(t *Target) error {
 		return fmt.Errorf("%w (got %d)", ErrInvalidFixLevel, t.FixLevel)
 	}
 	if t.CheckInterval < 0 {
-		return ErrInvalidInterval
+		t.CheckInterval = ManualOnly
 	}
 	if t.Kind == KindHDS {
 		if t.Classification != "" && t.Classification != policy.ClassHealth {
@@ -129,7 +129,7 @@ func normalize(t *Target) error {
 
 // Add validates and stores t. ID, Active and CreatedAt are set here. A zero
 // FixLevel stays 0 and a zero CheckInterval is stored as 0 (Due counts it
-// as DefaultCheckInterval).
+// as DefaultCheckInterval); a negative one is stored as ManualOnly.
 func (r *Repo) Add(ctx context.Context, t Target) (Target, error) {
 	if err := normalize(&t); err != nil {
 		return Target{}, err
@@ -401,16 +401,19 @@ func (r *Repo) SetLastCheckAt(ctx context.Context, id string, at time.Time) erro
 
 // Due returns the active servers whose last check is older than their check
 // interval (never checked counts as due), by name. A zero interval counts as
-// DefaultCheckInterval.
+// DefaultCheckInterval; a ManualOnly (negative) server is never due.
 func (r *Repo) Due(ctx context.Context, now time.Time) ([]Target, error) {
-	all, err := r.query(ctx, `SELECT `+cols+` FROM target WHERE active = 1 ORDER BY name`)
+	all, err := r.query(ctx, `SELECT `+cols+` FROM target WHERE active = 1 AND check_interval_s >= 0 ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	out := []Target{}
 	for _, t := range all {
+		if t.CheckInterval < 0 {
+			continue
+		}
 		every := t.CheckInterval
-		if every <= 0 {
+		if every == 0 {
 			every = DefaultCheckInterval
 		}
 		if t.LastCheckAt.IsZero() || !t.LastCheckAt.Add(every).After(now) {

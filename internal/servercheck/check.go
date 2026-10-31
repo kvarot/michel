@@ -114,6 +114,9 @@ func Check(ctx context.Context, d CheckDeps, targetID string) (CheckResult, erro
 	if err != nil {
 		return CheckResult{}, err
 	}
+	if !t.Active {
+		return CheckResult{}, fmt.Errorf("%w (%s)", ErrInactive, t.Name)
+	}
 	links, err := d.Repo.Links(ctx, t.ID)
 	if err != nil {
 		return CheckResult{}, err
@@ -202,10 +205,27 @@ func judge(ctx context.Context, d CheckDeps, t target.Target, inv target.Invento
 	}
 	fs := serverrules.EvaluateWith(t, inv, set, serverrules.Options{DistroOpen: open})
 	fs = append(fs, vulnmatch.Findings(t, m)...)
+	var prefixes []string
+	if slices.Contains(unread, osPackages) {
+		// The PHP2Shell mitigations of a packaged runtime depend on the
+		// distribution advisories, which could not be judged.
+		for _, rt := range inv.PHP {
+			if rt.FromPackage != "" {
+				unread = append(unread, rt.SAPI+":"+rt.Binary)
+			}
+		}
+	}
 	for _, u := range inv.Unseen {
-		if u.Reason == collect.ReasonDirectives {
-			// The settings of that binary were not read: absence proves nothing.
+		switch {
+		case u.Reason == collect.ReasonTimeout, u.Reason == collect.ReasonProbe && u.What == "discovery":
+			// Michel could not tell which runtimes are there.
+			prefixes = append(prefixes, "cli:", "fpm:")
+		case u.Reason == collect.ReasonDirectives, u.Reason == collect.ReasonProbe:
+			// That binary was not (fully) read: absence proves nothing.
 			unread = append(unread, "cli:"+u.What, "fpm:"+u.What)
+		case strings.HasSuffix(u.What, "/.user.ini") && u.Reason != collect.ReasonMissing:
+			// A .user.ini line counts for the FPM runtimes.
+			prefixes = append(prefixes, "fpm:")
 		}
 	}
 	enriched := d.Lookup != nil
@@ -226,9 +246,13 @@ func judge(ctx context.Context, d CheckDeps, t target.Target, inv target.Invento
 			fs[i] = scan.WithEnrichment(fs[i], scan.CombineEnrichment(known, scan.CVEsOf(fs[i])))
 		}
 	}
-	fresh, superseded, err := storeFindings(ctx, d, t, fs, unread, enriched, &res)
+	fresh, superseded, stale, err := storeFindings(ctx, d, t, inv.At, fs, scan.ServerApply{Unread: unread, UnreadPrefixes: prefixes, Enriched: enriched}, &res)
 	if err != nil {
 		return res, err
+	}
+	if stale {
+		// A newer inventory was judged meanwhile: this one is out of date.
+		return res, nil
 	}
 	res.Touched = true
 	for _, s := range superseded {
@@ -300,5 +324,8 @@ func (d CheckDeps) record(ctx context.Context, action, targetID string, res Chec
 		slog.Warn("servercheck: cannot record the check in the audit log", "action", action, "err", err)
 	}
 }
+
+// ErrInactive: the server is turned off in Michel; it is not checked.
+var ErrInactive = errors.New("this server is turned off in Michel: turn it back on to check it")
 
 func newRunID() string { return ulid.Make().String() }

@@ -798,3 +798,84 @@ func TestParsePackages(t *testing.T) {
 		t.Fatal("an environment variable read as a directive")
 	}
 }
+
+// slowRunner answers like r, except that the commands for which slow
+// returns true run past their time limit.
+type slowRunner struct {
+	r    collect.Runner
+	slow func(argv []string) bool
+}
+
+func (s slowRunner) Run(ctx context.Context, argv []string, stdin io.Reader) (sshx.Result, error) {
+	if s.slow(argv) {
+		return sshx.Result{}, fmt.Errorf("%w (1s): %w", sshx.ErrCommandTimeout, context.DeadlineExceeded)
+	}
+	return s.r.Run(ctx, argv, stdin)
+}
+
+func TestTimedOutFPMProbeIsUnseen(t *testing.T) {
+	e := start(t, debian(t))
+	r := slowRunner{r: e.client, slow: func(argv []string) bool {
+		return argv[len(argv)-2] == "/usr/sbin/php-fpm8.2" && argv[len(argv)-1] == "-v"
+	}}
+	inv, err := collect.Run(context.Background(), e.deps, r, e.tgt, demoLinks)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(runtimeOf(inv, "fpm")) != 0 || !hasUnseen(inv, "/usr/sbin/php-fpm8.2", collect.ReasonProbe) {
+		t.Fatalf("a timed-out php-fpm -v must be said: %+v", inv.Unseen)
+	}
+}
+
+func TestFailedDiscoveryIsUnseen(t *testing.T) {
+	for name, slow := range map[string]bool{"timed out": true, "shell error": false} {
+		h := debian(t)
+		e := start(t, h)
+		var r collect.Runner = e.client
+		if slow {
+			r = slowRunner{r: e.client, slow: func(argv []string) bool { return argv[0] == "command" }}
+		} else {
+			cmds := h.commands()
+			cmds["command"] = func(e sshtest.Exec) int { io.WriteString(e.Stderr, "sh: broken\n"); return 2 }
+			srv := sshtest.New(t, sshtest.Options{Commands: cmds})
+			e = restart(t, e, srv)
+			r = e.client
+		}
+		inv, err := collect.Run(context.Background(), e.deps, r, e.tgt, demoLinks)
+		if err != nil {
+			t.Fatalf("%s: Run: %v", name, err)
+		}
+		if len(inv.PHP) != 0 || !hasUnseen(inv, "discovery", collect.ReasonProbe) {
+			t.Fatalf("%s: unseen %+v", name, inv.Unseen)
+		}
+	}
+	// Nothing found is not a failure.
+	h := debian(t)
+	h.bins = map[string]string{}
+	inv := run(t, start(t, h), demoLinks)
+	if hasUnseen(inv, "discovery", collect.ReasonProbe) {
+		t.Fatalf("no PHP installed is not a failed lookup: %+v", inv.Unseen)
+	}
+}
+
+// restart dials srv instead of e's server, with e's settings.
+func restart(t *testing.T, e *env, srv *sshtest.Server) *env {
+	t.Helper()
+	ag := srv.NewAgent(t)
+	hostname, port, err := net.SplitHostPort(srv.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pn, _ := strconv.Atoi(port)
+	tg := e.tgt
+	tg.Host, tg.Port, tg.HostKey = hostname, pn, srv.HostKeyFingerprint()
+	p := policy.Defaults()
+	p.Sovereignty.Network.Allow = []policy.AllowRule{{Host: "127.0.0.1", Purpose: policy.PurposeTargetSSH}}
+	c, err := sshx.Dial(context.Background(), sshx.Deps{Gateway: egress.New(p, nil), KnownHosts: filepath.Join(t.TempDir(), "known_hosts"),
+		Agent: func() (agent.ExtendedAgent, io.Closer, error) { return ag, nil, nil }, Now: time.Now}, tg)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return &env{srv: srv, client: c, tgt: tg, st: e.st, deps: e.deps}
+}

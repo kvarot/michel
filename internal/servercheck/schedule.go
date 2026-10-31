@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/kvarot/michel/internal/sshx"
 )
 
 // retryAfter is how long the scheduler waits before trying again a server
@@ -52,9 +54,33 @@ func runDue(ctx context.Context, d CheckDeps, failed map[string]time.Time) {
 				return
 			}
 			failed[t.ID] = now
-			slog.Warn("servercheck: the check of a server failed", "target", t.ID, "err", err)
+			slog.Warn("servercheck: the check of a server failed", "target", t.ID, "name", t.Name, "reason", reasonOf(err))
 			continue
 		}
 		delete(failed, t.ID)
 	}
+}
+
+// reasonOf names why a check failed, without its text (which can carry the
+// SSH user and the host).
+func reasonOf(err error) string {
+	var unk sshx.ErrHostKeyUnknown
+	var chg sshx.ErrHostKeyChanged
+	switch {
+	case errors.As(err, &chg):
+		return "host_key_changed"
+	case errors.As(err, &unk):
+		return "host_key_unknown"
+	case errors.Is(err, sshx.ErrDenied):
+		return "denied"
+	case errors.Is(err, sshx.ErrNoAgent):
+		return "no_agent"
+	case errors.Is(err, sshx.ErrNoKeyAccepted):
+		return "no_key_accepted"
+	case errors.Is(err, sshx.ErrCommandTimeout), errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, ErrInactive):
+		return "inactive"
+	}
+	return "error"
 }

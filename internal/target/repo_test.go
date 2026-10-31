@@ -173,6 +173,9 @@ func TestDueRespectsInterval(t *testing.T) {
 	// A zero interval counts as the default 24 h.
 	mk("zero-due", 0, now.Add(-25*time.Hour), true)
 	mk("zero-fresh", 0, now.Add(-1*time.Hour), true)
+	// A negative interval means by hand only: never due, stored as -1 s.
+	mk("manual", -time.Second, time.Time{}, true)
+	mk("manual-old", -48*time.Hour, now.Add(-72*time.Hour), true)
 	mk("inactive", 24*time.Hour, time.Time{}, false)
 	due, err := r.Due(ctx, now)
 	if err != nil {
@@ -184,6 +187,10 @@ func TestDueRespectsInterval(t *testing.T) {
 	}
 	if !reflect.DeepEqual(names, []string{"due", "never-checked", "zero-due"}) {
 		t.Fatalf("due = %v", names)
+	}
+	m, err := r.Get(ctx, "manual-old")
+	if err != nil || m.CheckInterval != ManualOnly {
+		t.Fatalf("manual interval stored as %v (%v)", m.CheckInterval, err)
 	}
 }
 

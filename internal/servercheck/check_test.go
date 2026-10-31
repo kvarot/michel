@@ -42,6 +42,47 @@ type host struct {
 	phpV    string // php -v version
 	iniJSON string // php -r output
 	dpkg    string // dpkg-query output
+	// fpm adds PHP-FPM 8.2 from the Debian package php8.2-fpm; fpmSlow
+	// makes its -v run past the time limit; findBroken makes command -v
+	// fail.
+	fpm, fpmSlow, findBroken bool
+}
+
+const fpmBin = "/usr/sbin/php-fpm8.2"
+
+// dpkgFPM is dpkgOut with the FPM package.
+const dpkgFPM = dpkgOut + "php8.2-fpm\tphp8.2\t8.2.20-1+deb12u1\tamd64\n"
+
+var (
+	fixtureMu sync.Mutex
+	fixtures  = map[string]string{}
+)
+
+// fpmFixture is an output kept by package collect for its own tests.
+func fpmFixture(name string) string {
+	fixtureMu.Lock()
+	defer fixtureMu.Unlock()
+	if s, ok := fixtures[name]; ok {
+		return s
+	}
+	b, err := os.ReadFile(filepath.Join("..", "collect", "testdata", name))
+	if err != nil {
+		panic(err)
+	}
+	fixtures[name] = strings.ReplaceAll(string(b), "\r\n", "\n")
+	return fixtures[name]
+}
+
+func (h *host) change(f func(h *host)) {
+	h.mu.Lock()
+	f(h)
+	h.mu.Unlock()
+}
+
+func (h *host) flags() (fpm, slow, broken bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.fpm, h.fpmSlow, h.findBroken
 }
 
 func (h *host) get() (string, string, string) {
@@ -76,14 +117,40 @@ func (h *host) commands() map[string]sshtest.Handler {
 	}
 	out["uname"] = func(e sshtest.Exec) int { io.WriteString(e.Stdout, "6.1.0-21-amd64\n"); return 0 }
 	out["command"] = func(e sshtest.Exec) int {
-		code := 1
+		fpm, _, broken := h.flags()
+		if broken {
+			io.WriteString(e.Stderr, "sh: cannot look\n")
+			return 2
+		}
 		for _, a := range e.Args[2:] {
 			if a == "php" {
 				io.WriteString(e.Stdout, "/usr/bin/php\n")
-				code = 0
+			}
+			if a == fpmBin && fpm {
+				io.WriteString(e.Stdout, fpmBin+"\n")
 			}
 		}
-		return code
+		return 1 // some names are always missing
+	}
+	out[fpmBin] = func(e sshtest.Exec) int {
+		_, slow, _ := h.flags()
+		switch e.Args[1] {
+		case "-v":
+			if slow {
+				<-e.Ctx.Done()
+				return 1
+			}
+			io.WriteString(e.Stdout, fpmFixture("php-fpm8.2-v"))
+		case "-i":
+			io.WriteString(e.Stdout, fpmFixture("php-fpm8.2-i"))
+		case "-tt":
+			io.WriteString(e.Stderr, fpmFixture("php-fpm8.2-tt"))
+		case "-m":
+			io.WriteString(e.Stdout, "[PHP Modules]\nCore\n")
+		default:
+			return 1
+		}
+		return 0
 	}
 	out["readlink"] = func(e sshtest.Exec) int { io.WriteString(e.Stdout, e.Args[len(e.Args)-1]+"\n"); return 0 }
 	out["php"] = func(e sshtest.Exec) int {
@@ -101,7 +168,14 @@ func (h *host) commands() map[string]sshtest.Handler {
 		return 0
 	}
 	out["dpkg-query"] = func(e sshtest.Exec) int { _, _, d := h.get(); io.WriteString(e.Stdout, d); return 0 }
-	out["dpkg"] = func(e sshtest.Exec) int { return 1 } // the PHP binary is compiled, not packaged
+	// The command line PHP is compiled; the FPM comes from its package.
+	out["dpkg"] = func(e sshtest.Exec) int {
+		if e.Args[len(e.Args)-1] == fpmBin {
+			io.WriteString(e.Stdout, "php8.2-fpm: "+fpmBin+"\n")
+			return 0
+		}
+		return 1
+	}
 	out["env"] = func(e sshtest.Exec) int {
 		i := 1
 		for i < len(e.Args) && strings.Contains(e.Args[i], "=") {
@@ -125,7 +199,10 @@ func (h *host) commands() map[string]sshtest.Handler {
 func testRules() (serverrules.Set, error) {
 	return serverrules.Set{
 		Config: []serverrules.ConfigRule{{ID: "allow_url_include", Directive: "allow_url_include", Risky: "on", Changeable: "system",
-			Advised: "0", Severity: "high", Key: "serverrules.allow_url_include"}},
+			Advised: "0", Severity: "high", Key: "serverrules.allow_url_include"},
+			{ID: "session_upload_progress_off", Directive: "session.upload_progress.enabled", Risky: "on", Changeable: "perdir",
+				Advised: "0", Severity: "medium", MissingIsRisky: true, Context: []string{"sapi:fpm"},
+				Mitigates: []string{"CVE-2026-109618"}, Mitigation: true, Key: "serverrules.session_upload_progress_off"}},
 		Upstream: []serverrules.UpstreamAdvisory{{ID: "PHP2SHELL", Aliases: []string{"CVE-2026-109618", "CVE-2026-109619"}, Severity: "critical",
 			CVSS: 9.2, Key: "serverrules.php2shell", Branches: []serverrules.BranchFix{{Branch: "8.3", Fixed: "8.3.36"}}}},
 	}, nil
@@ -631,5 +708,215 @@ func TestCleanNeedsAJudgedRelease(t *testing.T) {
 		if got := c.r.Clean(); got != c.want {
 			t.Fatalf("%+v: Clean = %v", c.r, got)
 		}
+	}
+}
+
+// fpmHost runs a fixed command line PHP and the Debian PHP-FPM 8.2: its only
+// PHP finding is the PHP2Shell mitigation opened by the distribution
+// advisory of phpDB.
+func fpmHost() *host {
+	h := newHost()
+	h.fpm, h.dpkg = true, dpkgFPM
+	h.set("8.3.36", `{"allow_url_include":"0"}`)
+	return h
+}
+
+func phpDB() map[string]string {
+	db := baseDB()
+	db["DSA-0000-2001.json"] = `{"id":"DSA-0000-2001","aliases":["CVE-2026-109618"],"severity":[{"type":"CVSS_V3","score":"9.8"}],` +
+		`"affected":[{"package":{"ecosystem":"Debian:12","name":"php8.2"},"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"8.2.21-1"}]}]}]}`
+	return db
+}
+
+func (e *env) status(targetID, osvID string) string {
+	e.t.Helper()
+	f, ok := e.findings(targetID)[osvID]
+	if !ok {
+		return "absent"
+	}
+	return f.Status
+}
+
+func TestDistroMitigationKeptWhenPackagesCannotBeJudged(t *testing.T) {
+	e := newEnv(t)
+	writeDB(t, e.deps.OSVRoot, phpDB())
+	_, tg := e.server("srv-demo", fpmHost(), target.EnvProd)
+	e.check(tg.ID)
+	if st := e.status(tg.ID, "session_upload_progress_off"); st != scan.StatusNew {
+		t.Fatalf("the distribution advisory did not open the mitigation: %s", st)
+	}
+	e.takeAlerts()
+
+	// Source off, then archive missing: nothing can be judged, nothing closes.
+	if err := e.srcs.SetEnabled(context.Background(), "osv.debian", false); err != nil {
+		t.Fatal(err)
+	}
+	e.advance(time.Hour)
+	if res := e.check(tg.ID); res.Gone != 0 {
+		t.Fatalf("source off: %+v", res)
+	}
+	if err := e.srcs.SetEnabled(context.Background(), "osv.debian", true); err != nil {
+		t.Fatal(err)
+	}
+	root := e.deps.OSVRoot
+	e.deps.OSVRoot = t.TempDir()
+	e.advance(time.Hour)
+	if res := e.check(tg.ID); res.Gone != 0 {
+		t.Fatalf("archive missing: %+v", res)
+	}
+	for _, id := range []string{"session_upload_progress_off", "DSA-0000-2001"} {
+		if st := e.status(tg.ID, id); st == scan.StatusGone {
+			t.Fatalf("%s closed without a judgement", id)
+		}
+	}
+	e.deps.OSVRoot = root
+	e.advance(time.Hour)
+	e.check(tg.ID)
+	if a := e.takeAlerts(); len(a) != 0 {
+		t.Fatalf("the findings flapped and alerted again: %+v", a)
+	}
+}
+
+func TestTimedOutFPMProbeKeepsItsFindings(t *testing.T) {
+	e := newEnv(t)
+	writeDB(t, e.deps.OSVRoot, phpDB())
+	h := fpmHost()
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	e.takeAlerts()
+
+	h.change(func(h *host) { h.fpmSlow = true })
+	e.deps.SSH.CommandTimeout = 300 * time.Millisecond
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	if res.Gone != 0 || e.status(tg.ID, "session_upload_progress_off") == scan.StatusGone {
+		t.Fatalf("a timed-out php-fpm -v closed findings: %+v", res)
+	}
+	h.change(func(h *host) { h.fpmSlow = false })
+	e.deps.SSH.CommandTimeout = 0
+	e.advance(time.Hour)
+	e.check(tg.ID)
+	if a := e.takeAlerts(); len(a) != 0 {
+		t.Fatalf("alerted again: %+v", a)
+	}
+}
+
+func TestFailedDiscoveryKeepsPHPFindings(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	e.takeAlerts()
+
+	h.change(func(h *host) { h.findBroken = true })
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	if res.Gone != 0 || res.Clean() {
+		t.Fatalf("a failed command -v closed findings: %+v", res)
+	}
+	for _, id := range []string{"PHP2SHELL", "allow_url_include"} {
+		if st := e.status(tg.ID, id); st == scan.StatusGone {
+			t.Fatalf("%s closed", id)
+		}
+	}
+	h.change(func(h *host) { h.findBroken = false })
+	e.advance(time.Hour)
+	e.check(tg.ID)
+	if a := e.takeAlerts(); len(a) != 0 {
+		t.Fatalf("alerted again: %+v", a)
+	}
+}
+
+func TestCheckRefusesInactiveTarget(t *testing.T) {
+	e := newEnv(t)
+	srv, tg := e.server("srv-demo", newHost(), target.EnvProd)
+	tg.Active = false
+	if err := e.deps.Repo.Update(context.Background(), tg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Check(context.Background(), e.deps, tg.ID); !errors.Is(err, ErrInactive) {
+		t.Fatalf("err = %v", err)
+	}
+	if srv.Accepted() != 0 {
+		t.Fatal("an inactive server was contacted")
+	}
+}
+
+func TestUnknownPHPVersionUrgentOnProd(t *testing.T) {
+	f := scan.Finding{OSVID: "PHP-VERSION-UNKNOWN", Ecosystem: "php-upstream", SeverityLabel: "high", Kind: scan.KindServerPackage}
+	if !Urgent(target.Target{Env: target.EnvProd}, f) || Urgent(target.Target{Env: target.EnvPreprod}, f) {
+		t.Fatal("PHP2Shell cannot be ruled out: urgent on prod only")
+	}
+}
+
+func TestReappearedDecidedFindingDoesNotAlert(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	e.takeAlerts()
+	id := ""
+	for _, f := range e.findings(tg.ID) {
+		if f.OSVID == "allow_url_include" {
+			id = f.ID
+		}
+	}
+	// The risk is accepted: a decision in force on the finding.
+	if _, err := e.st.DB().Exec(`INSERT INTO decision (id, finding_id, project_id, action, author, created_at, seen_severity, seen_fixed_versions)
+		VALUES ('01DECISIONDEMO', ?, ?, 'accept', 'cli', '2026-10-31T10:00:00Z', 'high', '[]')`, id, tg.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.DB().Exec(`UPDATE finding SET status = 'decided' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	h.set("8.3.35", `{"allow_url_include":"0"}`)
+	e.advance(time.Hour)
+	e.check(tg.ID)
+	h.set("8.3.35", `{"allow_url_include":"1"}`)
+	e.advance(time.Hour)
+	e.check(tg.ID)
+	if st := e.status(tg.ID, "allow_url_include"); st != scan.StatusDecided {
+		t.Fatalf("status %s", st)
+	}
+	if a := e.takeAlerts(); len(a) != 0 {
+		t.Fatalf("an accepted finding that came back alerted: %+v", a)
+	}
+}
+
+func TestStaleRematchDoesNotOverwriteANewerCheck(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	old, _, err := e.deps.Repo.LatestInventory(context.Background(), tg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.set("8.3.36", `{"allow_url_include":"0"}`)
+	e.advance(time.Hour)
+	e.check(tg.ID)
+	e.takeAlerts()
+	// A rematch that read the older inventory before this check stored the
+	// newer one: it must not reopen what the check closed.
+	res, err := judge(context.Background(), e.deps, tg, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Touched || e.status(tg.ID, "PHP2SHELL") != scan.StatusGone {
+		t.Fatalf("a stale inventory was applied: %+v, PHP2SHELL %s", res, e.status(tg.ID, "PHP2SHELL"))
+	}
+	if a := e.takeAlerts(); len(a) != 0 {
+		t.Fatalf("alerts %+v", a)
+	}
+}
+
+func TestSchedulerLogNamesNoHost(t *testing.T) {
+	err := fmt.Errorf("cannot connect to server srv-demo: %w", sshx.ErrHostKeyChanged{Want: "a", Got: "b"})
+	if r := reasonOf(err); r != "host_key_changed" {
+		t.Fatalf("reason %q", r)
+	}
+	err = fmt.Errorf("x: %w: deploy@192.0.2.10", sshx.ErrNoKeyAccepted)
+	if r := reasonOf(err); strings.Contains(r, "192.0.2.10") || r != "no_key_accepted" {
+		t.Fatalf("reason %q", r)
 	}
 }

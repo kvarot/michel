@@ -50,6 +50,10 @@ const (
 // zero interval as this default.
 const DefaultCheckInterval = 24 * time.Hour
 
+// ManualOnly is the check interval of a server checked by hand only: Due
+// never returns it. Add and Update store any negative interval as this.
+const ManualOnly = -time.Second
+
 // Target is one server.
 type Target struct {
 	ID             string
@@ -63,7 +67,8 @@ type Target struct {
 	Env            Env
 	Classification policy.Classification
 	FixLevel       int
-	// CheckInterval is the time between two automatic checks; 0 means DefaultCheckInterval.
+	// CheckInterval is the time between two automatic checks; 0 means
+	// DefaultCheckInterval and ManualOnly (negative) by hand only.
 	CheckInterval time.Duration
 	PreprodID     string
 	Executor      Executor
@@ -180,7 +185,6 @@ var (
 	ErrInvalidExecutor = errors.New("unknown executor")
 	ErrInvalidSudo     = errors.New("unknown sudo mode")
 	ErrInvalidFixLevel = errors.New("fix level must be between 0 and 3")
-	ErrInvalidInterval = errors.New("check interval cannot be negative")
 	ErrInvalidClass    = errors.New("unknown classification")
 	ErrHDSIsHealth     = errors.New("a server of kind hds is always classified health")
 )

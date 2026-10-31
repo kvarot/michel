@@ -301,3 +301,20 @@ func TestRunRematchesServersAfterAnOSVUpdate(t *testing.T) {
 		t.Fatalf("a failed rematch: %+v, %v", rep, err)
 	}
 }
+
+func TestRematchPastTheDeadlineKeepsTheUpdate(t *testing.T) {
+	useReaders(t, &fakeReader{kinds: []source.Kind{source.KindOSV}, fn: func(ctx context.Context, e source.Entry, deps Deps) (Result, error) {
+		return Result{Items: 3}, nil
+	}})
+	rules := []policy.AllowRule{{Host: "osv.example.org", Purpose: policy.PurposeOSV}}
+	osv := source.Entry{Key: "osv.zzz", Kind: source.KindOSV, Hosts: []string{"osv.example.org"}, Purpose: policy.PurposeOSV,
+		Config: source.Config{User: map[string]any{"ecosystem": "Zzz"}}}
+	d := env(t, nil, rules, osv)
+	d.Rematch = func(ctx context.Context) (int, error) { <-ctx.Done(); return 0, ctx.Err() }
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	rep, err := Run(ctx, d, nil, "")
+	if !errors.Is(err, ErrSomeFailed) || rep.RematchError == "" || !reflect.DeepEqual(rep.Updated, []string{"osv.zzz"}) {
+		t.Fatalf("report %+v, err %v", rep, err)
+	}
+}

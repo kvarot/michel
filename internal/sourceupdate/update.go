@@ -372,7 +372,9 @@ func Run(ctx context.Context, deps Deps, keys []string, kind source.Kind) (Repor
 		n, err := deps.Rematch(ctx)
 		rep.Rematched = n
 		if err != nil {
-			if ctx.Err() != nil {
+			// Out of time is a failed rematch, not a failed update: the
+			// databases stay updated. Only a stop asked by the user stops here.
+			if errors.Is(ctx.Err(), context.Canceled) {
 				return rep, ctx.Err()
 			}
 			rep.RematchError = bounded(err.Error())

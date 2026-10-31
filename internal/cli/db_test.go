@@ -3,6 +3,7 @@ package cli
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/osvdb"
+	"github.com/kvarot/michel/internal/store"
+	"github.com/kvarot/michel/internal/target"
 )
 
 func zipBytes(t *testing.T) []byte {
@@ -177,5 +180,39 @@ func TestDBUpdatePartialFailureEvidence(t *testing.T) {
 	e := ev[0].evidence
 	if e["failed"] != "npm" || len(e["attempted"].([]any)) != 2 || len(e["completed"].([]any)) != 1 {
 		t.Errorf("evidence = %+v", e)
+	}
+}
+
+func TestDBUpdateRematchesServers(t *testing.T) {
+	z := zipBytes(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(z) }))
+	defer srv.Close()
+	defer osvdb.SetBaseURLForTest(srv.URL)()
+	dir := t.TempDir()
+	writeCfg(t, dir, osvdb.Host, "127.0.0.1")
+	root := filepath.Join(t.TempDir(), "osv")
+	if _, _, _, err := run(t, dir, "db", "status", "--osv-db", root); err != nil {
+		t.Fatal(err)
+	}
+	// A server with a stored inventory: the update judges it again, offline.
+	s, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := target.NewRepo(s)
+	tg, err := tr.Add(context.Background(), target.Target{Name: "srv-demo", Host: "192.0.2.10", User: "deploy", Kind: target.KindVPS})
+	if err == nil {
+		err = tr.SaveInventory(context.Background(), target.Inventory{TargetID: tg.ID, At: time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC),
+			OS: target.OSInfo{ID: "debian", VersionID: "12"}})
+	}
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "db", "update", "--osv-db", root); err != nil {
+		t.Fatal(err)
+	}
+	if ev := auditRows(t, dir, "target.rematch"); len(ev) != 1 || ev[0].target != tg.ID {
+		t.Fatalf("rematch events = %+v", ev)
 	}
 }

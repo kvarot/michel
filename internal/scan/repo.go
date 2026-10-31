@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kvarot/michel/internal/store"
@@ -201,9 +202,14 @@ func ApplyExternal(ctx context.Context, tx *sql.Tx, projectID, sourceKey, runID 
 // (such as "os-packages" or "fpm:/usr/sbin/php-fpm8.2") the check could not
 // judge: their findings are neither refreshed nor closed. Enriched tells
 // that the findings carry their enrichment (see applyScan).
+//
+// UnreadPrefixes protects, the same way, every stored manifest of the
+// server that starts with one of them ("cli:", "fpm:"): the check could not
+// even tell which runtimes are there.
 type ServerApply struct {
-	Unread   []string
-	Enriched bool
+	Unread         []string
+	UnreadPrefixes []string
+	Enriched       bool
 }
 
 // ApplyServerFindings records the findings of one check of a server
@@ -229,6 +235,29 @@ func ApplyServerFindings(ctx context.Context, tx *sql.Tx, targetID, runID string
 	unread := map[string]bool{}
 	for _, m := range o.Unread {
 		unread[m] = true
+	}
+	if len(o.UnreadPrefixes) > 0 {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT manifest_rel_path FROM finding WHERE project_id = ? AND source_key = ''`, targetID)
+		if err != nil {
+			return 0, 0, 0, nil, fmt.Errorf("cannot read the existing findings: %w", err)
+		}
+		for rows.Next() {
+			var m string
+			if err := rows.Scan(&m); err != nil {
+				rows.Close()
+				return 0, 0, 0, nil, err
+			}
+			for _, p := range o.UnreadPrefixes {
+				if strings.HasPrefix(m, p) {
+					unread[m] = true
+				}
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return 0, 0, 0, nil, err
+		}
 	}
 	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, targetID, "", runID, now, fs, unread, current, o.Enriched)
 	return newN, still + reappeared, gone, superseded, err
