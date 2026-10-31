@@ -9,6 +9,7 @@ require (
 	github.com/google/osv-scanner/v2 v2.7.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/ossf/osv-schema/bindings/go v0.0.0-20260902031056-b388a18021a3
+	github.com/pandatix/go-cvss v0.6.4
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
@@ -102,7 +103,6 @@ require (
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/owenrumney/go-sarif/v3 v3.3.1 // indirect
 	github.com/package-url/packageurl-go v0.1.7 // indirect
-	github.com/pandatix/go-cvss v0.6.4 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

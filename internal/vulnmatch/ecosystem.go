@@ -23,6 +23,7 @@ func Ecosystem(os target.OSInfo) (eco string, ok bool) {
 	case "debian":
 		return "Debian:" + major, true
 	case "ubuntu":
+		minor, _, _ = strings.Cut(minor, ".")
 		if minor == "" {
 			return "", false
 		}
@@ -32,6 +33,7 @@ func Ecosystem(os target.OSInfo) (eco string, ok bool) {
 		return "Ubuntu:" + major + "." + minor, true
 	case "alpine":
 		minor, _, _ = strings.Cut(minor, ".")
+		minor = leadingDigits(minor)
 		if minor == "" {
 			return "", false
 		}
@@ -55,4 +57,12 @@ func base(eco string) string {
 // ecosystem ("Debian:12" gives "osv.debian", "Rocky Linux:9" "osv.rocky-linux").
 func CatalogKey(eco string) string {
 	return "osv." + strings.ToLower(strings.ReplaceAll(base(eco), " ", "-"))
+}
+
+func leadingDigits(s string) string {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	return s[:i]
 }
