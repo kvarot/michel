@@ -16,6 +16,7 @@ import (
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/target"
 )
 
 // fixActor is the audit actor and the author of the fixes started,
@@ -142,6 +143,8 @@ type AttemptView struct {
 	UpdatedAt   string        `json:"updated_at"`
 	Proposal    *ProposalView `json:"proposal"`
 	Messages    []MessageView `json:"messages"`
+	// Server is set for a fix of a server (Project is then the server's name).
+	Server *ServerAttemptView `json:"server,omitempty"`
 }
 
 // ConsentLineView is one line of the AI consent screen: its catalog key,
@@ -213,6 +216,8 @@ func (s *server) fixRoutes() {
 	m.HandleFunc("POST /api/v1/fix/{attempt}/message", s.fixMessage)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/approve", s.fixApprove)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/refuse", s.fixRefuse)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/snapshot-done", s.fixSnapshotDone)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/applied-by-me", s.fixAppliedByMe)
 	m.HandleFunc("GET /api/v1/fixes", s.fixList)
 	m.HandleFunc("GET /api/v1/agent/status", s.agentStatus)
 	m.HandleFunc("GET /api/v1/projects/{name}/ai-consent", s.aiConsent)
@@ -279,8 +284,13 @@ func consentLines(lang i18n.Lang, texts []fix.ConsentText) []ConsentLineView {
 // consent the lines to accept come along.
 func (s *server) fixRefused(w http.ResponseWriter, r *http.Request, lang i18n.Lang, err error, p *project.Project) {
 	key := fix.ErrorKey(err)
-	status, ok := fixStatus[key]
+	status, ok := fixStatusOf(key)
 	if !ok {
+		// A server fix can also end on a refusal of the registry or of SSH.
+		if st, k := targetFailure(err); k != "" {
+			s.failedBody(w, st, lang, k, k+"_hint")
+			return
+		}
 		s.internal(w, r)
 		return
 	}
@@ -341,8 +351,8 @@ func commandViews(list []fix.RanCommand) []CommandView {
 	return out
 }
 
-func stateView(m *mask.Masker, a fix.Attempt) StateView {
-	v := StateView{State: string(a.State), Cause: shown(m, a.Cause), CauseDetail: shown(m, noPaths(a.CauseDetail)), ApprovedBy: a.ApprovedBy,
+func stateView(m *mask.Masker, a fix.Attempt, lang i18n.Lang) StateView {
+	v := StateView{State: string(a.State), Cause: shown(m, fix.CauseText(lang, a.Cause)), CauseDetail: shown(m, noPaths(a.CauseDetail)), ApprovedBy: a.ApprovedBy,
 		UpdatedAt: stamp(a.UpdatedAt)}
 	if a.State == fix.StateApplied || a.State == fix.StateProvenFixed || a.State == fix.StateInconclusive {
 		v.Branch = fix.Branch(a.ID)
@@ -352,28 +362,38 @@ func stateView(m *mask.Masker, a fix.Attempt) StateView {
 
 // attemptView builds the view of a; full adds the diff, the tests' output
 // and the conversation.
-func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool) (AttemptView, error) {
+func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool, lang i18n.Lang) (AttemptView, error) {
 	m := s.displayMasker(a.ID)
-	st := stateView(m, a)
+	st := stateView(m, a, lang)
 	v := AttemptView{ID: a.ID, Origin: a.Origin, State: st.State, Cause: st.Cause, CauseDetail: st.CauseDetail, ApprovedBy: a.ApprovedBy, Branch: st.Branch,
 		CreatedAt: stamp(a.CreatedAt), UpdatedAt: stamp(a.UpdatedAt)}
-	fi, p, found, err := s.lookup(ctx, a.FindingID)
-	if err != nil {
-		return AttemptView{}, err
-	}
-	if found {
-		v.Project = p.Name
-		v.Finding = FixFindingView{ID: fi.ID, ManifestRelPath: scan.SanitizeText(fi.ManifestRelPath), Ecosystem: fi.Ecosystem,
-			Package: scan.SanitizeText(fi.Package), OSVID: scan.SanitizeText(fi.OSVID), Severity: severityOf(effective(fi)),
-			InstalledVersion: scan.SanitizeText(fi.InstalledVersion), FixedVersions: sanitizeAll(fi.FixedVersions),
-			Summary: scan.SanitizeText(fi.Summary), Status: fi.Status}
-	} else {
-		v.Finding = FixFindingView{ID: a.FindingID, FixedVersions: []string{}}
-	}
 	repo := fix.NewRepo(s.deps.Store)
 	prop, ok, err := repo.CurrentProposal(ctx, a.ID)
 	if err != nil {
 		return AttemptView{}, err
+	}
+	if a.Work.Server != nil {
+		var pp *fix.Proposal
+		if ok {
+			pp = &prop
+		}
+		if err := s.serverAttempt(ctx, &v, a, pp); err != nil {
+			return AttemptView{}, err
+		}
+	} else {
+		fi, p, found, err := s.lookup(ctx, a.FindingID)
+		if err != nil {
+			return AttemptView{}, err
+		}
+		if found {
+			v.Project = p.Name
+			v.Finding = FixFindingView{ID: fi.ID, ManifestRelPath: scan.SanitizeText(fi.ManifestRelPath), Ecosystem: fi.Ecosystem,
+				Package: scan.SanitizeText(fi.Package), OSVID: scan.SanitizeText(fi.OSVID), Severity: severityOf(effective(fi)),
+				InstalledVersion: scan.SanitizeText(fi.InstalledVersion), FixedVersions: sanitizeAll(fi.FixedVersions),
+				Summary: scan.SanitizeText(fi.Summary), Status: fi.Status}
+		} else {
+			v.Finding = FixFindingView{ID: a.FindingID, FixedVersions: []string{}}
+		}
 	}
 	if ok {
 		v.Proposal = proposalView(m, prop, full)
@@ -412,7 +432,7 @@ func (s *server) answerAttempt(w http.ResponseWriter, r *http.Request, status in
 		s.internal(w, r)
 		return
 	}
-	v, err := s.attemptView(r.Context(), a, true)
+	v, err := s.attemptView(r.Context(), a, true, s.answerLang(r))
 	if err != nil {
 		s.internal(w, r)
 		return
@@ -430,6 +450,11 @@ func (s *server) fixStart(w http.ResponseWriter, r *http.Request) {
 	}
 	d, ok := s.fixDeps(w, r, lang)
 	if !ok {
+		return
+	}
+	// A finding of a server is fixed by Michel's own rules first.
+	if fix.IsServerFinding(r.Context(), d, r.PathValue("id")) {
+		s.runServerFix(w, r, lang, d, r.PathValue("id"), false)
 		return
 	}
 	fi, p, found, err := s.lookup(r.Context(), r.PathValue("id"))
@@ -465,7 +490,7 @@ func (s *server) answerStarted(w http.ResponseWriter, r *http.Request, a fix.Att
 		s.internal(w, r)
 		return
 	}
-	v, err := s.attemptView(r.Context(), got, true)
+	v, err := s.attemptView(r.Context(), got, true, s.answerLang(r))
 	if err != nil {
 		s.internal(w, r)
 		return
@@ -482,7 +507,7 @@ func (s *server) fixAttempt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, err := s.attemptView(r.Context(), a, true)
+	v, err := s.attemptView(r.Context(), a, true, s.answerLang(r))
 	if err != nil {
 		s.internal(w, r)
 		return
@@ -546,6 +571,15 @@ func (s *server) fixApprove(w http.ResponseWriter, r *http.Request) {
 		s.fixRefused(w, r, lang, err, nil)
 		return
 	}
+	// A server fix the user runs waits for their word (applied-by-me): the
+	// approval is all there is to do now.
+	if a.Work.Server != nil {
+		if prop, ok, err := fix.NewRepo(s.deps.Store).CurrentProposal(r.Context(), a.ID); err == nil && ok && prop.Server != nil &&
+			prop.Server.Executor == target.ExecUser {
+			s.answerAttempt(w, r, http.StatusOK, a.ID)
+			return
+		}
+	}
 	extend(w)
 	ctx, cancel := s.detached(r)
 	defer cancel()
@@ -590,7 +624,8 @@ func (s *server) fixRefuse(w http.ResponseWriter, r *http.Request) {
 // fixStates are the accepted values of GET /fixes?state= (several, comma
 // separated).
 var fixStates = []string{string(fix.StatePreparing), string(fix.StateProposed), string(fix.StateApproved), string(fix.StateRefused),
-	string(fix.StateApplied), string(fix.StateProvenFixed), string(fix.StateInconclusive), string(fix.StateFailed), string(fix.StateSuperseded)}
+	string(fix.StateApplied), string(fix.StateProvenFixed), string(fix.StateInconclusive), string(fix.StateFailed), string(fix.StateSuperseded),
+	string(fix.StateRunning), string(fix.StateUnknown)}
 
 // fixList lists the attempts, newest first, without their conversation:
 // ?state= keeps some states, ?project= one active project.
@@ -625,6 +660,15 @@ func (s *server) fixList(w http.ResponseWriter, r *http.Request) {
 		}
 		projectID = p.ID
 	}
+	// ?target= keeps the attempts of one server (its id or its name).
+	if ref := strings.TrimSpace(q.Get("target")); ref != "" {
+		t, err := s.targets().Get(ctx, ref)
+		if err != nil {
+			s.targetRefused(w, r, lang, err, false)
+			return
+		}
+		projectID = t.ID
+	}
 	list, err := fix.NewRepo(s.deps.Store).ListAttempts(ctx, projectID, "")
 	if err != nil {
 		s.internal(w, r)
@@ -635,7 +679,7 @@ func (s *server) fixList(w http.ResponseWriter, r *http.Request) {
 		if len(states) > 0 && !slices.Contains(states, string(a.State)) {
 			continue
 		}
-		v, err := s.attemptView(ctx, a, false)
+		v, err := s.attemptView(ctx, a, false, lang)
 		if err != nil {
 			s.internal(w, r)
 			return

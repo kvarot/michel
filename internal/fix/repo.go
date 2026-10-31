@@ -734,6 +734,18 @@ func (r *Repo) AddBackup(ctx context.Context, b ServerBackup, blob []byte) (Serv
 	return b, nil
 }
 
+// BackupSize is the size in bytes of the backups the workstation keeps for
+// server targetID (the sealed copies, about their plain size) and how many
+// files they are.
+func (r *Repo) BackupSize(ctx context.Context, targetID string) (bytes int64, files int, err error) {
+	var n, total sql.NullInt64
+	// The blobs are base64: three bytes for four characters.
+	if err := r.s.DB().QueryRowContext(ctx, `SELECT COUNT(*), SUM(LENGTH(blob)) FROM server_backup WHERE target_id = ?`, targetID).Scan(&n, &total); err != nil {
+		return 0, 0, fmt.Errorf("cannot read the size of the backups: %w", err)
+	}
+	return total.Int64 / 4 * 3, int(n.Int64), nil
+}
+
 // SealedBackup is a stored backup with its encrypted content.
 type SealedBackup struct {
 	ServerBackup

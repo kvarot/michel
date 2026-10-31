@@ -132,12 +132,22 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			// hands them to the gateway at once.
 			sd := sourceDeps(cmd, deps)
 			dataDir, _ := cmd.Flags().GetString("data-dir")
+			// The checks of the servers, for the scheduler and for the page: a
+			// server checked to its end has its findings queued for the fix
+			// levels 2 and 3 (the worker of the page prepares them).
+			cd := serverCheckDeps(cmd, deps)
+			cd.OnChecked = func(ctx context.Context, targetID string) {
+				if _, err := fix.QueueEligibleServer(ctx, fd, targetID); err != nil {
+					slog.Warn("serve: cannot queue the findings of a server", "target", targetID)
+				}
+			}
+			home, _ := userHomeDir()
 			d := api.Deps{Store: deps.Store, Audit: deps.Audit, Policy: deps.Policy, Secrets: secrets, Now: deps.Now,
 				Version: buildinfo.Version, OSVRoot: dbRoot(cmd, deps), Lang: deps.Lang,
 				AllowedHosts: []string{bound, net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("localhost", port), net.JoinHostPort("::1", port)},
 				PolicyPath:   sd.PolicyPath, Reload: sd.Reload,
 				Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir, Rematch: serverRematch(cmd, deps)},
-				Fix:     &fd, FixWorker: true}
+				Fix:     &fd, FixWorker: true, Servers: api.Servers{Check: cd, Home: home}}
 			if fsys, ok := web.Dist(); ok {
 				d.Web = fsys
 			}
@@ -161,14 +171,6 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			schedDone := make(chan struct{})
 			go func() {
 				defer close(schedDone)
-				cd := serverCheckDeps(cmd, deps)
-				// A server checked to its end has its findings queued for the
-				// fix levels 2 and 3 (the worker of the page prepares them).
-				cd.OnChecked = func(ctx context.Context, targetID string) {
-					if _, err := fix.QueueEligibleServer(ctx, fd, targetID); err != nil {
-						slog.Warn("serve: cannot queue the findings of a server", "target", targetID)
-					}
-				}
 				servercheck.Scheduler(schedCtx, cd, serverCheckInterval)
 			}()
 			// Server fixes left running by a process that stopped end

@@ -36,6 +36,17 @@ type Policy struct {
 	Assistant   AssistantConfig   `yaml:"assistant"`
 	Risk        RiskConfig        `yaml:"risk"`
 	Notify      NotifyConfig      `yaml:"notify"`
+	SSH         SSHConfig         `yaml:"ssh"`
+}
+
+// SSHConfig holds the settings of Michel's SSH client.
+type SSHConfig struct {
+	// AgentPipe is the SSH agent to reach instead of the system's: a named
+	// pipe on Windows (\.\pipe\..., for Pageant in OpenSSH mode), a Unix
+	// socket elsewhere. "" means the system agent (the OpenSSH pipe on
+	// Windows, SSH_AUTH_SOCK elsewhere). It is a path of this computer: it
+	// is never sent anywhere.
+	AgentPipe string `yaml:"agent_pipe"`
 }
 
 // SovereigntyConfig groups the sovereignty rules.

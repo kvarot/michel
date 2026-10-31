@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/kvarot/michel/internal/secret"
 )
@@ -50,6 +51,9 @@ func Validate(p Policy) error {
 	}
 	if err := ValidateRisk(p.Risk); err != nil {
 		return err
+	}
+	if a := p.SSH.AgentPipe; len(a) > 512 || strings.IndexFunc(a, unicode.IsControl) >= 0 {
+		return errors.New("ssh.agent_pipe must be a pipe or socket path of at most 512 characters, without control characters")
 	}
 	for i, r := range s.Network.Allow {
 		if strings.TrimSpace(r.Host) == "" || strings.TrimSpace(r.Purpose) == "" {

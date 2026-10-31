@@ -30,6 +30,9 @@ var dynamicPrefixes = []string{
 	// serverrules.<rule>.title/.explain are named by the Key of each rule in
 	// the embedded rules.yaml.
 	"serverrules.",
+	// api.target.* are named by the refusals of the server routes (servererr.Key),
+	// their hints (the key and _hint) and the state of a server.
+	"api.target.",
 }
 
 // family says how a call names a catalog key: the prefix added to the

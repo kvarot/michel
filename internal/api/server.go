@@ -61,6 +61,9 @@ type Deps struct {
 	// Close stops it.
 	Fix       *fix.Deps
 	FixWorker bool
+	// Servers is what the server routes need (the check service, the folder
+	// discovery reads).
+	Servers Servers
 }
 
 // Sources are the collaborators of the source routes: the egress gateway
@@ -131,6 +134,8 @@ type server struct {
 	runs   sync.WaitGroup
 	// agentSt keeps the last detection of Claude Code.
 	agentSt agentCache
+	// checks follows the server checks started from the page.
+	checks checkTracker
 }
 
 // Handler is the API and page handler New builds. Close stops the work it
@@ -209,6 +214,7 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/v1/digests", s.digests)
 	s.sourceRoutes()
 	s.fixRoutes()
+	s.targetRoutes()
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.not_found"), "")
 	})

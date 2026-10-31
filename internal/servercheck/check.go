@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -120,6 +121,14 @@ func Check(ctx context.Context, d CheckDeps, targetID string) (CheckResult, erro
 	if !t.Active {
 		return CheckResult{}, fmt.Errorf("%w (%s)", ErrInactive, t.Name)
 	}
+	// One check of a server at a time, wherever it was started (the
+	// scheduler, the page, the command line of this process).
+	unlock := lockTarget(t.ID)
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	links, err := d.Repo.Links(ctx, t.ID)
 	if err != nil {
 		return CheckResult{}, err
@@ -146,6 +155,8 @@ func Check(ctx context.Context, d CheckDeps, targetID string) (CheckResult, erro
 		return res, err
 	}
 	d.record(ctx, "target.check", t.ID, res)
+	unlock()
+	unlock = nil
 	if d.OnChecked != nil {
 		d.OnChecked(ctx, t.ID)
 	}
@@ -330,6 +341,17 @@ func (d CheckDeps) record(ctx context.Context, action, targetID string, res Chec
 			"release_known": res.ReleaseKnown, "source_to_enable": res.SourceToEnable}}); err != nil {
 		slog.Warn("servercheck: cannot record the check in the audit log", "action", action, "err", err)
 	}
+}
+
+// checkLocks holds one mutex per server id.
+var checkLocks sync.Map
+
+// lockTarget takes the check lock of server id and returns its release.
+func lockTarget(id string) func() {
+	m, _ := checkLocks.LoadOrStore(id, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // ErrInactive: the server is turned off in Michel; it is not checked.

@@ -27,14 +27,25 @@ import (
 // for a check (each one has its own interval, 24 h by default).
 const serverCheckInterval = 15 * time.Minute
 
-// serverCheckDeps are the services of a server check for this command. The
-// SSH agent is the system one (its pipe setting comes later).
+// sshDeps is the SSH client of every command that reaches a server (the
+// checks, the fixes, the host key reading, michel serve and michel mcp): the
+// gateway, the audit, and the SSH agent the policy names (ssh.agent_pipe), else
+// the system one.
+func sshDeps(deps *Deps) sshx.Deps {
+	return sshx.Deps{Gateway: deps.Gateway, Audit: deps.Audit, Now: deps.Now, Agent: sshAgent(deps.Policy.SSH.AgentPipe)}
+}
+
+// sshAgent opens the SSH agent at path, "" for the system one. Replaced in
+// tests, which never reach the real agent.
+var sshAgent = sshx.SystemAgent
+
+// serverCheckDeps are the services of a server check for this command.
 func serverCheckDeps(cmd *cobra.Command, deps *Deps) servercheck.CheckDeps {
 	return servercheck.CheckDeps{
 		Repo:    target.NewRepo(deps.Store),
 		Store:   deps.Store,
 		Audit:   deps.Audit,
-		SSH:     sshx.Deps{Gateway: deps.Gateway, Audit: deps.Audit, Now: deps.Now},
+		SSH:     sshDeps(deps),
 		Collect: collect.Deps{Now: deps.Now, Audit: deps.Audit, Gateway: deps.Gateway},
 		OSVRoot: dbRoot(cmd, deps),
 		Sources: source.NewRepo(deps.Store),

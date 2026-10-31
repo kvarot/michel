@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/policy"
@@ -164,6 +165,13 @@ func (d Deps) serverConsentOK(ctx context.Context, t target.Target) (bool, error
 func ServerConsent(ctx context.Context, d Deps, targetID string) (bool, error) {
 	_, _, ok, err := d.repo().Consent(ctx, serverConsentKey(targetID))
 	return ok, err
+}
+
+// ServerConsentAt is ServerConsent with the date the consent was given
+// (zero when it was not).
+func ServerConsentAt(ctx context.Context, d Deps, targetID string) (time.Time, bool, error) {
+	at, _, ok, err := d.repo().Consent(ctx, serverConsentKey(targetID))
+	return at, ok, err
 }
 
 // RevokeServerConsent forgets the AI consent of server targetID and

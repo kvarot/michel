@@ -89,3 +89,8 @@ notify:
   #     # url: only for tests (a local receiver); the key goes wherever it points. Leave it out for Free Mobile.
   #     # generic provider instead: url: https://sms.example.org/send  (POST {"text"}, signed with the secret like a webhook)
   # sms_per_day: 3               # most SMS in a day (local time), all channels together (default 3)
+
+# Michel's SSH client for the servers it checks. It signs in with the keys of your SSH agent only.
+# ssh:
+#   agent_pipe: ""                 # leave empty for the system agent; or the agent to use instead, for example
+#                                  # \.\pipe\openssh-ssh-agent on Windows (Pageant in OpenSSH mode has its own pipe)
