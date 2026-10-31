@@ -4,7 +4,7 @@
 
 Local-first, open-source daily watch for known vulnerabilities in your projects' dependencies (Composer, npm; Go next), with the cost and side effects of each fix laid out so you decide, proof before any "fixed" status, and compact fix briefs (Markdown, Claude Code skill, MCP) for the coding AI of your choice.
 
-Status: plans 1 to 4 delivered. Plan 1: offline scan of Composer and npm lockfiles against local OSV databases, SQLite findings store, hash-chained audit log, deny-by-default network gateway. Plan 2: local analysis of each finding (how the package is reached, which upgrade fixes it, where your code uses it, which tests cover it, local changelog) with a public risk score, explained in three sentences in English or French (`michel analyze`, `michel finding`). Plan 3: decisions (fix, defer, ignore; never asked again unless something changes), a daily digest sent by email, signed webhook or desktop notification, secrets kept outside the policy file, and a local "Today" page installable as an app (`michel decide`, `michel digest`, `michel serve`); every message in English or French. Plan 4: a registry of sources (`michel source`, Sources page): more OSV databases, `yarn.lock` and `pnpm-lock.yaml`, CISA KEV and EPSS at the head of the digest, vendor advisories to read, Trivy and Semgrep findings, pinned skills and MCP servers; each source contacts its hosts only after your consent. Still missing: fix briefs, automatic fixes, AI, a built-in scheduler.
+Status: plans 1 to 5 delivered. Plan 1: offline scan of Composer and npm lockfiles against local OSV databases, SQLite findings store, hash-chained audit log, deny-by-default network gateway. Plan 2: local analysis of each finding (how the package is reached, which upgrade fixes it, where your code uses it, which tests cover it, local changelog) with a public risk score, explained in three sentences in English or French (`michel analyze`, `michel finding`). Plan 3: decisions (fix, defer, ignore; never asked again unless something changes), a daily digest sent by email, signed webhook or desktop notification, secrets kept outside the policy file, and a local "Today" page installable as an app (`michel decide`, `michel digest`, `michel serve`); every message in English or French. Plan 4: a registry of sources (`michel source`, Sources page): more OSV databases, `yarn.lock` and `pnpm-lock.yaml`, CISA KEV and EPSS at the head of the digest, vendor advisories to read, Trivy and Semgrep findings, pinned skills and MCP servers; each source contacts its hosts only after your consent. Plan 5: fix briefs (`michel brief`, MCP, skill) and a fix agent: Claude Code prepares the fix on a copy, Michel checks and tests it, you approve and get a branch (Fix page, `michel fix`). Still missing: fixes applied directly on your server, an AI that runs on your computer, a built-in scheduler.
 
 ## Quick start
 
@@ -21,6 +21,7 @@ bin/michel audit verify
 ```
 
 - Sources (registry, consent, KEV/EPSS, feeds, plugins, skills, MCP): `docs/sources.md`
+- Fix agent (levels, consent, work copy, proof, residual risks): `docs/fix.md`
 - Risk score: `docs/remediation-risk.md`
 - Offline installation and scripting: `docs/operations/offline-installation.md`
 - Decisions, daily digest, channels, Today page, scheduled task: `docs/operations/daily-digest.md`
@@ -42,5 +43,17 @@ bin/michel source install skill.trailofbits-code-audit   # preview, then y/N
 ```
 
 The kinds, what leaves for each host, plugins, skills and MCP servers: `docs/sources.md`.
+
+## Fix
+
+On the page, the **Fix** button of a finding hands it to an agent (Claude Code, which you install and log in to yourself). It works on a copy of your project in Michel's data folder, without being able to run commands or use your settings; Michel runs the update, the install (Composer, npm) and the tests itself, then shows you the proposal in plain words. **Approve** creates a branch `michel/fix-…` in your repository, nothing else: you merge it, then deploy as usual. The first time, a consent screen (one per project) tells you what leaves your computer: the code of the copy, sent to Anthropic, and package names, sent to the package registries (Packagist, npm). It also says what runs on your computer; nothing goes to an AI without it, and never for a project classified `health`. Each project chooses its level: report, explain (default), prepare alone, or apply the safe minor updates you allowed.
+
+```
+bin/michel serve --open                         # Today page, then "Fix" on a finding
+bin/michel project set myproject --test-cmd "vendor/bin/phpunit"   # so that Michel can run your tests
+bin/michel brief <id-or-prefix>                 # the fix brief, nothing sent
+```
+
+Levels, consent, the work copy, what the agent can and cannot do, the proof, masking and residual risks: `docs/fix.md`.
 
 License: Apache-2.0.

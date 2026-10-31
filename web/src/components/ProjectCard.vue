@@ -43,10 +43,13 @@
     </section>
 
     <p v-if="!sections.length" class="m-card__quiet m-muted">{{ $t('project.nothing_new') }}</p>
+
+    <FixSettings :name="project.name" />
   </article>
 </template>
 
 <script>
+import FixSettings from './FixSettings.vue'
 import PackageRow from './PackageRow.vue'
 import { severityOf } from '../lib/digestView.js'
 
@@ -54,7 +57,7 @@ const checkPath = 'M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z'
 
 export default {
   name: 'ProjectCard',
-  components: { PackageRow },
+  components: { FixSettings, PackageRow },
   props: {
     project: { type: Object, required: true },
     items: { type: Array, default: () => [] },

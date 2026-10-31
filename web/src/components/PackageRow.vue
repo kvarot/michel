@@ -25,17 +25,28 @@
     <p v-else-if="item.kind === 'due'" class="m-row__what" :class="{ 'm-row__overdue': item.overdue }">
       {{ $t(item.overdue ? 'item.overdue' : 'item.due', { date: dueDate }) }}
     </p>
-    <v-btn
-      v-if="item.findingIds.length"
-      variant="text"
-      size="small"
-      class="m-row__toggle"
-      :aria-expanded="String(open)"
-      :aria-controls="sheetId"
-      @click="open = !open"
-    >
-      {{ $t(open ? 'item.hide' : 'item.open') }}
-    </v-btn>
+    <div class="m-row__buttons">
+      <v-btn
+        v-if="fixable"
+        variant="tonal"
+        color="primary"
+        size="small"
+        :href="fixHref"
+      >
+        {{ $t('item.fix') }}
+      </v-btn>
+      <v-btn
+        v-if="item.findingIds.length"
+        variant="text"
+        size="small"
+        class="m-row__toggle"
+        :aria-expanded="String(open)"
+        :aria-controls="sheetId"
+        @click="open = !open"
+      >
+        {{ $t(open ? 'item.hide' : 'item.open') }}
+      </v-btn>
+    </div>
     <div v-if="open" :id="sheetId" class="m-row__sheets">
       <FindingSheet v-for="id in item.findingIds" :key="id" :finding-id="id" @decided="$emit('decided')" />
     </div>
@@ -45,6 +56,7 @@
 <script>
 import FindingSheet from './FindingSheet.vue'
 import { formatDate, formatPercent } from '../lib/digestView.js'
+import { fixHash } from '../lib/fixView.js'
 
 let seq = 0
 
@@ -60,6 +72,13 @@ export default {
     return { open: false, sheetId: `sheet-${seq}` }
   },
   computed: {
+    // fixable: an open finding (not gone, not ignored) can go to the Fix page.
+    fixable() {
+      return this.item.findingIds.length > 0 && this.item.kind !== 'gone' && this.item.decided !== 'ignore'
+    },
+    fixHref() {
+      return fixHash({ finding: this.item.findingIds[0] })
+    },
     upgrade() {
       if (!this.item.target) return this.$t('item.no_target')
       return this.$t('item.upgrade', { installed: this.item.installed || '?', target: this.item.target })
@@ -121,6 +140,7 @@ export default {
 .m-voice.m-row__what { font-size: 1.05rem; }
 .m-row__previous { display: block; margin-top: 0.15rem; }
 .m-row__overdue { color: rgb(var(--v-theme-warning)); font-weight: 600; }
-.m-row__toggle { margin: 0.35rem 0 0 -0.75rem; }
+.m-row__buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.75rem; margin-top: 0.45rem; }
+.m-row__toggle { margin-left: -0.25rem; }
 .m-row__sheets { display: grid; gap: 0.75rem; margin-top: 0.5rem; }
 </style>

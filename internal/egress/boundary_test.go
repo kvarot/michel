@@ -142,7 +142,7 @@ func TestNoDirectHTTPOutsideEgress(t *testing.T) {
 		t.Fatalf("only %d Go files checked under %s: the walk is not seeing the module", checked, root)
 	}
 	// The packages that read the sources must be among those checked.
-	for _, dir := range []string{"internal/sourceupdate", "internal/sourceupdate/readers", "internal/enrich", "internal/osvdb", "internal/feed", "internal/gitrepo"} {
+	for _, dir := range []string{"internal/sourceupdate", "internal/sourceupdate/readers", "internal/enrich", "internal/osvdb", "internal/feed", "internal/gitrepo", "internal/workcopy", "internal/agent"} {
 		if !seen[filepath.ToSlash(filepath.Join(root, dir))] {
 			t.Errorf("the boundary walk did not check %s", dir)
 		}
@@ -218,5 +218,38 @@ func f() {
 	}
 	if len(v) != 11 {
 		t.Fatalf("got %d violations, want 11:\n%s", len(v), strings.Join(v, "\n"))
+	}
+}
+
+// TestProxyPackagesDialOnlyThroughGateway checks the subprocess proxies under
+// internal/egress (skipped by the module walk above): they may listen, but
+// every upstream connection goes through Gateway.DialContext, where the
+// allowlist and the audit apply.
+func TestProxyPackagesDialOnlyThroughGateway(t *testing.T) {
+	root := moduleRoot(t)
+	fset := token.NewFileSet()
+	for _, dir := range []string{"internal/egress/allowproxy", "internal/egress/denyproxy"} {
+		entries, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		checked := 0
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			checked++
+			v, err := boundaryViolations(fset, filepath.Join(root, dir, name), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range v {
+				t.Errorf("%s: direct network use in a proxy; dial through egress.Gateway.DialContext", s)
+			}
+		}
+		if checked == 0 {
+			t.Errorf("no Go file checked in %s", dir)
+		}
 	}
 }

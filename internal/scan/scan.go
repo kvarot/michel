@@ -420,13 +420,6 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		record("scan.finish", p.Name, ScanEmpty, map[string]any{"reason": "no_manifests", "ignored_config_files": configs})
 		return res, nil
 	}
-	plugins := []string{}
-	for _, pl := range scanPlugins {
-		if enabled(pluginEcosystem[pl]) {
-			plugins = append(plugins, pl)
-		}
-	}
-
 	handler := deps.LogHandler
 	if handler == nil {
 		handler = slog.NewTextHandler(io.Discard, nil)
@@ -448,23 +441,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 	var vr models.VulnerabilityResults
 	var derr error
 	if len(needed) > 0 {
-		vr, derr = osvscanner.DoScan(osvscanner.ScannerActions{
-			ConfigOverridePath:    override,
-			DirectoryPaths:        []string{p.Path},
-			Recursive:             true,
-			CompareOffline:        true,
-			DownloadDatabases:     false,
-			LocalDBPath:           opt.OSVRoot,
-			PluginNetworkDisabled: true,
-			ShowAllPackages:       true,
-			ExperimentalScannerActions: osvscanner.ExperimentalScannerActions{
-				ExcludePatterns:    globExcludes(exclude),
-				HTTPClient:         deps.Gateway.Client(Purpose),
-				PluginsNoDefaults:  true,
-				PluginsEnabled:     plugins,
-				TransitiveScanning: osvscanner.TransitiveScanningActions{Disabled: true},
-			},
-		})
+		vr, derr = doScan(deps, p.Path, exclude, enabled, opt.OSVRoot, override)
 	}
 	if afterScanHook != nil {
 		afterScanHook()
@@ -676,4 +653,166 @@ func updateTechAuto(ctx context.Context, deps Deps, p project.Project, vr models
 		return fmt.Errorf("cannot save the technologies detected in %s: %w", p.Name, err)
 	}
 	return nil
+}
+
+// doScan runs osv-scanner offline on root, with Michel's override
+// configuration, the extractors of the enabled ecosystems only and no
+// network (every request goes to the gateway under Purpose, which denies it).
+func doScan(deps Deps, root string, exclude []string, enabled func(string) bool, osvRoot, override string) (models.VulnerabilityResults, error) {
+	plugins := []string{}
+	for _, pl := range scanPlugins {
+		if enabled(pluginEcosystem[pl]) {
+			plugins = append(plugins, pl)
+		}
+	}
+	return osvscanner.DoScan(osvscanner.ScannerActions{
+		ConfigOverridePath:    override,
+		DirectoryPaths:        []string{root},
+		Recursive:             true,
+		CompareOffline:        true,
+		DownloadDatabases:     false,
+		LocalDBPath:           osvRoot,
+		PluginNetworkDisabled: true,
+		ShowAllPackages:       true,
+		ExperimentalScannerActions: osvscanner.ExperimentalScannerActions{
+			ExcludePatterns:    globExcludes(exclude),
+			HTTPClient:         deps.Gateway.Client(Purpose),
+			PluginsNoDefaults:  true,
+			PluginsEnabled:     plugins,
+			TransitiveScanning: osvscanner.TransitiveScanningActions{Disabled: true},
+		},
+	})
+}
+
+// ErrScanIncomplete means a lockfile of the folder could not be read: the
+// findings returned by ScanDir do not cover it.
+var ErrScanIncomplete = errors.New("a lockfile could not be read")
+
+// ScanDir scans the folder root offline with the same lockfile readers as
+// Run and returns its findings. It writes nothing in the database (no scan,
+// manifest or finding row, no status change, no audit event) and nothing
+// under root; only Michel's scanner override configuration in the data
+// folder (deps.DataDir, else the folder of the store) is kept up to date.
+// It is the re-scan of a fix copy: a proof, so a folder with no lockfile
+// is ErrNoManifests and a lockfile that cannot be read is ErrScanIncomplete
+// (with the findings of the other lockfiles). ecosystems lists the OSV
+// ecosystems to scan (nil: opt.Ecosystems, nil again: every ecosystem of
+// the lockfiles found); a lockfile of another ecosystem is left out. The
+// findings have no project: their ID is computed with an empty project id,
+// compare them by manifest, ecosystem, package and OSV id. opt.Exclude nil
+// means DefaultExclude; opt.Lookup, when set, enriches them.
+func ScanDir(ctx context.Context, deps Deps, root string, ecosystems []string, opt Options) ([]Finding, error) {
+	if ecosystems == nil {
+		ecosystems = opt.Ecosystems
+	}
+	exclude := opt.Exclude
+	if exclude == nil {
+		exclude = DefaultExclude
+	}
+	if deps.Gateway == nil {
+		return nil, errors.New("Michel cannot scan the folder: no network gateway was given")
+	}
+	found, _, err := findLockfiles(root, exclude)
+	if err != nil {
+		return nil, fmt.Errorf("Michel cannot read the folder to scan: %w", err)
+	}
+	enabled := func(eco string) bool { return ecosystems == nil || slices.Contains(ecosystems, eco) }
+	var needed []string
+	kept := found[:0]
+	for _, lf := range found {
+		if !enabled(lf.ecosystem) {
+			continue
+		}
+		kept = append(kept, lf)
+		if !slices.Contains(needed, lf.ecosystem) {
+			needed = append(needed, lf.ecosystem)
+		}
+	}
+	found = kept
+	if len(found) == 0 {
+		return nil, ErrNoManifests
+	}
+	if err := osvdb.Require(opt.OSVRoot, needed); err != nil {
+		return nil, fmt.Errorf("Michel cannot scan the folder: %w. A scan never downloads anything; fetch the databases first", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	dataDir := deps.DataDir
+	if dataDir == "" {
+		if deps.Store == nil {
+			return nil, errors.New("Michel cannot scan the folder: no data folder was given")
+		}
+		dataDir = filepath.Dir(deps.Store.Path())
+	}
+	override, err := ensureOverrideConfig(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("Michel cannot prepare the scanner configuration: %w", err)
+	}
+	handler := deps.LogHandler
+	if handler == nil {
+		handler = slog.NewTextHandler(io.Discard, nil)
+	}
+	osvscanner.SetLogger(handler)
+	vr, derr := doScan(deps, root, exclude, enabled, opt.OSVRoot, override)
+	if derr != nil && !errors.Is(derr, osvscanner.ErrVulnerabilitiesFound) && !errors.Is(derr, osvscanner.ErrNoPackagesFound) {
+		return nil, fmt.Errorf("the scanner failed: %w", derr)
+	}
+	findings, manifests := Normalize("", root, vr)
+	accepted := map[string]bool{}
+	for _, lf := range found {
+		accepted[lf.rel] = true
+	}
+	read := map[string]bool{}
+	var errs []error
+	for _, m := range manifests {
+		if !accepted[m.RelPath] {
+			continue
+		}
+		if m.Err != nil {
+			errs = append(errs, m.Err)
+		}
+		read[m.RelPath] = true
+	}
+	// A lockfile the scanner returned nothing for is either empty or
+	// unreadable: the same check as Run.
+	for _, lf := range found {
+		if read[lf.rel] {
+			continue
+		}
+		raw, rerr := os.ReadFile(lf.abs)
+		if rerr == nil {
+			rerr = checkContent(filepath.Base(lf.abs), raw)
+		}
+		if rerr != nil {
+			errs = append(errs, fmt.Errorf("cannot read %s: %w", lf.rel, rerr))
+		}
+	}
+	out := []Finding{}
+	for _, f := range findings {
+		if accepted[f.ManifestRelPath] {
+			out = append(out, f)
+		}
+	}
+	if opt.Lookup != nil {
+		cves := []string{}
+		for _, f := range out {
+			for _, c := range CVEsOf(f) {
+				if !slices.Contains(cves, c) {
+					cves = append(cves, c)
+				}
+			}
+		}
+		known, lerr := opt.Lookup(cves)
+		if lerr != nil {
+			return nil, fmt.Errorf("Michel cannot read the enrichment data (KEV, EPSS): %w", lerr)
+		}
+		for i := range out {
+			out[i] = WithEnrichment(out[i], CombineEnrichment(known, CVEsOf(out[i])))
+		}
+	}
+	if len(errs) > 0 {
+		return out, fmt.Errorf("%w: %w", ErrScanIncomplete, errors.Join(errs...))
+	}
+	return out, nil
 }

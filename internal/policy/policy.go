@@ -167,6 +167,13 @@ const (
 	PurposeDiscover = "source.discover"
 )
 
+// Purposes of the fix agent in network.allow rules: the package registries
+// the work copy installs from, and the AI provider the agent talks to.
+const (
+	PurposeFixInstall  = "fix.install"
+	PurposeAgentClaude = "agent.claude"
+)
+
 // Channel types.
 const (
 	ChannelEmail   = "email"

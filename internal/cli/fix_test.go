@@ -1,0 +1,153 @@
+package cli
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/kvarot/michel/internal/fix"
+	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/project"
+	"github.com/kvarot/michel/internal/store"
+)
+
+// withStore opens the store of the data folder dir for f, then closes it
+// (the commands open it themselves).
+func withStore(t *testing.T, dir string, f func(st *store.Store)) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	f(st)
+}
+
+func TestFixApproveRefusesChangedProposal(t *testing.T) {
+	dir, list := scannedDemo(t, false)
+	ctx := context.Background()
+	var id string
+	withStore(t, dir, func(st *store.Store) {
+		p, err := project.NewRepo(st).Get(ctx, "demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := fix.NewRepo(st)
+		a, err := repo.CreateAttempt(ctx, fix.Attempt{FindingID: list[0].ID, ProjectID: p.ID, Origin: fix.OriginAgent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id = a.ID
+		if _, err := repo.AddProposal(ctx, fix.Proposal{AttemptID: id, Summary: "First proposal.", Files: []string{"composer.lock"},
+			TestsStatus: "passed", Hash: "hash-one"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SetState(ctx, id, []fix.State{fix.StatePreparing}, fix.StateProposed, ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Nothing shown yet: approve asks for status first.
+	if _, _, _, err := run(t, dir, "fix", "approve", id); err == nil || !strings.Contains(err.Error(), "michel fix status") {
+		t.Fatalf("approve before status: %v", err)
+	}
+	_, out, _, err := run(t, dir, "fix", "status", id[:10])
+	if err != nil || !strings.Contains(out, "hash-one") || !strings.Contains(out, "First proposal.") {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	_, out, _, err = run(t, dir, "fix", "status")
+	if err != nil || !strings.Contains(out, id) || !strings.Contains(out, "proposed") {
+		t.Fatalf("status list: %v\n%s", err, out)
+	}
+	// The agent replaces its proposal after status showed the first one.
+	withStore(t, dir, func(st *store.Store) {
+		if _, err := fix.NewRepo(st).AddProposal(ctx, fix.Proposal{AttemptID: id, Summary: "Second proposal.", Files: []string{"composer.lock"},
+			TestsStatus: "passed", Hash: "hash-two"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	_, _, _, err = run(t, dir, "fix", "approve", id, "--lang", "fr")
+	if err == nil || !strings.Contains(err.Error(), i18n.T(i18n.FR, "fix.err.stale_proposal")) {
+		t.Fatalf("approve of a changed proposal: %v", err)
+	}
+	withStore(t, dir, func(st *store.Store) {
+		a, err := fix.NewRepo(st).GetAttempt(ctx, id)
+		if err != nil || a.State != fix.StateProposed || a.ApprovedBy != "" {
+			t.Errorf("attempt after a stale approve = %+v %v", a, err)
+		}
+	})
+	// Status shows the new one; approve then records it (the branch cannot
+	// be made here: the attempt has no copy).
+	if _, out, _, err = run(t, dir, "fix", "status", id); err != nil || !strings.Contains(out, "hash-two") {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	_, _, _, err = run(t, dir, "fix", "approve", id)
+	if err == nil || !strings.Contains(err.Error(), "branch") {
+		t.Errorf("approve: %v", err)
+	}
+	withStore(t, dir, func(st *store.Store) {
+		a, err := fix.NewRepo(st).GetAttempt(ctx, id)
+		if err != nil || a.State != fix.StateApproved || a.ApprovedHash != "hash-two" || a.ApprovedBy != "cli" {
+			t.Errorf("attempt after approve = %+v %v", a, err)
+		}
+	})
+	// Refusing works on an approved attempt too.
+	if _, out, _, err = run(t, dir, "fix", "refuse", id, "--reason", "not now"); err != nil || !strings.Contains(out, id) {
+		t.Errorf("refuse: %v\n%s", err, out)
+	}
+	if _, _, _, err := run(t, dir, "fix", "status", "zz"); err == nil {
+		t.Error("status of an unknown attempt succeeded")
+	}
+}
+
+func TestFixConsentYes(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte("sovereignty:\n  mode: standard\n  data_classification: sensitive\n  network:\n    default_egress: deny\n    allow: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	// Without --yes: the lines are shown, nothing changes.
+	_, out, _, err := run(t, dir, "fix", "consent", "demo", "--lang", "fr")
+	if err != nil || !strings.Contains(out, i18n.T(i18n.FR, "fix.consent.runs_code")) || !strings.Contains(out, "api.anthropic.com") ||
+		!strings.Contains(out, "--yes") {
+		t.Fatalf("consent: %v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(cfg); strings.Contains(string(b), "api.anthropic.com") {
+		t.Fatalf("the policy changed without --yes:\n%s", b)
+	}
+	_, out, _, err = run(t, dir, "fix", "consent", "demo", "--yes")
+	if err != nil || !strings.Contains(out, "demo") {
+		t.Fatalf("consent --yes: %v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(cfg)
+	if !strings.Contains(string(b), "api.anthropic.com") || !strings.Contains(string(b), "registry.npmjs.org") {
+		t.Errorf("the policy lacks the rules:\n%s", b)
+	}
+	withStore(t, dir, func(st *store.Store) {
+		p, err := project.NewRepo(st).Get(context.Background(), "demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, ok, err := fix.NewRepo(st).Consent(context.Background(), p.ID); err != nil || !ok {
+			t.Errorf("no consent recorded: %v", err)
+		}
+	})
+	_, out, _, err = run(t, dir, "fix", "consent", "demo")
+	if err != nil || !strings.Contains(out, i18n.T(i18n.EN, "cli.fix.consent.already", "demo")) {
+		t.Errorf("second consent: %v\n%s", err, out)
+	}
+	if _, _, _, err := run(t, dir, "fix", "consent", "nowhere"); err == nil {
+		t.Error("consent of an unknown project succeeded")
+	}
+	// A strict_local policy is refused, in clear.
+	if err := os.WriteFile(cfg, []byte("sovereignty:\n  mode: strict_local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "fix", "consent", "demo", "--yes"); err == nil || !strings.Contains(err.Error(), "strict_local") {
+		t.Errorf("strict_local consent: %v", err)
+	}
+}

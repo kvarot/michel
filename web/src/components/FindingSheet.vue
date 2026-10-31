@@ -144,6 +144,10 @@
         </dl>
       </section>
 
+      <div v-if="fixable" class="m-sheet__fix">
+        <v-btn color="primary" variant="flat" :href="fixHref">{{ $t('item.fix') }}</v-btn>
+      </div>
+
       <DecisionPanel :finding="f" @decided="onDecided" />
     </template>
   </div>
@@ -153,6 +157,7 @@
 import DecisionPanel from './DecisionPanel.vue'
 import { api } from '../api.js'
 import { formatDate, formatPercent, severityOf } from '../lib/digestView.js'
+import { fixHash } from '../lib/fixView.js'
 
 const kinds = ['dependency', 'code', 'misconfig', 'web', 'vulnerability']
 
@@ -167,6 +172,14 @@ export default {
     return { f: null, loading: true, failure: null }
   },
   computed: {
+    // fixable: an open finding can go to the Fix page ("Corriger").
+    fixable() {
+      if (!this.f || this.f.status === 'gone') return false
+      return this.f.decision?.action !== 'ignore'
+    },
+    fixHref() {
+      return fixHash({ finding: this.f?.id })
+    },
     a() {
       return this.f?.analysis || null
     },
@@ -262,6 +275,7 @@ export default {
 .m-tech { margin: 0.25rem 0 1rem; }
 .m-tech summary { cursor: pointer; font-size: 0.9rem; font-weight: 600; color: rgb(var(--v-theme-primary)); padding: 0.25rem 0; }
 .m-tech[open] summary { margin-bottom: 0.6rem; }
+.m-sheet__fix { margin: 0 0 1rem; }
 .m-glossary { margin-bottom: 1rem; }
 .m-glossary dl { margin: 0; display: grid; gap: 0.4rem; }
 .m-glossary dt { font-weight: 600; font-size: 0.9rem; }

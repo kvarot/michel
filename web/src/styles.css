@@ -21,6 +21,13 @@ body, .v-application { font-family: var(--m-ui); }
   padding: 0 var(--m-gutter);
 }
 
+/* The Fix page needs its three columns. */
+.m-wide {
+  max-width: calc(84rem + 2 * var(--m-gutter));
+  margin: 0 auto;
+  padding: 0 var(--m-gutter);
+}
+
 /* Michel speaks: the headline, his word, the three sentences. */
 .m-voice { font-family: var(--m-voice); }
 .m-headline {

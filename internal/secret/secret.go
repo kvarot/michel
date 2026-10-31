@@ -160,3 +160,10 @@ func (s *fileStore) List() ([]string, error) {
 	}
 	return names, nil
 }
+
+// Protect encrypts plain for the current user: DPAPI on Windows, a copy of
+// the value elsewhere (the file mode is the protection there).
+func Protect(plain []byte) ([]byte, error) { return protect(plain) }
+
+// Unprotect reverses Protect for the same user.
+func Unprotect(data []byte) ([]byte, error) { return unprotect(data) }

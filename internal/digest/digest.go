@@ -17,6 +17,7 @@ import (
 	"github.com/kvarot/michel/internal/analyze"
 	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/explain"
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
@@ -144,6 +145,17 @@ type ProjectDigest struct {
 	// ProvenFixed and ReportedFixed stay empty until fixes are tracked.
 	ProvenFixed   []Package `json:"proven_fixed,omitempty"`
 	ReportedFixed []Package `json:"reported_fixed,omitempty"`
+	// FixWaiting lists the fix proposals waiting for the user's decision
+	// (whatever the window); FixApplied the fixes proven in the window
+	// (branch merged, finding gone: "fixed in your code, deploy");
+	// FixQueued counts the automatic fixes queued that wait for michel
+	// serve to run.
+	FixWaiting []FixLine `json:"fix_waiting,omitempty"`
+	FixApplied []FixLine `json:"fix_applied,omitempty"`
+	FixQueued  int       `json:"fix_queued"`
+	// FixUnreadable counts the attempts whose stored record could not be
+	// read: left out of the lines above, never a failure of the digest.
+	FixUnreadable int `json:"fix_unreadable,omitempty"`
 	// Open counts the open findings (new, pending, decided fix or defer) by
 	// severity; Decided counts the decisions in force by action; Total is
 	// the open findings plus the ignored ones.
@@ -164,6 +176,17 @@ type ProjectDigest struct {
 	// malicious whose decision in force is defer or ignore: the digest
 	// recalls them in one line instead of listing them.
 	ExploitedDecided int `json:"exploited_decided"`
+}
+
+// FixLine is one fix attempt in a digest: the package and advisory, the
+// attempt and its branch. Never the diff, a path or the conversation.
+type FixLine struct {
+	Package   string `json:"package"`
+	OSVID     string `json:"osv_id"`
+	Target    string `json:"target,omitempty"`
+	FindingID string `json:"finding_id"`
+	AttemptID string `json:"attempt_id"`
+	Branch    string `json:"branch,omitempty"`
 }
 
 // Digest is what changed between Since and Until.
@@ -602,7 +625,10 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 		}
 		return a.OSVID < b.OSVID
 	})
-	attention += len(pd.Superseded) + len(pd.Due)
+	if err := c.fixes(ctx, p, &pd, byID); err != nil {
+		return ProjectDigest{}, 0, 0, nil, err
+	}
+	attention += len(pd.Superseded) + len(pd.Due) + len(pd.FixWaiting)
 	pd.Attention = attention
 
 	first, status, err := c.scans(ctx, p.ID)
@@ -627,6 +653,60 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 		return a.OSVID < b.OSVID
 	})
 	return pd, len(fresh), attention, exploited, nil
+}
+
+// fixes fills the fix lines of the project: the proposals waiting for the
+// user, the fixes proven in the window, and the queued automatic fixes.
+func (c computer) fixes(ctx context.Context, p project.Project, pd *ProjectDigest, byID map[string]scan.Finding) error {
+	repo := fix.NewRepo(c.s)
+	line := func(a fix.Attempt) FixLine {
+		f := byID[a.FindingID]
+		name, id, _ := scan.Ref(f)
+		l := FixLine{Package: scan.SanitizeText(name), OSVID: scan.SanitizeText(id), FindingID: a.FindingID, AttemptID: a.ID,
+			Target: scan.SanitizeText(a.Work.Plan.Target)}
+		if l.Package == "" {
+			l.Package = scan.SanitizeText(a.Work.Plan.Package)
+		}
+		return l
+	}
+	waiting, err := repo.ListAttempts(ctx, p.ID, string(fix.StateProposed))
+	if err != nil {
+		return err
+	}
+	for _, a := range waiting {
+		if a.WorkError != "" {
+			pd.FixUnreadable++
+			continue
+		}
+		pd.FixWaiting = append(pd.FixWaiting, line(a))
+	}
+	proven, err := repo.ListAttempts(ctx, p.ID, string(fix.StateProvenFixed))
+	if err != nil {
+		return err
+	}
+	for _, a := range proven {
+		if !a.UpdatedAt.After(c.since) {
+			continue
+		}
+		if a.WorkError != "" {
+			pd.FixUnreadable++
+			continue
+		}
+		l := line(a)
+		l.Branch = fix.Branch(a.ID)
+		pd.FixApplied = append(pd.FixApplied, l)
+	}
+	for _, list := range []*[]FixLine{&pd.FixWaiting, &pd.FixApplied} {
+		sort.SliceStable(*list, func(i, j int) bool {
+			a, b := (*list)[i], (*list)[j]
+			if a.Package != b.Package {
+				return a.Package < b.Package
+			}
+			return a.OSVID < b.OSVID
+		})
+	}
+	pd.FixQueued, err = repo.CountQueued(ctx, p.ID)
+	return err
 }
 
 // exploited is the head-of-digest line of f, a finding of the project named

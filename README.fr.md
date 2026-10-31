@@ -2,9 +2,9 @@
 
 🇬🇧 English version : [README.md](README.md)
 
-Veille quotidienne locale et open source des vulnérabilités connues dans les dépendances de tes projets (Composer, npm ; Go ensuite), avec le coût et les effets de bord de chaque correctif exposés pour que tu décides, une preuve avant tout statut « corrigé », et des fiches de correctif compactes (Markdown, skill Claude Code, MCP) pour l'IA de code de ton choix.
+Veille quotidienne locale et open source des vulnérabilités connues dans les dépendances de tes projets (Composer, npm ; Go ensuite), avec le coût et les effets de bord de chaque correctif exposés pour que tu décides, une preuve avant tout statut « corrigé », et des fiches de correction compactes (Markdown, skill Claude Code, MCP) pour l'IA de code de ton choix.
 
-État : plans 1 à 4 livrés. Plan 1 : scan hors ligne des lockfiles Composer et npm contre des bases OSV locales, stockage SQLite des findings, journal d'audit chaîné par hachage, passerelle réseau fermée par défaut. Plan 2 : analyse locale de chaque faille (comment le paquet est atteint, quelle mise à jour le corrige, où ton code l'utilise, quels tests le couvrent, journal des modifications local) avec un score de risque public, expliquée en trois phrases en français ou en anglais (`michel analyze`, `michel finding`). Plan 3 : décisions (corriger, reporter, ignorer ; Michel ne te redemande que si quelque chose change), un résumé quotidien (le « digest ») envoyé par e-mail, par webhook signé (envoi automatique vers une adresse web, avec une signature qui prouve l'origine) ou par notification sur le bureau, des secrets gardés hors du fichier de politique, et une page « Aujourd'hui » locale, installable comme une application (`michel decide`, `michel digest`, `michel serve`) ; tous les messages en français ou en anglais. Plan 4 : un registre unique des sources (`michel source`, page « Sources »). Il ajoute d'autres bases OSV, la lecture de `yarn.lock` et `pnpm-lock.yaml`, la liste des failles déjà attaquées (KEV, CISA) et leur probabilité d'attaque (EPSS), placées en tête du digest, les avis des éditeurs (« À lire »), les résultats de Trivy et de Semgrep, et des skills et serveurs MCP bloqués sur une version précise. Chaque source ne contacte ses hôtes qu'après ton accord. Pas encore : fiches de correctif, correctifs automatiques, IA, planificateur intégré.
+État : plans 1 à 5 livrés. Plan 1 : scan hors ligne des lockfiles Composer et npm contre des bases OSV locales, stockage SQLite des findings, journal d'audit chaîné par hachage, passerelle réseau fermée par défaut. Plan 2 : analyse locale de chaque faille (comment le paquet est atteint, quelle mise à jour le corrige, où ton code l'utilise, quels tests le couvrent, journal des modifications local) avec un score de risque public, expliquée en trois phrases en français ou en anglais (`michel analyze`, `michel finding`). Plan 3 : décisions (corriger, reporter, ignorer ; Michel ne te redemande que si quelque chose change), un résumé quotidien (le « digest ») envoyé par e-mail, par webhook signé (envoi automatique vers une adresse web, avec une signature qui prouve l'origine) ou par notification sur le bureau, des secrets gardés hors du fichier de politique, et une page « Aujourd'hui » locale, installable comme une application (`michel decide`, `michel digest`, `michel serve`) ; tous les messages en français ou en anglais. Plan 4 : un registre unique des sources (`michel source`, page « Sources »). Il ajoute d'autres bases OSV, la lecture de `yarn.lock` et `pnpm-lock.yaml`, la liste des failles déjà attaquées (KEV, CISA) et leur probabilité d'attaque (EPSS), placées en tête du digest, les avis des éditeurs (« À lire »), les résultats de Trivy et de Semgrep, et des skills et serveurs MCP bloqués sur une version précise. Chaque source ne contacte ses hôtes qu'après ton accord. Plan 5 : fiches de correction (`michel brief`, MCP, skill) et un agent de correction : Claude Code prépare la correction sur une copie, Michel la vérifie et la teste, tu valides et tu obtiens une branche (page « Corriger », `michel fix`). Pas encore : correction directement sur ton serveur, IA qui tourne sur ton ordinateur, planificateur intégré.
 
 ## Démarrage rapide
 
@@ -21,6 +21,7 @@ bin/michel audit verify
 ```
 
 - Sources (registre, accord, KEV/EPSS, flux, plugins, skills, MCP) : `docs/sources.fr.md`
+- Agent de correction (niveaux, accord, copie de travail, preuve, risques qui restent) : `docs/fix.fr.md`
 - Score de risque : `docs/remediation-risk.fr.md`
 - Installation hors ligne et scripts : `docs/operations/offline-installation.fr.md`
 - Décisions, digest quotidien, canaux, page « Aujourd'hui », tâche planifiée : `docs/operations/daily-digest.fr.md`
@@ -42,5 +43,17 @@ bin/michel source install skill.trailofbits-code-audit   # affiche un aperçu, p
 ```
 
 Les types de sources, ce qui est envoyé à chaque hôte, les plugins, les skills et les serveurs MCP : `docs/sources.fr.md`.
+
+## Corriger
+
+Sur la page, le bouton **Corriger** d'une faille la confie à un agent (Claude Code, que tu installes et où tu te connectes toi-même). Il travaille sur une copie de ton projet, dans le dossier de données de Michel, sans pouvoir lancer de commandes ni utiliser tes réglages ; Michel lance lui-même la mise à jour, l'installation (Composer, npm) et les tests, puis te montre la proposition en clair. **Valider** crée une branche `michel/fix-…` dans ton dépôt, rien d'autre : c'est toi qui la fusionnes, puis tu déploies comme d'habitude. La première fois, un écran d'accord (un par projet) te dit ce qui quitte ton ordinateur : le code de la copie, envoyé à Anthropic, et les noms de paquets, envoyés aux dépôts de paquets (Packagist, npm). Il dit aussi ce qui tourne sur ton ordinateur ; rien ne part vers une IA sans cet accord, et jamais pour un projet classé `health` (santé). Chaque projet choisit son niveau : signaler, expliquer (par défaut), préparer seul, ou appliquer les petites mises à jour sûres que tu as autorisées.
+
+```
+bin/michel serve --open                         # page « Aujourd'hui », puis « Corriger » sur une faille
+bin/michel project set monprojet --test-cmd "vendor/bin/phpunit"   # pour que Michel puisse lancer tes tests
+bin/michel brief <id-ou-préfixe>                # la fiche de correction, rien n'est envoyé
+```
+
+Les niveaux, l'accord, la copie de travail, ce que l'agent peut et ne peut pas faire, la preuve, le masquage et les risques qui restent : `docs/fix.fr.md`.
 
 Licence : Apache-2.0.

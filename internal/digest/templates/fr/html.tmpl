@@ -37,6 +37,18 @@
 {{range .Superseded}}<li><strong>{{.Package}}</strong> {{.OSVID}} : était {{template "action" .PreviousAction}}, {{reason .Reason}}</li>
 {{end}}</ul>
 {{end}}
+{{- if .FixWaiting}}<h3>{{fixWaiting (len .FixWaiting)}}</h3>
+<ul>
+{{range .FixWaiting}}<li><strong>{{.Package}}</strong> {{.OSVID}}{{if .Target}} → {{.Target}}{{end}}</li>
+{{end}}</ul>
+{{end}}
+{{- if .FixApplied}}<h3>Corrigées dans ton code</h3>
+<ul>
+{{range .FixApplied}}<li>{{fixProven .}}</li>
+{{end}}</ul>
+{{end}}
+{{- if .FixQueued}}<p class="banner">{{fixQueued .FixQueued}}</p>
+{{end}}
 {{- if .Due}}<h3>Reports qui arrivent à échéance</h3>
 <ul>
 {{range .Due}}<li><strong>{{.Package}}</strong> {{.OSVID}} : reportée jusqu'au {{day .DueAt}}{{if .Overdue}} <span class="sev sev-high">(date dépassée)</span>{{end}}</li>

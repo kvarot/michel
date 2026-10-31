@@ -7,6 +7,20 @@
       <p v-if="digest.since_label" class="m-muted m-small m-hero__since">{{ digest.since_label }}</p>
     </section>
 
+    <section v-if="toReview.length" class="m-review" aria-labelledby="review-title">
+      <h2 id="review-title" class="m-review__title">{{ $t('today.fixes.title') }}</h2>
+      <p class="m-muted m-small m-review__hint">{{ $t('today.fixes.hint') }}</p>
+      <ul class="m-review__list">
+        <li v-for="a in toReview" :key="a.id" class="m-review__item">
+          <span class="m-review__what">
+            <span class="m-code m-review__pkg">{{ a.finding.package }}</span>
+            <span class="m-muted m-small">{{ $t('fix.in_project', { project: a.project }) }}</span>
+          </span>
+          <v-btn color="primary" variant="flat" size="small" :href="reviewHref(a)">{{ $t('today.fixes.open') }}</v-btn>
+        </li>
+      </ul>
+    </section>
+
     <ExploitedBanner :exploited="digest.exploited || []" :decided="digest.exploited_decided || 0" @decided="$emit('decided')" />
 
     <OsvBanner :fetched-at="osvFetchedAt" :stale="digest.osv_stale" />
@@ -51,7 +65,9 @@ import ExploitedBanner from './ExploitedBanner.vue'
 import OsvBanner from './OsvBanner.vue'
 import ProjectCard from './ProjectCard.vue'
 import ReadingList from './ReadingList.vue'
+import { api } from '../api.js'
 import { groupAttention } from '../lib/digestView.js'
+import { fixHash } from '../lib/fixView.js'
 
 export default {
   name: 'TodayPage',
@@ -61,6 +77,9 @@ export default {
     meta: { type: Object, default: null },
   },
   emits: ['decided'],
+  data() {
+    return { toReview: [] }
+  },
   computed: {
     projects() {
       return this.digest.projects || []
@@ -76,6 +95,28 @@ export default {
       return t.startsWith('0001-') ? '' : t
     },
   },
+  watch: {
+    // A new digest (refresh, decision, language) reads the fixes again.
+    digest() {
+      this.loadReview()
+    },
+  },
+  created() {
+    this.loadReview()
+  },
+  methods: {
+    /** loadReview reads the fixes waiting for approval; without the fix service the section stays hidden. */
+    async loadReview() {
+      try {
+        this.toReview = (await api.get(`/fixes?state=proposed&lang=${encodeURIComponent(this.$ui.lang)}`)) || []
+      } catch {
+        this.toReview = []
+      }
+    },
+    reviewHref(a) {
+      return fixHash({ attempt: a.id })
+    },
+  },
 }
 </script>
 
@@ -84,6 +125,19 @@ export default {
 .m-hero__day { margin: 0 0 0.5rem; font-size: 0.95rem; }
 .m-hero__since { margin: 0.75rem 0 0; }
 .m-block { margin-bottom: 1.25rem; }
+.m-review {
+  margin-bottom: 1.5rem;
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  border: 1px solid rgba(var(--v-theme-primary), 0.35);
+  background: rgba(var(--v-theme-primary), 0.07);
+}
+.m-review__title { font-family: var(--m-voice); font-size: 1.3rem; font-weight: 600; margin: 0 0 0.25rem; }
+.m-review__hint { margin: 0 0 0.6rem; }
+.m-review__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.m-review__item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; }
+.m-review__what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.6rem; }
+.m-review__pkg { font-weight: 600; }
 .m-empty { display: grid; gap: 0.4rem; padding: 1.5rem 0; }
 .m-empty p { margin: 0; }
 .m-projects { display: grid; gap: 1.25rem; }

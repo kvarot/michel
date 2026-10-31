@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/analyze"
+	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/digest"
 	"github.com/kvarot/michel/internal/explain"
@@ -145,6 +146,7 @@ func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 // projectView counts p's findings the way the digest does.
 func (s *server) projectView(ctx context.Context, p project.Project) (ProjectView, error) {
 	v := ProjectView{Name: scan.SanitizeText(p.Name), Classification: string(p.Classification), FixLevel: p.FixLevel,
+		ServerFixLevel: p.ServerFixLevel, AutoFixMinor: p.AutoFixMinor,
 		Open: map[string]int{}, Decided: map[string]int{}, LastScanStatus: "never"}
 	for _, sev := range severities {
 		v.Open[sev] = 0
@@ -180,6 +182,71 @@ func (s *server) projectView(ctx context.Context, p project.Project) (ProjectVie
 		return ProjectView{}, err
 	}
 	return v, nil
+}
+
+// projectPatch is the body of PATCH /projects/{name}: only the fields sent
+// change.
+type projectPatch struct {
+	FixLevel       *int  `json:"fix_level"`
+	ServerFixLevel *int  `json:"server_fix_level"`
+	AutoFixMinor   *bool `json:"auto_fix_minor"`
+}
+
+// patchProject changes the fix levels and the automatic minor fixes of a
+// project, audits it and answers the project's view.
+func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
+	ctx, lang := r.Context(), s.answerLang(r)
+	var body projectPatch
+	if !s.readJSONHint(w, r, &body, i18n.T(lang, "api.project.patch.bad_json_hint")) {
+		return
+	}
+	if body.FixLevel == nil && body.ServerFixLevel == nil && body.AutoFixMinor == nil {
+		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.nothing"), i18n.T(lang, "api.project.patch.bad_json_hint"))
+		return
+	}
+	for _, l := range []*int{body.FixLevel, body.ServerFixLevel} {
+		if l != nil && (*l < 0 || *l > 3) {
+			s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.bad_level"), i18n.T(lang, "api.project.patch.bad_level_hint"))
+			return
+		}
+	}
+	p, found, err := s.activeProject(ctx, r.PathValue("name"))
+	if err != nil {
+		s.internal(w, r)
+		return
+	}
+	if !found {
+		s.fail(w, http.StatusNotFound, i18n.T(lang, "api.project_not_found"), "")
+		return
+	}
+	ev := map[string]any{}
+	if body.FixLevel != nil {
+		p.FixLevel, ev["fix_level"] = *body.FixLevel, *body.FixLevel
+	}
+	if body.ServerFixLevel != nil {
+		p.ServerFixLevel, ev["server_fix_level"] = *body.ServerFixLevel, *body.ServerFixLevel
+	}
+	if body.AutoFixMinor != nil {
+		p.AutoFixMinor, ev["auto_fix_minor"] = *body.AutoFixMinor, *body.AutoFixMinor
+	}
+	if err := project.NewRepo(s.deps.Store).Update(ctx, p); err != nil {
+		if errors.Is(err, project.ErrInvalidFixLevel) {
+			s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.bad_level"), i18n.T(lang, "api.project.patch.bad_level_hint"))
+			return
+		}
+		s.internal(w, r)
+		return
+	}
+	if _, err := s.deps.Audit.Record(ctx, audit.Event{Actor: decisionAuthor, Action: "project.update", Target: p.Name, Result: "ok", Evidence: ev}); err != nil {
+		s.auditFailed(w, r)
+		return
+	}
+	v, err := s.projectView(ctx, p)
+	if err != nil {
+		s.internal(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 // activeProject returns the active project named name.

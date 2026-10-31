@@ -2,7 +2,7 @@
   <v-app>
     <a class="m-skip" href="#main">{{ $t('app.skip') }}</a>
     <header class="m-top">
-      <div class="m-column m-top__row">
+      <div class="m-top__row" :class="page === 'fix' ? 'm-wide' : 'm-column'">
         <span class="m-brand">
           <img src="/icons/icon-192.png" alt="" width="28" height="28">
           <span>{{ assistant }}</span>
@@ -17,6 +17,7 @@
           @update:model-value="go"
         >
           <v-tab value="today">{{ $t('nav.today') }}</v-tab>
+          <v-tab value="fix">{{ $t('nav.fix') }}</v-tab>
           <v-tab value="sources">{{ $t('nav.sources') }}</v-tab>
         </v-tabs>
         <nav class="m-top__actions">
@@ -27,7 +28,7 @@
     </header>
 
     <v-main>
-      <div id="main" class="m-column m-main" tabindex="-1">
+      <div id="main" class="m-main" :class="page === 'fix' && state === 'ready' ? 'm-wide' : 'm-column'" tabindex="-1">
         <div v-if="state === 'loading'" class="m-state" role="status">
           <v-progress-circular indeterminate color="primary" size="28" width="3" />
           <p class="m-muted">{{ $t('app.loading') }}</p>
@@ -65,6 +66,7 @@
         </section>
 
         <SourcesPage v-else-if="page === 'sources'" @changed="stale = true" />
+        <FixPage v-else-if="page === 'fix'" :route="fixRoute" @changed="stale = true" />
         <TodayPage v-else :digest="digest" :meta="meta" @decided="loadToday(false)" />
       </div>
     </v-main>
@@ -86,18 +88,26 @@
 <script>
 import TodayPage from './components/TodayPage.vue'
 import SourcesPage from './components/SourcesPage.vue'
+import FixPage from './components/FixPage.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import { api } from './api.js'
 import { keys, save } from './lib/storage.js'
+import { fixRoute } from './lib/fixView.js'
 
-/** pageOf reads the page from the address hash. */
+/** pageOf reads the page from the address hash: #/sources, #/fix…, else today. */
 function pageOf(hash) {
-  return hash === '#/sources' ? 'sources' : 'today'
+  if (hash === '#/sources') return 'sources'
+  return fixRoute(hash) ? 'fix' : 'today'
+}
+
+/** routeOf is the Fix page's {attempt, finding} in the address (empty elsewhere). */
+function routeOf(hash) {
+  return fixRoute(hash) || { attempt: '', finding: '' }
 }
 
 export default {
   name: 'App',
-  components: { TodayPage, SourcesPage, SettingsPanel },
+  components: { TodayPage, SourcesPage, FixPage, SettingsPanel },
   data() {
     return {
       state: 'loading', // loading | unauthorized | offline | error | ready
@@ -112,6 +122,8 @@ export default {
       stopListening: null,
       // page follows the address: #/sources, else today (no router).
       page: pageOf(window.location.hash),
+      // fixRoute is the attempt or the finding the Fix page shows.
+      fixRoute: routeOf(window.location.hash),
       // stale is set when the Sources page changed something the Today page shows.
       stale: false,
     }
@@ -143,6 +155,7 @@ export default {
   methods: {
     onHash() {
       this.page = pageOf(window.location.hash)
+      this.fixRoute = routeOf(window.location.hash)
       if (this.page === 'today' && this.stale && this.state === 'ready') {
         this.stale = false
         this.loadToday(false)
@@ -150,7 +163,8 @@ export default {
     },
     /** go shows a page by changing the address, so the back button works. */
     go(page) {
-      window.location.hash = page === 'sources' ? '#/sources' : '#/'
+      const hashes = { sources: '#/sources', fix: '#/fix' }
+      window.location.hash = hashes[page] || '#/'
     },
     onUnauthorized() {
       this.rejected = !!api.token
