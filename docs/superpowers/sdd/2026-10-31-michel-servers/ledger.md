@@ -142,3 +142,25 @@ Task 9: fix round 4/5 (fresh implementer a5e21eea0ba01c6c0, opus): open_basedir 
 Task 9: fix round 4/5 (open_basedir riskyPathList, two-pattern readlink case — [!/]* idea was wrong, implementer proved with real sh; commits 6d6b820..e4e6ac5); controller verified: real sh case table (phpfoo/evil, php/x, python, binx → 7; php8.2 ok), tests green, eval.go diff read
 Task 9: complete (commits 19254a8..e4e6ac5, 4 fix rounds; reviews clean; spec amended d5ce052)
 Task 9: minor (deferred): .user.ini accepted anywhere collect read it (written as SSH user only); readlink chain intermediates (/etc/alternatives) not checked individually; dnf wrapped names; .user.ini cache_ttl
+Ruling: Task 10 rolled-back cause stored as digest.CauseRolledBack ("rolled_back") on fix_attempt (Task 8 digest reads it); i18n text key fix.server.rolled_back displays it — brief named the key as the cause — costs: none.
+Ruling: Task 10 RunAsRoot bundle with sudo_mode != nopasswd, or ErrUntestableBinary → executor user only (Michel never runs it) — spec § 8.1 bis — costs: none.
+Task 10: dispatched (BASE 667a651, implementer a687fff52a348f53b, opus)
+Task 10: implementer DONE_WITH_CONCERNS (commit 6e11a84; tests written after code, mutation-checked by hand; migration 0014 fix_proposal.steps; new AlertUndoNow kind; StepResults derived after run)
+Ruling: ErrUntestableBinary → no script at all (not even for the user) — reloading PHP without a config test can take the site down; Michel explains why — costs: PHP outside system dirs gets no scripted fix.
+Ruling: preprod linked but not showing the finding ⇒ ErrPreprodMissing (fail closed) — costs: user must unlink or fix preprod first.
+Task 10: ⚠️ carry to T12: wire StartServer/SnapshotDone/AppliedByMe in API/CLI; production CheckServer=servercheck.Check, SiteCheck=GET via target.http, Alert in fix.Deps (serve) — SiteCheck nil ⇒ always inconclusive
+Task 10: ⚠️ carry to T11/T13: button labels "Snapshot fait"/"Je l'ai appliqué" must match page; level-3 auto run in T11
+Task 10: FR review — 4 rewordings (task-10-fr-review.md) → join fix round
+Task 10: review — spec ❌ (C1 package failure/site-down reported as rolled_back), Needs fixes (I1 no atomic state claim before run; I2 caller ctx kills script and recording; I3 60s SIGKILL cap hits long upgrades; I4 mutations survive: apply-time snapshot gate, sudo/executor recheck, connection-lost alert; 10 minors incl. backups plaintext on Linux, dnf simulation unprivileged)
+Ruling: apply scripts are exempt from the 60 s per-command cap: bound 5 min for config bundles, 30 min for package bundles, no SIGKILL from Michel; on bound exceeded or SSH drop mid-run the state becomes `unknown` (no undo guessed), urgent alert "état inconnu, vérifie le serveur", then a recollection — killing dpkg mid-run is worse than waiting — costs: a hung script holds the attempt up to 30 min.
+Ruling: package plans never use CauseRolledBack; failure or site down after upgrade ⇒ state failed, cause package_failed / site_down_after_upgrade, Urgent alert "restaure ton snapshot" (spec § 8.1 bis: no automatic package rollback).
+Task 10: fix round 1 → implementer (C1, I1-I4, all minors, FR 4 rewordings)
+Task 10: fix round 1/5 (C1, I1-I4, minors, FR; new states running/unknown, RunWith NoKill, backups AES-256-GCM key in secret store; 15 tests failed first; commits 6e11a84..be670fa) → re-review
+Task 10: ⚠️ carry to T11/T13: page calls fix.BackupList; AlertInput.Backups not stored; 8 new FR keys unreviewed → T13 FR pass
+Task 10: re-review round 1 — spec ✅; C1, I1-I4, minors fixed (mutations M1/M8/M11 now caught); new I-R1 (stale running: Sweep only at start, no alert), I-R2 (post-script phase unbounded, alert before state change) + minors key race, AAD target_id, stderr tail → fix round 2
+Task 10: ⚠️ carry to T12: API fixStates add running, unknown; carry to T11/T13: warn when preparing a fix on a server with an unknown-state attempt
+Task 10: fix round 2/5 (I-R1 SweepRunning + 5 min RunningSweeper, run_deadline; I-R2 post-script 2 min bound, state before alert; key one-row table CAS; AAD target_id; StderrTail; migration 0015; commits be670fa..17d6de7) → re-review
+Task 10: re-review round 2 — I-R1/I-R2 order fixed; new I-R3 (one 2 min deadline for whole post-script phase leaves attempt stuck applied), I-R4 (backup key overwritten after 1 s wait → old backups unreadable) + N1 INSERT not PG race-safe, N2 → fix round 3
+Task 10: fix round 3/5 (I-R3 per-step bounds 30 s/5 min/5 min + fresh 2 min ctx per state/alert, stale applied swept; I-R4 key rotate only on persistent NotFound after 10 s, never overwrite; N1 ON CONFLICT; N2 StderrCut; commits 17d6de7..f5a2205) → re-review
+Task 10: complete (commits 667a651..f5a2205, 3 fix rounds, re-review approved)
+Task 10: minor (deferred, T11/T13): old backups after key rotation shown as "clé perdue" not "ne correspond pas"; key mismatch audit needs own reason; hung Alert leaves one goroutine (accepted)
