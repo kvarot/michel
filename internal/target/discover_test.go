@@ -282,3 +282,19 @@ func TestParsePhpStormResolvesSavedSSHConfigs(t *testing.T) {
 		t.Errorf("discover = %+v %v", got, err)
 	}
 }
+
+func TestParseSSHConfigAttrIgnoresAnythingAfterTheFirstToken(t *testing.T) {
+	for in, want := range map[string]sshEndpoint{
+		"deploy@192.0.2.30:22 password": {host: "192.0.2.30", user: "deploy", port: 22},
+		"deploy@192.0.2.30:2200\tkey":   {host: "192.0.2.30", user: "deploy", port: 2200},
+		"  192.0.2.31 extra words":      {host: "192.0.2.31", port: 22},
+	} {
+		got, ok := parseSSHConfigAttr(in)
+		if !ok || got != want {
+			t.Errorf("parseSSHConfigAttr(%q) = %+v %v, want %+v", in, got, ok, want)
+		}
+	}
+	if _, ok := parseSSHConfigAttr("   "); ok {
+		t.Error("an empty value was accepted")
+	}
+}

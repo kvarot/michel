@@ -142,7 +142,13 @@ func ideSSHConfigs(files []string) map[string]sshEndpoint {
 // parseSSHConfigAttr reads the "user@host:port" form of a server's sshConfig
 // attribute (user and port optional).
 func parseSSHConfigAttr(v string) (sshEndpoint, bool) {
-	v = strings.TrimSpace(v)
+	// Only the first word is the address: PhpStorm may add the sign-in method
+	// after it.
+	if f := strings.Fields(v); len(f) > 0 {
+		v = f[0]
+	} else {
+		v = ""
+	}
 	e := sshEndpoint{port: defaultSSHPort}
 	if i := strings.LastIndex(v, "@"); i >= 0 {
 		e.user, v = v[:i], v[i+1:]

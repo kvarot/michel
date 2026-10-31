@@ -1030,3 +1030,28 @@ func TestTargetLockIsTriedAndRespectsTheContext(t *testing.T) {
 		u3()
 	}
 }
+
+func TestCheckStopsQuietlyWhenTheServerLeftWhileItWaited(t *testing.T) {
+	e := newEnv(t)
+	srv, tg := e.server("srv-gone", newHost(), target.EnvProd)
+	unlock, ok := TryLock(tg.ID)
+	if !ok {
+		t.Fatal("lock")
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Check(context.Background(), e.deps, tg.ID)
+		done <- err
+	}()
+	time.Sleep(150 * time.Millisecond) // the check waits for the lock
+	if err := e.deps.Repo.Remove(context.Background(), tg.ID); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	if err := <-done; !errors.Is(err, target.ErrNotFound) {
+		t.Errorf("check of a removed server = %v", err)
+	}
+	if n := srv.Accepted(); n != 0 {
+		t.Errorf("the removed server was reached %d times", n)
+	}
+}

@@ -154,6 +154,9 @@ var (
 const (
 	CausePackageFailed        = "package_failed"
 	CauseSiteDownAfterUpgrade = "site_down_after_upgrade"
+	// CauseUserChecked ends a fix of unknown outcome: the user looked at the
+	// server themselves and says they know where it stands.
+	CauseUserChecked = "user_checked"
 )
 
 // serverErrorKey is the catalog key of a server refusal, "" otherwise.
@@ -215,6 +218,8 @@ func CauseText(lang i18n.Lang, cause string) string {
 		return i18n.T(lang, "fix.server.package_failed")
 	case CauseSiteDownAfterUpgrade:
 		return i18n.T(lang, "fix.server.site_down_after_upgrade")
+	case CauseUserChecked:
+		return i18n.T(lang, "fix.server.user_checked")
 	}
 	return cause
 }
@@ -682,4 +687,29 @@ func (d Deps) approveServer(ctx context.Context, a Attempt, prop Proposal, hash 
 // than BackupRetention; it returns how many. The servers keep theirs.
 func PurgeServerBackups(ctx context.Context, d Deps) (int, error) {
 	return d.repo().PurgeBackups(ctx, d.now().Add(-BackupRetention))
+}
+
+// ResolveUnknown is the way out of a fix of unknown outcome: the user checked
+// the server themselves, and the attempt ends failed with the cause
+// CauseUserChecked (audited server_fix.resolved). Michel changes nothing on
+// the server. Only an attempt in state unknown can be resolved
+// (ErrBadTransition otherwise), and only a server fix (ErrNotServerFinding).
+func ResolveUnknown(ctx context.Context, d Deps, attemptID, actor string) error {
+	repo := d.repo()
+	a, err := repo.GetAttempt(ctx, attemptID)
+	if err != nil {
+		return err
+	}
+	if a.Work.Server == nil {
+		return ErrNotServerFinding
+	}
+	if actor == "" {
+		actor = d.actor()
+	}
+	if err := repo.SetState(ctx, a.ID, []State{StateUnknown}, StateFailed, CauseUserChecked); err != nil {
+		return err
+	}
+	return d.record(ctx, "server_fix.resolved", a.ID, "ok", map[string]any{
+		"attempt_id": a.ID, "target_id": a.ProjectID, "finding_id": a.FindingID, "author": actor,
+	})
 }

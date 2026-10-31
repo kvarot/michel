@@ -14,6 +14,7 @@ import (
 
 	"github.com/kvarot/michel/internal/serverfix"
 	"github.com/kvarot/michel/internal/store"
+	"github.com/kvarot/michel/internal/target"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -881,17 +882,46 @@ func (r *Repo) SetBackupKeyFingerprint(ctx context.Context, old, fp string) (boo
 	return n == 1, err
 }
 
-// TargetBusy tells whether server targetID has a fix that must end before the
-// server can leave Michel: being prepared, running, of unknown outcome, or
-// approved and waiting to run.
-func (r *Repo) TargetBusy(ctx context.Context, targetID string) (bool, error) {
-	var one int
-	err := r.s.DB().QueryRowContext(ctx, `SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN ('preparing','running','unknown','approved') LIMIT 1`, targetID).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
+// What stands between a server and its removal.
+const (
+	// BlockWait: a fix is being prepared or run (or approved to be run by
+	// Michel): it ends by itself.
+	BlockWait = "wait"
+	// BlockUnknown: a fix of unknown outcome: only the user can end it
+	// (ResolveUnknown).
+	BlockUnknown = "unknown"
+	// BlockApproved: a fix the user runs themselves is approved and waits for
+	// their word: they run it (applied-by-me) or refuse it.
+	BlockApproved = "approved"
+)
+
+// TargetBlock says what, if anything, must end before server targetID can
+// leave Michel: BlockWait (preparing, running, approved for Michel to run),
+// BlockUnknown, BlockApproved, or "" when nothing is pending. The first
+// that applies wins, in that order.
+func (r *Repo) TargetBlock(ctx context.Context, targetID string) (string, error) {
+	list, err := r.ListAttempts(ctx, targetID, "")
 	if err != nil {
-		return false, fmt.Errorf("cannot read the fix attempts: %w", err)
+		return "", err
 	}
-	return true, nil
+	rank := map[string]int{"": 0, BlockApproved: 1, BlockUnknown: 2, BlockWait: 3}
+	block := ""
+	for _, a := range list {
+		b := ""
+		switch a.State {
+		case StatePreparing, StateRunning:
+			b = BlockWait
+		case StateUnknown:
+			b = BlockUnknown
+		case StateApproved:
+			b = BlockWait
+			if p, ok, err := r.CurrentProposal(ctx, a.ID); err == nil && ok && p.Server != nil && p.Server.Executor == target.ExecUser {
+				b = BlockApproved
+			}
+		}
+		if rank[b] > rank[block] {
+			block = b
+		}
+	}
+	return block, nil
 }

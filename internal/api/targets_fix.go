@@ -362,3 +362,26 @@ func (s *server) fixAppliedByMe(w http.ResponseWriter, r *http.Request) {
 	}
 	s.answerAttempt(w, r, http.StatusOK, a.ID)
 }
+
+// fixResolve is the user's word that they checked the server themselves after
+// a fix whose outcome Michel could not tell (state unknown): the attempt ends
+// failed, and the server can leave Michel.
+func (s *server) fixResolve(w http.ResponseWriter, r *http.Request) {
+	lang, ok := s.requestLang(w, r)
+	if !ok {
+		return
+	}
+	d, ok := s.fixDeps(w, r, lang)
+	if !ok {
+		return
+	}
+	a, ok := s.attempt(w, r, lang)
+	if !ok {
+		return
+	}
+	if err := fix.ResolveUnknown(r.Context(), d, a.ID, fixActor); err != nil {
+		s.fixRefused(w, r, lang, err, nil)
+		return
+	}
+	s.answerAttempt(w, r, http.StatusOK, a.ID)
+}

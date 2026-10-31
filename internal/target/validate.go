@@ -2,6 +2,7 @@ package target
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -206,11 +207,18 @@ func (r *Repo) ResolvePreprod(ctx context.Context, t Target, ref string) (string
 // GET of its site when it has one. Adding the server is the user's opt-in
 // for them.
 func AllowRules(t Target) []policy.AllowRule {
-	rules := []policy.AllowRule{{Host: t.Host, Purpose: policy.PurposeTargetSSH}}
+	rules := []policy.AllowRule{{Host: strings.ToLower(t.Host), Purpose: policy.PurposeTargetSSH}}
 	if u, err := url.Parse(t.SiteURL); err == nil && t.SiteURL != "" && u.Hostname() != "" {
-		rules = append(rules, policy.AllowRule{Host: u.Hostname(), Purpose: policy.PurposeTargetHTTP})
+		rules = append(rules, policy.AllowRule{Host: strings.ToLower(u.Hostname()), Purpose: policy.PurposeTargetHTTP})
 	}
 	return rules
+}
+
+// lowerRule is r with its host in lower case: host names compare without
+// case, so every comparison of rules goes through it.
+func lowerRule(r policy.AllowRule) policy.AllowRule {
+	r.Host = strings.ToLower(r.Host)
+	return r
 }
 
 // ReleasedRules are the network rules a server no longer needs once it is
@@ -220,12 +228,12 @@ func ReleasedRules(old Target, kept []Target) []policy.AllowRule {
 	used := map[policy.AllowRule]bool{}
 	for _, k := range kept {
 		for _, r := range AllowRules(k) {
-			used[r] = true
+			used[lowerRule(r)] = true
 		}
 	}
 	var out []policy.AllowRule
 	for _, r := range AllowRules(old) {
-		if !used[r] {
+		if !used[lowerRule(r)] {
 			out = append(out, r)
 		}
 	}
@@ -236,16 +244,57 @@ func ReleasedRules(old Target, kept []Target) []policy.AllowRule {
 func NewRules(current, want []policy.AllowRule) []policy.AllowRule {
 	have := map[policy.AllowRule]bool{}
 	for _, r := range current {
-		have[r] = true
+		have[lowerRule(r)] = true
 	}
 	var out []policy.AllowRule
 	for _, r := range want {
-		if !have[r] {
+		if !have[lowerRule(r)] {
 			out = append(out, r)
-			have[r] = true
+			have[lowerRule(r)] = true
 		}
 	}
 	return out
+}
+
+// RecordRules remembers that Michel wrote these rules for its servers.
+func (r *Repo) RecordRules(ctx context.Context, rules []policy.AllowRule) error {
+	for _, x := range rules {
+		x = lowerRule(x)
+		if _, err := r.s.DB().ExecContext(ctx, `INSERT INTO target_rule (host, purpose) VALUES (?, ?) ON CONFLICT (host, purpose) DO NOTHING`, x.Host, x.Purpose); err != nil {
+			return fmt.Errorf("cannot record the network rules: %w", err)
+		}
+	}
+	return nil
+}
+
+// ForgetRules forgets rules Michel took back.
+func (r *Repo) ForgetRules(ctx context.Context, rules []policy.AllowRule) error {
+	for _, x := range rules {
+		x = lowerRule(x)
+		if _, err := r.s.DB().ExecContext(ctx, `DELETE FROM target_rule WHERE host = ? AND purpose = ?`, x.Host, x.Purpose); err != nil {
+			return fmt.Errorf("cannot forget the network rules: %w", err)
+		}
+	}
+	return nil
+}
+
+// OwnedOnly keeps the rules Michel itself wrote: a rule written by hand in the
+// policy file is never released.
+func (r *Repo) OwnedOnly(ctx context.Context, rules []policy.AllowRule) ([]policy.AllowRule, error) {
+	var out []policy.AllowRule
+	for _, x := range rules {
+		l := lowerRule(x)
+		var one int
+		err := r.s.DB().QueryRowContext(ctx, `SELECT 1 FROM target_rule WHERE host = ? AND purpose = ?`, l.Host, l.Purpose).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("cannot read the network rules: %w", err)
+		}
+		out = append(out, x)
+	}
+	return out, nil
 }
 
 // CheckEnv refuses to make a server production while another one has it as

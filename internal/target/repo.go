@@ -75,6 +75,8 @@ func normalize(t *Target) error {
 	if strings.TrimSpace(t.Host) == "" {
 		return ErrEmptyHost
 	}
+	// Host names have no case: stored lower, compared lower.
+	t.Host = strings.ToLower(strings.TrimSpace(t.Host))
 	if t.Port == 0 {
 		t.Port = 22
 	}

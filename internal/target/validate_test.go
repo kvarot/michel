@@ -3,8 +3,11 @@ package target
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/kvarot/michel/internal/policy"
 )
 
 func TestParseIntervalAndText(t *testing.T) {
@@ -177,5 +180,56 @@ func TestUpdateClearsThePinWhenTheServerMovesAndRemoveClearsPreprod(t *testing.T
 	}
 	if got, _ := r.Get(ctx, x.ID); got.PreprodID != "" {
 		t.Errorf("dangling preprod: %q", got.PreprodID)
+	}
+}
+
+func TestReleasedRulesIgnoreHostCase(t *testing.T) {
+	gone := Target{Host: "Example.TEST", SiteURL: "https://WWW.Example.test/"}
+	stays := Target{Host: "example.test", SiteURL: "https://www.example.test/"}
+	if got := ReleasedRules(gone, []Target{stays}); len(got) != 0 {
+		t.Errorf("released %+v while another server uses the same hosts", got)
+	}
+	for _, r := range AllowRules(gone) {
+		if r.Host != strings.ToLower(r.Host) {
+			t.Errorf("rule host not lowercase: %+v", r)
+		}
+	}
+}
+
+func TestHostIsStoredInLowerCase(t *testing.T) {
+	r, _ := newRepo(t)
+	x, err := r.Add(context.Background(), Target{Name: "x", Host: "Example.TEST", User: "d", Kind: KindVPS})
+	if err != nil || x.Host != "example.test" {
+		t.Fatalf("add = %+v %v", x, err)
+	}
+	x.Host = "Other.Test"
+	if err := r.Update(context.Background(), x); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Get(context.Background(), x.ID); got.Host != "other.test" {
+		t.Errorf("updated host = %q", got.Host)
+	}
+}
+
+func TestOnlyTheRulesMichelWroteAreOwned(t *testing.T) {
+	r, _ := newRepo(t)
+	ctx := context.Background()
+	mine := policy.AllowRule{Host: "Mine.example.test", Purpose: policy.PurposeTargetSSH}
+	hand := policy.AllowRule{Host: "hand.example.test", Purpose: policy.PurposeTargetSSH}
+	if err := r.RecordRules(ctx, []policy.AllowRule{mine}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RecordRules(ctx, []policy.AllowRule{mine}); err != nil {
+		t.Fatalf("recording twice: %v", err)
+	}
+	got, err := r.OwnedOnly(ctx, []policy.AllowRule{mine, hand})
+	if err != nil || len(got) != 1 || !strings.EqualFold(got[0].Host, "mine.example.test") {
+		t.Fatalf("owned = %+v %v", got, err)
+	}
+	if err := r.ForgetRules(ctx, []policy.AllowRule{mine}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.OwnedOnly(ctx, []policy.AllowRule{mine}); len(got) != 0 {
+		t.Errorf("after forget = %+v", got)
 	}
 }

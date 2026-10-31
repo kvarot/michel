@@ -221,25 +221,38 @@ func newTargetDiscoverCmd(deps *Deps) *cobra.Command {
 // in the policy file, and hands the reloaded policy to the gateway: adding a
 // server is the user's opt-in, removing it takes the opt-in back. It returns
 // the rules to add that were not in force yet.
-func changeRules(cmd *cobra.Command, deps *Deps, add, remove []policy.AllowRule) ([]policy.AllowRule, error) {
+func changeRules(cmd *cobra.Command, deps *Deps, add, remove []policy.AllowRule) (added, removed []policy.AllowRule, err error) {
 	sd := sourceDeps(cmd, deps)
-	fresh := target.NewRules(deps.Policy.Sovereignty.Network.Allow, add)
+	ctx := cmd.Context()
+	repo := target.NewRepo(deps.Store)
+	added = target.NewRules(deps.Policy.Sovereignty.Network.Allow, add)
+	// Only the rules Michel wrote are taken back: a rule the user wrote by
+	// hand stays.
+	if removed, err = repo.OwnedOnly(ctx, remove); err != nil {
+		return nil, nil, err
+	}
 	if len(add) > 0 {
 		if _, err := policy.AddAllowRules(sd.PolicyPath, add...); err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		if err := repo.RecordRules(ctx, added); err != nil {
+			return added, nil, err
 		}
 	}
-	if len(remove) > 0 {
-		if _, err := policy.RemoveAllowRules(sd.PolicyPath, remove...); err != nil {
-			return fresh, err
+	if len(removed) > 0 {
+		if _, err := policy.RemoveAllowRules(sd.PolicyPath, removed...); err != nil {
+			return added, nil, err
+		}
+		if err := repo.ForgetRules(ctx, removed); err != nil {
+			return added, removed, err
 		}
 	}
 	p, err := sd.Reload()
 	if err != nil {
-		return fresh, err
+		return added, removed, err
 	}
 	deps.Gateway.SetRules(p.Sovereignty.Network.Allow)
-	return fresh, nil
+	return added, removed, nil
 }
 
 // otherTargets are the servers other than id.
@@ -338,7 +351,7 @@ func newTargetAddCmd(deps *Deps) *cobra.Command {
 					return targetFailure(deps, err, false)
 				}
 			}
-			fresh, err := changeRules(cmd, deps, target.AllowRules(added), nil)
+			fresh, _, err := changeRules(cmd, deps, target.AllowRules(added), nil)
 			n := len(fresh)
 			if err != nil {
 				_ = repo.Remove(ctx, added.ID)
@@ -536,13 +549,13 @@ func newTargetSetCmd(deps *Deps) *cobra.Command {
 			var fresh []policy.AllowRule
 			siteMoved := t.SiteURL != old.SiteURL
 			if siteMoved {
-				if fresh, err = changeRules(cmd, deps, target.AllowRules(t), nil); err != nil {
+				if fresh, _, err = changeRules(cmd, deps, target.AllowRules(t), nil); err != nil {
 					return deps.Wrapf("cli.target.set.allow_failed", err)
 				}
 			}
 			if err := repo.Update(ctx, t); err != nil {
 				if len(fresh) > 0 {
-					_, _ = changeRules(cmd, deps, nil, fresh)
+					_, _, _ = changeRules(cmd, deps, nil, fresh)
 				}
 				return targetFailure(deps, err, false)
 			}
@@ -550,8 +563,8 @@ func newTargetSetCmd(deps *Deps) *cobra.Command {
 			if siteMoved {
 				if others, err := otherTargets(ctx, repo, t.ID); err == nil {
 					gone := target.ReleasedRules(old, append(others, t))
-					if _, err := changeRules(cmd, deps, nil, gone); err == nil {
-						released = len(gone)
+					if _, done, err := changeRules(cmd, deps, nil, gone); err == nil {
+						released = len(done)
 					}
 				}
 			}
@@ -592,11 +605,17 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 			}
 			defer unlock()
 			repo := target.NewRepo(deps.Store)
-			busy, err := fix.NewRepo(deps.Store).TargetBusy(ctx, t.ID)
+			block, err := fix.NewRepo(deps.Store).TargetBlock(ctx, t.ID)
 			if err != nil {
 				return targetFailure(deps, err, false)
 			}
-			if busy {
+			switch block {
+			case "":
+			case fix.BlockUnknown:
+				return deps.Errorf("cli.target.remove.unknown", t.Name)
+			case fix.BlockApproved:
+				return deps.Errorf("cli.target.remove.approved", t.Name)
+			default:
 				return deps.Errorf("cli.target.remove.busy", t.Name)
 			}
 			others, err := otherTargets(ctx, repo, t.ID)
@@ -613,14 +632,18 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 				return targetFailure(deps, err, false)
 			}
 			// The opt-in goes with the server, except for what another uses.
-			removed := 0
+			removed, rulesFailed := 0, false
 			if gone := target.ReleasedRules(t, others); len(gone) > 0 {
-				if _, err := changeRules(cmd, deps, nil, gone); err == nil {
-					removed = len(gone)
-				}
+				_, done, err := changeRules(cmd, deps, nil, gone)
+				removed, rulesFailed = len(done), err != nil
 			}
-			if err := targetRecord(cmd, deps, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "preprod_cleared": dependents}); err != nil {
+			if err := targetRecord(cmd, deps, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed,
+				"rules_error": rulesFailed, "preprod_cleared": dependents}); err != nil {
 				return err
+			}
+			if rulesFailed {
+				// The server is gone; its network rules could not be taken back.
+				fmt.Fprintln(deps.Stderr, deps.T("cli.target.remove.rules_failed", t.Name))
 			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.target.remove.done", t.Name))
 			return nil

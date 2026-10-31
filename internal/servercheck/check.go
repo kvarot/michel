@@ -132,6 +132,14 @@ func Check(ctx context.Context, d CheckDeps, targetID string) (CheckResult, erro
 			unlock()
 		}
 	}()
+	// The server may have left, or been turned off, while the check waited:
+	// read it again under the lock and stop before touching the network.
+	if t, err = d.Repo.Get(ctx, targetID); err != nil {
+		return CheckResult{}, err
+	}
+	if !t.Active {
+		return CheckResult{}, fmt.Errorf("%w (%s)", ErrInactive, t.Name)
+	}
 	links, err := d.Repo.Links(ctx, t.ID)
 	if err != nil {
 		return CheckResult{}, err

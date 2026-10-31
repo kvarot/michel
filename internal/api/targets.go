@@ -480,31 +480,50 @@ func (s *server) resolveLinks(w http.ResponseWriter, r *http.Request, lang i18n.
 // gateway. It returns the rules to add that were not in force yet, so a
 // caller can take them back. Adding a server is the user's opt-in; removing
 // it takes the opt-in back.
-func (s *server) changeRules(add, remove []policy.AllowRule) ([]policy.AllowRule, error) {
+func (s *server) changeRules(add, remove []policy.AllowRule) (added, removed []policy.AllowRule, err error) {
 	if s.deps.PolicyPath == "" || s.deps.Reload == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	s.policyMu.Lock()
 	defer s.policyMu.Unlock()
-	fresh := target.NewRules(s.currentPolicy().Sovereignty.Network.Allow, add)
+	ctx := context.Background()
+	repo := s.targets()
+	// What is in force is read from the file itself: a rule the user wrote
+	// since Michel started counts as theirs.
+	present := s.currentPolicy().Sovereignty.Network.Allow
+	if p, err := s.deps.Reload(); err == nil {
+		present = p.Sovereignty.Network.Allow
+	}
+	added = target.NewRules(present, add)
+	// Only the rules Michel wrote are taken back: a rule the user wrote by
+	// hand stays.
+	if removed, err = repo.OwnedOnly(ctx, remove); err != nil {
+		return nil, nil, err
+	}
 	if len(add) > 0 {
 		if _, err := policy.AddAllowRules(s.deps.PolicyPath, add...); err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		if err := repo.RecordRules(ctx, added); err != nil {
+			return added, nil, err
 		}
 	}
-	if len(remove) > 0 {
-		if _, err := policy.RemoveAllowRules(s.deps.PolicyPath, remove...); err != nil {
-			return fresh, err
+	if len(removed) > 0 {
+		if _, err := policy.RemoveAllowRules(s.deps.PolicyPath, removed...); err != nil {
+			return added, nil, err
+		}
+		if err := repo.ForgetRules(ctx, removed); err != nil {
+			return added, removed, err
 		}
 	}
 	p, err := s.reload()
 	if err != nil {
-		return fresh, err
+		return added, removed, err
 	}
 	if g := s.deps.Sources.Gateway; g != nil {
 		g.SetRules(p.Sovereignty.Network.Allow)
 	}
-	return fresh, nil
+	return added, removed, nil
 }
 
 // otherTargets are the servers other than id.
@@ -864,7 +883,7 @@ func (s *server) targetAdd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	fresh, err := s.changeRules(target.AllowRules(added), nil)
+	fresh, _, err := s.changeRules(target.AllowRules(added), nil)
 	n := len(fresh)
 	if err != nil {
 		_ = s.targets().Remove(ctx, added.ID)
@@ -976,14 +995,14 @@ func (s *server) targetPatch(w http.ResponseWriter, r *http.Request) {
 	// nothing; they come out again when the update fails.
 	var fresh []policy.AllowRule
 	if t.Host != old.Host || t.SiteURL != old.SiteURL {
-		if fresh, err = s.changeRules(target.AllowRules(t), nil); err != nil {
+		if fresh, _, err = s.changeRules(target.AllowRules(t), nil); err != nil {
 			s.failedBody(w, http.StatusInternalServerError, lang, "api.target.allow_failed", "api.target.allow_failed_hint")
 			return
 		}
 	}
 	if err := s.targets().Update(ctx, t); err != nil {
 		if len(fresh) > 0 {
-			_, _ = s.changeRules(nil, fresh)
+			_, _, _ = s.changeRules(nil, fresh)
 		}
 		s.targetRefused(w, r, lang, err, false)
 		return
@@ -993,8 +1012,8 @@ func (s *server) targetPatch(w http.ResponseWriter, r *http.Request) {
 	if t.Host != old.Host || t.SiteURL != old.SiteURL {
 		if others, err := s.otherTargets(ctx, t.ID); err == nil {
 			gone := target.ReleasedRules(old, append(others, t))
-			if _, err := s.changeRules(nil, gone); err == nil {
-				released = len(gone)
+			if _, done, err := s.changeRules(nil, gone); err == nil {
+				released = len(done)
 			}
 		}
 	}
@@ -1037,10 +1056,20 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
-	if busy, err := fix.NewRepo(s.deps.Store).TargetBusy(ctx, t.ID); err != nil {
+	block, err := fix.NewRepo(s.deps.Store).TargetBlock(ctx, t.ID)
+	if err != nil {
 		s.internal(w, r)
 		return
-	} else if busy {
+	}
+	switch block {
+	case "":
+	case fix.BlockUnknown:
+		s.failedBody(w, http.StatusConflict, lang, "api.target.busy_unknown", "api.target.busy_unknown_hint")
+		return
+	case fix.BlockApproved:
+		s.failedBody(w, http.StatusConflict, lang, "api.target.busy_approved", "api.target.busy_approved_hint")
+		return
+	default:
 		s.failedBody(w, http.StatusConflict, lang, "api.target.busy", "api.target.busy_hint")
 		return
 	}
@@ -1061,14 +1090,19 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// The opt-in goes with the server, except for what another still uses.
 	released := target.ReleasedRules(t, others)
-	removed := 0
+	removed, rulesFailed := 0, false
 	if len(released) > 0 {
-		if _, err := s.changeRules(nil, released); err == nil {
-			removed = len(released)
-		}
+		_, gone, err := s.changeRules(nil, released)
+		removed, rulesFailed = len(gone), err != nil
 	}
-	if err := s.targetAudit(ctx, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "preprod_cleared": dependents}); err != nil {
+	if err := s.targetAudit(ctx, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "rules_error": rulesFailed,
+		"preprod_cleared": dependents}); err != nil {
 		s.internal(w, r)
+		return
+	}
+	if rulesFailed {
+		// The server is gone; its network rules could not be taken back.
+		writeJSON(w, http.StatusOK, map[string]bool{"removed": true, "rules_not_removed": true})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"removed": true})
