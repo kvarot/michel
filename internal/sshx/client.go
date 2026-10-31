@@ -29,6 +29,8 @@ import (
 const (
 	// MaxOutput caps what Run keeps of each output stream.
 	MaxOutput = 1 << 20
+	// TailSize is how much of the end of a cut error stream is kept.
+	TailSize = 64 << 10
 	// DefaultCommandTimeout bounds one command run by Run.
 	DefaultCommandTimeout = 60 * time.Second
 	// handshakeTimeout bounds the SSH handshake (key exchange and auth).
@@ -75,9 +77,11 @@ func (d Deps) now() time.Time {
 }
 
 // Result is the outcome of one command. Truncated is set when a stream went
-// past MaxOutput and was cut.
+// past MaxOutput and was cut. StderrTail is the last TailSize bytes of the
+// error stream, cut or not: a script's last line is never lost.
 type Result struct {
 	Stdout, Stderr []byte
+	StderrTail     []byte
 	Exit           int
 	Truncated      bool
 }
@@ -274,16 +278,26 @@ func Quote(argv []string) string {
 }
 
 // capped keeps at most MaxOutput bytes and discards the rest, so the remote
-// side is never blocked. It is safe for concurrent use.
+// side is never blocked; it also keeps the last TailSize bytes of the
+// whole stream. It is safe for concurrent use.
 type capped struct {
 	mu        sync.Mutex
 	buf       []byte
+	tail      []byte
 	truncated bool
 }
 
 func (w *capped) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if len(p) >= TailSize {
+		w.tail = append(w.tail[:0], p[len(p)-TailSize:]...)
+	} else {
+		w.tail = append(w.tail, p...)
+		if over := len(w.tail) - TailSize; over > 0 {
+			w.tail = append(w.tail[:0], w.tail[over:]...)
+		}
+	}
 	room := MaxOutput - len(w.buf)
 	if len(p) > room {
 		w.buf = append(w.buf, p[:max(room, 0)]...)
@@ -292,6 +306,12 @@ func (w *capped) Write(p []byte) (int, error) {
 		w.buf = append(w.buf, p...)
 	}
 	return len(p), nil
+}
+
+func (w *capped) last() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]byte(nil), w.tail...)
 }
 
 func (w *capped) bytes() ([]byte, bool) {
@@ -361,6 +381,7 @@ func (c *Client) RunWith(ctx context.Context, argv []string, stdin io.Reader, o 
 	var t1, t2 bool
 	res.Stdout, t1 = out.bytes()
 	res.Stderr, t2 = errOut.bytes()
+	res.StderrTail = errOut.last()
 	res.Truncated = t1 || t2
 	var exit *ssh.ExitError
 	switch {

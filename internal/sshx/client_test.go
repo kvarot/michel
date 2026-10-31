@@ -446,3 +446,31 @@ func TestFingerprintPrefersEd25519(t *testing.T) {
 	}
 	c.Close()
 }
+
+// The end of a stream cut by MaxOutput is kept apart: a script's last line
+// (its outcome) is never lost.
+func TestRunKeepsTailOfCutStream(t *testing.T) {
+	srv := sshtest.New(t, sshtest.Options{Commands: map[string]sshtest.Handler{
+		"noisy": func(e sshtest.Exec) int {
+			chunk := bytes.Repeat([]byte("y"), 64<<10)
+			for i := 0; i < 20; i++ { // 1.25 MiB
+				if _, err := e.Stderr.Write(chunk); err != nil {
+					return 1
+				}
+			}
+			io.WriteString(e.Stderr, "\nlast line\n")
+			return 1
+		},
+	}})
+	c := dial(t, deps(t, srv, true), tgt(t, srv, true))
+	res, err := c.Run(context.Background(), []string{"noisy"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Truncated || bytes.Contains(res.Stderr, []byte("last line")) {
+		t.Fatalf("truncated %v", res.Truncated)
+	}
+	if !bytes.HasSuffix(res.StderrTail, []byte("last line\n")) || len(res.StderrTail) > sshx.TailSize {
+		t.Errorf("tail %d bytes, ends %q", len(res.StderrTail), res.StderrTail[max(0, len(res.StderrTail)-20):])
+	}
+}

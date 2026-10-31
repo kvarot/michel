@@ -141,6 +141,7 @@ type Deps struct {
 	// replace the per-command cap of the collection for the scripts only.
 	ConfigApplyTimeout  time.Duration
 	PackageApplyTimeout time.Duration
+	RecordTimeout       time.Duration
 }
 
 // DefaultMaxTurns caps the agentic turns of a session when Deps.MaxTurns
@@ -1735,20 +1736,9 @@ func Sweep(ctx context.Context, d Deps) error {
 		}
 		_ = os.Remove(dir) // only when empty
 	}
-	// A server fix left running by a stopped process: its script may have
-	// run, in part or whole. Past the longest bound Michel says so; it never
-	// guesses an undo.
-	running, err := repo.ListAttempts(ctx, "", string(StateRunning))
-	if err != nil {
+	// A server fix left running by a stopped process.
+	if _, err := SweepRunning(ctx, d); err != nil {
 		return err
-	}
-	for _, a := range running {
-		if d.now().Sub(a.UpdatedAt) > d.applyBound(true)+runningMargin {
-			if err := repo.SetState(ctx, a.ID, []State{StateRunning}, StateUnknown, i18n.T(lang, "fix.server.unknown_state")); err != nil {
-				return err
-			}
-			_ = d.record(ctx, "server_fix.apply", a.ID, "error", map[string]any{"attempt_id": a.ID, "target_id": a.ProjectID, "error": "fix.server.unknown_state", "reason": "left running"})
-		}
 	}
 	approved, err := repo.ListAttempts(ctx, "", string(StateApproved))
 	if err != nil {

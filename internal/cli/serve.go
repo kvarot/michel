@@ -162,6 +162,13 @@ func newServeCmd(deps *Deps) *cobra.Command {
 				defer close(schedDone)
 				servercheck.Scheduler(schedCtx, serverCheckDeps(cmd, deps), serverCheckInterval)
 			}()
+			// Server fixes left running by a process that stopped end
+			// unknown, with an urgent alert, once past their own bound.
+			sweepDone := make(chan struct{})
+			go func() {
+				defer close(sweepDone)
+				fix.RunningSweeper(schedCtx, fd, fix.RunningSweepInterval)
+			}()
 			if open {
 				if err := openBrowser(url); err != nil {
 					fmt.Fprintln(deps.Stderr, deps.T("cli.serve.open_failed", err))
@@ -180,6 +187,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			_ = srv.Shutdown(shutdown)
 			stopSched()
 			<-schedDone
+			<-sweepDone
 			// The plugin runs the page started, the fix queue and the agents
 			// are stopped and waited for.
 			h.Close()

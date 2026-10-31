@@ -83,12 +83,16 @@ func shArgv(b serverfix.Bundle) []string {
 
 // serverRun is one Apply of a server fix in progress.
 type serverRun struct {
-	d     Deps
-	a     Attempt
-	prop  Proposal
-	sf    ServerFix
-	t     target.Target
-	b     serverfix.Bundle // the scripts rendered again, equal to the validated ones
+	d    Deps
+	a    Attempt
+	prop Proposal
+	sf   ServerFix
+	t    target.Target
+	b    serverfix.Bundle // the scripts rendered again, equal to the validated ones
+	// bg is the run's context, which the caller cannot cancel: the undo
+	// script runs under it with its own bound; what is recorded after the
+	// script runs under a context bounded by recordTimeout.
+	bg    context.Context
 	plan  serverfix.Plan
 	steps []StepResult
 }
@@ -255,15 +259,24 @@ func (d Deps) applyServer(ctx context.Context, a Attempt) error {
 		_ = r.audit(ctx, "server_fix.apply", "refused", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "reason": "not run by Michel any more"})
 		return errors.Join(ErrNotMichelExecutor, r.move(ctx, []State{StateApproved}, StateFailed, d.causeOf(ErrNotMichelExecutor)))
 	}
-	claimed, err := d.repo().Claim(ctx, a.ID)
+	// The deadline stored with the claim is this run's own bound: a sweeper
+	// in another process judges the run by it, never by its own settings.
+	claimed, err := d.repo().Claim(ctx, a.ID, d.now().Add(d.applyBound(r.pkg())))
 	if err != nil {
 		return err
 	}
 	if !claimed {
 		return ErrBusy
 	}
-	bg := context.WithoutCancel(ctx)
-	return r.run(bg)
+	r.bg = context.WithoutCancel(ctx)
+	return r.run(r.bg)
+}
+
+func (d Deps) recordTimeout() time.Duration {
+	if d.RecordTimeout > 0 {
+		return d.RecordTimeout
+	}
+	return recordTimeout
 }
 
 // run is the claimed part of Apply (state running), under a context the
@@ -291,8 +304,14 @@ func (r *serverRun) run(ctx context.Context) error {
 			_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "not started"})
 			return errors.Join(err, r.move(ctx, []State{StateRunning}, StateApproved, ""))
 		}
-		return r.unknown(ctx, c)
+		post, cancel := context.WithTimeout(ctx, d.recordTimeout())
+		defer cancel()
+		return r.unknown(post, c)
 	}
+	// From here on, everything Michel does is bounded: a hung alert, site
+	// or check never holds the attempt.
+	ctx, cancel := context.WithTimeout(ctx, d.recordTimeout())
+	defer cancel()
 	code := res.Exit
 	// php -c exits 0 on ini warnings: for the CLI test, anything PHP says on
 	// its error output is a failure (the script cannot tell). The output
@@ -301,7 +320,9 @@ func (r *serverRun) run(ctx context.Context) error {
 	r.scriptSteps(code, stderrFail)
 	r.fetchBackups(ctx, c)
 	if code != 0 {
-		e := classifyExit(code, res.Stderr, r.pkg())
+		e := classifyResult(res, r.pkg())
+		// The state first, then the alert.
+		ferr := r.fail(ctx, e, "exit "+strconv.Itoa(code))
 		switch {
 		case errors.Is(e, ErrServerRollbackFailed):
 			d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
@@ -310,7 +331,6 @@ func (r *serverRun) run(ctx context.Context) error {
 		case errors.Is(e, ErrPackageFailed):
 			d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
 		}
-		ferr := r.fail(ctx, e, "exit "+strconv.Itoa(code))
 		switch {
 		case errors.Is(e, ErrServerLineMoved):
 			c.Close()
@@ -348,8 +368,8 @@ func (r *serverRun) run(ctx context.Context) error {
 func (r *serverRun) unknown(ctx context.Context, c *sshx.Client) error {
 	c.Close()
 	r.step("apply", detailUnknown, false)
-	r.d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUnknownState, Urgent: true, Backups: r.backupList()})
 	err := r.move(ctx, []State{StateRunning}, StateUnknown, r.d.causeOf(ErrServerUnknownState))
+	r.d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUnknownState, Urgent: true, Backups: r.backupList()})
 	_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "error": "fix.server.unknown_state"})
 	r.recollect(ctx)
@@ -360,8 +380,8 @@ func (r *serverRun) unknown(ctx context.Context, c *sshx.Client) error {
 // nothing is undone (no script can), an urgent alert asks to restore the
 // snapshot.
 func (r *serverRun) siteDownAfterUpgrade(ctx context.Context) error {
-	r.d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
 	err := r.move(ctx, []State{StateApplied}, StateFailed, CauseSiteDownAfterUpgrade)
+	r.d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRestoreSnapshot, Urgent: true})
 	_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": r.a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "error": "fix.server.site_down_after_upgrade"})
 	r.recollect(ctx)
@@ -376,9 +396,22 @@ func (d Deps) approver(a Attempt) string {
 	return d.actor()
 }
 
+// alert tells the user, waiting at most until ctx ends: a channel that
+// hangs (SMS, webhook) never holds the attempt. The state is always set
+// before an alert is sent.
 func (d Deps) alert(ctx context.Context, in servercheck.AlertInput) {
-	if d.Alert != nil {
+	if d.Alert == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
 		d.Alert(ctx, in)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		slog.Warn("server fix: the alert did not return in time", "kind", in.Kind, "target", in.Target.ID)
 	}
 }
 
@@ -396,6 +429,17 @@ func cliTest(p serverfix.Plan) bool {
 // output when its trap put the files back (serverfix's own text): only
 // then is a failure "rolled back".
 const scriptRolledBack = "echec: fichiers remis"
+
+// classifyResult classifies a run by its exit and its error stream: the
+// kept head and, when the stream was cut, its kept tail, where the
+// script's last line (its outcome) is.
+func classifyResult(res sshx.Result, pkg bool) error {
+	stderr := res.Stderr
+	if res.Truncated && len(res.StderrTail) > 0 {
+		stderr = append(append(append([]byte(nil), res.Stderr...), '\n'), res.StderrTail...)
+	}
+	return classifyExit(res.Exit, stderr, pkg)
+}
 
 // classifyExit tells what a non-zero exit of the apply script means. The
 // scripts' own codes first (3 to 8); then sudo's refusal and a shell that
@@ -507,7 +551,11 @@ var errNoSiteCheck = errors.New("no site check")
 // put back by hand when undo failed. A package fix is never "undone" here.
 func (r *serverRun) undo(ctx context.Context, c *sshx.Client, reason string) error {
 	d := r.d
-	res, err := c.RunWith(ctx, shArgv(r.b), strings.NewReader(r.b.Undo), sshx.RunOptions{Timeout: d.applyBound(false), NoKill: true})
+	runCtx := r.bg
+	if runCtx == nil {
+		runCtx = context.WithoutCancel(ctx)
+	}
+	res, err := c.RunWith(runCtx, shArgv(r.b), strings.NewReader(r.b.Undo), sshx.RunOptions{Timeout: d.applyBound(false), NoKill: true})
 	undone := err == nil && res.Exit == 0
 	if undone {
 		r.step(StepUndo, detailDone, true)
@@ -532,13 +580,13 @@ func (r *serverRun) undo(ctx context.Context, c *sshx.Client, reason string) err
 		"correction_id": r.sf.CorrectionID, "exit": exit, "site_back": siteBack, "reason": reason}
 	var serr error
 	if !undone {
+		serr = r.move(ctx, []State{StateApplied}, StateFailed, d.causeOf(ErrServerRollbackFailed))
 		_ = r.audit(ctx, "server_fix.rollback", "error", ev)
 		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRollbackFailed, Urgent: true, Backups: r.backupList()})
-		serr = r.move(ctx, []State{StateApplied}, StateFailed, d.causeOf(ErrServerRollbackFailed))
 	} else {
+		serr = r.move(ctx, []State{StateApplied}, StateFailed, CauseRolledBack)
 		_ = r.audit(ctx, "server_fix.rollback", "ok", ev)
 		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertRolledBack, Urgent: !siteBack})
-		serr = r.move(ctx, []State{StateApplied}, StateFailed, CauseRolledBack)
 	}
 	r.recollect(ctx)
 	if !undone {
@@ -815,7 +863,8 @@ func AppliedByMe(ctx context.Context, d Deps, attemptID string) error {
 	if err := d.repo().SetState(ctx, a.ID, []State{StateApproved}, StateApplied, ""); err != nil {
 		return err
 	}
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.recordTimeout())
+	defer cancel()
 	_ = r.audit(ctx, "server_fix.apply", "ok", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "finding_id": r.sf.FindingID,
 		"hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "executor": "user", "author": d.actor()})
 	if c, err := sshx.Dial(ctx, d.SSH, r.t); err == nil {
@@ -827,8 +876,8 @@ func AppliedByMe(ctx context.Context, d Deps, attemptID string) error {
 		if r.pkg() {
 			return r.siteDownAfterUpgrade(ctx)
 		}
-		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUndoNow, Urgent: true, Backups: r.backupList()})
 		serr := r.move(ctx, []State{StateApplied}, StateFailed, d.causeOf(ErrServerSiteDown))
+		d.alert(ctx, servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertUndoNow, Urgent: true, Backups: r.backupList()})
 		_ = r.saveSteps(ctx)
 		_ = r.audit(ctx, "server_fix.apply", "error", map[string]any{"attempt_id": a.ID, "target_id": r.t.ID, "error": "fix.server.site_down_user"})
 		return errors.Join(ErrServerSiteDown, serr)

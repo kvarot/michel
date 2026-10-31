@@ -9,8 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-
-	"github.com/kvarot/michel/internal/secret"
+	"time"
 )
 
 // The server backups kept on the workstation are sealed with AES-256-GCM
@@ -29,31 +28,61 @@ var errNoKeyStore = errors.New("no secret store: the backup is not kept on this 
 // hash.
 var errBackupTampered = errors.New("a stored backup does not match its hash")
 
-// backupKey returns the key, made on first use. When two processes make
-// it at once the one stored last wins: the key is read back after it is
-// written, so both use the stored one.
-func (d Deps) backupKey() ([]byte, error) {
+// backupKey returns the key that seals the backups. The secret store
+// holds the key; the database holds its fingerprint, in one row that only
+// one process can write first (a conditional insert), so two processes
+// never seal with two keys: the loser waits for the winner's key to show
+// in the store. A key lost from the store (store wiped) is replaced the
+// same way (conditional update); the backups sealed with the lost key no
+// longer open, which is fail closed (they are still on the server).
+func (d Deps) backupKey(ctx context.Context) ([]byte, error) {
 	if d.Secrets == nil {
 		return nil, errNoKeyStore
 	}
-	k, err := d.Secrets.Get(backupKeyName)
-	if err == nil && len(k) == 32 {
+	repo := d.repo()
+	for try := 0; try < 3; try++ {
+		fp, err := repo.BackupKeyFingerprint(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if fp != "" {
+			// Wait a little for the key of the process that made it.
+			for wait := 0; wait < 50; wait++ {
+				if k, err := d.Secrets.Get(backupKeyName); err == nil && keyFingerprint(k) == fp {
+					return k, nil
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		k := make([]byte, 32)
+		if _, err := rand.Read(k); err != nil {
+			return nil, err
+		}
+		won, err := repo.SetBackupKeyFingerprint(ctx, fp, keyFingerprint(k))
+		if err != nil {
+			return nil, err
+		}
+		if !won {
+			continue
+		}
+		if err := d.Secrets.Set(backupKeyName, k); err != nil {
+			return nil, fmt.Errorf("cannot save the backup key: %w", err)
+		}
+		if got, err := d.Secrets.Get(backupKeyName); err != nil || keyFingerprint(got) != keyFingerprint(k) {
+			return nil, fmt.Errorf("cannot read the backup key back: %v", err)
+		}
 		return k, nil
 	}
-	if err != nil && !errors.Is(err, secret.ErrNotFound) {
-		return nil, fmt.Errorf("cannot read the backup key: %w", err)
+	return nil, errors.New("cannot agree on the backup key")
+}
+
+// keyFingerprint names a key without revealing it.
+func keyFingerprint(k []byte) string {
+	if len(k) != 32 {
+		return "-"
 	}
-	k = make([]byte, 32)
-	if _, err := rand.Read(k); err != nil {
-		return nil, err
-	}
-	if err := d.Secrets.Set(backupKeyName, k); err != nil {
-		return nil, fmt.Errorf("cannot save the backup key: %w", err)
-	}
-	if k, err = d.Secrets.Get(backupKeyName); err != nil || len(k) != 32 {
-		return nil, fmt.Errorf("cannot read the backup key back: %v", err)
-	}
-	return k, nil
+	h := sha256.Sum256(append([]byte("michel server backup key\n"), k...))
+	return hex.EncodeToString(h[:])
 }
 
 func backupAEAD(key []byte) (cipher.AEAD, error) {
@@ -70,7 +99,7 @@ func backupAEAD(key []byte) (cipher.AEAD, error) {
 func (d Deps) addBackup(ctx context.Context, b ServerBackup) error {
 	sum := sha256.Sum256(b.Content)
 	b.SHA256 = hex.EncodeToString(sum[:])
-	key, err := d.backupKey()
+	key, err := d.backupKey(ctx)
 	if err != nil {
 		return err
 	}
@@ -82,19 +111,20 @@ func (d Deps) addBackup(ctx context.Context, b ServerBackup) error {
 	if _, err := rand.Read(nonce); err != nil {
 		return err
 	}
-	blob := aead.Seal(nonce, nonce, b.Content, []byte(b.AttemptID+"\n"+b.RemotePath+"\n"+b.SHA256))
+	blob := aead.Seal(nonce, nonce, b.Content, backupAAD(b))
 	_, err = d.repo().AddBackup(ctx, b, blob)
 	return err
 }
 
 // backups returns the backups of an attempt, opened and checked against
-// their hash.
+// their hash. A row that does not open is left out and reported in the
+// error (errBackupTampered), the good ones are still returned.
 func (d Deps) backups(ctx context.Context, attemptID string) ([]ServerBackup, error) {
 	sealed, err := d.repo().Backups(ctx, attemptID)
 	if err != nil || len(sealed) == 0 {
 		return nil, err
 	}
-	key, err := d.backupKey()
+	key, err := d.backupKey(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -103,24 +133,36 @@ func (d Deps) backups(ctx context.Context, attemptID string) ([]ServerBackup, er
 		return nil, err
 	}
 	out := make([]ServerBackup, 0, len(sealed))
+	var bad []error
 	for _, s := range sealed {
 		n := aead.NonceSize()
+		var plain []byte
+		var oerr error
 		if len(s.Blob) < n {
-			return nil, fmt.Errorf("%w (%s)", errBackupTampered, s.ID)
+			oerr = errBackupTampered
+		} else if plain, oerr = aead.Open(nil, s.Blob[:n], s.Blob[n:], backupAAD(s.ServerBackup)); oerr == nil {
+			sum := sha256.Sum256(plain)
+			if hex.EncodeToString(sum[:]) != s.SHA256 {
+				oerr = errBackupTampered
+			}
 		}
-		plain, err := aead.Open(nil, s.Blob[:n], s.Blob[n:], []byte(s.AttemptID+"\n"+s.RemotePath+"\n"+s.SHA256))
-		if err != nil {
-			return nil, fmt.Errorf("%w (%s)", errBackupTampered, s.ID)
-		}
-		sum := sha256.Sum256(plain)
-		if hex.EncodeToString(sum[:]) != s.SHA256 {
-			return nil, fmt.Errorf("%w (%s)", errBackupTampered, s.ID)
+		if oerr != nil {
+			// One bad row never hides the others: it is skipped and reported.
+			bad = append(bad, fmt.Errorf("%w (%s)", errBackupTampered, s.ID))
+			continue
 		}
 		b := s.ServerBackup
 		b.Content = plain
 		out = append(out, b)
 	}
-	return out, nil
+	return out, errors.Join(bad...)
+}
+
+// backupAAD binds a sealed backup to its attempt, server, path and hash:
+// a blob moved to another row, or a row moved to another server, does not
+// open.
+func backupAAD(b ServerBackup) []byte {
+	return []byte(b.AttemptID + "\n" + b.TargetID + "\n" + b.RemotePath + "\n" + b.SHA256)
 }
 
 // ServerBackups returns the backups of a server fix kept on this computer,

@@ -753,10 +753,10 @@ func (r *Repo) PurgeBackups(ctx context.Context, before time.Time) (int, error) 
 
 // Claim moves an approved attempt to running in one conditional update and
 // reports whether this caller got it: only one Apply, in any process, ever
-// runs a server fix's script.
-func (r *Repo) Claim(ctx context.Context, id string) (bool, error) {
-	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, updated_at = ? WHERE id = ? AND state = ?`,
-		string(StateRunning), ts(r.now()), id, string(StateApproved))
+// runs a server fix's script. deadline is when the run's own bound ends.
+func (r *Repo) Claim(ctx context.Context, id string, deadline time.Time) (bool, error) {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, updated_at = ?, run_deadline = ? WHERE id = ? AND state = ?`,
+		string(StateRunning), ts(r.now()), ts(deadline), id, string(StateApproved))
 	if err != nil {
 		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
@@ -765,4 +765,75 @@ func (r *Repo) Claim(ctx context.Context, id string) (bool, error) {
 		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
 	return n == 1, nil
+}
+
+// StaleRunning lists the running attempts whose run deadline (or, for a
+// record without one, updated_at plus fallback) is before cutoff.
+func (r *Repo) StaleRunning(ctx context.Context, cutoff time.Time, fallback time.Duration) ([]Attempt, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, run_deadline FROM fix_attempt WHERE state = ?`, string(StateRunning))
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
+	}
+	type row struct{ id, deadline string }
+	var list []row
+	for rows.Next() {
+		var x row
+		if err := rows.Scan(&x.id, &x.deadline); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		list = append(list, x)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var out []Attempt
+	for _, x := range list {
+		a, err := r.GetAttempt(ctx, x.id)
+		if err != nil {
+			return nil, err
+		}
+		end := a.UpdatedAt.Add(fallback)
+		if x.deadline != "" {
+			if end, err = parseTime(x.deadline); err != nil {
+				return nil, err
+			}
+		}
+		if end.Before(cutoff) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// BackupKeyFingerprint is the fingerprint of the backup key, "" when none
+// was made yet.
+func (r *Repo) BackupKeyFingerprint(ctx context.Context) (string, error) {
+	var fp string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT fingerprint FROM server_backup_key WHERE id = 1`).Scan(&fp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("cannot read the backup key: %w", err)
+	}
+	return fp, nil
+}
+
+// SetBackupKeyFingerprint records fp as the backup key's when the current
+// one is old ("" for none), in one conditional statement: it reports
+// whether this caller won.
+func (r *Repo) SetBackupKeyFingerprint(ctx context.Context, old, fp string) (bool, error) {
+	var res sql.Result
+	var err error
+	if old == "" {
+		res, err = r.s.DB().ExecContext(ctx, `INSERT INTO server_backup_key (id, fingerprint) SELECT 1, ? WHERE NOT EXISTS (SELECT 1 FROM server_backup_key WHERE id = 1)`, fp)
+	} else {
+		res, err = r.s.DB().ExecContext(ctx, `UPDATE server_backup_key SET fingerprint = ? WHERE id = 1 AND fingerprint = ?`, fp, old)
+	}
+	if err != nil {
+		return false, fmt.Errorf("cannot record the backup key: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
