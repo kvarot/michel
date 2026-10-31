@@ -56,8 +56,11 @@ type Deps struct {
 	Attempt string
 	Token   string
 	Propose func(ctx context.Context, attemptID string, p fix.ProposeInput) (fix.Proposal, error)
-	Version string
-	Log     io.Writer
+	// ProposeServer records the proposal of a server attempt, under the
+	// same rule as Propose.
+	ProposeServer func(ctx context.Context, attemptID string, p fix.ServerProposeInput) (fix.Proposal, error)
+	Version       string
+	Log           io.Writer
 }
 
 type request struct {
@@ -85,8 +88,11 @@ type server struct {
 	d     Deps
 	m     *mask.Masker
 	scope string // the attempt's project id; "" for every active project
-	mu    sync.Mutex
-	out   *bufio.Writer
+	// serverAttempt is set for a session bound to an attempt on a server:
+	// scope is then the server's id and only the server tools exist.
+	serverAttempt bool
+	mu            sync.Mutex
+	out           *bufio.Writer
 }
 
 // Serve answers the messages read from in on out until in ends (nil) or ctx
@@ -107,6 +113,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, d Deps) error {
 		}
 		// Reads stay in the attempt's project, token or not.
 		s.scope = a.ProjectID
+		s.serverAttempt = a.Work.Server != nil
 		if d.Secrets != nil {
 			if m, err := mask.Load(d.Secrets, a.ID); err == nil {
 				s.m = m
@@ -242,7 +249,7 @@ func (s *server) handle(ctx context.Context, line []byte) (response, bool) {
 		resp.Result = map[string]any{}
 	case "tools/list":
 		list := []map[string]any{}
-		for _, t := range tools() {
+		for _, t := range s.tools() {
 			list = append(list, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Schema})
 		}
 		resp.Result = map[string]any{"tools": list}

@@ -17,6 +17,7 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/secret"
+	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/workcopy"
 	"github.com/spf13/cobra"
 )
@@ -57,6 +58,14 @@ func fixDeps(cmd *cobra.Command, deps *Deps, secrets secret.Store, actor string)
 		// A session ends at its time limit or at its turn cap (spec § 7.1).
 		MaxTurns: fix.DefaultMaxTurns,
 	}
+	// Server fixes: the registry, SSH through the gateway, a check of the
+	// server again, the GET of its site from this computer and the alerts.
+	cd := serverCheckDeps(cmd, deps)
+	d.Targets, d.SSH, d.Alert = cd.Repo, cd.SSH, cd.Alert
+	d.CheckServer = func(ctx context.Context, targetID string) (servercheck.CheckResult, error) {
+		return servercheck.Check(ctx, cd, targetID)
+	}
+	d.SiteCheck = siteCheck(deps)
 	d.Notify = func(ctx context.Context, waiting int) {
 		nd, err := notifyDeps(cmd, deps, false)
 		if err != nil {

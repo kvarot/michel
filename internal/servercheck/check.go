@@ -59,7 +59,10 @@ type CheckDeps struct {
 	Lookup scan.LookupFunc
 	// Alert is told about new grave findings; nil tells no one.
 	Alert func(ctx context.Context, a AlertInput)
-	Now   func() time.Time
+	// OnChecked is told each server checked to its end (michel serve queues
+	// its findings for the fix levels 2 and 3); nil tells no one.
+	OnChecked func(ctx context.Context, targetID string)
+	Now       func() time.Time
 }
 
 func (d CheckDeps) now() time.Time {
@@ -143,6 +146,9 @@ func Check(ctx context.Context, d CheckDeps, targetID string) (CheckResult, erro
 		return res, err
 	}
 	d.record(ctx, "target.check", t.ID, res)
+	if d.OnChecked != nil {
+		d.OnChecked(ctx, t.ID)
+	}
 	return res, nil
 }
 

@@ -2,6 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,6 +15,7 @@ import (
 	"github.com/kvarot/michel/internal/collect"
 	"github.com/kvarot/michel/internal/enrich"
 	"github.com/kvarot/michel/internal/notify"
+	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/source"
@@ -36,6 +41,41 @@ func serverCheckDeps(cmd *cobra.Command, deps *Deps) servercheck.CheckDeps {
 		Lookup:  enrich.LookupFunc(deps.Store.DB()),
 		Alert:   serverAlert(cmd, deps),
 		Now:     deps.Now,
+	}
+}
+
+// siteCheckMax bounds what the site check reads of the page.
+const siteCheckMax = 1 << 20
+
+// siteCheck is the GET of a server fix's check_site, from this computer
+// through the gateway (purpose target.http): the site answers when its
+// status is 2xx or 3xx and its page is not empty. Nothing of the page is
+// kept.
+func siteCheck(deps *Deps) func(ctx context.Context, url string) error {
+	return func(ctx context.Context, url string) error {
+		if deps.Gateway == nil {
+			return errors.New("no network gateway")
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := deps.Gateway.Client(policy.PurposeTargetHTTP).Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+			return fmt.Errorf("the site answered %d", resp.StatusCode)
+		}
+		n, err := io.Copy(io.Discard, io.LimitReader(resp.Body, siteCheckMax))
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errors.New("the site sent an empty page")
+		}
+		return nil
 	}
 }
 

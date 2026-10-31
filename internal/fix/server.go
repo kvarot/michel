@@ -72,6 +72,11 @@ type ServerFix struct {
 	Mitigation    bool               `json:"mitigation,omitempty"`
 	NeedsSnapshot bool               `json:"needs_snapshot,omitempty"`
 	Actions       []serverfix.Action `json:"actions"`
+	// Requested are the actions an agent proposed, as it gave them (only
+	// the fields of its tool); nil for Michel's own fix. They are what
+	// Michel validates again on the production once a preprod fix of the
+	// agent is proven. Not covered by the hash: the scripts are.
+	Requested []serverfix.Action `json:"requested,omitempty"`
 }
 
 // serverHash is the fingerprint the user approves for a server fix: the
@@ -337,6 +342,43 @@ func (d Deps) sameOn(ctx context.Context, t target.Target, f scan.Finding) (scan
 // proposeServer builds, validates and renders the fix of f on t, then
 // stores the attempt and its proposal (state proposed).
 func (d Deps) proposeServer(ctx context.Context, t target.Target, f scan.Finding, w ServerWork) (Attempt, error) {
+	return d.proposeServerAs(ctx, t, f, w, OriginServer, nil)
+}
+
+// proposeAgain prepares again, on server t for its finding f, the fix of
+// attempt a: Michel's own plan for Michel's fix; for an agent's fix, the
+// actions the agent asked for, validated against t's own inventory (as
+// given, else with Michel locating each directive itself when the files
+// differ from the server the agent saw). The new attempt keeps a's origin:
+// an agent's fix is never applied by a rule.
+func (d Deps) proposeAgain(ctx context.Context, a Attempt, sf ServerFix, t target.Target, f scan.Finding, w ServerWork) (Attempt, error) {
+	if !agentOrigin(a.Origin) {
+		return d.proposeServer(ctx, t, f, w)
+	}
+	if len(sf.Requested) == 0 {
+		return Attempt{}, ErrNeedsAgent
+	}
+	na, err := d.proposeServerAs(ctx, t, f, w, a.Origin, sf.Requested)
+	if err == nil || errors.Is(err, ErrBusy) {
+		return na, err
+	}
+	located := make([]serverfix.Action, len(sf.Requested))
+	changed := false
+	for i, x := range sf.Requested {
+		if x.Op == serverfix.OpSetDirective && x.Path != "" {
+			x.Path, changed = "", true
+		}
+		located[i] = x
+	}
+	if !changed {
+		return Attempt{}, err
+	}
+	return d.proposeServerAs(ctx, t, f, w, a.Origin, located)
+}
+
+// proposeServerAs is proposeServer for an origin: Michel's own plan when
+// requested is nil, else the requested actions (an agent's).
+func (d Deps) proposeServerAs(ctx context.Context, t target.Target, f scan.Finding, w ServerWork, origin string, requested []serverfix.Action) (Attempt, error) {
 	inv, ok, err := d.Targets.LatestInventory(ctx, t.ID)
 	if err != nil {
 		return Attempt{}, err
@@ -344,9 +386,16 @@ func (d Deps) proposeServer(ctx context.Context, t target.Target, f scan.Finding
 	if !ok {
 		return Attempt{}, ErrNoInventory
 	}
-	plan, err := planFor(f, t, inv)
-	if err != nil {
-		return Attempt{}, err
+	var plan serverfix.Plan
+	if requested == nil {
+		if plan, err = planFor(f, t, inv); err != nil {
+			return Attempt{}, err
+		}
+	} else {
+		if healthTarget(t) {
+			return Attempt{}, ErrHealthForbidden
+		}
+		plan = serverfix.Plan{TargetID: t.ID, FindingID: f.ID, Mitigation: f.Mitigation, Actions: requested}
 	}
 	v, err := serverfix.Validate(plan, t, inv)
 	if err != nil {
@@ -369,9 +418,9 @@ func (d Deps) proposeServer(ctx context.Context, t target.Target, f scan.Finding
 		return Attempt{}, err
 	}
 	sf := ServerFix{TargetID: t.ID, FindingID: f.ID, CorrectionID: cid, Executor: executorFor(t, b),
-		Mitigation: v.Mitigation, NeedsSnapshot: v.NeedsSnapshot, Actions: v.Actions}
+		Mitigation: v.Mitigation, NeedsSnapshot: v.NeedsSnapshot, Actions: v.Actions, Requested: requested}
 	repo := d.repo()
-	a, err := repo.CreateAttempt(ctx, Attempt{FindingID: f.ID, ProjectID: t.ID, Origin: OriginServer, Work: Work{Server: &w}})
+	a, err := repo.CreateAttempt(ctx, Attempt{FindingID: f.ID, ProjectID: t.ID, Origin: origin, Work: Work{Server: &w}})
 	if err != nil {
 		return Attempt{}, err
 	}
@@ -388,7 +437,7 @@ func (d Deps) proposeServer(ctx context.Context, t target.Target, f scan.Finding
 	if err := d.record(ctx, "server_fix.propose", a.ID, "ok", map[string]any{
 		"attempt_id": a.ID, "target_id": t.ID, "finding_id": f.ID, "proposal_id": prop.ID, "correction_id": cid,
 		"hash": prop.Hash, "scripts_hash": b.Hash, "executor": string(sf.Executor), "run_as_root": b.RunAsRoot,
-		"needs_snapshot": sf.NeedsSnapshot, "mitigation": sf.Mitigation, "preprod_first": w.ProdTargetID != "",
+		"needs_snapshot": sf.NeedsSnapshot, "mitigation": sf.Mitigation, "preprod_first": w.ProdTargetID != "", "origin": origin,
 	}); err != nil {
 		return Attempt{}, err
 	}

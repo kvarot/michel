@@ -46,6 +46,9 @@ func newMCPCmd(deps *Deps) *cobra.Command {
 				Propose: func(ctx context.Context, attemptID string, in fix.ProposeInput) (fix.Proposal, error) {
 					return fix.Propose(ctx, fd, attemptID, in)
 				},
+				ProposeServer: func(ctx context.Context, attemptID string, in fix.ServerProposeInput) (fix.Proposal, error) {
+					return fix.ProposeServer(ctx, fd, attemptID, in)
+				},
 			})
 		},
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
+	"github.com/kvarot/michel/internal/target"
 )
 
 // AgentHosts are the hosts Claude Code 2.1.314 needs behind Michel's allow
@@ -95,6 +96,143 @@ func ConsentNeeded(p project.Project, pol policy.Policy, consented bool) []Conse
 		out = append(out, ConsentText{What: "fix.consent.external_providers"})
 	}
 	return out
+}
+
+// serverConsentKey is the key of a server's consent record in fix_consent:
+// a prefix keeps it apart from the projects' records.
+func serverConsentKey(targetID string) string { return "server:" + targetID }
+
+// healthTarget tells whether a server holds health data: kind hds, or
+// classified health. Its findings never go to an external AI.
+func healthTarget(t target.Target) bool {
+	return t.Kind == target.KindHDS || t.Classification == policy.ClassHealth
+}
+
+// missingAgentRules are the allow rules an agent on a server needs and pol
+// lacks: the agent's hosts only (Michel installs nothing for a server fix).
+func missingAgentRules(pol policy.Policy) []policy.AllowRule {
+	var out []policy.AllowRule
+	for _, h := range AgentHosts {
+		if !allowed(pol.Sovereignty.Network.Allow, h, policy.PurposeAgentClaude) {
+			out = append(out, policy.AllowRule{Host: h, Purpose: policy.PurposeAgentClaude})
+		}
+	}
+	return out
+}
+
+// ServerConsentNeeded lists what the user must accept before an agent
+// helps with a fix of server t: what leaves the computer (the masked
+// versions and settings of this server), that the agent never connects to
+// it, the server's classification when it is sensitive, each agent host
+// without an allow rule and the switch of external providers. A health
+// server gets the one line that says it never goes to an AI. It is empty
+// for a consented server under a policy that allows everything.
+func ServerConsentNeeded(t target.Target, pol policy.Policy, consented bool) []ConsentText {
+	if healthTarget(t) {
+		return []ConsentText{{What: "fix.consent.server_health"}}
+	}
+	rules := missingAgentRules(pol)
+	if consented && len(rules) == 0 && pol.Sovereignty.AI.ExternalProvidersEnabled {
+		return nil
+	}
+	out := []ConsentText{{What: "fix.consent.server_what_leaves"}, {What: "fix.consent.server_no_access"}}
+	if t.Classification == policy.ClassSensitive {
+		out = append(out, ConsentText{What: "fix.consent.server_sensitive"})
+	}
+	for _, r := range rules {
+		out = append(out, ConsentText{What: "fix.consent.agent", Host: r.Host, Purpose: r.Purpose})
+	}
+	if !pol.Sovereignty.AI.ExternalProvidersEnabled {
+		out = append(out, ConsentText{What: "fix.consent.external_providers"})
+	}
+	return out
+}
+
+// serverConsentOK reports whether an agent may help with a fix of t now:
+// not a health server, a consent record for t, every agent rule in force
+// and external providers on.
+func (d Deps) serverConsentOK(ctx context.Context, t target.Target) (bool, error) {
+	if healthTarget(t) || len(missingAgentRules(d.Policy)) > 0 || !d.Policy.Sovereignty.AI.ExternalProvidersEnabled {
+		return false, nil
+	}
+	_, _, ok, err := d.repo().Consent(ctx, serverConsentKey(t.ID))
+	return ok, err
+}
+
+// ServerConsent reports whether server targetID gave its AI consent (the
+// page shows ServerConsentNeeded with it).
+func ServerConsent(ctx context.Context, d Deps, targetID string) (bool, error) {
+	_, _, ok, err := d.repo().Consent(ctx, serverConsentKey(targetID))
+	return ok, err
+}
+
+// GiveServerConsent records the AI consent of one server: it refuses a
+// health server (ErrHealthForbidden) and a strict_local policy
+// (ErrStrictLocal), writes the missing allow rules of AgentHosts, turns
+// ai.external_providers_enabled on when needed, reloads the policy, stores
+// the consent of this server only and records ai.consent.
+func GiveServerConsent(ctx context.Context, d Deps, targetID string) error {
+	return GiveServerConsentWith(ctx, d, targetID, ConsentOptions{})
+}
+
+// GiveServerConsentWith is GiveServerConsent with the user's choices (the
+// switch to standard mode on the user's click, as for a project).
+func GiveServerConsentWith(ctx context.Context, d Deps, targetID string, opts ConsentOptions) error {
+	if d.Targets == nil {
+		return errors.New("the fix service needs the server registry")
+	}
+	t, err := d.Targets.Get(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if healthTarget(t) {
+		return ErrHealthForbidden
+	}
+	if d.Policy.Sovereignty.Mode == policy.ModeStrictLocal {
+		if !opts.SwitchToStandard {
+			return ErrStrictLocal
+		}
+		if err := d.switchToStandard(ctx, project.Project{ID: t.ID, Name: t.Name}); err != nil {
+			return err
+		}
+	}
+	rules := missingAgentRules(d.Policy)
+	enable := !d.Policy.Sovereignty.AI.ExternalProvidersEnabled
+	if len(rules) > 0 || enable {
+		if d.PolicyPath == "" {
+			return errors.New("cannot write the consent: the policy file path is unknown")
+		}
+		if len(rules) > 0 {
+			if _, err := policy.AddAllowRules(d.PolicyPath, rules...); err != nil {
+				return err
+			}
+		}
+		if enable {
+			if _, err := policy.SetExternalProviders(d.PolicyPath, true); err != nil {
+				return err
+			}
+		}
+		if err := d.reload(); err != nil {
+			return fmt.Errorf("the consent was written but the policy cannot be reloaded: %w", err)
+		}
+	}
+	hosts := append([]string{}, AgentHosts...)
+	if err := d.repo().SetConsent(ctx, serverConsentKey(t.ID), hosts); err != nil {
+		return err
+	}
+	if d.Audit != nil {
+		if _, err := d.Audit.Record(ctx, audit.Event{
+			Actor: d.actor(), Action: "ai.consent", Target: t.ID, Result: "ok",
+			Evidence: map[string]any{
+				"target_id": t.ID, "kind": "server", "classification": string(t.Classification), "hosts": hosts,
+				"purposes": []string{policy.PurposeAgentClaude}, "rules_written": len(rules),
+				"external_providers_written": enable, "author": d.actor(),
+			},
+		}); err != nil {
+			return fmt.Errorf("the consent is recorded, but the audit log could not record it: %w", err)
+		}
+	}
+	return nil
 }
 
 // consentOK reports whether p may go to the agent now: a consent record,

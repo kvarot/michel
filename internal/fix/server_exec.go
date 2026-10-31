@@ -696,7 +696,7 @@ func (r *serverRun) repropose(ctx context.Context) {
 	}
 	pctx, cancel := r.fresh(d.checkTimeout())
 	defer cancel()
-	na, err := d.proposeServer(pctx, r.t, list[0], w)
+	na, err := d.proposeAgain(pctx, r.a, r.sf, r.t, list[0], w)
 	if err != nil {
 		_ = r.audit(ctx, "server_fix.repropose", "error", map[string]any{"previous_attempt_id": r.a.ID, "target_id": r.t.ID, "error": serverErrorKey(err)})
 		return
@@ -881,7 +881,7 @@ func (r *serverRun) promote(ctx context.Context) {
 	}
 	pctx, cancel := r.fresh(d.checkTimeout())
 	defer cancel()
-	na, err := d.proposeServer(pctx, pt, list[0], ServerWork{TargetID: pt.ID})
+	na, err := d.proposeAgain(pctx, r.a, r.sf, pt, list[0], ServerWork{TargetID: pt.ID})
 	result := "ok"
 	if err != nil {
 		result, ev["error"] = "error", serverErrorKey(err)

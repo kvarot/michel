@@ -761,10 +761,15 @@ func (d Deps) run(id string, r *running) {
 		d.cleanup(ctx, a, true)
 	case StateProposed:
 		// The agent is gone: no more proposal can come. The copy stays
-		// until the user decides.
+		// until the user decides; a server agent's empty folder goes.
 		_ = DeleteAttemptToken(d.Secrets, id)
+		if a.Work.Server != nil {
+			d.cleanup(ctx, a, true)
+		}
 	case StateApproved:
-		if a.ApprovedBy == ActorAuto {
+		// A server fix is never applied from here: an agent's proposal is
+		// never approved by a rule.
+		if a.ApprovedBy == ActorAuto && a.Work.Server == nil {
 			d.applyAuto(ctx, a)
 		}
 	}
@@ -818,6 +823,10 @@ func (d Deps) cleanup(ctx context.Context, a Attempt, removeCopy bool) {
 	}
 	if removeCopy && a.Work.Copy.Dir != "" {
 		_ = workcopy.Remove(d.work(), a.Work.Copy)
+	}
+	// A server agent's empty working folder.
+	if removeCopy && a.Work.Server != nil && d.DataDir != "" && filepath.IsAbs(d.DataDir) && idFolder.MatchString(a.ID) {
+		_ = os.RemoveAll(filepath.Join(d.DataDir, "fix-tmp", a.ID))
 	}
 }
 

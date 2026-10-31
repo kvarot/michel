@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -160,7 +161,15 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			schedDone := make(chan struct{})
 			go func() {
 				defer close(schedDone)
-				servercheck.Scheduler(schedCtx, serverCheckDeps(cmd, deps), serverCheckInterval)
+				cd := serverCheckDeps(cmd, deps)
+				// A server checked to its end has its findings queued for the
+				// fix levels 2 and 3 (the worker of the page prepares them).
+				cd.OnChecked = func(ctx context.Context, targetID string) {
+					if _, err := fix.QueueEligibleServer(ctx, fd, targetID); err != nil {
+						slog.Warn("serve: cannot queue the findings of a server", "target", targetID)
+					}
+				}
+				servercheck.Scheduler(schedCtx, cd, serverCheckInterval)
 			}()
 			// Server fixes left running by a process that stopped end
 			// unknown, with an urgent alert, once past their own bound.
