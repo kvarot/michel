@@ -108,6 +108,9 @@ var secretName = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 // network.allow rule for its host and purpose. A disabled channel is checked
 // for shape only. Errors name the channel and say what to write.
 func ValidateNotify(n NotifyConfig, rules []AllowRule) error {
+	if n.SMSPerDay < 0 {
+		return fmt.Errorf("notify.sms_per_day is %d: use 0 (default %d) or a positive number", n.SMSPerDay, DefaultSMSPerDay)
+	}
 	if n.PageURL != "" {
 		u, err := url.Parse(n.PageURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -150,8 +153,38 @@ func ChannelTarget(c ChannelConfig) (host, purpose string, err error) {
 		return h, PurposeWebhook, err
 	case ChannelToast:
 		return "", "", nil
+	case ChannelSMS:
+		h, err := checkSMS(c)
+		return h, PurposeNotifySMS, err
 	}
-	return "", "", fmt.Errorf("type %q is unknown (use email, webhook or toast)", c.Type)
+	return "", "", fmt.Errorf("type %q is unknown (use email, webhook, toast or sms)", c.Type)
+}
+
+// checkSMS returns the host an SMS channel contacts.
+func checkSMS(c ChannelConfig) (string, error) {
+	switch c.Provider {
+	case SMSFreeMobile:
+		if strings.TrimSpace(c.User) == "" {
+			return "", errors.New("an sms channel with provider freemobile needs user (your Free Mobile login)")
+		}
+		if c.Secret == "" {
+			return "", errors.New("secret is empty: name the secret holding the Free Mobile key (michel secret set <name>)")
+		}
+		w := c
+		if w.URL == "" {
+			w.URL = FreeMobileURL
+		}
+		w.Format = ""
+		return checkWebhook(w)
+	case SMSGeneric:
+		if c.URL == "" {
+			return "", errors.New("an sms channel with provider generic needs url")
+		}
+		w := c
+		w.Format = ""
+		return checkWebhook(w)
+	}
+	return "", fmt.Errorf("provider %q is unknown (use freemobile or generic)", c.Provider)
 }
 
 func checkEmail(c ChannelConfig) error {

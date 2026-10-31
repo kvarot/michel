@@ -30,13 +30,7 @@ const discordMax = 1900
 // names a secret.
 type webhook struct{ base }
 
-func (w *webhook) host() string {
-	u, err := url.Parse(w.cfg.URL)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
-}
+func (w *webhook) host() string { return hostOf(w.cfg.URL) }
 
 func (w *webhook) Target() (string, string) { return w.host(), policy.PurposeWebhook }
 
@@ -99,28 +93,35 @@ func chatBody(format, text string) ([]byte, error) {
 // post sends body and returns its size. Neither the URL path nor the
 // response body ever reaches the error.
 func (w *webhook) post(ctx context.Context, body []byte) (int, error) {
-	host := w.host()
+	return signedPost(ctx, w.deps, w.cfg.URL, policy.PurposeWebhook, w.cfg.Secret, "webhook", body)
+}
+
+// signedPost POSTs body as JSON to rawURL through the gateway under purpose,
+// signed with HMAC-SHA256 when secretName is set. what names the channel in
+// the errors.
+func signedPost(ctx context.Context, deps Deps, rawURL, purpose, secretName, what string, body []byte) (int, error) {
+	host := hostOf(rawURL)
 	var key []byte
-	if w.cfg.Secret != "" {
-		k, err := readSecret(w.deps.Secrets, w.cfg.Secret)
+	if secretName != "" {
+		k, err := readSecret(deps.Secrets, secretName)
 		if err != nil {
 			return 0, err
 		}
 		key = k
 		defer clear(key)
 	}
-	if w.deps.Gateway == nil {
+	if deps.Gateway == nil {
 		return 0, errors.New("notify: no egress gateway")
 	}
 	ctx, cancel := context.WithTimeout(ctx, webhookTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.cfg.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
 	if err != nil {
-		return 0, fmt.Errorf("notify: the webhook url of %s is invalid", host)
+		return 0, fmt.Errorf("notify: the %s url of %s is invalid", what, host)
 	}
-	ts := w.deps.now().Format(time.RFC3339)
+	ts := deps.now().Format(time.RFC3339)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "michel/"+w.deps.Version)
+	req.Header.Set("User-Agent", "michel/"+deps.Version)
 	req.Header.Set("X-Michel-Timestamp", ts)
 	if key != nil {
 		mac := hmac.New(sha256.New, key)
@@ -128,8 +129,8 @@ func (w *webhook) post(ctx context.Context, body []byte) (int, error) {
 		mac.Write(body)
 		req.Header.Set("X-Michel-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
-	client := w.deps.Gateway.Client(policy.PurposeWebhook)
-	// A redirect would carry the digest to another address: never follow.
+	client := deps.Gateway.Client(purpose)
+	// A redirect would carry the message to another address: never follow.
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {
@@ -137,12 +138,21 @@ func (w *webhook) post(ctx context.Context, body []byte) (int, error) {
 		if errors.As(err, &uerr) {
 			err = uerr.Err // drop the URL, its path may hold a token
 		}
-		return 0, denied(fmt.Errorf("notify: webhook to %s failed: %w", host, err), host, policy.PurposeWebhook)
+		return 0, denied(fmt.Errorf("notify: %s to %s failed: %w", what, host, err), host, purpose)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return len(body), fmt.Errorf("notify: webhook %s answered HTTP %d", host, resp.StatusCode)
+		return len(body), fmt.Errorf("notify: %s %s answered HTTP %d", what, host, resp.StatusCode)
 	}
 	return len(body), nil
+}
+
+// hostOf is the host name of rawURL ("" when it does not parse).
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }

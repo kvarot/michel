@@ -187,7 +187,22 @@ const (
 	ChannelEmail   = "email"
 	ChannelWebhook = "webhook"
 	ChannelToast   = "toast"
+	ChannelSMS     = "sms"
 )
+
+// SMS providers.
+const (
+	// SMSFreeMobile is Free Mobile's "notification by SMS" API (GET).
+	SMSFreeMobile = "freemobile"
+	// SMSGeneric POSTs {"text"} as JSON, signed like a webhook.
+	SMSGeneric = "generic"
+)
+
+// FreeMobileURL is the endpoint of the Free Mobile SMS API.
+const FreeMobileURL = "https://smsapi.free-mobile.fr/sendmsg"
+
+// DefaultSMSPerDay is the most SMS Michel sends in a day.
+const DefaultSMSPerDay = 3
 
 // Webhook body formats.
 const (
@@ -205,13 +220,24 @@ type NotifyConfig struct {
 	// token.
 	PageURL  string          `yaml:"page_url"`
 	Channels []ChannelConfig `yaml:"channels"`
+	// SMSPerDay caps the SMS sent in a day, all channels together; 0 means
+	// DefaultSMSPerDay.
+	SMSPerDay int `yaml:"sms_per_day"`
+}
+
+// EffectiveSMSPerDay is the daily SMS cap, with the default applied.
+func (n NotifyConfig) EffectiveSMSPerDay() int {
+	if n.SMSPerDay <= 0 {
+		return DefaultSMSPerDay
+	}
+	return n.SMSPerDay
 }
 
 // ChannelConfig is one notification channel. Secrets are referred to by
 // their name in the secret store, never by value.
 type ChannelConfig struct {
 	Name string `yaml:"name"`
-	// Type is email, webhook or toast.
+	// Type is email, webhook, toast or sms.
 	Type string `yaml:"type"`
 	// Enabled nil means true.
 	Enabled *bool `yaml:"enabled"`
@@ -232,6 +258,15 @@ type ChannelConfig struct {
 	Format string `yaml:"format"`
 	// Secret names the secret holding the HMAC key.
 	Secret string `yaml:"secret"`
+
+	// SMS. Provider is freemobile or generic. For freemobile, User is the
+	// account login and Secret names the secret holding the API key; URL is
+	// optional (it replaces Free Mobile's address, for tests). For generic,
+	// URL and Secret work as for a webhook. Urgent must be true for the
+	// channel to send anything: an SMS only goes out for an urgent alert.
+	Provider string `yaml:"provider"`
+	User     string `yaml:"user"`
+	Urgent   bool   `yaml:"urgent"`
 }
 
 // IsEnabled reports whether the channel is enabled (Enabled nil = true).

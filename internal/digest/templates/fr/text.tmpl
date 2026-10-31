@@ -42,6 +42,10 @@ failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevée
 {{range .Due}}  {{.Package}} {{.OSVID}} : reportée jusqu'au {{day .DueAt}}{{if .Overdue}} (date dépassée){{end}}
 {{end}}{{end}}
 {{- end}}
+{{- if .Servers}}
+{{serversTitle}} :
+{{range .Servers}}  {{serverLine .}}
+{{end}}{{end}}
 {{- if .Reading}}
 À lire, sur les technologies que tu utilises :
 {{range .Reading}}  {{.Source}} : {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}

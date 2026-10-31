@@ -1,5 +1,6 @@
 // Package notify sends the digest on the channels of the policy's notify
-// section: email (SMTP over TLS), signed webhook and native desktop toast.
+// section: email (SMTP over TLS), signed webhook, native desktop toast and, for
+// urgent server alerts only, SMS.
 //
 // Network channels reach the network only through the egress gateway, under
 // the purposes notify.email and notify.webhook. A channel receives only what
@@ -55,6 +56,11 @@ type Deps struct {
 	TLSConfig *tls.Config
 	// Lang is the language of the test message.
 	Lang i18n.Lang
+	// SMSCounter counts the SMS of the day and SMSPerDay caps them (Build
+	// fills SMSPerDay from the policy when it is 0). Without a counter no
+	// alert goes out by SMS.
+	SMSCounter SMSCounter
+	SMSPerDay  int
 }
 
 func (d Deps) now() time.Time {
@@ -142,6 +148,8 @@ func New(c policy.ChannelConfig, deps Deps) (Notifier, error) {
 		return &email{base: b}, nil
 	case policy.ChannelWebhook:
 		return &webhook{base: b}, nil
+	case policy.ChannelSMS:
+		return &sms{base: b}, nil
 	default: // policy.ChannelToast
 		return newToast(b), nil
 	}
@@ -151,6 +159,9 @@ func New(c policy.ChannelConfig, deps Deps) (Notifier, error) {
 // configuration error.
 func Build(cfg policy.NotifyConfig, deps Deps) ([]Notifier, error) {
 	out := []Notifier{}
+	if deps.SMSPerDay == 0 {
+		deps.SMSPerDay = cfg.EffectiveSMSPerDay()
+	}
 	for _, c := range cfg.Channels {
 		if !c.IsEnabled() {
 			continue
@@ -208,6 +219,12 @@ func Deliver(ctx context.Context, ns []Notifier, d digest.Digest) []Delivery {
 	out := make([]Delivery, 0, len(ns))
 	for _, n := range ns {
 		host, purpose := Target(n)
+		if n.Type() == policy.ChannelSMS {
+			// The digest never goes by SMS.
+			out = append(out, Delivery{ChannelResult: digest.ChannelResult{Name: n.Name(), Type: n.Type(), Result: ResultSkipped},
+				Host: host, Purpose: purpose})
+			continue
+		}
 		dn := d
 		if s, ok := n.(Scoped); ok && len(s.Projects()) > 0 {
 			dn = digest.Filter(d, s.Projects())
