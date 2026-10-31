@@ -108,9 +108,15 @@ Source : le ledger de travail du contrôleur (miroir committé : `ledger.md` dan
 ## Task 11 — docs, inventaire réseau, ledger
 
 - `docs/fix.md` + `docs/fix.fr.md` (nouveaux) ; `docs/security/network-egress.md` + `.fr.md` (usages `fix.install` et `agent.claude`, proxy d'autorisation, testé ou seulement déclaré) ; section « Corriger » des README ; commentaires de `config.example.yaml`.
-- Constat de doc : le message `fix.msg.secret_hits.*` dit d'« exclure les fichiers dans les réglages du projet », mais `--exclude` ne prend que des noms de dossiers ; les docs disent de déplacer le fichier dans un dossier exclu ou de sortir le secret dans un `.env`. À reprendre dans le texte (ou en ajoutant une exclusion par fichier) : vague finale.
+- Constat de doc : le message `fix.msg.secret_hits.*` dit d'« exclure les fichiers dans les réglages du projet », mais `--exclude` ne prend que des noms de dossiers ; les docs disent de déplacer le fichier dans un dossier exclu ou de sortir le secret dans un `.env`. À reprendre dans le texte (ou en ajoutant une exclusion par fichier) : vague finale. Réglé (c2cba3e) : le message dit de sortir le secret du code, ou nomme le dossier à exclure.
 - Test corrigé : `TestWorkerCapsThreePerDay` ne passait que le 2026-10-30 (UTC) : le store du montage de test gardait l'horloge réelle pour créer les tentatives, alors que `StartedToday` comptait sur le jour du montage ; le test donne maintenant l'horloge du montage au store. Le code de production utilise une seule horloge et n'est pas concerné.
-- Constat de doc : `agent.Spec.MaxTurns` existe mais n'est pas réglé par le service (0 = pas de plafond de tours) : la seule limite d'une tentative est sa durée (20 min) ; à régler dans la vague finale.
+- Constat de doc : `agent.Spec.MaxTurns` existe mais n'est pas réglé par le service (0 = pas de plafond de tours) : la seule limite d'une tentative est sa durée (20 min) ; à régler dans la vague finale. Réglé : `fix.DefaultMaxTurns` = 50 (c2cba3e).
+- Ruling (45) : une faille disparue sans que le commit de la branche soit fusionné laisse la tentative « inconclusive » (la faille garde le statut que le scan lui donne) ; le code et les docs disent la même chose ; la phrase du spec § 8.3 parle de la faille, pas de la tentative — coût si faux : aucun.
+
+## Vague finale (revue de toute la branche)
+
+- Ruling (46) : une dernière vague de corrections prend C1-C3, I4-I10 et les points mineurs 11-12 de la revue finale ; les mineurs 13-14 (motifs de refus sensibles à la casse sous Windows, versions du protocole MCP) sont reportés — coût si faux : aucun.
+- Corrigé (c79bc2e, 6bb5792, c2cba3e) : sortie d'installation de Michel hors de la proposition (C2) ; à l'application, seul le patch brut est vérifié, et les repères ont la forme exacte de Michel (C1) ; un refus de Michel finit la tentative `failed` avec sa cause (C3) ; langue de l'utilisateur dans la consigne de l'agent (I4) ; `Sweep` respecte l'agent d'un autre processus (I5) ; copie retirée quand le démarrage échoue (I6) ; texte de `fix.msg.secret_hits` (I7) ; table de masquage enregistrée par le seul processus de la session (I8) ; plafond de tours (I9) ; test du secret coupé ramené à ce que le code garantit (I10).
 
 ## Run réel
 
