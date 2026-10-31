@@ -70,3 +70,14 @@ Task 4: fix round 3/5 (regression addressed — readlink gated like head, shape 
 Ruling: Task 4 parent-folder "missing" vs "not_read" (GNU readlink -f silent) stays deferred Minor — it was a Minor (round-1 re-review) the controller folded into round 3; display-only, no security impact — costs: on GNU servers an absent folder shows "Michel n'a pas pu lire ce fichier" instead of "absent"; also the test mock prints "No such file" unlike GNU readlink (fix mock in final wave).
 Task 4: minor (deferred): runFile refusal uses raw p (unreachable); runFile/run doc comments misplaced in collect.go; collect.go ~520 lines
 Task 4: complete (commits b50ec2e..f2c10ef, review clean after 3 rounds; 1 minor ruled deferred)
+Ruling R8: Task 5 treats PHP branches < 8.2 as EOL and vulnerable to PHP2Shell (no fixed version on the branch; advised = lowest supported fixed) — spec silent; safest reading — costs: a false alarm if an old branch got an unofficial backport.
+Task 5: dispatched (BASE 24b3e40, implementer a0ab95bfab68f76dc, sonnet)
+Task 5: automated security review (MEDIUM, eval.go): .user.ini directive overrides runtime value even for PHP_INI_SYSTEM directives (allow_url_include, expose_php) and when Binary empty → false 'not risky' (fail-open). Accepted → joins Task 5 fix round.
+Task 5: implementer DONE (commits 24b3e40..9be7b7e incl. FR fix); review dispatched (opus)
+Task 5: review — Needs fixes (3 Important: I1 .user.ini fail-open incl. per-site + php_admin precedence; I2 pool php_admin_value[]/php_flag[] unmatched; I3 unreadable compiled version skipped silently; 7 minors in task-5-review.md) → fix round 1 sent to implementer
+Task 5: fix round 1/5 (3 Important + M1-M4,M7 addressed; M5,M6 skipped; commits 9be7b7e..ef7f416) → re-review
+Task 5: complete (commits 24b3e40..ef7f416, re-review clean)
+Task 5: minor (deferred, Task 6 input): M5 open distro advisories passed to Evaluate (PHP2Shell via distro backport) — carry to T6 dispatch
+Task 5: minor (deferred, MUST-FIX final wave): M6 inline ";" comments not stripped — "display_errors = On ; dev" missed (fail-open); fix in collect/files.go + strip in isOn
+Task 5: minor (deferred): PHP-VERSION-UNKNOWN finding has no i18n Key — UI (T13) must map by OSVID; 8.2 date-based EOL (2026-12-31) not modelled
+Task 6: dispatched (BASE ef7f416)
