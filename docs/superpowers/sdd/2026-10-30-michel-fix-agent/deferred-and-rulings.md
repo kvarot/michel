@@ -108,18 +108,38 @@ Source : le ledger de travail du contrôleur (miroir committé : `ledger.md` dan
 ## Task 11 — docs, inventaire réseau, ledger
 
 - `docs/fix.md` + `docs/fix.fr.md` (nouveaux) ; `docs/security/network-egress.md` + `.fr.md` (usages `fix.install` et `agent.claude`, proxy d'autorisation, testé ou seulement déclaré) ; section « Corriger » des README ; commentaires de `config.example.yaml`.
-- Constat de doc : le message `fix.msg.secret_hits.*` dit d'« exclure les fichiers dans les réglages du projet », mais `--exclude` ne prend que des noms de dossiers ; les docs disent de déplacer le fichier dans un dossier exclu ou de sortir le secret dans un `.env`. À reprendre dans le texte (ou en ajoutant une exclusion par fichier) dans un plan suivant.
+- Constat de doc : le message `fix.msg.secret_hits.*` dit d'« exclure les fichiers dans les réglages du projet », mais `--exclude` ne prend que des noms de dossiers ; les docs disent de déplacer le fichier dans un dossier exclu ou de sortir le secret dans un `.env`. À reprendre dans le texte (ou en ajoutant une exclusion par fichier) : vague finale.
 - Test corrigé : `TestWorkerCapsThreePerDay` ne passait que le 2026-10-30 (UTC) : le store du montage de test gardait l'horloge réelle pour créer les tentatives, alors que `StartedToday` comptait sur le jour du montage ; le test donne maintenant l'horloge du montage au store. Le code de production utilise une seule horloge et n'est pas concerné.
-- Constat de doc : `agent.Spec.MaxTurns` existe mais n'est pas réglé par le service (0 = pas de plafond de tours) : la seule limite d'une tentative est sa durée (20 min).
+- Constat de doc : `agent.Spec.MaxTurns` existe mais n'est pas réglé par le service (0 = pas de plafond de tours) : la seule limite d'une tentative est sa durée (20 min) ; à régler dans la vague finale.
 
 ## Run réel
 
-*À compléter (partie 2 de la Task 11, contrôleur) : agrégats seulement — durée de la tentative, tours, tests, `egress.attempt` par usage, événements d'audit par action, `treeDigest` du projet avant/après préparation, projet `demo` créé pour l'occasion.*
+Contrôleur, 2026-10-31. Binaire construit depuis `feat/fix-agent` à 2c38f10. Dossier de données et fichier de politique jetables (absents au départ, donc `strict_local`). Projet créé pour l'occasion, enregistré sous `demo` : un dépôt git avec `composer.json` / `composer.lock` et une seule dépendance, une bibliothèque publique dans une ancienne version qui a des failles connues. Claude Code 2.1.314, avec la connexion de l'utilisateur, lancé par Michel. Détail et tableau complet : `progress.md` dans ce dossier.
+
+- Scan de `demo` : 1 lockfile, 14 failles (6 high, 8 medium).
+- Accord en `strict_local` : l'explication et le bouton « Passer en mode standard et autoriser les IA externes » (ruling 41) ; le clic note `policy.mode` puis `ai.consent`.
+- Michel lance sa propre mise à jour sur la copie intacte, puis Claude Code ; l'agent consulte Michel par MCP, relève la contrainte dans `composer.json` et appelle `propose_fix`.
+- Durée du démarrage à la proposition : 40 s. Tests : pas lancés (aucune commande de test). Nouveau scan de la copie : la faille a disparu. Proposition 7.4.0 → 7.4.3, risque 30.
+- « Valider » : `fix.approve` ok, puis `fix.apply` refusé par Michel (point 2 ci-dessous). Aucune branche créée ; dans `demo`, fichiers, index et historique inchangés (0 changement, 1 commit).
+- Événements d'audit par action : `egress.attempt` 21, `app.start` 6, `source.read` 2, `source.consent` 1, `source.enable` 1, `project.add` 1, `scan.start` 1, `scan.manifest` 1, `scan.finish` 1, `analyze.start` 1, `analyze.finish` 1, `api.start` 1, `policy.mode` 1, `ai.consent` 1, `fix.start` 1, `fix.propose` 1, `fix.approve` 1, `fix.apply` 1.
+- `egress.attempt` par hôte (tous autorisés, 0 refusé) : `api.github.com` 8, `codeload.github.com` 7 (archives Composer), base OSV 2, `packagist.org` 2, `repo.packagist.org` 1, `api.anthropic.com` 1 (un seul tunnel CONNECT, réutilisé par Claude Code). Par usage (déduit des hôtes) : `osv.db` 2, `fix.install` 18, `agent.claude` 1.
+- Fichiers de la proposition : 170 (`composer.json`, `composer.lock` et 168 fichiers sous `vendor/`).
+- `audit verify` : 44 événements vérifiés, code de sortie 0.
+
+À corriger dans la vague finale :
+
+- Run réel (Important) : la sortie de l'installation entre dans la proposition. L'installation de Michel écrit `vendor/` dans la copie, et la photo (`add -A`) le prend, puisque `vendor/` n'est ni ignoré ni suivi dans Base : 170 fichiers, et une branche mettrait `vendor/` dans le dépôt de l'utilisateur. Les dossiers produits par l'installation et absents de Base (`vendor`, `node_modules`, `vendor-dir` de Composer) doivent rester hors de la photo et du diff, ou l'installation ne doit tourner que dans le dossier à part.
+- Run réel (Important) : application refusée par la vérification des repères de masquage (« la modification contient un texte de remplacement à la place d'un secret ») : un faux positif, sans doute une chaîne en forme de `[secret-…]` dans `vendor/`, ou `HasToken` trop large. À revoir après le point précédent ; `HasToken` ne doit reconnaître que la forme des repères de Michel.
+- Run réel (Important, affichage) : un refus de Michel est montré comme le refus de l'utilisateur. La tentative passe `refused` et la page dit « Tu as refusé la dernière proposition » alors que l'utilisateur a cliqué « Valider ». Le refus de Michel doit être un résultat à part (`failed` avec une cause en clair).
+- Run réel (minor) : l'agent répond en anglais à un utilisateur français ; la première consigne doit lui demander d'écrire ses messages et son résumé dans la langue de l'utilisateur.
+- Constat de doc de la Task 11 : `fix.msg.secret_hits.*` dit d'exclure des fichiers alors que `--exclude` ne prend que des dossiers (voir Task 11).
+- Constat de doc de la Task 11 : `agent.Spec.MaxTurns` n'est pas réglé par le service, aucun plafond de tours (voir Task 11).
 
 ## Risques résiduels
 
 - **Installation et tests sans bac à sable** (ruling 30) : composer/npm et les tests du projet tournent sur une copie avec les droits de l'utilisateur ; quand l'agent a modifié du code, les tests l'exécutent. Verrous en place : pas de scripts ni de plugins, listes de réglages autorisés, lockfiles lus strictement, dossiers d'installation neufs, dossier à part pour les tests, fix-home comme dossier personnel, proxy d'autorisation. Ce n'est pas un environnement isolé ; Docker est prévu plus tard. L'écran d'accord le dit.
 - **Agent ou outil qui ignore le proxy** : le proxy d'autorisation ne retient que les programmes qui respectent `HTTPS_PROXY`/`HTTP_PROXY`. Une connexion ouverte autrement n'est ni arrêtée ni notée. Déclaré, pas garanti.
+- **Audit par tunnel, pas par requête** (run réel) : le proxy d'autorisation note la demande CONNECT, puis ne voit plus ce qui passe dans le tunnel chiffré. Claude Code réutilise un seul tunnel : seule sa première connexion apparaît dans le journal (1 `egress.attempt` vers `api.anthropic.com` pour toute la tentative). Déclaré, pas un suivi requête par requête.
 - **Code de la copie lu par Anthropic** : les fichiers de la copie ne sont pas masqués (choix du spec § 7.2) ; seuls les fichiers exclus restent sur le poste. Un secret écrit dans un fichier committé est lu par l'agent ; Michel le signale au démarrage.
 - **Options de Claude Code qui changent** : l'isolement repose sur `--setting-sources ""`, `--strict-mcp-config`, `--restricted`, `--tools`, les règles de permission passées en argv et en réglages, `disableAllHooks`, et les variables `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY`, `DISABLE_AUTOUPDATER`. Michel vérifie que l'aide liste les options, pas qu'elles font toujours la même chose : les hooks et réglages de l'utilisateur sont exclus par une option qu'on ne peut pas vérifier hors de la version testée (2.1.314). La liste `fix.AgentHosts` vient aussi de cette version.
 - **Connexion de l'utilisateur** : Claude Code reçoit le vrai dossier personnel pour y lire sa connexion ; les lectures de `~/.claude`, `~/.claude.json` et `~/.ssh` sont refusées à l'agent par règle de permission, pas par le système.
