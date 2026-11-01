@@ -1,0 +1,169 @@
+import { describe, expect, test } from 'vitest'
+import {
+  backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, serverLevels, serversHash,
+  serversRoute, needsSnapshot, serverStateLine, stateSentence, stepLine, touchedServers,
+} from './serversView.js'
+
+const now = new Date('2026-11-01T12:00:00Z')
+
+/** srv builds a TargetView as GET /targets answers it. */
+function srv(extra = {}) {
+  return {
+    id: '01SRV', name: 'srv-demo', kind: 'vps', env: 'prod', fix_level: 1, check_interval: '24h', executor: 'user', sudo: 'none',
+    active: true, host_key_pinned: true, last_check_at: '2026-11-01T09:00:00Z', open_findings: 0, checking: false,
+    state: { code: 'clean', text: '' }, ...extra,
+  }
+}
+
+describe('stateSentence', () => {
+  test('touched: the number of flaws and when Michel last looked', () => {
+    expect(stateSentence(srv({ open_findings: 2, state: { code: 'findings' } }), 'fr', now)).toBe('Touché par 2 failles. Dernière vérification il y a 3 h.')
+    expect(stateSentence(srv({ open_findings: 1, state: { code: 'findings' } }), 'fr', now)).toBe('Touché par 1 faille. Dernière vérification il y a 3 h.')
+    expect(stateSentence(srv({ open_findings: 2, state: { code: 'findings' } }), 'en', now)).toBe('Affected by 2 flaws. Last check 3 h ago.')
+  })
+
+  test('nothing known, and could not see everything', () => {
+    expect(stateSentence(srv(), 'fr', now)).toBe('Rien de connu. Dernière vérification il y a 3 h.')
+    expect(stateSentence(srv({ state: { code: 'unread' } }), 'fr', now)).toBe("Rien de connu, mais Michel n'a pas pu tout voir. Dernière vérification il y a 3 h.")
+    expect(stateSentence(srv({ state: { code: 'unread' } }), 'en', now)).toBe('Nothing known, but Michel could not see everything. Last check 3 h ago.')
+  })
+
+  test('the states before any check, and while one runs', () => {
+    expect(stateSentence(srv({ last_check_at: '', host_key_pinned: false, state: { code: 'key_unconfirmed' } }), 'fr', now))
+      .toBe("Pas encore vérifié : confirme d'abord l'empreinte du serveur.")
+    expect(stateSentence(srv({ last_check_at: '', state: { code: 'never_checked' } }), 'fr', now)).toBe('Pas encore vérifié.')
+    expect(stateSentence(srv({ checking: true, state: { code: 'checking' } }), 'fr', now)).toBe('Michel vérifie ce serveur en ce moment.')
+    expect(stateSentence(srv({ active: false, state: { code: 'inactive' } }), 'fr', now)).toBe('Michel ne vérifie plus ce serveur.')
+  })
+
+  test('a failed check says why, from the server', () => {
+    const t = srv({ state: { code: 'check_failed', text: 'La dernière vérification a échoué : Michel n\'a pas pu joindre le serveur.' } })
+    expect(stateSentence(t, 'fr', now)).toBe('La dernière vérification a échoué : Michel n\'a pas pu joindre le serveur.')
+    expect(stateSentence(srv({ state: { code: 'check_failed', text: '' } }), 'fr', now)).toBe("La dernière vérification n'est pas allée au bout.")
+    expect(stateSentence(null, 'fr', now)).toBe('')
+  })
+
+  test('serverStateLine is the short form of the list', () => {
+    expect(serverStateLine(srv({ open_findings: 3, state: { code: 'findings' } }), 'fr')).toBe('Touché par 3 failles.')
+  })
+})
+
+describe('labels', () => {
+  test('kind, environment, interval', () => {
+    expect(kindLabel('hds', 'fr')).toBe('HDS (données de santé)')
+    expect(kindLabel('vps', 'fr')).toBe('VPS')
+    expect(kindLabel('shared', 'fr')).toBe('Mutualisé')
+    expect(kindLabel('shared', 'en')).toBe('Shared hosting')
+    expect(kindLabel('other', 'fr')).toBe('other')
+    expect(envLabel('prod', 'fr')).toBe('Production')
+    expect(envLabel('preprod', 'fr')).toBe('Préproduction')
+    expect(envLabel('dev', 'en')).toBe('Development')
+    expect(intervalLabel('manual', 'fr')).toBe('seulement à la main')
+    expect(intervalLabel('24h', 'fr')).toBe('toutes les 24 h')
+    expect(intervalLabel('30m', 'en')).toBe('every 30 min')
+    expect(intervalLabel('', 'fr')).toBe('toutes les 24 h')
+  })
+
+  test('levelLabel names the four server levels in sentences', () => {
+    expect(serverLevels).toEqual([0, 1, 2, 3])
+    expect(levelLabel(0, 'fr').title).toBe('Signaler')
+    expect(levelLabel(1, 'fr').title).toBe('Expliquer et préparer à la demande')
+    expect(levelLabel(2, 'fr').title).toBe('Préparer')
+    expect(levelLabel(3, 'fr').title).toBe("Appliquer ce que j'ai autorisé")
+    expect(levelLabel(3, 'en').title).toBe('Apply what I allowed')
+    // Level 3: a fix Michel prepared, even on request, can then run alone.
+    expect(levelLabel(3, 'fr').text).toMatch(/même à ta demande/)
+    expect(levelLabel(3, 'fr').text).toMatch(/seule/)
+    for (const n of serverLevels) {
+      expect(levelLabel(n, 'fr').text).toMatch(/\.$/)
+      expect(levelLabel(n, 'en').text).not.toBe(levelLabel(n, 'fr').text)
+    }
+    expect(levelLabel(4, 'fr')).toBe(null)
+    expect(levelLabel('1', 'fr')).toBe(null)
+  })
+
+  test('findingTitle maps PHP-VERSION-UNKNOWN, which has no catalog text', () => {
+    expect(findingTitle({ rule: 'PHP-VERSION-UNKNOWN', title: 'PHP-VERSION-UNKNOWN' }, 'fr')).toBe("Michel n'a pas pu lire la version de PHP de ce serveur.")
+    expect(findingTitle({ rule: 'expose_php', title: 'PHP annonce sa version' }, 'fr')).toBe('PHP annonce sa version')
+    expect(findingTitle({ rule: 'x', title: '', package: 'php' }, 'fr')).toBe('php')
+  })
+})
+
+describe('stepLine', () => {
+  test('says each step in one line, in French', () => {
+    expect(stepLine({ op: 'backup_file', ok: true, detail: 'done' }, 'fr')).toBe('Copie des fichiers : faite.')
+    expect(stepLine({ op: 'set_directive', ok: true, detail: 'done' }, 'fr')).toBe('Modification du réglage : faite.')
+    expect(stepLine({ op: 'check_site', ok: false, detail: 'the site does not answer' }, 'fr')).toBe('Vérification du site : le site ne répond pas.')
+    expect(stepLine({ op: 'undo', ok: true, detail: 'done' }, 'fr')).toBe('Retour en arrière : fait, le serveur est comme avant.')
+    expect(stepLine({ op: 'recollect', ok: true, detail: 'the check no longer sees the problem' }, 'fr'))
+      .toBe('Nouvelle vérification du serveur : le problème a disparu.')
+    expect(stepLine({ op: 'test_config', ok: false, detail: 'not run' }, 'fr')).toBe('Test de la configuration : pas lancé.')
+  })
+
+  test('and in English, with a plain word for what it does not know', () => {
+    expect(stepLine({ op: 'reload_service', ok: true, detail: 'done' }, 'en')).toBe('Reload of PHP: done.')
+    expect(stepLine({ op: 'package_upgrade', ok: false, detail: 'the upgrade failed; the package may have changed' }, 'en'))
+      .toBe('Package upgrade: the upgrade failed, the package may have changed.')
+    expect(stepLine({ op: 'mystery', ok: false, detail: 'weird' }, 'en')).toBe('Step: failed.')
+    expect(stepLine({ op: 'mystery', ok: true, detail: 'weird' }, 'fr')).toBe('Étape : faite.')
+    expect(stepLine(null, 'fr')).toBe('')
+  })
+})
+
+describe('snapshot and approval', () => {
+  const proposal = { hash: 'abc' }
+  const attempt = (server, state = 'proposed') => ({ id: 'a1', state, proposal, server })
+
+  test('needsSnapshot reads the server part of the proposal', () => {
+    expect(needsSnapshot({ needs_snapshot: true })).toBe(true)
+    expect(needsSnapshot(attempt({ needs_snapshot: true }))).toBe(true)
+    expect(needsSnapshot({ needs_snapshot: false })).toBe(false)
+    expect(needsSnapshot(null)).toBe(false)
+  })
+
+  test('canApproveServer is false without the snapshot word', () => {
+    expect(canApproveServer(attempt({ needs_snapshot: false }), proposal)).toBe(true)
+    expect(canApproveServer(attempt({ needs_snapshot: true, snapshot_done: false }), proposal)).toBe(false)
+    expect(canApproveServer(attempt({ needs_snapshot: true, snapshot_done: true }), proposal)).toBe(true)
+    expect(canApproveServer(attempt({ needs_snapshot: false }, 'approved'), proposal)).toBe(false)
+    expect(canApproveServer(attempt({ needs_snapshot: false }), { hash: '' })).toBe(false)
+    expect(canApproveServer(attempt({ needs_snapshot: false }), null)).toBe(false)
+    expect(canApproveServer({ id: 'a1', state: 'proposed', proposal }, proposal)).toBe(false)
+    expect(canApproveServer(null, proposal)).toBe(false)
+    expect(isServerAttempt(attempt({}))).toBe(true)
+    expect(isServerAttempt({ id: 'a2' })).toBe(false)
+  })
+})
+
+describe('backupLine', () => {
+  test('a copy whose key was lost says so, never "does not match"', () => {
+    expect(backupLine({ file: '/var/lib/michel/backups/x/1', state: 'kept' }, 'fr')).toBe('/var/lib/michel/backups/x/1 : copie gardée sur ton ordinateur, chiffrée.')
+    expect(backupLine({ file: '/var/lib/michel/backups/x/1', state: 'key_lost' }, 'fr'))
+      .toBe('/var/lib/michel/backups/x/1 : clé perdue. La copie de ton ordinateur ne peut plus être ouverte ; celle du serveur reste là.')
+    expect(backupLine({ file: 'f', state: 'damaged' }, 'fr')).toBe("f : ne correspond pas. La copie de ton ordinateur a été abîmée ; celle du serveur reste là.")
+    expect(backupLine({ file: 'f', state: 'key_lost' }, 'en')).not.toMatch(/match/)
+  })
+})
+
+describe('routes', () => {
+  test('reads and writes the Servers page addresses', () => {
+    expect(serversRoute('#/servers')).toEqual({ id: '' })
+    expect(serversRoute('#/servers/01SRV')).toEqual({ id: '01SRV' })
+    expect(serversRoute('#/servers/a%20b')).toEqual({ id: 'a b' })
+    expect(serversRoute('#/serversx')).toBe(null)
+    expect(serversRoute('#/fix')).toBe(null)
+    expect(serversHash('01SRV')).toBe('#/servers/01SRV')
+    expect(serversHash('')).toBe('#/servers')
+  })
+
+  test('touchedServers puts the servers with open flaws first, worst first', () => {
+    const list = [
+      srv({ id: 'a', open_findings: 0 }),
+      srv({ id: 'b', open_findings: 1, state: { code: 'findings' } }),
+      srv({ id: 'c', open_findings: 3, state: { code: 'findings' } }),
+      srv({ id: 'd', state: { code: 'check_failed', text: 'x' } }),
+    ]
+    expect(touchedServers(list).map((t) => t.id)).toEqual(['c', 'b'])
+    expect(touchedServers(null)).toEqual([])
+  })
+})

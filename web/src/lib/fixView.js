@@ -19,15 +19,19 @@ export function isFinal(state) {
 /**
  * groupOf is the group of an attempt state: still to fix after a refusal or
  * a failure, running while the agent works or Michel applies an approved
- * fix, to review once proposed, done once the branch exists.
+ * fix (or runs a server fix's script), to review once proposed or when a
+ * server fix's outcome is unknown (the user checks the server), done once
+ * the branch exists or the script ran.
  * @param {string} state
  */
 export function groupOf(state) {
   switch (state) {
     case 'preparing':
     case 'approved':
+    case 'running':
       return 'running'
     case 'proposed':
+    case 'unknown':
       return 'review'
     case 'applied':
     case 'proven_fixed':

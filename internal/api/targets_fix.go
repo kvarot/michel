@@ -35,12 +35,36 @@ type ServerAttemptView struct {
 	BackupList     []string   `json:"backup_list"`
 	// ForProduction names the production server a preprod fix is tried for.
 	ForProduction *TargetRef `json:"for_production,omitempty"`
+	// Scripts are the two scripts the user validates, exactly as they run
+	// (the full view only): to read, and to copy when the user runs them.
+	Scripts *ScriptsView `json:"scripts,omitempty"`
+	// Backups are the copies of the server files kept on this computer, and
+	// whether each one still opens (the full view only).
+	Backups []BackupView `json:"backups,omitempty"`
+}
+
+// ScriptsView is the apply and the undo script of a server fix. They hold
+// paths and values of the server only, never a secret value (a secret
+// directive is never written by a fix).
+type ScriptsView struct {
+	Apply string `json:"apply"`
+	Undo  string `json:"undo"`
+}
+
+// BackupView is a backup kept on this computer: the server file it copies,
+// when, and its state: kept, key_lost (sealed with a key that was replaced:
+// it no longer opens, the copy on the server stays) or damaged (it does not
+// match).
+type BackupView struct {
+	File  string `json:"file"`
+	At    string `json:"at"`
+	State string `json:"state"`
 }
 
 // serverAttempt fills the server part of an attempt view: its finding, its
 // server and, when the attempt has a proposal, the scripts' facts and the
 // steps. The caller has checked a.Work.Server is set.
-func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attempt, prop *fix.Proposal) error {
+func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attempt, prop *fix.Proposal, full bool, lang i18n.Lang) error {
 	repo := s.targets()
 	t, err := repo.Get(ctx, a.Work.Server.TargetID)
 	if err != nil && !errors.Is(err, target.ErrNotFound) {
@@ -87,6 +111,19 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 		sv.BackupList = srvTexts(user, fix.BackupList(*prop))
 		if sv.BackupList == nil {
 			sv.BackupList = []string{}
+		}
+		if full && prop.Scripts != nil {
+			// Exactly as validated: the text the hash covers, the one to copy.
+			sv.Scripts = &ScriptsView{Apply: strings.ToValidUTF8(prop.Scripts.Apply, "�"), Undo: strings.ToValidUTF8(prop.Scripts.Undo, "�")}
+		}
+	}
+	if full {
+		if d, ok := s.fixDepsQuiet(lang); ok {
+			if list, err := fix.BackupStates(ctx, d, a.ID); err == nil {
+				for _, b := range list {
+					sv.Backups = append(sv.Backups, BackupView{File: srvText(user, b.RemotePath), At: stamp(b.CreatedAt), State: b.State})
+				}
+			}
 		}
 	}
 	v.Server = sv

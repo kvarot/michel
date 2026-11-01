@@ -90,6 +90,17 @@ type Server struct {
 // New starts a server on 127.0.0.1:0 and stops it at the end of the test.
 func New(t testing.TB, opts Options) *Server {
 	t.Helper()
+	s, err := Start(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	return s
+}
+
+// Start starts a server on 127.0.0.1:0 outside a test (the demo command);
+// the caller stops it with Close. It only ever listens on the loopback.
+func Start(opts Options) (*Server, error) {
 	types := opts.HostKeyTypes
 	if len(types) == 0 {
 		types = []string{"ed25519"}
@@ -99,7 +110,7 @@ func New(t testing.TB, opts Options) *Server {
 	for _, typ := range types {
 		sg, err := newHostSigner(typ)
 		if err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 		signers[typ] = sg
 		if main == nil || typ == "ed25519" {
@@ -108,7 +119,7 @@ func New(t testing.TB, opts Options) *Server {
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	s := &Server{opts: opts, ln: ln, signers: signers, main: main, files: map[string]string{}, authorized: map[string]bool{}}
 	for k, v := range opts.Files {
@@ -116,8 +127,7 @@ func New(t testing.TB, opts Options) *Server {
 	}
 	s.wg.Add(1)
 	go s.serve()
-	t.Cleanup(s.close)
-	return s
+	return s, nil
 }
 
 // Addr is the host:port the server listens on.
@@ -206,23 +216,36 @@ func (s *Server) SetFile(path, content string) {
 // server accepts.
 func (s *Server) NewAgent(t testing.TB) agent.ExtendedAgent {
 	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	kr, err := s.AddClientKey()
 	if err != nil {
 		t.Fatal(err)
+	}
+	return kr
+}
+
+// AddClientKey makes a fresh client key, has the server accept it, and
+// returns an in-memory agent holding it (never the real SSH agent).
+func (s *Server) AddClientKey() (agent.ExtendedAgent, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
 	}
 	kr := agent.NewKeyring().(agent.ExtendedAgent)
 	if err := kr.Add(agent.AddedKey{PrivateKey: priv}); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	pub, err := ssh.NewPublicKey(priv.Public())
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	s.mu.Lock()
 	s.authorized[string(pub.Marshal())] = true
 	s.mu.Unlock()
-	return kr
+	return kr, nil
 }
+
+// Close stops the server and cuts its connections.
+func (s *Server) Close() { s.close() }
 
 func (s *Server) close() {
 	s.ln.Close()

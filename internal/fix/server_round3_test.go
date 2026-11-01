@@ -271,3 +271,49 @@ func TestTailOnlyForCutStderr(t *testing.T) {
 		t.Errorf("stderr cut: %v", err)
 	}
 }
+
+// A backup sealed with a key that was replaced since reads "key lost"; a
+// backup sealed with the current key that no longer matches reads
+// "damaged"; a good one "kept". (Task 13: the page must not call a copy
+// whose key was lost a copy that does not match.)
+func TestBackupStatesSayKeyLostAfterRotation(t *testing.T) {
+	f := newServerFixture(t)
+	ctx := context.Background()
+	f.d.BackupKeyWait = 100 * time.Millisecond
+	add := func(path, content string) {
+		t.Helper()
+		if err := f.d.addBackup(ctx, ServerBackup{AttemptID: "01ATTEMPT", TargetID: "01TARGET", RemotePath: path, Content: []byte(content)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("/var/lib/michel/backups/x/1", "old")
+	if err := f.d.Secrets.Delete(backupKeyName); err != nil {
+		t.Fatal(err)
+	}
+	add("/var/lib/michel/backups/x/2", "new")
+	add("/var/lib/michel/backups/x/3", "bad")
+	if _, err := f.st.DB().Exec(`UPDATE server_backup SET sha256 = '00' WHERE remote_path = '/var/lib/michel/backups/x/3'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := BackupStates(ctx, f.d, "01ATTEMPT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"/var/lib/michel/backups/x/1": BackupKeyLost, "/var/lib/michel/backups/x/2": BackupKept, "/var/lib/michel/backups/x/3": BackupDamaged}
+	if len(got) != 3 {
+		t.Fatalf("got %d states", len(got))
+	}
+	for _, s := range got {
+		if want[s.RemotePath] != s.State {
+			t.Errorf("%s: %s, want %s", s.RemotePath, s.State, want[s.RemotePath])
+		}
+	}
+	// A copy stored before the fingerprint was recorded is not called lost.
+	if _, err := f.st.DB().Exec(`UPDATE server_backup SET key_fingerprint = '' WHERE remote_path = '/var/lib/michel/backups/x/1'`); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = BackupStates(ctx, f.d, "01ATTEMPT")
+	if got[0].State != BackupDamaged {
+		t.Errorf("unrecorded key: %s", got[0].State)
+	}
+}

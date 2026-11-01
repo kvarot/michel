@@ -379,7 +379,7 @@ func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool, lang
 		if ok {
 			pp = &prop
 		}
-		if err := s.serverAttempt(ctx, &v, a, pp); err != nil {
+		if err := s.serverAttempt(ctx, &v, a, pp, full, lang); err != nil {
 			return AttemptView{}, err
 		}
 	} else {

@@ -717,6 +717,9 @@ type ServerBackup struct {
 	SHA256     string
 	Content    []byte
 	CreatedAt  time.Time
+	// KeyFingerprint names the key the copy was sealed with ("" for a copy
+	// stored before Michel recorded it).
+	KeyFingerprint string
 }
 
 // AddBackup stores a sealed backup: blob is the encrypted content, b.Content
@@ -728,8 +731,8 @@ func (r *Repo) AddBackup(ctx context.Context, b ServerBackup, blob []byte) (Serv
 		return ServerBackup{}, err
 	}
 	b.ID, b.CreatedAt = id, now
-	if _, err := r.s.DB().ExecContext(ctx, `INSERT INTO server_backup (id, attempt_id, target_id, remote_path, sha256, blob, created_at) VALUES (?,?,?,?,?,?,?)`,
-		b.ID, b.AttemptID, b.TargetID, b.RemotePath, b.SHA256, base64.StdEncoding.EncodeToString(blob), ts(now)); err != nil {
+	if _, err := r.s.DB().ExecContext(ctx, `INSERT INTO server_backup (id, attempt_id, target_id, remote_path, sha256, blob, created_at, key_fingerprint) VALUES (?,?,?,?,?,?,?,?)`,
+		b.ID, b.AttemptID, b.TargetID, b.RemotePath, b.SHA256, base64.StdEncoding.EncodeToString(blob), ts(now), b.KeyFingerprint); err != nil {
 		return ServerBackup{}, fmt.Errorf("cannot save the backup: %w", err)
 	}
 	return b, nil
@@ -756,7 +759,7 @@ type SealedBackup struct {
 // Backups returns the stored backups of an attempt, oldest first, still
 // sealed.
 func (r *Repo) Backups(ctx context.Context, attemptID string) ([]SealedBackup, error) {
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, attempt_id, target_id, remote_path, sha256, blob, created_at FROM server_backup WHERE attempt_id = ? ORDER BY created_at, id`, attemptID)
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, attempt_id, target_id, remote_path, sha256, blob, created_at, key_fingerprint FROM server_backup WHERE attempt_id = ? ORDER BY created_at, id`, attemptID)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the backups: %w", err)
 	}
@@ -765,7 +768,7 @@ func (r *Repo) Backups(ctx context.Context, attemptID string) ([]SealedBackup, e
 	for rows.Next() {
 		var b SealedBackup
 		var blob, created string
-		if err := rows.Scan(&b.ID, &b.AttemptID, &b.TargetID, &b.RemotePath, &b.SHA256, &blob, &created); err != nil {
+		if err := rows.Scan(&b.ID, &b.AttemptID, &b.TargetID, &b.RemotePath, &b.SHA256, &blob, &created, &b.KeyFingerprint); err != nil {
 			return nil, err
 		}
 		if b.Blob, err = base64.StdEncoding.DecodeString(blob); err != nil {

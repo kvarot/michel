@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,14 +15,17 @@ import (
 	"github.com/kvarot/michel/internal/collect"
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/servererr"
 	"github.com/kvarot/michel/internal/serverrules"
+	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/sshx"
 	"github.com/kvarot/michel/internal/target"
+	"github.com/kvarot/michel/internal/vulnmatch"
 )
 
 // Servers are the collaborators of the server routes.
@@ -166,11 +170,14 @@ type TargetView struct {
 	// The detail only.
 	Findings    []TargetFindingView `json:"findings,omitempty"`
 	Unseen      []TargetUnseenView  `json:"unseen,omitempty"`
-	Projects    []TargetLinkView    `json:"projects,omitempty"`
+	Projects    []TargetLinkView    `json:"projects,omitempty"` // also in the list
 	History     []TargetCheckView   `json:"history,omitempty"`
 	BackupBytes *int64              `json:"backup_bytes,omitempty"`
 	BackupFiles *int                `json:"backup_files,omitempty"`
 	AIConsent   *bool               `json:"ai_consent,omitempty"`
+	// SourceToEnable is the catalog key of the distribution database Michel
+	// needs to judge the system packages it saw ("" when none is missing).
+	SourceToEnable string `json:"source_to_enable,omitempty"`
 }
 
 // CandidateView is a server found on this computer, not yet added: the same
@@ -628,14 +635,8 @@ func (s *server) targetView(ctx context.Context, t target.Target, lang i18n.Lang
 		v.LastCheck = lc
 	}
 	v.State = s.targetState(lang, t, v, run, tracked, unread)
-	if !detail {
-		return v, nil
-	}
-	if haveInv {
-		for _, u := range inv.Unseen {
-			v.Unseen = append(v.Unseen, TargetUnseenView{What: srvText(t.User, u.What), Reason: reasonText(lang, t.User, u.Reason)})
-		}
-	}
+	// The projects that live on the server, in the list too: a project's card
+	// links to its servers.
 	links, err := repo.Links(ctx, t.ID)
 	if err != nil {
 		return TargetView{}, err
@@ -646,6 +647,17 @@ func (s *server) targetView(ctx context.Context, t target.Target, lang i18n.Lang
 			continue
 		}
 		v.Projects = append(v.Projects, TargetLinkView{Project: p.Name, RemoteDir: srvText(t.User, l.RemoteDir)})
+	}
+	if !detail {
+		return v, nil
+	}
+	if haveInv {
+		for _, u := range inv.Unseen {
+			v.Unseen = append(v.Unseen, TargetUnseenView{What: srvText(t.User, u.What), Reason: reasonText(lang, t.User, u.Reason)})
+		}
+		if v.SourceToEnable, err = s.sourceToEnable(ctx, inv); err != nil {
+			return TargetView{}, err
+		}
 	}
 	if v.History, err = s.targetHistory(ctx, t.ID); err != nil {
 		return TargetView{}, err
@@ -663,6 +675,25 @@ func (s *server) targetView(ctx context.Context, t target.Target, lang i18n.Lang
 		}
 	}
 	return v, nil
+}
+
+// sourceToEnable is the distribution database the packages of inv need and
+// that is not turned on ("" when there is none to turn on, or no package
+// manager answered), as the check judges it.
+func (s *server) sourceToEnable(ctx context.Context, inv target.Inventory) (string, error) {
+	eco, ok := vulnmatch.Ecosystem(inv.OS)
+	if !ok || len(inv.Packages) == 0 {
+		return "", nil
+	}
+	enabled, err := osvdb.Enabled(ctx, source.NewRepo(s.deps.Store), nil)
+	if err != nil {
+		return "", err
+	}
+	base, _, _ := strings.Cut(eco, ":")
+	if slices.Contains(enabled, base) {
+		return "", nil
+	}
+	return vulnmatch.CatalogKey(eco), nil
 }
 
 // reasonText is the reason a read failed: the catalog sentence when the

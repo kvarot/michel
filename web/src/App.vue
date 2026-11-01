@@ -18,6 +18,7 @@
         >
           <v-tab value="today">{{ $t('nav.today') }}</v-tab>
           <v-tab value="fix">{{ $t('nav.fix') }}</v-tab>
+          <v-tab value="servers">{{ $t('nav.servers') }}</v-tab>
           <v-tab value="sources">{{ $t('nav.sources') }}</v-tab>
         </v-tabs>
         <nav class="m-top__actions">
@@ -67,6 +68,7 @@
 
         <SourcesPage v-else-if="page === 'sources'" @changed="stale = true" />
         <FixPage v-else-if="page === 'fix'" :route="fixRoute" @changed="stale = true" />
+        <ServersPage v-else-if="page === 'servers'" :route="serversRoute" @changed="stale = true" />
         <TodayPage v-else :digest="digest" :meta="meta" @decided="loadToday(false)" />
       </div>
     </v-main>
@@ -89,15 +91,23 @@
 import TodayPage from './components/TodayPage.vue'
 import SourcesPage from './components/SourcesPage.vue'
 import FixPage from './components/FixPage.vue'
+import ServersPage from './components/ServersPage.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import { api } from './api.js'
 import { keys, save } from './lib/storage.js'
 import { fixRoute } from './lib/fixView.js'
+import { serversRoute } from './lib/serversView.js'
 
-/** pageOf reads the page from the address hash: #/sources, #/fix…, else today. */
+/** pageOf reads the page from the address hash: #/sources, #/fix…, #/servers…, else today. */
 function pageOf(hash) {
   if (hash === '#/sources') return 'sources'
+  if (serversRoute(hash)) return 'servers'
   return fixRoute(hash) ? 'fix' : 'today'
+}
+
+/** serversOf is the Servers page's {id} in the address ('' for the list). */
+function serversOf(hash) {
+  return serversRoute(hash) || { id: '' }
 }
 
 /** routeOf is the Fix page's {attempt, finding} in the address (empty elsewhere). */
@@ -107,7 +117,7 @@ function routeOf(hash) {
 
 export default {
   name: 'App',
-  components: { TodayPage, SourcesPage, FixPage, SettingsPanel },
+  components: { TodayPage, SourcesPage, FixPage, ServersPage, SettingsPanel },
   data() {
     return {
       state: 'loading', // loading | unauthorized | offline | error | ready
@@ -124,6 +134,8 @@ export default {
       page: pageOf(window.location.hash),
       // fixRoute is the attempt or the finding the Fix page shows.
       fixRoute: routeOf(window.location.hash),
+      // serversRoute is the server whose sheet the Servers page shows.
+      serversRoute: serversOf(window.location.hash),
       // stale is set when the Sources page changed something the Today page shows.
       stale: false,
     }
@@ -156,6 +168,7 @@ export default {
     onHash() {
       this.page = pageOf(window.location.hash)
       this.fixRoute = routeOf(window.location.hash)
+      this.serversRoute = serversOf(window.location.hash)
       if (this.page === 'today' && this.stale && this.state === 'ready') {
         this.stale = false
         this.loadToday(false)
@@ -163,7 +176,7 @@ export default {
     },
     /** go shows a page by changing the address, so the back button works. */
     go(page) {
-      const hashes = { sources: '#/sources', fix: '#/fix' }
+      const hashes = { sources: '#/sources', fix: '#/fix', servers: '#/servers' }
       window.location.hash = hashes[page] || '#/'
     },
     onUnauthorized() {

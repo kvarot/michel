@@ -46,7 +46,7 @@
                   <span class="m-code m-fix__pkg">{{ itemFinding(item).package }}</span>
                   <span class="m-sev" :class="`m-sev--${sev(itemFinding(item).severity)}`">{{ $t(`severity.${sev(itemFinding(item).severity)}`) }}</span>
                 </span>
-                <span class="m-small m-muted">{{ $t('fix.in_project', { project: itemProject(item) }) }}</span>
+                <span class="m-small m-muted">{{ itemWhere(item) }}</span>
                 <span class="m-small m-voice">{{ lineText(item) }}</span>
               </a>
             </li>
@@ -64,6 +64,25 @@
           <div v-if="viewLoading" class="m-fix__state m-muted" role="status">
             <v-progress-circular indeterminate size="18" width="2" color="primary" />
             {{ $t('fix.loading') }}
+          </div>
+          <div v-else-if="serverOnly" class="m-fix__server">
+            <h2 class="m-fix__server-title">{{ $t('srvfix.center_title', { name: current.server.target.name }) }}</h2>
+            <p class="m-muted m-small">{{ $t('srvfix.no_agent_chat') }}</p>
+            <template v-if="current.proposal && (current.proposal.steps_server || []).length">
+              <h3 class="m-fix__server-sub">{{ $t('srvfix.what') }}</h3>
+              <ol class="m-fix__server-list">
+                <li v-for="(line, i) in current.proposal.steps_server" :key="i" class="m-voice">{{ line }}</li>
+              </ol>
+            </template>
+            <template v-if="(current.server.steps || []).length">
+              <h3 class="m-fix__server-sub">{{ $t('srvfix.steps') }}</h3>
+              <ul class="m-fix__steps" aria-live="polite">
+                <li v-for="(st, i) in current.server.steps" :key="i" :class="st.ok ? 'm-fix__step--ok' : 'm-fix__step--bad'">
+                  <span aria-hidden="true">{{ st.ok ? '✓' : '✗' }}</span>
+                  {{ stepText(st) }}
+                </li>
+              </ul>
+            </template>
           </div>
           <FixChat
             v-else
@@ -88,8 +107,25 @@
         </v-alert>
       </div>
 
+      <ServerProposal
+        v-if="current && current.server"
+        class="m-fix__right"
+        :attempt="current"
+        :flaw="serverFlaw"
+        :target="target"
+        :approving="approving"
+        :refusing="refusing"
+        :acting="acting"
+        :updated="proposalUpdated"
+        @approve="approve"
+        @refuse="refuse"
+        @snapshot="serverAction('snapshot-done', 'snapshot')"
+        @applied="serverAction('applied-by-me', 'applied')"
+        @resolve="serverAction('resolve', 'resolve')"
+        @again="again"
+      />
       <FixProposal
-        v-if="selectedFinding"
+        v-else-if="selectedFinding"
         class="m-fix__right"
         :attempt="current"
         :finding="selectedFinding"
@@ -121,9 +157,15 @@
 import AiConsentDialog from './AiConsentDialog.vue'
 import FixChat from './FixChat.vue'
 import FixProposal from './FixProposal.vue'
+import ServerProposal from './ServerProposal.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
 import { acceptResult, activityLine, fixHash, groupAttempts, isFinal, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
+import { isServerFinal, serverAttemptLine, stepLine } from '../lib/serversView.js'
+
+// serverEvery is how often a server fix under way is read again: its steps
+// come with the attempt, not on the stream.
+const serverEvery = 3000
 
 // listEvery is how often the list is read again while the page is open: an
 // attempt started alone (level 2) or proposed through michel mcp shows up.
@@ -140,7 +182,7 @@ function isOpen(f) {
 // the right. route is {attempt, finding} from the address.
 export default {
   name: 'FixPage',
-  components: { AiConsentDialog, FixChat, FixProposal },
+  components: { AiConsentDialog, FixChat, FixProposal, ServerProposal },
   props: {
     route: { type: Object, default: () => ({ attempt: '', finding: '' }) },
   },
@@ -170,6 +212,11 @@ export default {
       startingFor: '',
       approving: false,
       refusing: false,
+      // acting is the server fix action running: snapshot, applied, resolve, again.
+      acting: '',
+      // target is the sheet of the server of the attempt shown (a server fix).
+      target: null,
+      serverTimer: null,
       sending: false,
       actionError: null,
       consent: { open: false, project: '', lines: [], switchMode: false, busy: false, error: '', findingId: '' },
@@ -213,6 +260,16 @@ export default {
     canStart() {
       return !this.agentProblem
     },
+    // serverOnly: a server fix Michel prepares alone (no agent, no conversation).
+    serverOnly() {
+      const a = this.current
+      return !!a && !!a.server && !String(a.origin || '').startsWith('agent') && !this.messages.length
+    },
+    // serverFlaw is the finding as the server's sheet tells it.
+    serverFlaw() {
+      if (!this.current?.server || !this.target) return null
+      return (this.target.findings || []).find((f) => f.id === this.current.finding?.id) || null
+    },
     // waiting: the attempt the address names is on its way (a direct link).
     waiting() {
       return !!this.route.attempt && !this.current && this.pending === this.route.attempt
@@ -245,6 +302,7 @@ export default {
     this.pending = null
     this.closeStream()
     clearInterval(this.timer)
+    clearTimeout(this.serverTimer)
   },
   methods: {
     q(path) {
@@ -259,6 +317,13 @@ export default {
     itemProject(item) {
       return item.kind === 'attempt' ? item.attempt.project : item.finding.project
     },
+    itemWhere(item) {
+      if (item.kind === 'attempt' && item.attempt.server) return this.$t('srvfix.flaw_on', { name: item.attempt.server.target.name })
+      return this.$t('fix.in_project', { project: this.itemProject(item) })
+    },
+    stepText(st) {
+      return stepLine(st, this.lang)
+    },
     itemKey(item) {
       return item.kind === 'attempt' ? `a:${item.attempt.id}` : `f:${item.finding.id}`
     },
@@ -270,6 +335,7 @@ export default {
       return !this.route.attempt && this.route.finding === item.finding.id
     },
     lineText(item) {
+      if (item.kind === 'attempt' && item.attempt.server) return serverAttemptLine(item.attempt, this.lang)
       return stateLine(item, this.lang)
     },
 
@@ -346,7 +412,9 @@ export default {
       }
       this.pending = null
       this.closeStream()
+      clearTimeout(this.serverTimer)
       this.current = null
+      this.target = null
       this.messages = []
       this.activity = ''
       this.shownHash = ''
@@ -376,7 +444,84 @@ export default {
         return
       }
       this.show(v)
-      if (!isFinal(v.state)) this.follow(id)
+      if (v.server) {
+        this.pollServer(id)
+        if (!isServerFinal(v.state)) this.follow(id)
+      } else if (!isFinal(v.state)) {
+        this.follow(id)
+      }
+    },
+    /** pollServer reads a server fix again while it is under way (its steps are not on the stream). */
+    pollServer(id) {
+      clearTimeout(this.serverTimer)
+      if (!this.alive || !this.current || this.current.id !== id || isServerFinal(this.current.state)) return
+      if (!['approved', 'running', 'applied', 'preparing'].includes(this.current.state)) return
+      this.serverTimer = setTimeout(async () => {
+        if (!this.alive || this.current?.id !== id) return
+        try {
+          const v = await api.get(this.q(`/fix/${encodeURIComponent(id)}`))
+          if (!this.alive || this.current?.id !== id) return
+          const was = this.current.state
+          this.show(v)
+          if (was !== v.state) this.$emit('changed')
+        } catch {
+          // Tried again at the next turn.
+        }
+        this.pollServer(id)
+      }, serverEvery)
+    },
+    /** loadTarget reads the sheet of the server of a server fix (the flaw in words). */
+    async loadTarget(id) {
+      if (!id || this.target?.id === id) return
+      try {
+        const t = await api.get(this.q(`/targets/${encodeURIComponent(id)}`))
+        if (this.alive && this.current?.server?.target?.id === id) this.target = t
+      } catch {
+        // The right side then shows what the attempt knows of the flaw.
+      }
+    },
+    /** serverAction sends the user's word on a server fix: snapshot-done, applied-by-me, resolve. */
+    async serverAction(path, what) {
+      if (!this.current || this.acting) return
+      const id = this.current.id
+      this.acting = what
+      this.actionError = null
+      try {
+        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/${path}`))
+        if (!this.alive || this.current?.id !== id) return
+        this.show(v)
+        this.pollServer(id)
+        this.$emit('changed')
+      } catch (err) {
+        if (err?.status === 401) return
+        this.actionError = err
+        if (this.alive) {
+          await this.openAttempt(id)
+          if (this.alive) this.actionError = err
+        }
+      } finally {
+        this.acting = ''
+      }
+    },
+    /** again prepares a new fix of the same server finding (after a failure or a refusal). */
+    async again() {
+      const a = this.current
+      if (!a?.server || this.acting) return
+      this.acting = 'again'
+      this.actionError = null
+      try {
+        const r = await api.post(this.q(`/targets/${encodeURIComponent(a.server.target.id)}/fix/${encodeURIComponent(a.finding.id)}`))
+        if (!this.alive) return
+        if (r?.attempt) {
+          this.attempts.unshift({ ...r.attempt, messages: null })
+          this.$emit('changed')
+          window.location.hash = fixHash({ attempt: r.attempt.id })
+        }
+      } catch (err) {
+        if (err?.status !== 401) this.actionError = err
+      } finally {
+        this.acting = ''
+      }
     },
     /** show puts an AttemptView (in full) on screen. */
     show(v) {
@@ -387,7 +532,8 @@ export default {
       this.activity = tools.length ? activityLine(tools[tools.length - 1], this.lang) : ''
       this.shownHash = v.proposal?.hash || ''
       this.patchList(v)
-      this.loadSheet(v.finding?.id)
+      if (v.server) this.loadTarget(v.server.target?.id)
+      else this.loadSheet(v.finding?.id)
     },
     /** patchList updates the attempt's line in the list. */
     patchList(v) {
@@ -525,12 +671,14 @@ export default {
         this.show(v)
         this.proposalUpdated = false
         // approved (the branch is not there yet): keep following until it is.
-        if (!isFinal(v.state)) this.follow(id)
+        if (v.server) this.pollServer(id)
+        else if (!isFinal(v.state)) this.follow(id)
         this.$emit('changed')
       } catch (err) {
         if (err?.status === 401) return
         this.actionError = err
-        if (this.alive && (err?.status === 409 || err?.status === 502)) {
+        // A server fix that failed on the server (rolled back, unknown…) is read again.
+        if (this.alive && (err?.status === 409 || err?.status === 502 || this.current?.server)) {
           await this.openAttempt(id)
           if (this.alive) this.actionError = err
         }
@@ -612,6 +760,14 @@ export default {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
 }
 .m-fix__pick { font-size: 1.1rem; margin: 0; }
+.m-fix__server { display: grid; gap: 0.6rem; }
+.m-fix__server p { margin: 0; }
+.m-fix__server-title { font-family: var(--m-voice); font-size: 1.25rem; font-weight: 600; margin: 0; }
+.m-fix__server-sub { font-size: 0.95rem; font-weight: 650; margin: 0.5rem 0 0; }
+.m-fix__server-list { margin: 0; padding-left: 1.3rem; display: grid; gap: 0.35rem; line-height: 1.5; }
+.m-fix__steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
+.m-fix__step--ok span { color: rgb(var(--v-theme-success)); font-weight: 700; }
+.m-fix__step--bad span { color: rgb(var(--v-theme-error)); font-weight: 700; }
 .m-fix__error p { margin: 0; }
 .m-fix__detail summary { cursor: pointer; }
 .m-fix__detail p { margin: 0.25rem 0 0; overflow-wrap: anywhere; }

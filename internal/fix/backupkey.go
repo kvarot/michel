@@ -200,6 +200,7 @@ func (d Deps) addBackup(ctx context.Context, b ServerBackup) error {
 		return err
 	}
 	blob := aead.Seal(nonce, nonce, b.Content, backupAAD(b))
+	b.KeyFingerprint = keyFingerprint(key)
 	_, err = d.repo().AddBackup(ctx, b, blob)
 	return err
 }
@@ -224,21 +225,12 @@ func (d Deps) backups(ctx context.Context, attemptID string) ([]ServerBackup, er
 	var bad []error
 	for _, s := range sealed {
 		n := aead.NonceSize()
-		var plain []byte
-		var oerr error
-		if len(s.Blob) < n {
-			oerr = errBackupTampered
-		} else if plain, oerr = aead.Open(nil, s.Blob[:n], s.Blob[n:], backupAAD(s.ServerBackup)); oerr == nil {
-			sum := sha256.Sum256(plain)
-			if hex.EncodeToString(sum[:]) != s.SHA256 {
-				oerr = errBackupTampered
-			}
-		}
-		if oerr != nil {
+		if openBackup(aead, s) != nil {
 			// One bad row never hides the others: it is skipped and reported.
 			bad = append(bad, fmt.Errorf("%w (%s)", errBackupTampered, s.ID))
 			continue
 		}
+		plain, _ := aead.Open(nil, s.Blob[:n], s.Blob[n:], backupAAD(s.ServerBackup))
 		b := s.ServerBackup
 		b.Content = plain
 		out = append(out, b)
@@ -251,6 +243,76 @@ func (d Deps) backups(ctx context.Context, attemptID string) ([]ServerBackup, er
 // open.
 func backupAAD(b ServerBackup) []byte {
 	return []byte(b.AttemptID + "\n" + b.TargetID + "\n" + b.RemotePath + "\n" + b.SHA256)
+}
+
+// The states of a backup kept on this computer.
+const (
+	// BackupKept: the copy opens and matches its hash.
+	BackupKept = "kept"
+	// BackupKeyLost: the copy was sealed with a key the secret store no
+	// longer holds (it was replaced): it cannot be opened, the copy on the
+	// server is the one to use.
+	BackupKeyLost = "key_lost"
+	// BackupDamaged: the copy was sealed with the current key (or one Michel
+	// did not record) and does not open or does not match its hash.
+	BackupDamaged = "damaged"
+)
+
+// BackupState is a backup of a server fix as the page shows it: the server
+// file it copies, when, and whether it can still be opened here.
+type BackupState struct {
+	RemotePath string
+	CreatedAt  time.Time
+	State      string
+}
+
+// BackupStates tells, for each backup of an attempt kept on this computer,
+// whether it opens (kept), was sealed with a key that was replaced since
+// (key_lost), or no longer matches (damaged). Nothing is opened for the
+// caller: only the state is returned.
+func BackupStates(ctx context.Context, d Deps, attemptID string) ([]BackupState, error) {
+	sealed, err := d.repo().Backups(ctx, attemptID)
+	if err != nil || len(sealed) == 0 {
+		return nil, err
+	}
+	key, err := d.backupKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := backupAEAD(key)
+	if err != nil {
+		return nil, err
+	}
+	current := keyFingerprint(key)
+	out := make([]BackupState, 0, len(sealed))
+	for _, s := range sealed {
+		st := BackupState{RemotePath: s.RemotePath, CreatedAt: s.CreatedAt, State: BackupKept}
+		if openBackup(aead, s) != nil {
+			st.State = BackupDamaged
+			if s.KeyFingerprint != "" && s.KeyFingerprint != current {
+				st.State = BackupKeyLost
+			}
+		}
+		out = append(out, st)
+	}
+	return out, nil
+}
+
+// openBackup opens a sealed backup and checks its hash.
+func openBackup(aead cipher.AEAD, s SealedBackup) error {
+	n := aead.NonceSize()
+	if len(s.Blob) < n {
+		return errBackupTampered
+	}
+	plain, err := aead.Open(nil, s.Blob[:n], s.Blob[n:], backupAAD(s.ServerBackup))
+	if err != nil {
+		return errBackupTampered
+	}
+	sum := sha256.Sum256(plain)
+	if hex.EncodeToString(sum[:]) != s.SHA256 {
+		return errBackupTampered
+	}
+	return nil
 }
 
 // ServerBackups returns the backups of a server fix kept on this computer,

@@ -54,12 +54,17 @@
         </template>
       </section>
 
-      <section class="m-fixset__group m-fixset__soon" :aria-labelledby="`${uid}-server`" aria-disabled="true">
-        <h4 :id="`${uid}-server`" class="m-fixset__label">
-          {{ $t('fixset.server') }}
-          <span class="m-tag m-small">{{ $t('fixset.soon') }}</span>
-        </h4>
-        <p class="m-small">{{ $t('fixset.server_hint') }}</p>
+      <section class="m-fixset__group" :aria-labelledby="`${uid}-server`">
+        <h4 :id="`${uid}-server`" class="m-fixset__label">{{ $t('projsrv.title') }}</h4>
+        <ul v-if="servers.length" class="m-fixset__servers m-small">
+          <li v-for="t in servers" :key="t.id">
+            <a :href="serverHref(t)">{{ t.name }}</a> ({{ envText(t) }}) : {{ serverLine(t) }}
+          </li>
+        </ul>
+        <template v-else>
+          <p class="m-small">{{ $t('projsrv.none') }}</p>
+          <v-btn size="small" variant="text" color="primary" href="#/servers" class="m-fixset__give">{{ $t('projsrv.open') }}</v-btn>
+        </template>
       </section>
 
       <p v-if="saved" class="m-small m-fixset__saved" role="status">{{ $t('fixset.saved') }}</p>
@@ -85,13 +90,14 @@ import AiConsentDialog from './AiConsentDialog.vue'
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
 import { levelLabel, levels } from '../lib/fixView.js'
+import { envLabel, serverStateLine, serversHash } from '../lib/serversView.js'
 
 let seq = 0
 
 // FixSettings is the fix part of a project's card, read when it is opened:
 // "Corriger le code" (the four levels in sentences), the rule of the
-// automatic minor updates, the AI consent, and "Corriger le serveur",
-// greyed until plan 6.
+// automatic minor updates, the AI consent, and the servers the project is
+// deployed on (each one's fix settings live on its own sheet).
 export default {
   name: 'FixSettings',
   components: { AiConsentDialog },
@@ -113,6 +119,8 @@ export default {
       dialog: false,
       consentBusy: false,
       consentError: '',
+      // servers are the servers this project is deployed on.
+      servers: [],
     }
   },
   computed: {
@@ -140,9 +148,11 @@ export default {
       this.failure = null
       try {
         const enc = encodeURIComponent(this.name)
-        const [projects, consent] = await Promise.all([api.get('/projects'), api.get(this.q(`/projects/${enc}/ai-consent`))])
+        const [projects, consent, targets] = await Promise.all([api.get('/projects'), api.get(this.q(`/projects/${enc}/ai-consent`)),
+          api.get(this.q('/targets')).catch(() => [])])
         this.view = (projects || []).find((p) => p.name === this.name) || null
         this.consent = consent
+        this.servers = (targets || []).filter((t) => (t.projects || []).some((p) => p.project === this.name))
         this.loaded = true
       } catch (err) {
         if (err?.status !== 401) this.failure = err
@@ -162,6 +172,15 @@ export default {
       } finally {
         this.saving = false
       }
+    },
+    serverHref(t) {
+      return serversHash(t.id)
+    },
+    envText(t) {
+      return envLabel(t.env, this.$ui.lang)
+    },
+    serverLine(t) {
+      return serverStateLine(t, this.$ui.lang)
     },
     setLevel(n) {
       if (typeof n === 'number' && n !== this.view.fix_level) this.patch({ fix_level: n })
@@ -198,7 +217,7 @@ export default {
 .m-fixset__hint { margin-left: 2.5rem !important; }
 .m-fixset__note { padding: 0.4rem 0.7rem; border-radius: 8px; background: rgba(var(--v-theme-warning), 0.12); }
 .m-fixset__give { justify-self: start; }
-.m-fixset__soon { opacity: 0.6; }
+.m-fixset__servers { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.2rem; }
 .m-fixset__failure p { margin: 0 0 0.5rem; }
 .m-fixset__saved { color: rgb(var(--v-theme-success)); margin: 0; }
 .m-fixset__error { color: rgb(var(--v-theme-error)); margin: 0; }

@@ -7,6 +7,20 @@
       <p v-if="digest.since_label" class="m-muted m-small m-hero__since">{{ digest.since_label }}</p>
     </section>
 
+    <section v-if="touched.length" class="m-review m-review--servers" aria-labelledby="servers-title">
+      <h2 id="servers-title" class="m-review__title">{{ $t('today.servers.title') }}</h2>
+      <p class="m-muted m-small m-review__hint">{{ $t('today.servers.hint') }}</p>
+      <ul class="m-review__list">
+        <li v-for="t in touched" :key="t.id" class="m-review__item">
+          <span class="m-review__what">
+            <span class="m-review__pkg">{{ t.name }}</span>
+            <span class="m-small m-voice">{{ serverSentence(t) }}</span>
+          </span>
+          <v-btn color="primary" variant="flat" size="small" :href="serverHref(t)">{{ $t('today.servers.open') }}</v-btn>
+        </li>
+      </ul>
+    </section>
+
     <section v-if="toReview.length" class="m-review" aria-labelledby="review-title">
       <h2 id="review-title" class="m-review__title">{{ $t('today.fixes.title') }}</h2>
       <p class="m-muted m-small m-review__hint">{{ $t('today.fixes.hint') }}</p>
@@ -14,7 +28,7 @@
         <li v-for="a in toReview" :key="a.id" class="m-review__item">
           <span class="m-review__what">
             <span class="m-code m-review__pkg">{{ a.finding.package }}</span>
-            <span class="m-muted m-small">{{ $t('fix.in_project', { project: a.project }) }}</span>
+            <span class="m-muted m-small">{{ a.server ? $t('srvfix.flaw_on', { name: a.server.target.name }) : $t('fix.in_project', { project: a.project }) }}</span>
           </span>
           <v-btn color="primary" variant="flat" size="small" :href="reviewHref(a)">{{ $t('today.fixes.open') }}</v-btn>
         </li>
@@ -68,6 +82,7 @@ import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
 import { groupAttention } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
+import { serversHash, stateSentence, touchedServers } from '../lib/serversView.js'
 
 export default {
   name: 'TodayPage',
@@ -78,7 +93,7 @@ export default {
   },
   emits: ['decided'],
   data() {
-    return { toReview: [] }
+    return { toReview: [], touched: [] }
   },
   computed: {
     projects() {
@@ -99,10 +114,12 @@ export default {
     // A new digest (refresh, decision, language) reads the fixes again.
     digest() {
       this.loadReview()
+      this.loadServers()
     },
   },
   created() {
     this.loadReview()
+    this.loadServers()
   },
   methods: {
     /** loadReview reads the fixes waiting for approval; without the fix service the section stays hidden. */
@@ -112,6 +129,20 @@ export default {
       } catch {
         this.toReview = []
       }
+    },
+    /** loadServers reads the servers: those touched by a flaw come first on the page. */
+    async loadServers() {
+      try {
+        this.touched = touchedServers(await api.get(`/targets?lang=${encodeURIComponent(this.$ui.lang)}`))
+      } catch {
+        this.touched = []
+      }
+    },
+    serverSentence(t) {
+      return stateSentence(t, this.$ui.lang)
+    },
+    serverHref(t) {
+      return serversHash(t.id)
     },
     reviewHref(a) {
       return fixHash({ attempt: a.id })
@@ -132,6 +163,7 @@ export default {
   border: 1px solid rgba(var(--v-theme-primary), 0.35);
   background: rgba(var(--v-theme-primary), 0.07);
 }
+.m-review--servers { border-color: rgba(var(--v-theme-error), 0.35); background: rgba(var(--v-theme-error), 0.06); }
 .m-review__title { font-family: var(--m-voice); font-size: 1.3rem; font-weight: 600; margin: 0 0 0.25rem; }
 .m-review__hint { margin: 0 0 0.6rem; }
 .m-review__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
