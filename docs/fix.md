@@ -148,6 +148,14 @@ Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks
 - The diff shown on the page is masked, but the branch holds the change as written: a password-like line of your own code is not a reason to refuse the change.
 - **The limit**: the files of the copy are **not** masked. The copy holds your real code, and Claude Code reads it, so it goes to Anthropic. What protects your secrets is that the excluded files are not copied; a secret written in a committed file is read by the agent. That is why Michel reports those before the agent starts. Secret detection is never perfect: some forms (XML `<password>`, YAML block values, a password with an unencoded `@` in a URL…) can slip through.
 
+## Server fixes (plan 6)
+
+A finding of a **server** (a PHP setting, a package) has its own fix, described in [servers.md](servers.md): no work copy and no branch, but two scripts, `apply` and `undo`, that you validate by fingerprint and that you or Michel run on the server.
+
+- The level is set **per server** (`--level` of `michel target add|set`), not per project. Michel prepares known fixes alone; the agent is only used to discuss a case, with a consent **per server** (the preprod's when one is linked) and never for a server of kind `hds`.
+- Level 3 runs without a click only the settings of Michel's own rules at their advised value, never a package; a package upgrade always waits for your **Snapshot done**.
+- A fix whose outcome Michel cannot tell ends in the state `unknown`: check the server, then `michel fix resolve <attempt>` (or **I checked the server** on the page).
+
 ## Residual risks
 
 - **Install and tests run with your rights, without a sandbox.** `composer`/`npm` and your tests run on the copy as you, on your computer; when the agent changed code, the tests run that code. Michel hardens what it can (no install scripts, no plugins, settings allowlists, folders reset before each install, scratch folder, a Michel home folder, the proxy), but it is not an isolated environment: a hostile project or a hostile change could reach what you can reach. An isolated environment (Docker) is planned for a later plan.

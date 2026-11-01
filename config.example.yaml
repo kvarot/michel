@@ -20,10 +20,14 @@ sovereignty:
     # 'michel source enable <key>' adds the rule a source needs here, after your consent
     # (keeping a copy of this file as config.yaml.bak); 'michel source disable <key> --forget' removes it.
     # Purposes: osv.db, source.enrich, source.feed, source.repo, source.discover, notify.email,
-    # notify.webhook, fix.install, agent.claude. plugin.<key> is never allowed. Hosts of each
+    # notify.webhook, notify.sms, target.ssh, target.http, fix.install, agent.claude. plugin.<key> is never allowed. Hosts of each
     # source: docs/sources.md; of the fix agent: docs/security/network-egress.md.
     # Example written by 'michel source enable enrich.kev':
     #   - {host: www.cisa.gov, purpose: source.enrich}
+    # Rules written when you add a server ('michel target add', or the Servers page; removed with the server,
+    # only those Michel wrote). docs/servers.md:
+    #   - {host: srv.example.test, purpose: target.ssh}    # SSH to the server
+    #   - {host: www.example.test, purpose: target.http}   # the site address, if you gave one
     # Rules written by a project's AI consent for the fix agent (docs/fix.md):
     #   - {host: api.anthropic.com, purpose: agent.claude}
     #   - {host: platform.claude.com, purpose: agent.claude}

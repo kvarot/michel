@@ -152,6 +152,14 @@ Avant que ce que Michel donne lui-même arrive à l'agent (la fiche, les répons
 - Les modifications affichées sur la page sont masquées, mais la branche contient la modification telle qu'elle a été écrite : une ligne de ton code qui ressemble à un mot de passe n'est pas une raison de refuser la modification.
 - **La limite** : les fichiers de la copie ne sont **pas** masqués. La copie contient ton vrai code, Claude Code le lit, donc il part chez Anthropic. Ce qui protège tes secrets, c'est que les fichiers exclus ne sont pas copiés ; un secret écrit dans un fichier de ton commit est lu par l'agent. C'est pour ça que Michel te les signale avant que l'agent démarre. La détection des secrets n'est jamais parfaite : certaines formes (`<password>` en XML, valeurs YAML sur plusieurs lignes, mot de passe contenant un `@` non encodé dans une adresse…) peuvent passer.
 
+## Corrections de serveur (plan 6)
+
+Une faille de **serveur** (un réglage de PHP, un paquet) a sa propre correction, décrite dans [servers.fr.md](servers.fr.md) : pas de copie de travail ni de branche, mais deux scripts, `appliquer` et `annuler`, que tu valides par empreinte et que toi ou Michel lancez sur le serveur.
+
+- Le niveau se règle **par serveur** (`--level` de `michel target add|set`), pas par projet. Michel prépare seul les corrections connues ; l'agent ne sert qu'à discuter un cas, avec un accord **par serveur** (celui de la préprod quand il y en a une) et jamais pour un serveur de type `hds`.
+- Le niveau 3 ne lance sans clic que les réglages des règles de Michel à leur valeur conseillée, jamais un paquet ; une mise à jour de paquet attend toujours ton **Snapshot fait**.
+- Une correction dont Michel ne peut pas dire le résultat finit à l'état `unknown` (inconnu) : va voir le serveur, puis `michel fix resolve <tentative>` (ou **J'ai vérifié le serveur** sur la page).
+
 ## Risques qui restent
 
 - **L'installation et les tests tournent avec tes droits, sans bac à sable.** `composer`/`npm` et tes tests tournent sur la copie en ton nom, sur ton ordinateur ; quand l'agent a modifié du code, les tests exécutent ce code. Michel verrouille ce qu'il peut (pas de scripts d'installation, pas de plugins, listes de réglages autorisés, dossiers remis à zéro avant chaque installation, dossier séparé, dossier personnel propre à Michel, le proxy), mais ce n'est pas un environnement isolé : un projet ou une modification malveillante pourrait atteindre ce que toi tu peux atteindre. Un environnement isolé (Docker) est prévu dans un plan suivant.
