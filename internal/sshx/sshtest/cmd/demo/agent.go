@@ -29,6 +29,9 @@ func listenAgent(dir string) (net.Listener, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// On Windows the mode does nothing: the socket stays private because its
+	// folder (under the user's %TEMP%) only the user may open, and it holds
+	// a throwaway key only the demo server accepts.
 	if err := os.Chmod(p, 0o600); err != nil {
 		ln.Close()
 		return nil, "", err

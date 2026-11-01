@@ -2,8 +2,8 @@
   <div class="m-today">
     <section class="m-hero" aria-labelledby="today-title">
       <p class="m-hero__day m-muted">{{ $t('today.heading') }}</p>
-      <h1 id="today-title" class="m-headline">{{ digest.title }}</h1>
-      <p v-if="digest.word" class="m-word">{{ digest.word }}</p>
+      <h1 id="today-title" class="m-headline">{{ headline.title }}</h1>
+      <p v-if="headline.word" class="m-word">{{ headline.word }}</p>
       <p v-if="digest.since_label" class="m-muted m-small m-hero__since">{{ digest.since_label }}</p>
     </section>
 
@@ -82,7 +82,7 @@ import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
 import { groupAttention } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
-import { serversHash, stateSentence, touchedServers } from '../lib/serversView.js'
+import { serverHeadline, serversHash, stateSentence, touchedServers } from '../lib/serversView.js'
 
 export default {
   name: 'TodayPage',
@@ -93,9 +93,14 @@ export default {
   },
   emits: ['decided'],
   data() {
-    return { toReview: [], touched: [] }
+    return { toReview: [], touched: [], servers: [] }
   },
   computed: {
+    // headline: an urgent (else critical) server flaw comes before the
+    // projects' digest, which never says "all calm" over it.
+    headline() {
+      return serverHeadline(this.servers, this.$ui.lang) || { title: this.digest.title, word: this.digest.word }
+    },
     projects() {
       return this.digest.projects || []
     },
@@ -133,8 +138,10 @@ export default {
     /** loadServers reads the servers: those touched by a flaw come first on the page. */
     async loadServers() {
       try {
-        this.touched = touchedServers(await api.get(`/targets?lang=${encodeURIComponent(this.$ui.lang)}`))
+        this.servers = (await api.get(`/targets?lang=${encodeURIComponent(this.$ui.lang)}`)) || []
+        this.touched = touchedServers(this.servers)
       } catch {
+        this.servers = []
         this.touched = []
       }
     },

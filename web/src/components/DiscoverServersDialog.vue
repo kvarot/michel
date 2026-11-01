@@ -82,7 +82,7 @@
     <v-card-actions class="m-disc__actions">
       <v-btn variant="text" :disabled="busy" @click="$emit('close')">{{ $t('servers.discover.cancel') }}</v-btn>
       <v-btn color="primary" variant="flat" :loading="busy" :disabled="busy || !count" @click="add">
-        {{ $t('servers.discover.add_n', { n: count }) }}
+        {{ count ? $t('servers.discover.add_n', { n: count }) : $t('servers.discover.pick_one') }}
       </v-btn>
     </v-card-actions>
   </v-card>

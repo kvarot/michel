@@ -94,3 +94,6 @@ notify:
 # ssh:
 #   agent_pipe: ""                 # leave empty for the system agent; or the agent to use instead, for example
 #                                  # \.\pipe\openssh-ssh-agent on Windows (Pageant in OpenSSH mode has its own pipe)
+#                                  # or, for an agent that offers one, the full path of a Unix socket (also on Windows).
+#                                  # A socket must sit in a folder only you can write to: whoever controls it sees
+#                                  # Michel's sign-in requests.

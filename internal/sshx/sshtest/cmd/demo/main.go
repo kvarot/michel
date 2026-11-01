@@ -205,7 +205,7 @@ func writeFiles(dir, port, agentPath string) (demoPaths, error) {
 		return p, err
 	}
 	if _, err := os.Stat(p.config); errors.Is(err, os.ErrNotExist) {
-		pol := fmt.Sprintf("# Michel's demo policy: the demo SSH agent, nothing else.\nassistant:\n  lang: fr\nssh:\n  agent_pipe: '%s'\nnotify:\n  page_url: http://127.0.0.1:7331/\n", agentPath)
+		pol := fmt.Sprintf("# Michel's demo policy: the demo SSH agent, nothing else.\nassistant:\n  lang: fr\nssh:\n  agent_pipe: '%s'\nnotify:\n  page_url: http://127.0.0.1:7331/\n", yamlQuoted(agentPath))
 		if err := os.WriteFile(p.config, []byte(pol), 0o600); err != nil {
 			return p, err
 		}
@@ -228,11 +228,14 @@ func setAgentPipe(path, agentPath string) error {
 	ls := strings.Split(string(b), "\n")
 	for i, l := range ls {
 		if strings.HasPrefix(strings.TrimSpace(l), "agent_pipe:") {
-			ls[i] = "  agent_pipe: '" + agentPath + "'"
+			ls[i] = "  agent_pipe: '" + yamlQuoted(agentPath) + "'"
 		}
 	}
 	return os.WriteFile(path, []byte(strings.Join(ls, "\n")), 0o600)
 }
+
+// yamlQuoted escapes s for a single-quoted YAML string (a quote is doubled).
+func yamlQuoted(s string) string { return strings.ReplaceAll(s, "'", "''") }
 
 func printHelp(w io.Writer, dir string, srv *sshtest.Server, port, siteURL, agentPath string, p demoPaths) {
 	fp := srv.HostKeyFingerprint()

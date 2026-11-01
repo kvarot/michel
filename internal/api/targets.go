@@ -101,8 +101,10 @@ type TargetFindingView struct {
 	Status     string   `json:"status"`
 	Mitigation bool     `json:"mitigation"`
 	KEV        bool     `json:"kev"`
-	FirstSeen  string   `json:"first_seen_at"`
-	LastSeen   string   `json:"last_seen_at"`
+	// Urgent: the finding would send an urgent alert (servercheck.Urgent).
+	Urgent    bool   `json:"urgent"`
+	FirstSeen string `json:"first_seen_at"`
+	LastSeen  string `json:"last_seen_at"`
 }
 
 // TargetUnseenView is something the last check could not read, and why.
@@ -141,31 +143,36 @@ type TargetLastCheck struct {
 // its findings, what the last check could not read, its projects, its check
 // history and the size of the backups Michel keeps for it.
 type TargetView struct {
-	ID             string           `json:"id"`
-	Name           string           `json:"name"`
-	Host           string           `json:"host"`
-	Port           int              `json:"port"`
-	User           string           `json:"user"`
-	Alias          string           `json:"alias"`
-	Kind           string           `json:"kind"`
-	Env            string           `json:"env"`
-	Classification string           `json:"classification"`
-	FixLevel       int              `json:"fix_level"`
-	CheckInterval  string           `json:"check_interval"`
-	Preprod        *TargetRef       `json:"preprod"`
-	Executor       string           `json:"executor"`
-	Sudo           string           `json:"sudo"`
-	SiteURL        string           `json:"site_url"`
-	AutoConfig     bool             `json:"auto_config"`
-	Active         bool             `json:"active"`
-	HostKey        string           `json:"host_key"`
-	HostKeyPinned  bool             `json:"host_key_pinned"`
-	LastCheckAt    string           `json:"last_check_at"`
-	CreatedAt      string           `json:"created_at"`
-	State          TargetState      `json:"state"`
-	Open           int              `json:"open_findings"`
-	Checking       bool             `json:"checking"`
-	LastCheck      *TargetLastCheck `json:"last_check"`
+	ID             string      `json:"id"`
+	Name           string      `json:"name"`
+	Host           string      `json:"host"`
+	Port           int         `json:"port"`
+	User           string      `json:"user"`
+	Alias          string      `json:"alias"`
+	Kind           string      `json:"kind"`
+	Env            string      `json:"env"`
+	Classification string      `json:"classification"`
+	FixLevel       int         `json:"fix_level"`
+	CheckInterval  string      `json:"check_interval"`
+	Preprod        *TargetRef  `json:"preprod"`
+	Executor       string      `json:"executor"`
+	Sudo           string      `json:"sudo"`
+	SiteURL        string      `json:"site_url"`
+	AutoConfig     bool        `json:"auto_config"`
+	Active         bool        `json:"active"`
+	HostKey        string      `json:"host_key"`
+	HostKeyPinned  bool        `json:"host_key_pinned"`
+	LastCheckAt    string      `json:"last_check_at"`
+	CreatedAt      string      `json:"created_at"`
+	State          TargetState `json:"state"`
+	Open           int         `json:"open_findings"`
+	// CriticalOpen and UrgentOpen count the open findings of critical
+	// severity, and the urgent ones (servercheck.Urgent: prod and KEV,
+	// critical or unreadable PHP version).
+	CriticalOpen int              `json:"critical_open"`
+	UrgentOpen   int              `json:"urgent_open"`
+	Checking     bool             `json:"checking"`
+	LastCheck    *TargetLastCheck `json:"last_check"`
 
 	// The detail only.
 	Findings    []TargetFindingView `json:"findings,omitempty"`
@@ -604,11 +611,20 @@ func (s *server) targetView(ctx context.Context, t target.Target, lang i18n.Lang
 		return TargetView{}, err
 	}
 	for _, f := range findings {
+		urgent := servercheck.Urgent(t, f)
 		if openStatus(f.Status) {
 			v.Open++
+			if sev, _ := scan.EffectiveSeverity(f); sev == "critical" {
+				v.CriticalOpen++
+			}
+			if urgent {
+				v.UrgentOpen++
+			}
 		}
 		if detail && f.Status != scan.StatusGone {
-			v.Findings = append(v.Findings, targetFindingView(lang, t.User, f))
+			fv := targetFindingView(lang, t.User, f)
+			fv.Urgent = urgent
+			v.Findings = append(v.Findings, fv)
 		}
 	}
 	unread := 0

@@ -313,7 +313,45 @@ func TestBackupStatesSayKeyLostAfterRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = BackupStates(ctx, f.d, "01ATTEMPT")
-	if got[0].State != BackupDamaged {
-		t.Errorf("unrecorded key: %s", got[0].State)
+	for _, s := range got {
+		if s.RemotePath == "/var/lib/michel/backups/x/1" && s.State != BackupDamaged {
+			t.Errorf("unrecorded key: %s", s.State)
+		}
+	}
+}
+
+// Task 13 fix round 1, I2: the page's read of the backup states never
+// waits for, creates or rotates the key, and never hides the list: with the
+// key gone from the store, every copy sealed with it reads key_lost at
+// once; without a secret store the states are still given.
+func TestBackupStatesReadTheKeyOnly(t *testing.T) {
+	f := newServerFixture(t)
+	ctx := context.Background()
+	f.d.BackupKeyWait = 2 * time.Second
+	if err := f.d.addBackup(ctx, ServerBackup{AttemptID: "01ATTEMPT", TargetID: "01TARGET", RemotePath: "/var/lib/michel/backups/x/1", Content: []byte("a")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Secrets.Delete(backupKeyName); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	got, err := BackupStates(ctx, f.d, "01ATTEMPT")
+	if err != nil || len(got) != 1 || got[0].State != BackupKeyLost {
+		t.Fatalf("key deleted: %+v, %v", got, err)
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("BackupStates waited %s for the key", time.Since(start))
+	}
+	if n := auditCount(t, f.st, "server_fix.backup_key", "rotated"); n != 0 {
+		t.Errorf("a page read rotated the key (%d)", n)
+	}
+	if _, err := f.d.Secrets.Get(backupKeyName); err == nil {
+		t.Error("a page read created a key")
+	}
+	d := f.d
+	d.Secrets = nil
+	got, err = BackupStates(ctx, d, "01ATTEMPT")
+	if err != nil || len(got) != 1 || got[0].State != BackupKeyLost {
+		t.Errorf("no secret store: %+v, %v", got, err)
 	}
 }

@@ -53,7 +53,13 @@ export function intervalLabel(interval, lang) {
  */
 export function levelLabel(n, lang) {
   if (!serverLevels.includes(n)) return null
-  return { title: translate(lang, `servers.level.${n}.title`), text: translate(lang, `servers.level.${n}.text`) }
+  const out = { title: translate(lang, `servers.level.${n}.title`), text: translate(lang, `servers.level.${n}.text`) }
+  if (n === 3) {
+    // The warning is also shown under "Corriger" on a level 3 server.
+    out.warn = translate(lang, 'servers.level.3.warn')
+    out.text = `${out.text} ${out.warn}`
+  }
+  return out
 }
 
 /**
@@ -67,8 +73,16 @@ export function serverStateLine(target, lang) {
   const code = stateCodes.includes(target.state?.code) ? target.state.code : 'clean'
   const t = (key, params) => translate(lang, `servers.state.${key}`, params)
   switch (code) {
-    case 'findings':
-      return t('findings', { n: Number(target.open_findings) || 0 })
+    case 'findings': {
+      // « Touché par 3 failles, dont 1 critique. »: the urgent ones first.
+      const n = Number(target.open_findings) || 0
+      const urgent = Number(target.urgent_open) || 0
+      const critical = Number(target.critical_open) || 0
+      let tail = ''
+      if (urgent > 0) tail = n === 1 ? t('single_urgent') : t('of_urgent', { n: urgent })
+      else if (critical > 0) tail = n === 1 ? t('single_critical') : t('of_critical', { n: critical })
+      return t('end', { text: t('findings', { n }) + tail })
+    }
     case 'check_failed':
       // The server's own sentence says why (no SSH agent, key changed…).
       return target.state?.text || t('check_failed')
@@ -100,9 +114,100 @@ export function stateSentence(target, lang, now = new Date()) {
  * @param {object[]|null} list GET /targets
  */
 export function touchedServers(list) {
+  const n = (t, k) => Number(t[k]) || 0
   return (Array.isArray(list) ? list : [])
-    .filter((t) => t && t.active !== false && Number(t.open_findings) > 0)
-    .sort((a, b) => Number(b.open_findings) - Number(a.open_findings))
+    .filter((t) => t && t.active !== false && n(t, 'open_findings') > 0)
+    .sort((a, b) => n(b, 'urgent_open') - n(a, 'urgent_open') || n(b, 'critical_open') - n(a, 'critical_open') ||
+      n(b, 'open_findings') - n(a, 'open_findings'))
+}
+
+/**
+ * serverHeadline is the Today headline when a server has an urgent (else a
+ * critical) open flaw: it comes before the projects' "all calm". null when
+ * no server has one.
+ * @param {object[]|null} list GET /targets
+ * @param {string} lang
+ * @returns {{title: string, word: string}|null}
+ */
+export function serverHeadline(list, lang) {
+  const active = (Array.isArray(list) ? list : []).filter((t) => t && t.active !== false)
+  for (const kind of ['urgent', 'critical']) {
+    const hit = active.filter((t) => Number(t[`${kind}_open`]) > 0)
+    if (!hit.length) continue
+    const one = hit.length === 1
+    return {
+      title: one ? translate(lang, `servers.headline.${kind}_one`, { name: hit[0].name }) : translate(lang, `servers.headline.${kind}_many`, { n: hit.length }),
+      word: translate(lang, one ? 'servers.headline.word_one' : 'servers.headline.word_many'),
+    }
+  }
+  return null
+}
+
+const severityOrder = ['critical', 'high', 'medium', 'low']
+
+/**
+ * sortFindings orders a server's findings for its sheet: the most severe
+ * first, then the urgent ones, then the exploited ones (KEV). The list is
+ * copied.
+ * @param {object[]|null} list TargetFindingView
+ */
+export function sortFindings(list) {
+  const rank = (f) => {
+    const i = severityOrder.indexOf(f?.severity)
+    return i < 0 ? severityOrder.length : i
+  }
+  return (Array.isArray(list) ? [...list] : []).sort((a, b) => rank(a) - rank(b) || Number(!!b.urgent) - Number(!!a.urgent) ||
+    Number(!!b.kev) - Number(!!a.kev))
+}
+
+/**
+ * mergeFindings makes one card per flaw: the same rule on the same version
+ * seen in several PHP runtimes (command line and FPM) is one card that lists
+ * each runtime it concerns, with its binary from the inventory. The first
+ * finding of a card stands for it ("Corriger"); ids are all of them.
+ * @param {object[]} list TargetFindingView, in the order to show
+ * @param {{php?: {sapi: string, binary: string}[]}|null} inv the inventory
+ * @returns {{key: string, finding: object, ids: string[], runtimes: {sapi: string, binary: string}[]}[]}
+ */
+export function mergeFindings(list, inv) {
+  const bins = {}
+  for (const p of inv?.php || []) if (p && p.sapi && !bins[p.sapi]) bins[p.sapi] = p.binary || ''
+  const cards = []
+  const byKey = {}
+  for (const f of Array.isArray(list) ? list : []) {
+    if (!f) continue
+    const key = [f.kind, f.rule, f.package, f.installed_version, (f.fixed_versions || []).join(','), f.location || ''].join('|')
+    let c = byKey[key]
+    if (!c) {
+      c = { key, finding: f, ids: [], runtimes: [] }
+      byKey[key] = c
+      cards.push(c)
+    }
+    c.ids.push(f.id)
+    if (f.sapi && !c.runtimes.some((r) => r.sapi === f.sapi)) c.runtimes.push({ sapi: f.sapi, binary: bins[f.sapi] || '' })
+  }
+  return cards
+}
+
+/**
+ * serverPollDelay is how often the Fix page reads a server fix again: 3 s
+ * while Michel works on it (preparing, running, approved for Michel, applied
+ * while he checks), 30 s while it waits for the user (proposed, approved for
+ * the user to run, unknown), 0 once it is over.
+ * @param {object|null} attempt AttemptView with server
+ */
+export function serverPollDelay(attempt) {
+  if (!attempt || isServerFinal(attempt.state)) return 0
+  switch (attempt.state) {
+    case 'preparing':
+    case 'running':
+    case 'applied':
+      return 3000
+    case 'approved':
+      return attempt.server?.executor === 'user' ? 30000 : 3000
+    default:
+      return 30000
+  }
 }
 
 /** The rules whose finding has no text in Michel's catalog, said here. */

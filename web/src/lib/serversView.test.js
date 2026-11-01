@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
-  backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, serverLevels, serversHash,
-  serversRoute, needsSnapshot, serverStateLine, stateSentence, stepLine, touchedServers,
+  backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, serverHeadline,
+  serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers,
 } from './serversView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -23,9 +23,9 @@ describe('stateSentence', () => {
   })
 
   test('nothing known, and could not see everything', () => {
-    expect(stateSentence(srv(), 'fr', now)).toBe('Rien de connu. Dernière vérification il y a 3 h.')
-    expect(stateSentence(srv({ state: { code: 'unread' } }), 'fr', now)).toBe("Rien de connu, mais Michel n'a pas pu tout voir. Dernière vérification il y a 3 h.")
-    expect(stateSentence(srv({ state: { code: 'unread' } }), 'en', now)).toBe('Nothing known, but Michel could not see everything. Last check 3 h ago.')
+    expect(stateSentence(srv(), 'fr', now)).toBe('Aucune faille connue. Dernière vérification il y a 3 h.')
+    expect(stateSentence(srv({ state: { code: 'unread' } }), 'fr', now)).toBe("Aucune faille connue, mais Michel n'a pas pu tout voir. Dernière vérification il y a 3 h.")
+    expect(stateSentence(srv({ state: { code: 'unread' } }), 'en', now)).toBe('No known flaw, but Michel could not see everything. Last check 3 h ago.')
   })
 
   test('the states before any check, and while one runs', () => {
@@ -41,6 +41,17 @@ describe('stateSentence', () => {
     expect(stateSentence(t, 'fr', now)).toBe('La dernière vérification a échoué : Michel n\'a pas pu joindre le serveur.')
     expect(stateSentence(srv({ state: { code: 'check_failed', text: '' } }), 'fr', now)).toBe("La dernière vérification n'est pas allée au bout.")
     expect(stateSentence(null, 'fr', now)).toBe('')
+  })
+
+  test('says how many of the flaws are critical or urgent (B9)', () => {
+    expect(serverStateLine(srv({ open_findings: 3, critical_open: 1, urgent_open: 0, state: { code: 'findings' } }), 'fr'))
+      .toBe('Touché par 3 failles, dont 1 critique.')
+    expect(serverStateLine(srv({ open_findings: 3, critical_open: 2, urgent_open: 2, state: { code: 'findings' } }), 'fr'))
+      .toBe('Touché par 3 failles, dont 2 urgentes.')
+    expect(serverStateLine(srv({ open_findings: 1, critical_open: 1, urgent_open: 1, state: { code: 'findings' } }), 'fr'))
+      .toBe('Touché par 1 faille, urgente.')
+    expect(serverStateLine(srv({ open_findings: 3, critical_open: 1, urgent_open: 1, state: { code: 'findings' } }), 'en'))
+      .toBe('Affected by 3 flaws, 1 of them urgent.')
   })
 
   test('serverStateLine is the short form of the list', () => {
@@ -73,6 +84,8 @@ describe('labels', () => {
     expect(levelLabel(3, 'en').title).toBe('Apply what I allowed')
     // Level 3: a fix Michel prepared, even on request, can then run alone.
     expect(levelLabel(3, 'fr').text).toMatch(/même à ta demande/)
+    expect(levelLabel(3, 'fr').warn).toMatch(/même à ta demande/)
+    expect(levelLabel(3, 'fr').text.endsWith(levelLabel(3, 'fr').warn)).toBe(true)
     expect(levelLabel(3, 'fr').text).toMatch(/seule/)
     for (const n of serverLevels) {
       expect(levelLabel(n, 'fr').text).toMatch(/\.$/)
@@ -86,6 +99,73 @@ describe('labels', () => {
     expect(findingTitle({ rule: 'PHP-VERSION-UNKNOWN', title: 'PHP-VERSION-UNKNOWN' }, 'fr')).toBe("Michel n'a pas pu lire la version de PHP de ce serveur.")
     expect(findingTitle({ rule: 'expose_php', title: 'PHP annonce sa version' }, 'fr')).toBe('PHP annonce sa version')
     expect(findingTitle({ rule: 'x', title: '', package: 'php' }, 'fr')).toBe('php')
+  })
+})
+
+describe('headline and order', () => {
+  test('serverHeadline: an urgent or critical server flaw is the headline, never "all calm" (B1)', () => {
+    const urgent = srv({ name: 'srv-demo', open_findings: 4, critical_open: 2, urgent_open: 2, state: { code: 'findings' } })
+    expect(serverHeadline([srv(), urgent], 'fr')).toEqual({
+      title: 'Le serveur srv-demo a une faille urgente.',
+      word: 'Ouvre sa fiche : elle dit quoi faire en premier.',
+    })
+    expect(serverHeadline([urgent, { ...urgent, id: 'b', name: 'srv-b' }], 'fr').title).toBe('2 serveurs ont une faille urgente.')
+    const critical = srv({ name: 'srv-demo', open_findings: 1, critical_open: 1, urgent_open: 0, state: { code: 'findings' } })
+    expect(serverHeadline([critical], 'fr').title).toBe('Le serveur srv-demo a une faille critique.')
+    expect(serverHeadline([critical], 'en').title).toBe('The server srv-demo has a critical flaw.')
+    expect(serverHeadline([srv({ open_findings: 2, state: { code: 'findings' } })], 'fr')).toBe(null)
+    expect(serverHeadline([{ ...urgent, active: false }], 'fr')).toBe(null)
+    expect(serverHeadline(null, 'fr')).toBe(null)
+  })
+
+  test('touchedServers puts the urgent ones first', () => {
+    const a = srv({ id: 'a', open_findings: 5, state: { code: 'findings' } })
+    const b = srv({ id: 'b', open_findings: 1, urgent_open: 1, critical_open: 1, state: { code: 'findings' } })
+    expect(touchedServers([a, b]).map((t) => t.id)).toEqual(['b', 'a'])
+  })
+
+  test('sortFindings: severity first (critical on top), then urgent, then KEV (B2)', () => {
+    const list = [
+      { id: 'low', severity: 'low' },
+      { id: 'crit', severity: 'critical' },
+      { id: 'med', severity: 'medium' },
+      { id: 'crit-urgent', severity: 'critical', urgent: true },
+      { id: 'high-kev', severity: 'high', kev: true },
+      { id: 'high', severity: 'high' },
+    ]
+    expect(sortFindings(list).map((f) => f.id)).toEqual(['crit-urgent', 'crit', 'high-kev', 'high', 'med', 'low'])
+    expect(list[0].id).toBe('low')
+    expect(sortFindings(null)).toEqual([])
+  })
+
+  test('mergeFindings: one card per flaw, listing the PHP runtimes it concerns (B3)', () => {
+    const inv = { php: [{ sapi: 'cli', binary: '/usr/local/bin/php' }, { sapi: 'fpm', binary: '/usr/local/sbin/php-fpm' }] }
+    const cards = mergeFindings([
+      { id: 'f1', rule: 'PHP2SHELL', kind: 'server_package', package: 'php', installed_version: '8.3.35', fixed_versions: ['8.3.36'], sapi: 'fpm', severity: 'critical' },
+      { id: 'f2', rule: 'PHP2SHELL', kind: 'server_package', package: 'php', installed_version: '8.3.35', fixed_versions: ['8.3.36'], sapi: 'cli', severity: 'critical' },
+      { id: 'f3', rule: 'expose_php', kind: 'server_config', package: 'expose_php', sapi: 'fpm', severity: 'low' },
+    ], inv)
+    expect(cards.map((c) => c.ids)).toEqual([['f1', 'f2'], ['f3']])
+    expect(cards[0].finding.id).toBe('f1')
+    expect(cards[0].runtimes).toEqual([{ sapi: 'fpm', binary: '/usr/local/sbin/php-fpm' }, { sapi: 'cli', binary: '/usr/local/bin/php' }])
+    expect(cards[1].runtimes).toEqual([{ sapi: 'fpm', binary: '/usr/local/sbin/php-fpm' }])
+    expect(mergeFindings([{ id: 'x', rule: 'r', sapi: 'fpm' }], null)[0].runtimes).toEqual([{ sapi: 'fpm', binary: '' }])
+  })
+})
+
+describe('polling', () => {
+  test('serverPollDelay: fast while the script runs, slow while waiting for the user (m2)', () => {
+    const a = (state, executor = 'michel') => ({ state, server: { executor } })
+    expect(serverPollDelay(a('running'))).toBe(3000)
+    expect(serverPollDelay(a('applied'))).toBe(3000)
+    expect(serverPollDelay(a('approved'))).toBe(3000)
+    expect(serverPollDelay(a('preparing'))).toBe(3000)
+    expect(serverPollDelay(a('approved', 'user'))).toBe(30000)
+    expect(serverPollDelay(a('unknown'))).toBe(30000)
+    expect(serverPollDelay(a('proposed'))).toBe(30000)
+    expect(serverPollDelay(a('proven_fixed'))).toBe(0)
+    expect(serverPollDelay(a('failed'))).toBe(0)
+    expect(serverPollDelay(null)).toBe(0)
   })
 })
 

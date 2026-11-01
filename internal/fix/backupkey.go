@@ -267,27 +267,30 @@ type BackupState struct {
 }
 
 // BackupStates tells, for each backup of an attempt kept on this computer,
-// whether it opens (kept), was sealed with a key that was replaced since
-// (key_lost), or no longer matches (damaged). Nothing is opened for the
-// caller: only the state is returned.
+// whether it opens (kept), was sealed with a key the secret store no longer
+// holds (key_lost), or no longer matches (damaged). It only reads the key
+// in the store, once: it never waits for it, creates it or replaces it (a
+// page view must change nothing), and a key it cannot read never hides the
+// list: the copies then read key_lost (sealed with a recorded key) or
+// damaged. Nothing is opened for the caller: only the state is returned.
 func BackupStates(ctx context.Context, d Deps, attemptID string) ([]BackupState, error) {
 	sealed, err := d.repo().Backups(ctx, attemptID)
 	if err != nil || len(sealed) == 0 {
 		return nil, err
 	}
-	key, err := d.backupKey(ctx)
-	if err != nil {
-		return nil, err
+	var aead cipher.AEAD
+	current := ""
+	if d.Secrets != nil {
+		if key, err := d.Secrets.Get(backupKeyName); err == nil && len(key) == 32 {
+			if a, err := backupAEAD(key); err == nil {
+				aead, current = a, keyFingerprint(key)
+			}
+		}
 	}
-	aead, err := backupAEAD(key)
-	if err != nil {
-		return nil, err
-	}
-	current := keyFingerprint(key)
 	out := make([]BackupState, 0, len(sealed))
 	for _, s := range sealed {
 		st := BackupState{RemotePath: s.RemotePath, CreatedAt: s.CreatedAt, State: BackupKept}
-		if openBackup(aead, s) != nil {
+		if aead == nil || openBackup(aead, s) != nil {
 			st.State = BackupDamaged
 			if s.KeyFingerprint != "" && s.KeyFingerprint != current {
 				st.State = BackupKeyLost

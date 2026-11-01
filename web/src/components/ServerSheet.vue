@@ -41,7 +41,7 @@
           <p>{{ lastFailure.error || $t('servers.sheet.last_failed') }}</p>
           <p v-if="lastFailure.hint" class="m-small">{{ lastFailure.hint }}</p>
         </v-alert>
-        <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert" closable @click:close="actionError = null">
+        <v-alert v-if="actionError && !errorFor" type="error" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert" closable @click:close="clearError">
           <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
           <p v-if="actionError.hint" class="m-small">{{ actionError.hint }}</p>
           <v-btn v-if="agentOffer" size="small" variant="tonal" color="primary" class="m-sheet__inline-btn" :loading="!!startingFor" @click="startAgent(agentOffer)">
@@ -60,37 +60,50 @@
 
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-flaws`">
         <h3 :id="`srv-${id}-flaws`" class="m-sheet__title">{{ $t('servers.sheet.flaws') }}</h3>
-        <p v-if="!flaws.length" class="m-muted">{{ view.last_check_at ? $t('servers.sheet.no_flaws') : $t('servers.sheet.no_flaws_unchecked') }}</p>
+        <p v-if="!cards.length" class="m-muted">{{ view.last_check_at ? $t('servers.sheet.no_flaws') : $t('servers.sheet.no_flaws_unchecked') }}</p>
         <ul v-else class="m-sheet__flaws">
-          <li v-for="f in flaws" :key="f.id" class="m-sheet__flaw">
+          <li v-for="c in cards" :key="c.key" class="m-sheet__flaw">
             <div class="m-sheet__flaw-top">
-              <span class="m-sev" :class="`m-sev--${sev(f.severity)}`">{{ $t(`severity.${sev(f.severity)}`) }}</span>
-              <span v-if="f.kev" class="m-tag m-tag--hot m-small">{{ $t('servers.sheet.kev') }}</span>
-              <span v-if="f.mitigation" class="m-tag m-small">{{ $t('servers.sheet.mitigation') }}</span>
-              <span class="m-code m-small m-muted">{{ f.rule }}</span>
+              <span class="m-sev" :class="`m-sev--${sev(c.finding.severity)}`">{{ $t(`severity.${sev(c.finding.severity)}`) }}</span>
+              <span v-if="c.finding.kev" class="m-tag m-tag--hot m-small">{{ $t('servers.sheet.kev') }}</span>
+              <span v-if="c.finding.mitigation" class="m-tag m-small">{{ $t('servers.sheet.mitigation') }}</span>
+              <span v-if="c.finding.kind === 'server_config'" class="m-code m-small m-muted">{{ c.finding.package }}</span>
             </div>
-            <p class="m-voice m-sheet__flaw-title">{{ title(f) }}</p>
-            <p v-if="f.explain" class="m-small">{{ f.explain }}</p>
-            <p v-else-if="f.rule === 'PHP-VERSION-UNKNOWN'" class="m-small">{{ $t('servers.finding.php_version_unknown_hint') }}</p>
-            <p v-if="f.location" class="m-muted m-small">{{ $t('servers.sheet.where', { where: f.location }) }}</p>
+            <p class="m-voice m-sheet__flaw-title">{{ title(c.finding) }}</p>
+            <p v-if="c.finding.explain" class="m-small">{{ c.finding.explain }}</p>
+            <p v-else-if="c.finding.rule === 'PHP-VERSION-UNKNOWN'" class="m-small">{{ $t('servers.finding.php_version_unknown_hint') }}</p>
+            <p v-if="c.runtimes.length" class="m-muted m-small">{{ runtimesText(c) }}</p>
+            <p v-if="c.finding.location" class="m-muted m-small">{{ $t('servers.sheet.where', { where: c.finding.location }) }}</p>
             <div class="m-sheet__flaw-actions">
-              <v-btn v-if="attemptOf(f)" size="small" variant="tonal" color="primary" :href="fixHref(attemptOf(f).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
+              <v-btn v-if="attemptOf(c)" size="small" variant="tonal" color="primary" :href="fixHref(attemptOf(c).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
               <v-btn
                 v-else-if="view.fix_level > 0"
                 size="small"
                 variant="flat"
                 color="primary"
-                :loading="startingFor === f.id"
+                :loading="startingFor === c.finding.id"
                 :disabled="!!startingFor"
-                @click="fix(f)"
+                @click="fix(c.finding)"
               >
                 {{ $t('servers.sheet.fix') }}
               </v-btn>
-              <span v-if="attemptOf(f)" class="m-small m-voice">{{ attemptLine(attemptOf(f)) }}</span>
+              <span v-if="attemptOf(c)" class="m-small m-voice">{{ attemptLine(attemptOf(c)) }}</span>
             </div>
+            <!-- The answer of "Corriger" stays next to the card it was asked for. -->
+            <v-alert v-if="actionError && errorFor === c.finding.id" type="error" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert" closable @click:close="clearError">
+              <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
+              <p v-if="actionError.hint" class="m-small">{{ actionError.hint }}</p>
+              <v-btn v-if="agentOffer" size="small" variant="tonal" color="primary" class="m-sheet__inline-btn" :loading="!!startingFor" @click="startAgent(agentOffer)">
+                {{ $t('servers.sheet.ask_agent') }}
+              </v-btn>
+              <v-btn v-if="unknownAttempt && actionErrorIsUnknown" size="small" variant="text" color="primary" :href="fixHref(unknownAttempt.id)">
+                {{ $t('servers.unknown.open') }}
+              </v-btn>
+            </v-alert>
           </li>
         </ul>
-        <p v-if="flaws.length && view.fix_level === 0" class="m-muted m-small">{{ $t('servers.sheet.fix_report_only') }}</p>
+        <p v-if="cards.length && view.fix_level === 0" class="m-muted m-small">{{ $t('servers.sheet.fix_report_only') }}</p>
+        <p v-if="cards.length && view.fix_level === 3" class="m-muted m-small">{{ level3Warn }}</p>
       </section>
 
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-seen`">
@@ -276,8 +289,8 @@ import { api } from '../api.js'
 import { formatDate, severityOf } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
 import {
-  envLabel, envs, findingTitle, intervalLabel, intervals, isServerFinal, kindLabel, kinds, levelLabel, serverAttemptLine, serverLevels,
-  stateSentence,
+  envLabel, envs, findingTitle, intervalLabel, intervals, isServerFinal, kindLabel, kinds, levelLabel, mergeFindings, serverAttemptLine,
+  serverLevels, sortFindings, stateSentence,
 } from '../lib/serversView.js'
 
 // checkEvery is how often the sheet reads the server again while a check runs.
@@ -311,6 +324,10 @@ export default {
       timer: null,
       startingFor: '',
       actionError: null,
+      // errorFor is the finding whose "Corriger" got actionError ('' for the header).
+      errorFor: '',
+      // pollErrors counts the failed reads while a check runs.
+      pollErrors: 0,
       agentOffer: null,
       notice: '',
       site: '',
@@ -353,6 +370,13 @@ export default {
     unknownAttempt() {
       return this.fixes.find((a) => a.state === 'unknown') || null
     },
+    // cards are the flaws, the most severe first, one card per flaw.
+    cards() {
+      return mergeFindings(sortFindings(this.flaws), this.inv)
+    },
+    level3Warn() {
+      return levelLabel(3, this.lang).warn
+    },
     actionErrorIsUnknown() {
       return this.actionError?.data?.code === 'api.target.busy_unknown'
     },
@@ -363,7 +387,7 @@ export default {
       }
       for (const a of this.fixes) {
         const what = a.proposal?.summary || a.finding?.package || ''
-        const state = a.cause || serverAttemptLine(a, this.lang)
+        const state = serverAttemptLine(a, this.lang)
         out.push({ key: `f:${a.id}`, at: a.updated_at || a.created_at, href: this.fixHref(a.id), text: this.$t('servers.sheet.history_fix', { date: this.formatDate(a.updated_at || a.created_at), what, state }) })
       }
       return out.sort((x, y) => String(y.at).localeCompare(String(x.at))).slice(0, 30)
@@ -376,8 +400,7 @@ export default {
       return serverLevels.map((n) => ({ n, ...levelLabel(n, this.lang) }))
     },
     intervalValue() {
-      const v = this.view?.check_interval || '24h'
-      return intervals.includes(v) ? v : v
+      return this.view?.check_interval || '24h'
     },
     intervalText() {
       return intervalLabel(this.view?.check_interval, this.lang)
@@ -408,6 +431,11 @@ export default {
   },
   watch: {
     id() {
+      // A check followed on the server shown before stops here.
+      clearTimeout(this.timer)
+      this.checking = false
+      this.pollErrors = 0
+      this.clearError()
       this.view = null
       this.load()
     },
@@ -444,10 +472,19 @@ export default {
     attemptLine(a) {
       return serverAttemptLine(a, this.lang)
     },
-    /** attemptOf is the newest fix of a finding still under way (GET /fixes is newest first). */
-    attemptOf(f) {
-      const a = this.fixes.find((x) => x.finding?.id === f.id)
+    /** attemptOf is the newest fix of a card's findings still under way (GET /fixes is newest first). */
+    attemptOf(c) {
+      const a = this.fixes.find((x) => c.ids.includes(x.finding?.id))
       return a && !isServerFinal(a.state) ? a : null
+    },
+    runtimesText(c) {
+      const list = c.runtimes.map((r) => (r.binary ? this.$t('servers.sheet.runtime', r) : this.$t('servers.sheet.runtime_nobin', r)))
+      return this.$t('servers.sheet.runtimes', { list: list.join(', ') })
+    },
+    clearError() {
+      this.actionError = null
+      this.errorFor = ''
+      this.agentOffer = null
     },
     async load() {
       this.loading = !this.view
@@ -513,16 +550,24 @@ export default {
             return
           }
           this.checking = false
+          this.pollErrors = 0
           await Promise.all([this.loadInventory(), this.loadFixes()])
           this.$emit('changed')
-        } catch {
+        } catch (err) {
+          this.pollErrors += 1
+          // A server gone (removed elsewhere) or a page that keeps failing: stop.
+          if (err?.status === 404 || err?.status === 401 || this.pollErrors >= 5) {
+            this.checking = false
+            if (err?.status !== 401) this.failure = err
+            return
+          }
           this.follow()
         }
       }, checkEvery)
     },
     async check() {
       this.checking = true
-      this.actionError = null
+      this.clearError()
       this.notice = ''
       try {
         await api.post(this.q(`/targets/${this.enc(this.id)}/check`))
@@ -553,8 +598,7 @@ export default {
     },
     async startFix(f) {
       this.startingFor = f.id
-      this.actionError = null
-      this.agentOffer = null
+      this.clearError()
       try {
         const r = await api.post(this.q(`/targets/${this.enc(this.id)}/fix/${this.enc(f.id)}`))
         if (!this.alive) return
@@ -565,6 +609,7 @@ export default {
       } catch (err) {
         if (err?.status === 401) return
         this.actionError = err
+        this.errorFor = f.id
         // No ready-made fix: the agent may study it (never on an HDS server).
         if (err?.data?.code === 'fix.server.needs_agent' && this.view.kind !== 'hds') this.agentOffer = f
       } finally {
@@ -573,8 +618,7 @@ export default {
     },
     async startAgent(f) {
       this.startingFor = f.id
-      this.actionError = null
-      this.agentOffer = null
+      this.clearError()
       try {
         const r = await api.post(this.q(`/targets/${this.enc(this.id)}/agent-fix/${this.enc(f.id)}`))
         if (!this.alive) return
@@ -590,6 +634,7 @@ export default {
           return
         }
         this.actionError = err
+        this.errorFor = f.id
       } finally {
         this.startingFor = ''
       }

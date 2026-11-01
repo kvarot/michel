@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
@@ -38,6 +39,9 @@ type ServerAttemptView struct {
 	// Scripts are the two scripts the user validates, exactly as they run
 	// (the full view only): to read, and to copy when the user runs them.
 	Scripts *ScriptsView `json:"scripts,omitempty"`
+	// ScriptsUnreadable: the scripts are not valid text and are not shown
+	// (never altered to fit).
+	ScriptsUnreadable bool `json:"scripts_unreadable,omitempty"`
 	// Backups are the copies of the server files kept on this computer, and
 	// whether each one still opens (the full view only).
 	Backups []BackupView `json:"backups,omitempty"`
@@ -114,7 +118,13 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 		}
 		if full && prop.Scripts != nil {
 			// Exactly as validated: the text the hash covers, the one to copy.
-			sv.Scripts = &ScriptsView{Apply: strings.ToValidUTF8(prop.Scripts.Apply, "�"), Undo: strings.ToValidUTF8(prop.Scripts.Undo, "�")}
+			// A script that is not valid UTF-8 is never rewritten to fit: it
+			// is left out, and the page says it cannot show it.
+			if utf8.ValidString(prop.Scripts.Apply) && utf8.ValidString(prop.Scripts.Undo) {
+				sv.Scripts = &ScriptsView{Apply: prop.Scripts.Apply, Undo: prop.Scripts.Undo}
+			} else {
+				sv.ScriptsUnreadable = true
+			}
 		}
 	}
 	if full {

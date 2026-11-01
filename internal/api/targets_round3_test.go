@@ -54,3 +54,29 @@ func TestTargetDetailNamesTheSourceToEnable(t *testing.T) {
 		t.Errorf("list = %+v", list)
 	}
 }
+
+// Task 13 fix round 1 (B1, B9): the list says how many open flaws are
+// critical and how many are urgent, so the Today headline and the state
+// sentence can say it; each finding of the sheet says whether it is urgent.
+func TestTargetListCountsCriticalAndUrgent(t *testing.T) {
+	tf := newTargetFixture(t)
+	v := tf.addNamed("srv-crit", "192.0.2.82")
+	tf.seedServerFinding(v.ID, "fsrv000000000003", scan.KindServerPackage, "PHP2SHELL")
+	tf.seedServerFinding(v.ID, "fsrv000000000004", scan.KindServerConfig, "expose_php")
+	if _, err := tf.st.DB().Exec(`UPDATE finding SET severity_label = 'critical' WHERE id = 'fsrv000000000003'`); err != nil {
+		t.Fatal(err)
+	}
+	var list []TargetView
+	tf.get("/api/v1/targets", &list)
+	if len(list) != 1 || list[0].Open != 2 || list[0].CriticalOpen != 1 || list[0].UrgentOpen != 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	got := tf.view(v.ID)
+	urgent := map[string]bool{}
+	for _, f := range got.Findings {
+		urgent[f.ID] = f.Urgent
+	}
+	if !urgent["fsrv000000000003"] || urgent["fsrv000000000004"] {
+		t.Errorf("urgent = %v", urgent)
+	}
+}

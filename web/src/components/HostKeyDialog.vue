@@ -20,8 +20,8 @@
             <p class="m-hk__strong">{{ $t('servers.hostkey.changed') }}</p>
             <p>{{ $t('servers.hostkey.changed_why') }}</p>
           </v-alert>
-          <p class="m-small">{{ $t('servers.hostkey.was', { fp: '' }) }}<span class="m-code">{{ key.pinned }}</span></p>
-          <p class="m-small">{{ $t('servers.hostkey.now', { fp: '' }) }}<span class="m-code">{{ key.fingerprint }}</span></p>
+          <p class="m-small m-code">{{ $t('servers.hostkey.was', { fp: key.pinned }) }}</p>
+          <p class="m-small m-code">{{ $t('servers.hostkey.now', { fp: key.fingerprint }) }}</p>
           <v-checkbox v-model="replaceOk" :label="$t('servers.hostkey.replace_ok')" color="error" density="comfortable" hide-details />
         </template>
 

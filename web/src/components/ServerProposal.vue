@@ -5,7 +5,7 @@
       <p class="m-sprop__id">
         <span class="m-sev" :class="`m-sev--${severity}`">{{ $t(`severity.${severity}`) }}</span>
         <span v-if="flawView.kev" class="m-tag m-tag--hot m-small">{{ $t('servers.sheet.kev') }}</span>
-        <span class="m-code m-muted m-small">{{ flawView.rule || attempt.finding.osv_id }}</span>
+        <span v-if="flawView.kind === 'server_config'" class="m-code m-muted m-small">{{ flawView.package }}</span>
       </p>
       <p class="m-muted m-small">
         <a :href="serverHref">{{ $t('srvfix.flaw_on', { name: server.target.name }) }}</a>
@@ -23,7 +23,7 @@
         <p v-if="updated" class="m-sprop__note m-small" role="status">{{ $t('fix.proposal.updated') }}</p>
         <p class="m-voice m-sprop__sentence m-sprop__main">{{ p.summary }}</p>
         <p v-if="server.for_production" class="m-small">{{ $t('srvfix.for_production', { name: server.for_production.name }) }}</p>
-        <p v-if="server.mitigation" class="m-sprop__warn m-small"><strong>{{ $t('servers.sheet.mitigation') }}</strong> — {{ $t('srvfix.mitigation') }}</p>
+        <p v-if="server.mitigation" class="m-sprop__warn m-small">{{ $t('srvfix.mitigation') }}</p>
 
         <!-- A package upgrade: the snapshot first, then Valider. -->
         <div v-if="needsSnap" class="m-sprop__snap" :class="{ 'm-sprop__snap--done': server.snapshot_done }">
@@ -91,7 +91,6 @@
           <p class="m-small">{{ $t('srvfix.restore.body') }}</p>
         </v-alert>
 
-        <p v-if="rolledBack" class="m-sprop__done m-voice">{{ $t('srvfix.rolled_back') }}</p>
         <p v-if="attempt.cause" class="m-small">{{ $t('fix.chat.cause', { cause: attempt.cause }) }}</p>
         <p v-if="doneText" class="m-sprop__done m-voice">{{ doneText }}</p>
 
@@ -111,6 +110,7 @@
           </div>
           <p class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
         </details>
+        <p v-if="server.scripts_unreadable" class="m-sprop__warn m-small" role="alert">{{ $t('srvfix.scripts_unreadable') }}</p>
         <p v-if="copied" class="m-small m-sprop__ok" role="status">{{ copied }}</p>
 
         <section v-if="backupLines.length || serverBackups.length" class="m-sprop__sub">
@@ -147,7 +147,7 @@
 
 <script>
 import { formatDate, severityOf } from '../lib/digestView.js'
-import { backupLine, canApproveServer, envLabel, findingTitle, isServerFinal, needsSnapshot, serversHash } from '../lib/serversView.js'
+import { backupLine, canApproveServer, envLabel, findingTitle, needsSnapshot, serversHash } from '../lib/serversView.js'
 
 // ServerProposal is the right of the Fix page for a fix of a server: the
 // flaw in plain words, then the proposal: its sentence, « réduit le risque,
@@ -219,9 +219,6 @@ export default {
     steps() {
       return this.server.steps || []
     },
-    rolledBack() {
-      return this.steps.some((s) => s.op === 'undo' && s.ok)
-    },
     // restoreNow: a package upgrade failed, or the site went down after it.
     restoreNow() {
       if (!this.needsSnap || this.attempt.state !== 'failed') return false
@@ -243,7 +240,7 @@ export default {
       return ''
     },
     canAgain() {
-      return ['failed', 'refused', 'inconclusive'].includes(this.attempt.state) && isServerFinal(this.attempt.state)
+      return ['failed', 'refused', 'inconclusive'].includes(this.attempt.state)
     },
   },
   watch: {

@@ -2,10 +2,10 @@
   <div class="m-fix">
     <header class="m-fix__head">
       <h1 class="m-fix__title">{{ $t('fix.title') }}</h1>
-      <p class="m-muted m-fix__intro">{{ $t('fix.intro') }}</p>
+      <p class="m-muted m-fix__intro">{{ serverOnly ? $t('fix.intro_server') : $t('fix.intro') }}</p>
     </header>
 
-    <v-alert v-if="agentProblem" type="warning" variant="tonal" density="comfortable" class="m-fix__agent" role="status">
+    <v-alert v-if="agentProblem && !serverOnly" type="warning" variant="tonal" density="comfortable" class="m-fix__agent" role="status">
       <p v-if="agentProblem.title" class="m-fix__agent-title">{{ agentProblem.title }}</p>
       <p>{{ agentProblem.text }}</p>
       <v-btn size="small" variant="text" color="primary" class="m-fix__agent-btn" :loading="agentLoading" @click="loadAgent(true)">
@@ -161,11 +161,8 @@ import ServerProposal from './ServerProposal.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
 import { acceptResult, activityLine, fixHash, groupAttempts, isFinal, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
-import { isServerFinal, serverAttemptLine, stepLine } from '../lib/serversView.js'
+import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../lib/serversView.js'
 
-// serverEvery is how often a server fix under way is read again: its steps
-// come with the attempt, not on the stream.
-const serverEvery = 3000
 
 // listEvery is how often the list is read again while the page is open: an
 // attempt started alone (level 2) or proposed through michel mcp shows up.
@@ -455,7 +452,9 @@ export default {
     pollServer(id) {
       clearTimeout(this.serverTimer)
       if (!this.alive || !this.current || this.current.id !== id || isServerFinal(this.current.state)) return
-      if (!['approved', 'running', 'applied', 'preparing'].includes(this.current.state)) return
+      // 3 s while Michel works on it, 30 s while it waits for the user.
+      const delay = serverPollDelay(this.current)
+      if (!delay) return
       this.serverTimer = setTimeout(async () => {
         if (!this.alive || this.current?.id !== id) return
         try {
@@ -468,7 +467,7 @@ export default {
           // Tried again at the next turn.
         }
         this.pollServer(id)
-      }, serverEvery)
+      }, delay)
     },
     /** loadTarget reads the sheet of the server of a server fix (the flaw in words). */
     async loadTarget(id) {
