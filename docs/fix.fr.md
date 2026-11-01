@@ -154,11 +154,12 @@ Avant que ce que Michel donne lui-même arrive à l'agent (la fiche, les répons
 
 ## Corrections de serveur (plan 6)
 
-Une faille de **serveur** (un réglage de PHP, un paquet) a sa propre correction, décrite dans [servers.fr.md](servers.fr.md) : pas de copie de travail ni de branche, mais deux scripts, `appliquer` et `annuler`, que tu valides par empreinte et que toi ou Michel lancez sur le serveur.
+Une faille de **serveur** (un réglage de PHP, un paquet) a sa propre correction, décrite dans [servers.fr.md](servers.fr.md) : pas de copie de travail ni de branche, mais deux scripts, `appliquer` et `annuler`, que tu valides par empreinte. Tu les lances toi-même sur le serveur, ou Michel les lance pour toi.
 
 - Le niveau se règle **par serveur** (`--level` de `michel target add|set`), pas par projet. Michel prépare seul les corrections connues ; l'agent ne sert qu'à discuter un cas, avec un accord **par serveur** (celui de la préprod quand il y en a une) et jamais pour un serveur de type `hds`.
 - Le niveau 3 ne lance sans clic que les réglages des règles de Michel à leur valeur conseillée, jamais un paquet ; une mise à jour de paquet attend toujours ton **Snapshot fait**.
 - Une correction dont Michel ne peut pas dire le résultat finit à l'état `unknown` (inconnu) : va voir le serveur, puis `michel fix resolve <tentative>` (ou **J'ai vérifié le serveur** sur la page).
+- Une seule correction à la fois par serveur : tant qu'une correction est en cours, vérifiée après son script ou `unknown`, aucune autre n'est préparée ni lancée sur ce serveur.
 
 ## Risques qui restent
 

@@ -155,6 +155,7 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 - The level is set **per server** (`--level` of `michel target add|set`), not per project. Michel prepares known fixes alone; the agent is only used to discuss a case, with a consent **per server** (the preprod's when one is linked) and never for a server of kind `hds`.
 - Level 3 runs without a click only the settings of Michel's own rules at their advised value, never a package; a package upgrade always waits for your **Snapshot done**.
 - A fix whose outcome Michel cannot tell ends in the state `unknown`: check the server, then `michel fix resolve <attempt>` (or **I checked the server** on the page).
+- One fix at a time per server: while a fix is under way, checked after its script or `unknown`, no other is prepared or run on that server.
 
 ## Residual risks
 

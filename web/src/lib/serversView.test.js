@@ -210,6 +210,8 @@ describe('snapshot and approval', () => {
     expect(canApproveServer(attempt({ needs_snapshot: false }), null)).toBe(false)
     expect(canApproveServer({ id: 'a1', state: 'proposed', proposal }, proposal)).toBe(false)
     expect(canApproveServer(null, proposal)).toBe(false)
+    // Scripts the page cannot show are never validated.
+    expect(canApproveServer(attempt({ needs_snapshot: false, scripts_unreadable: true }), proposal)).toBe(false)
     expect(isServerAttempt(attempt({}))).toBe(true)
     expect(isServerAttempt({ id: 'a2' })).toBe(false)
   })

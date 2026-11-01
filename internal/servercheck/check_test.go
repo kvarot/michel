@@ -46,6 +46,9 @@ type host struct {
 	// makes its -v run past the time limit; findBroken makes command -v
 	// fail.
 	fpm, fpmSlow, findBroken bool
+	// noCommand is a login shell without `command` (tcsh): exit 1, nothing
+	// printed.
+	noCommand bool
 	// userIni is the content of demoUserIni ("" = no such file);
 	// userIniDenied makes it unreadable for the SSH user.
 	userIni       string
@@ -128,7 +131,17 @@ func (h *host) commands() map[string]sshtest.Handler {
 			io.WriteString(e.Stderr, "sh: cannot look\n")
 			return 2
 		}
+		h.mu.Lock()
+		tcsh := h.noCommand
+		h.mu.Unlock()
+		if tcsh {
+			io.WriteString(e.Stderr, "command: Command not found.\n")
+			return 1
+		}
 		for _, a := range e.Args[2:] {
+			if a == "sh" {
+				io.WriteString(e.Stdout, "/bin/sh\n")
+			}
 			if a == "php" {
 				io.WriteString(e.Stdout, "/usr/bin/php\n")
 			}
@@ -848,6 +861,28 @@ func TestFailedDiscoveryKeepsPHPFindings(t *testing.T) {
 	e.check(tg.ID)
 	if a := e.takeAlerts(); len(a) != 0 {
 		t.Fatalf("alerted again: %+v", a)
+	}
+}
+
+// Final wave I3: a login shell without `command` (exit 1, nothing printed)
+// never reads as "no PHP": the PHP findings stay open, the server is not
+// clean.
+func TestShellWithoutCommandKeepsPHPFindings(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	e.takeAlerts()
+	h.change(func(h *host) { h.noCommand = true })
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	if res.Gone != 0 || res.Clean() {
+		t.Fatalf("a shell without command closed findings: %+v", res)
+	}
+	for _, id := range []string{"PHP2SHELL", "allow_url_include"} {
+		if st := e.status(tg.ID, id); st == scan.StatusGone {
+			t.Fatalf("%s closed", id)
+		}
 	}
 }
 

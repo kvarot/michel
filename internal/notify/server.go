@@ -42,6 +42,8 @@ func serverMessage(lang i18n.Lang, in servercheck.AlertInput, pageURL string) (t
 		body = i18n.T(lang, "notify.server.auto_not_run", name)
 	case servercheck.AlertUnknownState:
 		body = i18n.T(lang, "notify.server.unknown_state", name)
+	case servercheck.AlertLineMovedAgain:
+		body = i18n.T(lang, "notify.server.line_moved_again", name)
 	default:
 		n := len(in.New)
 		if n == 0 {
@@ -94,6 +96,11 @@ func SendServerAlert(ctx context.Context, ns []Notifier, in servercheck.AlertInp
 			dl := s.alert(ctx, body, now)
 			dl.Host, dl.Purpose = host, purpose
 			out = append(out, dl)
+			continue
+		}
+		if w, ok := n.(*webhook); ok {
+			size, err := w.serverAlert(ctx, in.Kind, title, body)
+			out = append(out, deliver(n, host, purpose, size, err))
 			continue
 		}
 		m, ok := n.(messenger)

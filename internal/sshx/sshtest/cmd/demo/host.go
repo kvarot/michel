@@ -217,6 +217,8 @@ func (h *host) commands() map[string]sshtest.Handler {
 		code := 0
 		for _, a := range e.Args[2:] {
 			switch a {
+			case "sh":
+				io.WriteString(e.Stdout, "/bin/sh\n")
 			case "php":
 				io.WriteString(e.Stdout, phpCLI+"\n")
 			case "php-fpm":

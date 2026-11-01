@@ -77,30 +77,30 @@ Ce que Michel ne lit **jamais** : les dossiers de données, les bases de donnée
 - **Aucun secret n'est conservé.** Les valeurs de `password`, `secret`, `key`, `token`, les DSN et les réglages secrets connus sont masquées avant d'être stockées ; la base garde le nom du réglage, une valeur non secrète, le fichier et la ligne, plus l'empreinte du fichier, jamais le fichier brut.
 - **Les liens symboliques** ne sont pas suivis pour lire un fichier que PHP ne désigne pas.
 - Ce que Michel n'a pas pu lire est listé comme **non vu** (« `php.ini` illisible avec l'utilisateur deploy »), en clair. Il n'essaie jamais un autre moyen. À noter : un `.user.ini` illisible garde ouvertes toutes les alertes de réglages de ce serveur, ce qui est large exprès.
-- Les commandes supposent un shell de connexion POSIX pour l'utilisateur SSH (un shell csh ou fish peut donner des résultats étranges).
+- Les commandes supposent un shell de connexion POSIX pour l'utilisateur SSH. La recherche des programmes (`command -v`) demande d'abord `sh`, présent partout : si le shell de connexion ne connaît pas `command` (csh, tcsh), Michel le voit. La recherche de PHP est alors notée **non vue**, et les alertes PHP du serveur restent ouvertes : jamais « PHP absent ».
 - Plafonds : 60 s par commande, 5 min par collecte, 1 Mio de sortie par commande, 256 Kio par fichier de configuration.
 
 ### Le PHP de la ligne de commande n'est pas toujours celui du site
 
 Le `php` d'un terminal peut être une autre version que celle qui sert le site (PHP-FPM, autre `php.ini`, réglages par site). Michel lit **les deux** quand il les trouve, et dit quand il n'a vu que la ligne de commande. Si tu donnes l'adresse du site (`--site-url`), Michel lit aussi les en-têtes `Server` et `X-Powered-By` par une simple requête GET, comme un navigateur. Il ne détecte pas tous les cas : voir [les limites](#12-les-limites-à-connaître).
 
-### Quand
+### Quand Michel vérifie
 
-Une fois par jour par défaut ; par serveur : toutes les N heures, ou **seulement à la main** ; **Vérifier maintenant** ou `michel target check <id>` à tout moment. `michel serve` fait tourner le calendrier ; s'il ne tourne pas, le digest le dit. **Sans connexion**, quand une base de failles est mise à jour, Michel compare de nouveau ce qu'il a déjà stocké : une nouvelle faille grave sur une version que tu utilises alerte tout de suite, et la prochaine connexion la confirme.
+Une fois par jour par défaut ; par serveur : toutes les N heures, ou **seulement à la main** ; **Vérifier maintenant** ou `michel target check <id>` à tout moment. `michel serve` fait tourner le calendrier ; s'il ne tourne pas, le digest le dit. Quand une base de failles est mise à jour, Michel compare de nouveau ce qu'il a déjà gardé, **sans se connecter au serveur**. Si une nouvelle faille grave touche une version que tu utilises, il t'alerte tout de suite. La prochaine connexion la confirme.
 
 ## 5. Suis-je touché ? Les sources
 
 - **Paquets du système** : les bases OSV des distributions (Debian, Ubuntu, Alpine, AlmaLinux, Rocky, Red Hat…), **désactivées par défaut**. Michel propose d'activer celle du système vu sur le serveur (`michel source enable osv.debian`, même accord que dans [sources.fr.md](sources.fr.md)) ; `michel target check` affiche la commande exacte quand il en manque une. La version est jugée d'après la base de la distribution, pas d'après `php -v` : les distributions corrigent sans changer le numéro amont.
 - **Règles PHP** : un jeu de règles embarqué, versionné, déterministe (sans IA). Chacune a un réglage, une valeur à risque, une valeur conseillée, une gravité et une explication en clair : `display_errors` activé en production, `expose_php`, `allow_url_include`, `open_basedir` vide en mutualisé, `session.cookie_secure`, une branche de PHP qui n'est plus suivie, et PHP2Shell. Un réglage que PHP ne lit que dans la configuration principale (`PHP_INI_SYSTEM`) n'est pas « corrigé » par un `.user.ini`.
-- **PHP2Shell** (CVE-2026-109618 et CVE-2026-109619, exploitées dans la nature) : jugé sur la **version**. Corrigé dans PHP 8.5.12, 8.4.27, 8.3.36 et 8.2.35 ; une branche plus ancienne que 8.2 est traitée comme non suivie et touchée. Michel peut proposer `session.upload_progress.enabled=0`, étiqueté **« réduit le risque, ne corrige pas »** : seule la mise à jour corrige. Il ne propose jamais `memory_limit=-1`.
+- **PHP2Shell** (CVE-2026-109618 et CVE-2026-109619, déjà utilisées par des attaquants) : jugé sur la **version**. Corrigé dans PHP 8.5.12, 8.4.27, 8.3.36 et 8.2.35 ; une branche plus ancienne que 8.2 est traitée comme non suivie et touchée. Michel peut proposer `session.upload_progress.enabled=0`, étiqueté **« réduit le risque, ne corrige pas »** : seule la mise à jour corrige. Il ne propose jamais `memory_limit=-1`.
 - La liste des failles de PHP embarquée dans Michel n'est à jour que si ta version de Michel l'est (mets Michel à jour pour la mettre à jour).
-- Un serveur dont la version de PHP n'a pas pu être lue reçoit une alerte « version de PHP illisible » : zéro faille avec une version de distribution inconnue ou des paquets non jugés n'est jamais présenté comme « rien à signaler ».
+- Si Michel n'a pas pu lire la version de PHP, il alerte « version de PHP illisible ». Il ne dit jamais « rien à signaler » quand la version de la distribution est inconnue ou que des paquets n'ont pas pu être jugés.
 
 La fiche du serveur dit **touché / pas touché / pas pu tout voir**, liste les failles, et la liste « non vu ». Une faille dans le code d'un projet indique où il est déployé (« déployé sur : serveur X (prod) »).
 
 ## 6. Une correction : les scripts et leurs actions
 
-Une correction n'est jamais du texte libre. C'est une **suite d'actions typées, d'une liste fermée**, que Michel traduit en un script shell POSIX lisible (`sh`, compatible dash et busybox) :
+Une correction n'est jamais du texte libre. C'est une **suite d'actions prises dans une liste fermée**, que Michel traduit en un script shell POSIX lisible (`sh`, compatible dash et busybox) :
 
 | Action | Ce qu'elle fait | Annulation |
 |---|---|---|
@@ -113,7 +113,7 @@ Une correction n'est jamais du texte libre. C'est une **suite d'actions typées,
 
 - **Aucune action ne supprime quoi que ce soit.** Pas de `rm`, pas de vidage, pas de base de données. Le seul fichier écrit est un fichier de configuration déjà présent, sauvegardé juste avant. Si un réglage n'est nulle part, Michel **ajoute une ligne** à la fin du `php.ini` chargé (ou du `.user.ini` en mutualisé), jamais un nouveau fichier dans `conf.d`.
 - Chaque correction produit deux scripts, `appliquer` et `annuler`, plus un texte « ce que ça fait ». Une empreinte SHA-256 couvre les scripts et la liste des vérifications, avec le serveur et la correction ; **ce que tu valides est exactement ce qui est lancé**, et Michel revérifie avant l'envoi.
-- `appliquer` se protège lui-même : `set -eu`, et un `trap` qui remet les fichiers sauvegardés et recharge si une étape échoue après un changement. Ça vaut aussi quand tu le lances toi-même.
+- `appliquer` se protège lui-même : `set -eu`, et un `trap` qui remet les fichiers sauvegardés et recharge si une étape échoue après un changement, puis sort avec le code `9`. Les nouvelles copies sont préparées, et chaque ligne vérifiée, avant que le `trap` ne soit posé : le code `5` (la ligne a changé) veut toujours dire que rien n'a été modifié. Ça vaut aussi quand tu le lances toi-même.
 - Ordre fixe : sauvegarde, changement, test de configuration, rechargement, vérification du site, nouvelle collecte du serveur. Une étape qui échoue arrête tout.
 - Michel n'écrit que de la **configuration PHP**. Pour nginx et Apache, il signale et explique quoi changer ; il n'écrit rien.
 - **Pas testable, pas de script.** Une correction recharge PHP, et Michel ne le fait pas sans avoir testé la configuration. Le test ne se lance qu'avec des binaires PHP nommés `php` ou `php-fpm` (avec une version éventuelle) dans `/usr/bin`, `/usr/sbin`, `/usr/local/bin` ou `/usr/local/sbin`. Un PHP ailleurs (`/opt/…`, compilé à la main) n'a **aucun script**, même pas pour toi, et Michel explique pourquoi.
@@ -124,15 +124,26 @@ Une correction n'est jamais du texte libre. C'est une **suite d'actions typées,
 
 | Situation | Ce que fait Michel |
 |---|---|
-| Une étape échoue après un changement | le script remet les fichiers, recharge ; état *annulé*, alerte urgente |
+| Une étape échoue après un changement | le script remet les fichiers, recharge et sort avec le code `9` ; état *annulé*, alerte. Michel lit ce code, ou la dernière ligne du script, avant tout autre code : une commande qui échoue avec son propre code (un rechargement qui sort avec `5`) n'est jamais prise pour « la ligne a changé » |
 | Le site ne répond plus après une correction de configuration | `annuler` tout de suite si c'est Michel qui lance ; sinon alerte urgente « lance `annuler` maintenant », script affiché |
 | `annuler` échoue lui aussi | alerte urgente, avec les copies sauvegardées à remettre à la main |
 | Une mise à jour de **paquet** échoue, ou le site tombe après | **jamais annulée automatiquement** : état *échoué*, alerte urgente « restaure ton snapshot » |
 | Le script a dépassé sa limite de temps, ou la connexion a coupé | état **`unknown`** (inconnu) : Michel ne peut pas dire ce qui a changé, alerte urgente, nouvelle collecte, et aucune annulation devinée |
 
-Limites de temps d'un script lancé par Michel : **5 minutes** pour la configuration, **30 minutes** pour les paquets ; Michel ne tue jamais le processus (tuer `dpkg` en plein travail est pire qu'attendre). Une correction échouée n'est jamais relancée : prépare-en une nouvelle (nouvel identifiant).
+Limites de temps d'un script lancé par Michel : **5 minutes** pour la configuration, **30 minutes** pour les paquets. Michel n'envoie jamais de signal pour arrêter le script (tuer `dpkg` en plein travail est pire qu'attendre). Mais une fois la limite passée, il ferme la connexion : une commande qui écrit encore sur sa sortie peut alors s'arrêter. Une mise à jour de paquet de plus de 30 minutes peut donc être coupée : garde ton snapshot. Une correction échouée n'est jamais relancée : prépare-en une nouvelle (nouvel identifiant).
 
-Les codes de sortie d'un script, si tu le lances toi-même : `0` tout va bien ; `3` pas lancé par le bon utilisateur (root pour `php.ini` ou un pool, l'utilisateur SSH pour un `.user.ini`) ; `4` cette correction a déjà été appliquée ; `5` la ligne a bougé depuis la dernière vérification (rien n'a changé) ; `6` un fichier est un lien ; `7` dossier ou sauvegarde non sûr ; `8` le **retour arrière a échoué** (urgent : va voir le serveur). Voir [en cas de problème](#11-en-cas-de-problème).
+Si tu lances le script toi-même, voici les codes de sortie :
+
+- `0` : tout va bien.
+- `3` : pas lancé par le bon utilisateur (root pour `php.ini` ou un pool, l'utilisateur SSH pour un `.user.ini`).
+- `4` : cette correction a déjà été appliquée (pour `annuler` : une sauvegarde manque).
+- `5` : la ligne a changé depuis la dernière vérification (rien n'a été modifié).
+- `6` : un fichier est un lien symbolique.
+- `7` : dossier ou sauvegarde pas sûr.
+- `8` : le **retour en arrière a échoué** (urgent : va voir le serveur).
+- `9` : une étape a échoué après le changement ; les fichiers ont été remis et PHP rechargé.
+
+Les codes `3` à `7` sont toujours donnés avant tout changement, avec leur ligne d'explication. Voir [en cas de problème](#11-en-cas-de-problème).
 
 ## 7. Qui lance le script, et sudo
 
@@ -141,7 +152,7 @@ Les codes de sortie d'un script, si tu le lances toi-même : `0` tout va bien ; 
 
 Qui le lance :
 
-- Un script qui touche un fichier appartenant à root (`php.ini`, un pool) tourne **entièrement en root**. Il vérifie d'abord qu'il est root, sinon il s'arrête avant tout changement avec « lance ce script en root ». Avec `executor: michel` et `sudo: nopasswd`, Michel l'envoie par `sudo -n sh -s` (jamais ligne par ligne, et `-n` veut dire qu'il n'attend jamais de mot de passe : s'il en faut un, l'étape échoue et le dit). Sans `sudo`, la correction n’est proposée qu’à toi, pour que tu la lances toi-même.
+- Un script qui touche un fichier appartenant à root (`php.ini`, un pool) tourne **entièrement en root**. Il vérifie d'abord qu'il est root, sinon il s'arrête avant tout changement avec « lance ce script en root ». Avec `executor: michel` et `sudo: nopasswd`, Michel l'envoie par `sudo -n sh -s` (jamais ligne par ligne, et `-n` veut dire qu'il n'attend jamais de mot de passe : s'il en faut un, l'étape échoue et le dit). Sans `sudo`, Michel te propose seulement la correction : tu la lances toi-même.
 - Un script `.user.ini` tourne avec l'**utilisateur SSH**, jamais en root.
 - Le texte du script ne dépend pas de qui le lance (même empreinte).
 
@@ -150,7 +161,7 @@ Qui le lance :
 - **Préprod d'abord** : si le serveur a une préprod liée, la correction s'y exécute d'abord. La correction de la production est **reconstruite** à partir de l'inventaire de la production (chemins, versions, services), avec sa propre empreinte et son propre Valider (ou les règles du niveau 3). Si la préprod est liée mais ne montre pas la faille, la correction est refusée tant que tu ne la détaches pas ou ne la revérifies pas.
 - **Snapshot** : avant tout script avec `package_upgrade`, Michel bloque sur **« fais un snapshot de ce serveur chez ton hébergeur »** ; tu coches **Snapshot fait** (horodaté, journalisé). Sans la case, pas d'exécution, même au niveau 3. Michel n'a jamais accès à ton compte chez l'hébergeur.
 - **Sauvegardes** : sur le serveur, un script lancé en root sauvegarde dans `/var/lib/michel/backups/<correction>/` (un dossier réservé à root), un script `.user.ini` dans `~/.michel/backups/<correction>/`. Michel ne les **supprime jamais**, pas même les siennes : vide-les toi-même quand tu veux (`sudo rm -r /var/lib/michel/backups/<correction>` ; la fiche du serveur montre la taille et le dit). `annuler` refuse une sauvegarde qui n'appartient pas à root. Sur ton poste, chaque copie est conservée **chiffrée** (AES-256-GCM, clé dans le coffre de secrets de Michel), 90 jours. Une copie dont la clé est perdue indique « clé perdue » ; celle du serveur reste.
-- Seuls les **arbres de configuration PHP** sont modifiables : le `php.ini` que PHP charge, les autres fichiers ini qu'il lit, un pool PHP-FPM, un `.user.ini`. Un arbre PHP de type cPanel qui n'en fait pas partie n'est pas modifiable. Root n'écrit que dans des dossiers qui lui appartiennent et que personne d'autre ne peut modifier, jamais sous `/home`.
+- Seuls les **fichiers de configuration de PHP** sont modifiables : le `php.ini` que PHP charge, les autres fichiers ini qu'il lit, un pool PHP-FPM, un `.user.ini`. Une installation PHP de type cPanel qui n'en fait pas partie n'est pas modifiable. Root n'écrit que dans des dossiers qui lui appartiennent et que personne d'autre ne peut modifier, jamais sous `/home`.
 
 ## 9. Les quatre niveaux, et l'agent
 
@@ -163,7 +174,22 @@ Chaque serveur a son propre niveau (`--level`, 1 par défaut) :
 | 2 | Préparer | prépare les scripts de lui-même pour chaque faille ; ils attendent ta validation |
 | 3 | Appliquer ce que j'ai autorisé | comme 2, et lance sans clic les corrections qui respectent toutes tes règles |
 
-**Règles du niveau 3**, toutes requises, vérifiées par Michel (jamais par un agent) : `executor: michel` ; la case « corriger seul les réglages à risque connus » cochée pour ce serveur ; **seulement des `set_directive` issus des règles embarquées de Michel, à leur valeur conseillée** (aucun paquet, aucune proposition d'un agent, jamais un `.user.ini`, qui n'a pas de test de configuration) ; un test de configuration et une vérification du site (donc un `site_url`) ; `sudo: nopasswd` pour un fichier de root ; une préprod liée d'abord prouvée par la **propre** correction de Michel pour cette même faille ; aucune tentative en cours ou `unknown` sur le serveur ; un binaire testable. Les corrections que tu as préparées à la main peuvent se lancer seules si ces règles sont respectées. Le digest et les alertes disent ce qui a été appliqué seul et ce qui a été annulé.
+**Règles du niveau 3.** Michel (jamais un agent) vérifie que toutes ces conditions sont réunies :
+
+1. `executor: michel`.
+2. La case « corriger seul les réglages à risque connus » est cochée pour ce serveur.
+3. La correction contient seulement des `set_directive` issus des règles de Michel, à leur valeur conseillée (aucun paquet, aucune proposition d'un agent, jamais un `.user.ini`, qui n'a pas de test de configuration).
+4. Il y a un test de configuration et une vérification du site (donc un `site_url`).
+5. `sudo: nopasswd` si le fichier appartient à root.
+6. Si une préprod est liée, la **propre** correction de Michel pour cette faille y a d'abord réussi.
+7. Aucune autre tentative n'est en cours sur le serveur (lancée, ou en vérification après le script) ni à l'état `unknown`.
+8. Le PHP est testable (voir [section 6](#6-une-correction--les-scripts-et-leurs-actions)).
+
+Les corrections que tu as préparées à la main peuvent se lancer seules si ces règles sont respectées. Le digest et les alertes disent ce qui a été appliqué seul et ce qui a été annulé.
+
+**Une correction à la fois par serveur.** Tant qu'une correction est préparée, attend ta validation, tourne, ou est vérifiée après son script (site, annulation, nouvelle collecte), ou tant que son résultat est `unknown`, Michel ne prépare, ne valide par une règle et ne lance aucune autre correction sur ce serveur, et le serveur ne peut pas être supprimé. Il en va de même à la main : **Préparer la correction** répond qu'une correction est déjà en cours.
+
+Si la ligne a changé (code `5`), Michel revérifie le serveur et prépare **une** nouvelle correction. Si celle-ci trouve à son tour une ligne changée, il n'en prépare pas d'autre, même au niveau 3, et t'alerte : c'est toi qui relances.
 
 **L'agent** (Claude Code, comme dans [fix.fr.md](fix.fr.md)) ne sert qu'à comprendre ou à discuter un cas : une faille combinée, plusieurs réglages possibles, un choix entre mise à jour et contournement. Michel prépare seul les corrections connues (une règle vers sa valeur conseillée, un paquet vers sa version corrigée). L'agent n'a jamais d'accès SSH, ne voit que l'inventaire **masqué**, ne peut pas valider, et n'a aucun outil de fichiers : il propose des actions typées par un seul outil MCP, et Michel vérifie chaque action avant d'assembler les scripts. **L'accord est par serveur**, et c'est celui de la **préprod** quand une préprod est liée (c'est son inventaire qui part). **Tu peux le retirer** à tout moment. Un serveur de type `hds` (`health`) n'a jamais d'agent.
 
@@ -171,7 +197,11 @@ Chaque serveur a son propre niveau (`--level`, 1 par défaut) :
 
 Les alertes passent par les canaux de [daily-digest.md](operations/daily-digest.md) (mail, notification du bureau, webhook), avec un contenu minimal (« serveur X : 1 faille grave », un lien), jamais une version détaillée ni un réglage. **Un canal limité à certains projets ne reçoit jamais d'alerte de serveur.**
 
-Le **SMS** est un type de canal `sms` (`provider: freemobile` pour l'API de Free Mobile, gratuite pour ses abonnés, ou `generic` pour un fournisseur payant par un POST signé). Sa clé est dans le coffre de secrets (`michel secret set sms-urgent`), jamais dans le fichier de politique ; le numéro d'identifiant Free Mobile est un champ ordinaire. Il lui faut sa propre règle réseau (`notify.sms`). Le SMS n'est envoyé **que pour l'urgent** : un serveur `prod` avec une faille exploitée dans la nature (KEV) ou critique, un retour arrière qui a échoué, un état `unknown`, une mise à jour de paquet à restaurer par snapshot. Une faille de distribution sans correctif et hors KEV n'est jamais urgente. Au plus **3 SMS par jour** (`sms_per_day`), tous canaux confondus, comptés sur **ta journée locale**. Le digest et le mail portent le reste. Une alerte urgente qui a échoué n'est pas renvoyée (le digest la liste).
+Sur un webhook `generic`, une alerte de serveur est `{"michel_server_alert": 1, "kind": "…", "title": "…", "text": "…"}`, à ne pas confondre avec le message « une correction t'attend » (`michel_fix_waiting`).
+
+Le **SMS** est un type de canal `sms` (`provider: freemobile` pour l'API de Free Mobile, gratuite pour ses abonnés, ou `generic` pour un fournisseur payant, qui reçoit un message signé comme un webhook). Sa clé est dans le coffre de secrets (`michel secret set sms-urgent`), jamais dans le fichier de politique ; le numéro d'identifiant Free Mobile est un champ ordinaire. Il lui faut sa propre règle réseau (`notify.sms`). Le SMS n'est envoyé **que pour l'urgent** : un serveur `prod` avec une faille déjà attaquée (liste KEV) ou critique, un retour arrière qui a échoué, un état `unknown`, une mise à jour de paquet à restaurer par snapshot. Une faille de distribution sans correctif et hors KEV n'est jamais urgente.
+
+Au plus **3 SMS par jour** (`sms_per_day`), tous canaux confondus, comptés sur **ta journée locale**. Le digest et le mail portent le reste. Une alerte urgente qui a échoué n'est pas renvoyée (le digest la liste).
 
 ## 11. En cas de problème
 
@@ -190,14 +220,17 @@ Michel affiche ces messages dans ta langue ; voici quoi faire.
 | **Michel ne peut pas tester la configuration : le PHP n'est pas celui du système** | Le PHP est hors des dossiers du système : pas de script, pour ne pas recharger PHP sans test. Change le réglage de PHP à la main. |
 | **Pour vérifier ses paquets, Michel a besoin de la source …** | Lance la commande `michel source enable …` affichée. |
 | **La version de PHP n'a pas pu être lue** | Vérifie que `php -v` marche pour l'utilisateur SSH, puis revérifie. |
-| **Le fichier a changé sur le serveur depuis la dernière vérification** (code 5) | Rien n'a été modifié. Michel revérifie et prépare une nouvelle correction. |
+| **Le fichier a changé sur le serveur depuis la dernière vérification** (code 5) | Rien n'a été modifié. Michel revérifie et prépare une nouvelle correction, une seule fois. |
+| **Une correction n'a pas pu s'appliquer deux fois de suite, le fichier change sans cesse** | Quelque chose d'autre modifie ce fichier (un outil de déploiement, un panneau d'hébergement). Michel arrête d'essayer seul. Trouve ce qui le modifie, puis prépare la correction à la main. |
+| **La correction a échoué et a été annulée** (code 9) | Une étape après le changement a échoué (test de configuration, rechargement) ; les fichiers ont été remis. Regarde l'étape en échec sur la page, corrige la cause, puis prépare une nouvelle correction. |
 | **Un fichier à modifier est un lien symbolique** (code 6) | Corrige ce fichier à la main. |
-| **Un dossier ou un fichier peut être modifié par quelqu'un d'autre que root** (code 7) | Arrêt de sécurité, rien n'a changé. Répare les droits, ou le dossier ou la sauvegarde qui n'appartient pas à root. |
+| **Un dossier ou un fichier peut être modifié par quelqu'un d'autre que root** (code 7) | Arrêt de sécurité, rien n'a changé. Répare les droits du dossier. Si une sauvegarde n'appartient pas à root, vérifie-la, puis remets-en la propriété à root avant de relancer. |
 | **La correction a échoué et n'a pas pu être annulée** (code 8) | Urgent. Va voir le serveur maintenant ; les copies sauvegardées sont sur la page et dans le dossier de sauvegardes. |
-| **Déjà appliquée** (code 4) | Michel ne lance jamais deux fois la même correction. Prépare-en une nouvelle. |
+| **Déjà appliquée** (code 4) | Michel ne lance jamais deux fois la même correction. Prépare-en une nouvelle. Pour `annuler`, le code 4 veut dire qu'une sauvegarde manque : rien n'a été remis. |
 | **Pas lancé par le bon utilisateur** (code 3) | Lance-le en root (ou avec l'utilisateur SSH pour un `.user.ini`). |
 | **Le script n'a pas répondu : état inconnu** | Va voir le serveur toi-même (la configuration est-elle valide, le site répond-il ?). Puis dis que tu as vérifié : **J'ai vérifié le serveur** sur la page, ou `michel fix resolve <tentative>`. La correction se termine en échec ; Michel ne change rien sur le serveur. D'ici là, le serveur n'accepte aucune nouvelle correction et ne peut pas être supprimé. |
 | **Une mise à jour de paquet a échoué / le site ne répond plus après** | Aucun script ne peut l'annuler : restaure ton snapshot, puis vérifie le serveur. |
+| **Le site ne répond plus après une correction, alors qu'il marche** | Si l'adresse du site redirige vers un autre hôte (par exemple `www.`), la vérification du site est refusée par la politique réseau : seule l'adresse donnée a une règle. Donne l'adresse finale comme `site_url`. |
 
 ## 12. Les limites à connaître
 

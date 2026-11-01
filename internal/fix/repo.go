@@ -59,6 +59,16 @@ func parseTime(s string) (time.Time, error) {
 // waits for the user: the project has no other attempt meanwhile.
 const busyStates = `('preparing','proposed','approved','running')`
 
+// serverBusyStates are busyStates for a server, plus applied (the steps
+// after the script: site check, undo, recollection) and unknown (what the
+// script changed is not known): one server fix at a time on a server.
+const serverBusyStates = `('preparing','proposed','approved','running','applied','unknown')`
+
+// serverRunStates are the states of a server attempt whose script may be
+// touching the server, or whose outcome is not known: no other fix of the
+// same server is claimed meanwhile.
+const serverRunStates = `('running','applied','unknown')`
+
 const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at, work_json, approved_by, approved_proposal, approved_hash, cause_detail`
 
 func workJSON(w Work) (string, error) {
@@ -73,7 +83,9 @@ func workJSON(w Work) (string, error) {
 // CreateAttempt stores a new attempt in state preparing; ID, State and the
 // dates are set here. The insert is conditional on the project having no
 // attempt being worked on or waiting for the user (one statement, so two
-// callers cannot both succeed): ErrBusy otherwise.
+// callers cannot both succeed): ErrBusy otherwise. For a server fix
+// (Work.Server set), an applied or unknown attempt of the server counts
+// too (serverBusyStates).
 func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	now := r.now()
 	id, err := r.newID(now)
@@ -85,9 +97,13 @@ func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	if err != nil {
 		return Attempt{}, err
 	}
+	busy := busyStates
+	if a.Work.Server != nil {
+		busy = serverBusyStates
+	}
 	res, err := r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`)
 		SELECT ?,?,?,?,?,?,?,?,?,?,?,'','','',''
-		WHERE NOT EXISTS (SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN `+busyStates+`)`,
+		WHERE NOT EXISTS (SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN `+busy+`)`,
 		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now), work, a.ProjectID)
 	if err != nil {
 		return Attempt{}, fmt.Errorf("cannot save the fix attempt: %w", err)
@@ -517,7 +533,8 @@ func (r *Repo) NextQueued(ctx context.Context, except ...string) (findingID, pro
 	}
 	defer tx.Rollback()
 	q := `SELECT finding_id, project_id FROM fix_queue
-		WHERE project_id NOT IN (SELECT project_id FROM fix_attempt WHERE state IN ` + busyStates + `)`
+		WHERE project_id NOT IN (SELECT project_id FROM fix_attempt WHERE state IN ` + busyStates + `
+			OR (state IN ('applied','unknown') AND project_id IN (SELECT id FROM target)))`
 	args := []any{}
 	for _, p := range except {
 		q += ` AND project_id <> ?`
@@ -795,10 +812,14 @@ func (r *Repo) PurgeBackups(ctx context.Context, before time.Time) (int, error) 
 
 // Claim moves an approved attempt to running in one conditional update and
 // reports whether this caller got it: only one Apply, in any process, ever
-// runs a server fix's script. deadline is when the run's own bound ends.
+// runs a server fix's script, and never while another attempt of the same
+// server is running, applied or unknown (serverRunStates). deadline is when
+// the run's own bound ends.
 func (r *Repo) Claim(ctx context.Context, id string, deadline time.Time) (bool, error) {
-	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, updated_at = ?, run_deadline = ? WHERE id = ? AND state = ?`,
-		string(StateRunning), ts(r.now()), ts(deadline), id, string(StateApproved))
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, updated_at = ?, run_deadline = ? WHERE id = ? AND state = ?
+		AND NOT EXISTS (SELECT 1 FROM fix_attempt o WHERE o.project_id = (SELECT p.project_id FROM fix_attempt p WHERE p.id = ?)
+			AND o.id <> ? AND o.state IN `+serverRunStates+`)`,
+		string(StateRunning), ts(r.now()), ts(deadline), id, string(StateApproved), id, id)
 	if err != nil {
 		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
@@ -899,7 +920,7 @@ const (
 )
 
 // TargetBlock says what, if anything, must end before server targetID can
-// leave Michel: BlockWait (preparing, running, approved for Michel to run),
+// leave Michel: BlockWait (preparing, running, applied, approved for Michel to run),
 // BlockUnknown, BlockApproved, or "" when nothing is pending. The first
 // that applies wins, in that order.
 func (r *Repo) TargetBlock(ctx context.Context, targetID string) (string, error) {
@@ -912,7 +933,9 @@ func (r *Repo) TargetBlock(ctx context.Context, targetID string) (string, error)
 	for _, a := range list {
 		b := ""
 		switch a.State {
-		case StatePreparing, StateRunning:
+		case StatePreparing, StateRunning, StateApplied:
+			// Applied: the steps after the script (site check, undo,
+			// recollection) still need the server.
 			b = BlockWait
 		case StateUnknown:
 			b = BlockUnknown

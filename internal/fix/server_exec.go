@@ -366,10 +366,10 @@ func (r *serverRun) run(ctx context.Context) error {
 	// its error output is a failure (the script cannot tell). The output
 	// itself is never kept.
 	stderrFail := code == 0 && len(res.Stderr) > 0 && cliTest(r.plan)
-	r.scriptSteps(code, stderrFail)
+	e := classifyResult(res, r.pkg())
+	r.scriptSteps(e, stderrFail)
 	r.fetchBackups(ctx, c)
 	if code != 0 {
-		e := classifyResult(res, r.pkg())
 		// The state first, then the alert.
 		ferr := r.fail(ctx, e, "exit "+strconv.Itoa(code))
 		switch {
@@ -477,7 +477,7 @@ func cliTest(p serverfix.Plan) bool {
 // scriptRolledBack is the line the apply script prints on its error
 // output when its trap put the files back (serverfix's own text): only
 // then is a failure "rolled back".
-const scriptRolledBack = "echec: fichiers remis"
+const scriptRolledBack = serverfix.MsgRolledBack
 
 // classifyResult classifies a run by its exit and its error stream: the
 // kept head and, when the stream was cut, its kept tail, where the
@@ -490,67 +490,84 @@ func classifyResult(res sshx.Result, pkg bool) error {
 	return classifyExit(res.Exit, stderr, pkg)
 }
 
-// classifyExit tells what a non-zero exit of the apply script means. The
-// scripts' own codes first (3 to 8); then sudo's refusal and a shell that
-// could not run (126, 127): nothing ran. For a package upgrade, any other
-// failure may have changed the package: only the snapshot takes it back.
-// For a configuration fix, a failure is "rolled back" only when the script
-// says its trap put the files back; otherwise it stopped before any change.
+// classifyExit tells what a non-zero exit of the apply script means.
+// First the rollback's outcome (codes 8 and 9, or its lines, which only
+// rollback() prints, so only once the trap was armed): it wins over any
+// code, since a command that failed after the change may exit with one of
+// the scripts' own codes. Then the scripts' own refusals before any change
+// (3 to 7), each only with its line: without it, the code is another
+// command's. Then sudo's refusal and a shell that could not run (126, 127):
+// nothing ran. For a package upgrade, any other failure may have changed
+// the package: only the snapshot takes it back. Any other failure of a
+// configuration fix stopped before any change.
 func classifyExit(code int, stderr []byte, pkg bool) error {
-	switch code {
-	case 0:
+	if code == 0 {
 		return nil
-	case serverfix.ExitNotRoot:
-		return ErrServerWrongUser
-	case serverfix.ExitApplied:
-		return ErrServerAlreadyApplied
-	case serverfix.ExitLineMoved:
-		return ErrServerLineMoved
-	case serverfix.ExitLink:
-		return ErrServerLink
-	case serverfix.ExitUnsafe:
-		return ErrServerUnsafe
-	case 126, 127:
+	}
+	has := func(line string) bool { return bytes.Contains(stderr, []byte(line)) }
+	if !pkg {
+		switch {
+		case code == serverfix.ExitRollbackFail || has(serverfix.MsgRollbackFailed):
+			return ErrServerRollbackFailed
+		case code == serverfix.ExitRolledBack || has(serverfix.MsgRolledBack):
+			return ErrServerRolledBack
+		}
+	}
+	own := false
+	for _, line := range serverfix.ExitLines(code) {
+		own = own || has(line)
+	}
+	if own {
+		switch code {
+		case serverfix.ExitNotRoot:
+			return ErrServerWrongUser
+		case serverfix.ExitApplied:
+			return ErrServerAlreadyApplied
+		case serverfix.ExitLineMoved:
+			return ErrServerLineMoved
+		case serverfix.ExitLink:
+			return ErrServerLink
+		case serverfix.ExitUnsafe:
+			return ErrServerUnsafe
+		}
+	}
+	if code == 126 || code == 127 {
 		return ErrServerNotRun
 	}
 	if code == 1 && (bytes.HasPrefix(stderr, []byte("sudo:")) || bytes.Contains(stderr, []byte("\nsudo:"))) {
 		return ErrServerSudoRefused
 	}
-	switch {
-	case pkg:
+	if pkg {
 		return ErrPackageFailed
-	case code == serverfix.ExitRollbackFail:
-		return ErrServerRollbackFailed
-	case bytes.Contains(stderr, []byte(scriptRolledBack)):
-		return ErrServerRolledBack
 	}
 	return ErrServerStopped
 }
 
-// scriptSteps turns the exit status of the apply script into its steps.
-// The script runs as a whole, so a failure is placed on the first step
-// that can give it: the first step for a refusal before any change, the
-// write for a line that moved, the first test, reload or upgrade for a
-// failure after the change.
-func (r *serverRun) scriptSteps(code int, stderrFail bool) {
+// scriptSteps turns the outcome of the apply script (e, its
+// classification; nil for exit 0) into its steps. The script runs as a
+// whole, so a failure is placed on the first step that can give it: the
+// first step for a refusal before any change, the write for a line that
+// moved, the first test, reload or upgrade for a failure after the change.
+func (r *serverRun) scriptSteps(e error, stderrFail bool) {
 	failsAt := func(a serverfix.Action) (bool, string) {
 		later := a.Op == serverfix.OpTestConfig || a.Op == serverfix.OpReload || a.Op == serverfix.OpPackageUpgrade
 		switch {
-		case code == serverfix.ExitNotRoot || code == serverfix.ExitApplied || code == serverfix.ExitLink || code == serverfix.ExitUnsafe ||
-			code == 126 || code == 127:
-			return true, detailStopped
-		case code == serverfix.ExitLineMoved:
-			return a.Op == serverfix.OpSetDirective, detailStopped
-		case code != 0 && r.pkg():
-			return a.Op == serverfix.OpPackageUpgrade, detailPkgFailed
-		case code == serverfix.ExitRollbackFail:
-			return later, detailRollbackBad
-		case code != 0:
-			return later, detailRolledBack
-		case stderrFail:
+		case e == nil && stderrFail:
 			return a.Op == serverfix.OpTestConfig && a.SAPI == serverfix.SAPICLI, detailStderr
+		case e == nil:
+			return false, ""
+		case errors.Is(e, ErrServerLineMoved):
+			return a.Op == serverfix.OpSetDirective, detailStopped
+		case errors.Is(e, ErrPackageFailed):
+			return a.Op == serverfix.OpPackageUpgrade, detailPkgFailed
+		case errors.Is(e, ErrServerRollbackFailed):
+			return later, detailRollbackBad
+		case errors.Is(e, ErrServerRolledBack):
+			return later, detailRolledBack
 		}
-		return false, ""
+		// A refusal, sudo's, a shell that could not run, a stop: before
+		// any change.
+		return true, detailStopped
 	}
 	failed := false
 	for _, a := range r.plan.Actions {
@@ -673,7 +690,10 @@ func (r *serverRun) fail(ctx context.Context, e error, reason string) error {
 
 // repropose checks the server again after a line moved since the
 // collection and, when the finding is still open, prepares a new fix (a
-// new correction id) that waits for the user's approval.
+// new correction id) that waits for the user's approval, or runs at level
+// 3. It does so once: when the fix that moved was itself made again, the
+// line keeps moving, so Michel makes no other one and alerts (the user
+// starts the next try). Each re-proposal follows its own new check.
 func (r *serverRun) repropose(ctx context.Context) {
 	d := r.d
 	if d.CheckServer == nil {
@@ -694,6 +714,13 @@ func (r *serverRun) repropose(ctx context.Context) {
 	if r.a.Work.Server != nil {
 		w = *r.a.Work.Server
 	}
+	if w.Reproposed {
+		_ = r.audit(ctx, "server_fix.repropose", "refused", map[string]any{"previous_attempt_id": r.a.ID, "target_id": r.t.ID,
+			"reason": "line moved again"})
+		r.alert(servercheck.AlertInput{Target: r.t, Kind: servercheck.AlertLineMovedAgain})
+		return
+	}
+	w.Reproposed = true
 	pctx, cancel := r.fresh(d.checkTimeout())
 	defer cancel()
 	na, err := d.proposeAgain(pctx, r.a, r.sf, r.t, list[0], w)

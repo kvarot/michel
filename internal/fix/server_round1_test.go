@@ -323,7 +323,7 @@ func TestClassifyExit(t *testing.T) {
 		{126, nil, false, ErrServerNotRun},
 		{127, nil, false, ErrServerNotRun},
 		{8, nil, false, ErrServerRollbackFailed},
-		{3, nil, true, ErrServerWrongUser},
+		{3, []byte("lance ce script en root\n"), true, ErrServerWrongUser},
 		{1, []byte("sudo: a password is required\n"), true, ErrServerSudoRefused},
 		{100, nil, true, ErrPackageFailed},
 		{1, nil, true, ErrPackageFailed},

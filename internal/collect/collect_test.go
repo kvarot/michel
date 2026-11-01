@@ -82,7 +82,10 @@ func (h *host) commands() map[string]sshtest.Handler {
 	out["command"] = func(e sshtest.Exec) int {
 		code := 0
 		for _, a := range e.Args[2:] {
-			if p, ok := h.bins[a]; ok {
+			if a == "sh" {
+				// Every POSIX system has sh: the lookup's sentinel.
+				io.WriteString(e.Stdout, "/bin/sh\n")
+			} else if p, ok := h.bins[a]; ok {
 				io.WriteString(e.Stdout, p+"\n")
 			} else {
 				code = 1
@@ -652,7 +655,7 @@ func TestHealthTargetRefusesNonConfigPath(t *testing.T) {
 const envC = `'env' 'LC_ALL=C' 'LANG=C' `
 
 var allowedShapes = []*regexp.Regexp{
-	regexp.MustCompile(`^'command' '-v'( '(/usr/sbin/)?(php|php-fpm(8\.[1-5])?|nginx|apache2|httpd)')+$`),
+	regexp.MustCompile(`^'command' '-v'( 'sh')?( '(/usr/sbin/)?(php|php-fpm(8\.[1-5])?|nginx|apache2|httpd)')+$`),
 	regexp.MustCompile(`^` + envC + `'cat' '/etc/os-release'$`),
 	regexp.MustCompile(`^` + envC + `'uname' '-r'$`),
 	regexp.MustCompile(`^` + envC + `'php' '(-v|-m|--ini)'$`),

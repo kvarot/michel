@@ -114,3 +114,11 @@ Written at the end of plan 6 (branch `feat/servers`). Each ruling was binding on
 12. **A script that runs past its limit** leaves the attempt `unknown` until the user checks; a hung script can hold an attempt up to 30 minutes.
 13. **Tests never touch a real server.** Everything is checked against an in-memory SSH server and a mini POSIX interpreter (also run against real dash, bash and busybox as root in WSL during Task 9). **The run on a real test server, by Kévin, is still to do.**
 14. **Windows agent via a Unix socket** widens what can answer sign-in requests; the path is only read from the user's own policy file and must sit in a user-only folder.
+
+## 4. Final wave (closed before merge)
+
+- **One server fix at a time** (final review I1): for a server, `applied` and `unknown` count as busy (`CreateAttempt`, `serverBusy`, `NextQueued`, the level 3 guard, `TargetBlock`), and `Claim` refuses while another attempt of the same server is `running`, `applied` or `unknown` (one conditional `UPDATE … NOT EXISTS`).
+- **Rollback exit** (I2): `rollback()` ends with its own `exit 9`; the new copies and the line checks (exit 5) come before the trap is armed; `classifyExit` reads codes 8/9 and the rollback lines first, and a code 3–7 only with its own line. A re-proposal after a moved line happens once; a second moved line alerts (`line_moved_again`) and prepares nothing.
+- **Discovery sentinel** (I3, Task 7 deferred): `command -v sh …` must print a path to `sh`, else the lookup is `Unseen` (`discovery`), never "no PHP".
+- **Unreadable scripts** (Task 13 n2) are refused by `approveServer` and by `canApproveServer`.
+- **Texts**: `fix.intro_server` (F1), the 16 FR rewordings, the server alert webhook marker `michel_server_alert` (Task 14), the M6 regression test in `serverrules`, the unused key `srvfix.rolled_back` (n5), README scheduler and package rollback wording, the never-kills and redirect notes in `docs/servers*.md`, exit 4 for `undo`.

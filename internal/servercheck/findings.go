@@ -31,6 +31,9 @@ const (
 	// AlertAutoNotRun: a fix approved by the level 3 rules could not be
 	// started (server unreachable); Michel tries again after the next check.
 	AlertAutoNotRun = "auto_not_run"
+	// AlertLineMovedAgain: a fix made again after a line moved met a moved
+	// line too; Michel prepares no third one by itself.
+	AlertLineMovedAgain = "line_moved_again"
 )
 
 // AlertInput is what Alert is told: the server, the findings concerned and

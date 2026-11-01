@@ -263,7 +263,7 @@ func (d Deps) workServer(ctx context.Context, f scan.Finding, t target.Target) (
 // a rule approved whose run could not start (server unreachable): those are
 // tried again once after each new check of the server, never in a loop.
 // The fix is validated again against the server's latest inventory first.
-// A server with a fix whose state is unknown or running gets none. A fix
+// A server with a fix whose state is unknown, running or applied gets none. A fix
 // that ran tells the user (Alert applied_auto); one that could not start
 // tells it once (Alert auto_not_run); one that failed was told by its run.
 // An error is audited once per attempt and reason, not at every pass. The
@@ -336,8 +336,9 @@ func (d Deps) autoServer(ctx context.Context, a Attempt) (ran bool, err error) {
 	if err != nil || !ok || prop.Server == nil || prop.Scripts == nil {
 		return false, err
 	}
-	// No fix runs alone next to one whose outcome is not known.
-	for _, st := range []State{StateUnknown, StateRunning} {
+	// No fix runs alone next to one whose outcome is not known, or whose
+	// steps after the script (site check, undo, recollection) still run.
+	for _, st := range []State{StateUnknown, StateRunning, StateApplied} {
 		list, err := d.repo().ListAttempts(ctx, t.ID, string(st))
 		if err != nil {
 			return false, err

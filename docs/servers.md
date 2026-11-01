@@ -77,7 +77,7 @@ What Michel does **not** read, ever: data folders, databases, the homes of other
 - **Secrets never get stored.** Values of `password`, `secret`, `key`, `token`, DSN and the known secret settings are masked before storage; the database keeps the directive name, a non-secret value, the file and the line, plus the file's fingerprint, never the raw file.
 - **Symbolic links** are not followed to read a file outside what PHP names.
 - What Michel could not read is listed as **not seen** ("`php.ini` unreadable with the user deploy"), in plain words. It never tries another way. Note: an unreadable `.user.ini` keeps all the settings findings of that server open, which is broad on purpose.
-- Commands assume a POSIX login shell for the SSH user (a csh or fish login shell may give odd results).
+- Commands assume a POSIX login shell for the SSH user. The program lookup (`command -v`) asks for `sh` first, which every system has: if the login shell has no `command` (csh, tcsh), Michel sees it. The PHP lookup is then listed as **not seen**, and the server's PHP findings stay open: never "no PHP".
 - Limits: 60 s per command, 5 min per collection, 1 MiB of output per command, 256 KiB per configuration file.
 
 ### PHP of the command line is not always the PHP of the site
@@ -113,7 +113,7 @@ A fix is never free text. It is a **sequence of typed actions from a closed list
 
 - **No action deletes anything.** No `rm`, no emptying, no database. The only file written is an existing configuration file, saved right before. If a setting is nowhere, Michel **appends a line** at the end of the loaded `php.ini` (or `.user.ini` on shared hosting), never a new file in `conf.d`.
 - Each fix produces two scripts, `apply` and `undo`, plus a plain "what it does" text. A SHA-256 fingerprint covers the scripts and the list of checks, together with the server and the fix; **what you validate is exactly what runs**, and Michel re-checks before sending.
-- `apply` protects itself: `set -eu`, and a `trap` that puts the saved files back and reloads if a step fails after a change. This holds when you run it yourself.
+- `apply` protects itself: `set -eu`, and a `trap` that puts the saved files back and reloads if a step fails after a change, then exits with code `9`. The new copies are made, and each line checked, before the `trap` is set: code `5` (the line changed) always means nothing was changed. This holds when you run it yourself.
 - Fixed order: backup, change, config test, reload, site check, new collection of the server. A step that fails stops everything.
 - Michel only writes **PHP configuration**. For nginx and Apache, it reports and explains what to change; it writes nothing.
 - **Not testable, no script.** A fix reloads PHP, and Michel will not do that without testing the configuration first. The test is only run with PHP binaries named `php` or `php-fpm` (with an optional version) under `/usr/bin`, `/usr/sbin`, `/usr/local/bin` or `/usr/local/sbin`. A PHP elsewhere (`/opt/…`, compiled by hand) gets **no script at all**, not even for you, and Michel explains why.
@@ -124,15 +124,26 @@ A fix is never free text. It is a **sequence of typed actions from a closed list
 
 | Situation | What Michel does |
 |---|---|
-| A step fails after a change | the script puts the files back, reloads; state *rolled back*, an urgent alert |
+| A step fails after a change | the script puts the files back, reloads and exits `9`; state *rolled back*, an alert. Michel reads that code, or the script's last line, before any other code: a command failing with its own code (a reload exiting `5`) is never taken for "the line changed" |
 | The site stops answering after a config fix | `undo` right away if Michel runs it; otherwise an urgent "run `undo` now" with the script shown |
 | `undo` itself fails | urgent alert, with the saved copies to put back by hand |
 | A **package** upgrade fails or the site dies after it | **never rolled back automatically**: state *failed*, urgent "restore your snapshot" |
 | The script ran past its time limit, or the connection dropped | state **`unknown`**: Michel cannot say what changed, urgent alert, a new collection, and no guessed undo |
 
-Time limits of a Michel-run script: **5 minutes** for configuration, **30 minutes** for packages; Michel never kills the process (killing `dpkg` midway is worse than waiting). A fix that failed is never run again: prepare a new one (new ID).
+Time limits of a Michel-run script: **5 minutes** for configuration, **30 minutes** for packages. Michel never sends a signal to stop the script (killing `dpkg` midway is worse than waiting). But once the limit is past, it closes the connection: a command that still writes to its output may then stop. A package upgrade longer than 30 minutes can therefore be cut: keep your snapshot. A fix that failed is never run again: prepare a new one (new ID).
 
-The exit codes of a script, in case you run it yourself: `0` fine; `3` not run by the right user (root for `php.ini` or a pool, the SSH user for a `.user.ini`); `4` this fix was already applied; `5` the line moved since the last check (nothing changed); `6` a file is a link; `7` unsafe folder or backup; `8` the **rollback failed** (urgent: look at the server). See [troubleshooting](#11-troubleshooting).
+If you run a script yourself, these are its exit codes:
+
+- `0`: fine.
+- `3`: not run by the right user (root for `php.ini` or a pool, the SSH user for a `.user.ini`).
+- `4`: this fix was already applied (for `undo`: a backup is missing).
+- `5`: the line changed since the last check (nothing was changed).
+- `6`: a file is a symbolic link.
+- `7`: unsafe folder or backup.
+- `8`: the **rollback failed** (urgent: look at the server).
+- `9`: a step failed after the change; the files were put back and PHP reloaded.
+
+Codes `3` to `7` always come before any change, with their line of explanation. See [troubleshooting](#11-troubleshooting).
 
 ## 7. Who runs the script, and sudo
 
@@ -163,13 +174,19 @@ Each server has its own level (`--level`, default 1):
 | 2 | Prepare | prepares the scripts by itself for each flaw; they wait for your validation |
 | 3 | Apply what I allowed | like 2, and runs without a click the fixes that follow all your rules |
 
-**Level 3 rules**, all required, checked by Michel (never by an agent): `executor: michel`; the box "fix alone the known risky settings" ticked for this server; **only `set_directive` of Michel's embedded rules, to their advised value** (no package, no agent's proposal, never a `.user.ini`, which has no config test); a config test and a site check (so a `site_url`); `sudo: nopasswd` for a root file; a linked preprod proven first by Michel's **own** fix for this very finding; no running or `unknown` attempt on the server; a testable binary. Fixes you prepared by hand may run alone if these rules hold. The digest and the alerts say what was applied alone and what was undone.
+**Level 3 rules**, all required, checked by Michel (never by an agent): `executor: michel`; the box "fix alone the known risky settings" ticked for this server; **only `set_directive` of Michel's embedded rules, to their advised value** (no package, no agent's proposal, never a `.user.ini`, which has no config test); a config test and a site check (so a `site_url`); `sudo: nopasswd` for a root file; a linked preprod proven first by Michel's **own** fix for this very finding; no other attempt running on the server (its script, or the checks after it) nor `unknown`; a testable binary. Fixes you prepared by hand may run alone if these rules hold. The digest and the alerts say what was applied alone and what was undone.
+
+**One fix at a time per server.** While a fix is prepared, waits for your approval, runs, or is checked after its script (site, undo, new collection), or while its outcome is `unknown`, Michel prepares, approves by a rule and runs no other fix on that server, and the server cannot be removed. The same holds by hand: **Prepare the fix** says a fix is already in progress.
+
+If the line changed (exit `5`), Michel checks the server again and prepares **one** new fix. If that one meets a changed line too, it prepares no other, even at level 3, and alerts you: you start the next try.
 
 **The agent** (Claude Code, as in [fix.md](fix.md)) is only used to understand or discuss a case: a combined flaw, several possible settings, a choice between update and workaround. Michel alone prepares the known fixes (a rule to its advised value, a package to its fixed version). The agent never gets SSH access, sees only the **masked** inventory, cannot validate, and has no file tool: it proposes typed actions through one MCP tool, and Michel checks each action before assembling the scripts. The **consent is per server**, and it is the **preprod's** when a preprod is linked (it is its inventory that leaves). **You can revoke it** at any time. A server of kind `hds` (`health`) never gets an agent.
 
 ## 10. Alerts and SMS
 
 Alerts use the channels of [daily-digest.md](operations/daily-digest.md) (mail, desktop notification, webhook), with a minimal content ("server X: 1 serious flaw", a link), never a detailed version or a setting. **A channel limited to some projects never receives a server alert.**
+
+On a `generic` webhook, a server alert is `{"michel_server_alert": 1, "kind": "…", "title": "…", "text": "…"}`, not to be confused with the "a fix waits" message (`michel_fix_waiting`).
 
 **SMS** is a channel type `sms` (`provider: freemobile` for the Free Mobile API, free for its subscribers, or `generic` for a paid provider through a signed POST). Its key sits in the secret store (`michel secret set sms-urgent`), never in the policy file; the Free Mobile login number is a plain field. It needs its own network rule (`notify.sms`). SMS is sent **only for the urgent**: a `prod` server with a flaw exploited in the wild (KEV) or critical, a rollback that failed, an `unknown` state, a package upgrade to restore from snapshot. An unfixed distribution advisory without KEV is never urgent. At most **3 SMS a day** (`sms_per_day`), all channels together, counted on **your local day**. The digest and mail carry the rest. A failed urgent alert is not resent (the digest lists it).
 
@@ -190,11 +207,14 @@ Michel shows these messages in your language; here is what to do.
 | **Michel cannot test the configuration: the PHP is not a system one** | The PHP is outside the system folders: no script, to avoid reloading PHP untested. Change the PHP setting by hand. |
 | **To check its system packages Michel needs the source …** | Run the `michel source enable …` command shown. |
 | **The PHP version could not be read** | Check that `php -v` works for the SSH user, then check again. |
-| **The file changed on the server since the last check** (exit 5) | Nothing was changed. Michel checks again and prepares a new fix. |
+| **The site stops answering after a fix, though it works** | If the site address redirects to another host (for example `www.`), the site check is refused by the network policy: only the address you gave has a rule. Give the final address as `site_url`. |
+| **The file changed on the server since the last check** (exit 5) | Nothing was changed. Michel checks again and prepares a new fix, once. |
+| **A fix could not be applied twice in a row, the file keeps changing** | Something else changes that file (a deploy tool, a hosting panel). Michel stops trying alone. Find what changes it, then prepare the fix by hand. |
+| **The fix failed and was undone** (exit 9) | A step after the change failed (config test, reload); the files were put back. See the failed step on the page, fix its cause, then prepare a new fix. |
 | **A file to change is a symbolic link** (exit 6) | Fix that file by hand. |
 | **A folder or file can be changed by someone other than root** (exit 7) | Safety stop, nothing changed. Fix the rights, or the folder/backup that is not root's. |
 | **The fix failed and could not be put back** (exit 8) | Urgent. Look at the server now; the saved copies are on the page and in the backup folder. |
-| **Already applied** (exit 4) | Michel never runs the same fix twice. Prepare a new one. |
+| **Already applied** (exit 4) | Michel never runs the same fix twice. Prepare a new one. For `undo`, exit 4 means a backup is missing: nothing was put back. |
 | **Not run by the right user** (exit 3) | Run it as root (or the SSH user for a `.user.ini`). |
 | **The script gave no answer: state unknown** | Look at the server yourself (is the config valid, does the site answer?). Then say you checked: **I checked the server** on the page, or `michel fix resolve <attempt>`. The fix ends as failed; Michel changes nothing on the server. Until then the server accepts no new fix and cannot be deleted. |
 | **A package upgrade failed / the site no longer answers after it** | No script can undo it: restore your snapshot, then check the server. |

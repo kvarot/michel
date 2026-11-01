@@ -40,7 +40,7 @@ const (
 	msgLink       = "lien refuse"
 )
 
-// Exit codes the scripts use, for Task 10.
+// Exit codes the scripts use.
 const (
 	ExitNotRoot      = 3 // wrong user (not root, or root for a .user.ini)
 	ExitApplied      = 4 // already applied (Apply), or a backup missing (Undo)
@@ -48,7 +48,36 @@ const (
 	ExitLink         = 6 // a target file is a symbolic link
 	ExitUnsafe       = 7 // a folder, file, binary or backup is not root's and closed
 	ExitRollbackFail = 8 // the rollback itself failed: urgent alert
+	ExitRolledBack   = 9 // a step failed after the change, the files were put back
 )
+
+// The lines rollback() prints on the error output, last: the files were put
+// back (then exit 9), or not all of them (then exit 8). Only rollback()
+// prints them, so only after the trap was armed.
+const (
+	MsgRolledBack     = msgRolled
+	MsgRollbackFailed = msgRollFailed
+)
+
+// ExitLines are the lines a script prints on its error output with each of
+// its own refusals (codes 3 to 7), always before any change: an exit code
+// in that range without one of its lines is not the script's own (a
+// package manager's, or another command's).
+func ExitLines(code int) []string {
+	switch code {
+	case ExitNotRoot:
+		return []string{msgRoot, msgNotRoot, msgOwner}
+	case ExitApplied:
+		return []string{msgApplied, msgNoBackup}
+	case ExitLineMoved:
+		return []string{msgNoLine}
+	case ExitLink:
+		return []string{msgLink}
+	case ExitUnsafe:
+		return []string{msgUnsafeBak, msgUnsafeDir, msgUnsafeFile}
+	}
+	return nil
+}
 
 // Building blocks of the grammar. A case pattern is unquoted: quoted, its
 // ? would be a literal character; ? also stands for the space of stat. A
@@ -110,6 +139,7 @@ var Grammar = []string{
 	`  ` + gReload + ` \|\| R=1`,
 	`  \[ "\$R" = 0 \] \|\| \{ echo "` + msgRollFailed + `" >&2; exit 8; \}`,
 	`  echo "` + msgRolled + `" >&2`,
+	`  exit 9`,
 	`\}`,
 	`main\(\) \{`,
 	`main </dev/null`,
@@ -445,6 +475,10 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 		}
 		ap.l(`  [ "$R" = 0 ] || { echo "` + msgRollFailed + `" >&2; exit 8; }`)
 		ap.l(`  echo "` + msgRolled + `" >&2`)
+		// Its own code: without it, sh exits with the status of the command
+		// that failed, which may be one of the scripts' own (a reload that
+		// exits 5).
+		ap.l("  exit 9")
 		ap.l("}")
 	}
 	start(&ap)
@@ -471,9 +505,11 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 		for i, f := range files {
 			ap.l("cat ", q(f), " > ", bak(i+1))
 		}
-		ap.l("trap 'rollback' EXIT")
-		ap.l("trap 'exit 1' HUP INT TERM")
-		ap.l("# changes")
+		// The new copies are made, and each line checked (exit 5), before
+		// the trap is armed: nothing has changed yet, so the scripts' own
+		// exit 5 never meets a rollback. Then the trap, then the writes.
+		ap.l("# new copies")
+		last := make([]string, len(files))
 		for i, f := range files {
 			n, k, cur := i+1, 0, bak(i+1)
 			for _, w := range writes {
@@ -498,8 +534,14 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 				}
 				cur = next
 			}
+			last[i] = cur
+		}
+		ap.l("trap 'rollback' EXIT")
+		ap.l("trap 'exit 1' HUP INT TERM")
+		ap.l("# changes")
+		for i, f := range files {
 			linkCheck(&ap, f)
-			ap.l("cat ", cur, " > ", q(f))
+			ap.l("cat ", last[i], " > ", q(f))
 		}
 	}
 	if len(tests)+len(reloads) > 0 {

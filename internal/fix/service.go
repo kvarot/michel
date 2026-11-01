@@ -416,7 +416,18 @@ func (d Deps) find(ctx context.Context, id string) (scan.Finding, project.Projec
 // busy reports whether the project has an attempt being worked on or
 // waiting for the user.
 func (d Deps) busy(ctx context.Context, projectID string) (bool, error) {
-	for _, st := range []State{StatePreparing, StateProposed, StateApproved, StateRunning} {
+	return d.busyIn(ctx, projectID, StatePreparing, StateProposed, StateApproved, StateRunning)
+}
+
+// serverBusy is busy for a server: an applied attempt (its site check, undo
+// and recollection still run) or one whose outcome is unknown counts too,
+// so a server never has two fixes at once.
+func (d Deps) serverBusy(ctx context.Context, targetID string) (bool, error) {
+	return d.busyIn(ctx, targetID, StatePreparing, StateProposed, StateApproved, StateRunning, StateApplied, StateUnknown)
+}
+
+func (d Deps) busyIn(ctx context.Context, projectID string, states ...State) (bool, error) {
+	for _, st := range states {
 		list, err := d.repo().ListAttempts(ctx, projectID, string(st))
 		if err != nil {
 			return false, err

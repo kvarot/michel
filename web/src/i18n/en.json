@@ -643,7 +643,7 @@
   "servers.hostkey.now": "Fingerprint shown now: {fp}",
   "servers.hostkey.replace_ok": "I know why the key changed (for example, I reinstalled the server) and I checked the new fingerprint with my host.",
   "servers.hostkey.replace": "Replace the fingerprint",
-  "servers.hostkey.keep": "Keep the old one",
+  "servers.hostkey.keep": "Keep the old fingerprint",
   "servers.hostkey.cancel": "Later",
   "servers.sheet.loading": "Michel is opening the server's sheet.",
   "servers.sheet.check": "Check now",
@@ -768,7 +768,7 @@
   "srvfix.restore.body": "The package upgrade went wrong and no script can undo it. Restore the snapshot you made at your host, then check the server.",
   "srvfix.backups": "The copies of the files",
   "srvfix.backup_server": "On the server: {line}",
-  "srvfix.backup_hint": "To put a file back by hand: copy the kept file over the changed file (cp copy file), then reload PHP.",
+  "srvfix.backup_hint": "To put a file back by hand: copy the backup over the changed file (cp <backup> <file>), then reload PHP.",
   "srvfix.again": "Prepare again",
   "srvfix.done.proven_fixed": "Fixed: the new check no longer sees the problem.",
   "srvfix.done.inconclusive": "The script ran, but Michel could not prove the fix.",
@@ -784,7 +784,6 @@
   "today.servers.hint": "A known flaw affects these servers: their sheet says what to do.",
   "today.servers.open": "See the server",
 
-  "srvfix.rolled_back": "Rollback done: the server is as it was before the fix.",
   "servers.state.of_urgent.one": ", {n} of them urgent",
   "servers.state.of_urgent.other": ", {n} of them urgent",
   "servers.state.of_critical.one": ", {n} of them critical",
@@ -803,6 +802,6 @@
   "servers.sheet.runtime": "PHP {sapi} ({binary})",
   "servers.sheet.runtime_nobin": "PHP {sapi}",
   "servers.discover.pick_one": "Tick a server",
-  "fix.intro_server": "For a server, Michel prepares the scripts from his own rules, without an agent; nothing changes on the server without your approval.",
+  "fix.intro_server": "For a server, Michel prepares the scripts from his own rules, without an agent. Nothing changes on the server without your approval, or that of the rules you allowed.",
   "srvfix.scripts_unreadable": "Michel cannot show these scripts as they are (unreadable text). Run nothing: prepare a new fix."
 }

@@ -218,7 +218,7 @@ func (d Deps) startServerAgent(ctx context.Context, findingID, origin string) (A
 	if !ok {
 		return Attempt{}, ErrNoInventory
 	}
-	if busy, err := d.busy(ctx, on.ID); err != nil {
+	if busy, err := d.serverBusy(ctx, on.ID); err != nil {
 		return Attempt{}, err
 	} else if busy {
 		return Attempt{}, ErrBusy

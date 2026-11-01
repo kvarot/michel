@@ -46,9 +46,16 @@ var (
 	cmdAPK       = []string{"apk", "info", "-v"}
 )
 
-// cmdFind is `command -v` on the PHP names (as the plan lists them).
+// sentinel is the name cmdFind asks first: every POSIX system has it, so a
+// lookup that does not print its path did not look at all (a login shell
+// without `command`, such as tcsh, answers exit 1 with nothing printed, as
+// bash does when every name is missing).
+const sentinel = "sh"
+
+// cmdFind is `command -v` on the sentinel, then on the PHP names (as the
+// plan lists them).
 func cmdFind() []string {
-	return append([]string{"command", "-v", "php"}, fpmNames...)
+	return append([]string{"command", "-v", sentinel, "php"}, fpmNames...)
 }
 
 // cmdFindSbin is `command -v` on the web servers and on the FPM and web

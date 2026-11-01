@@ -463,10 +463,13 @@ func TestSudoPrefixOnlyWhenNopasswd(t *testing.T) {
 
 // harness is a test server with the demo files and the mini shell.
 type harness struct {
-	srv   *sshtest.Server
-	sh    *sshtest.Shell
-	fpmT  int // exit status of php-fpm -t
-	rel   int // exit status of systemctl reload
+	srv  *sshtest.Server
+	sh   *sshtest.Shell
+	fpmT int // exit status of php-fpm -t
+	rel  int // exit status of systemctl reload
+	// rels, when set, are the exit statuses of the reloads in turn (then
+	// rel).
+	rels  []int
 	stdin []string
 }
 
@@ -482,8 +485,15 @@ func newHarness(t *testing.T, sh *sshtest.Shell) *harness {
 				h.stdin = append(h.stdin, string(b))
 				return h.fpmT
 			},
-			cliBin:       func(e sshtest.Exec) int { return 0 },
-			"systemctl":  func(e sshtest.Exec) int { return h.rel },
+			cliBin: func(e sshtest.Exec) int { return 0 },
+			"systemctl": func(e sshtest.Exec) int {
+				if len(h.rels) > 0 {
+					code := h.rels[0]
+					h.rels = h.rels[1:]
+					return code
+				}
+				return h.rel
+			},
 			"apt-get":    func(e sshtest.Exec) int { return 0 },
 			"rc-service": func(e sshtest.Exec) int { return 0 },
 		},

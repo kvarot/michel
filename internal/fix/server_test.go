@@ -1104,8 +1104,14 @@ func TestServerAuditHasNoConfigContent(t *testing.T) {
 
 func TestServerExitCodesAndKeys(t *testing.T) {
 	for code, want := range map[int]error{3: ErrServerWrongUser, 4: ErrServerAlreadyApplied, 5: ErrServerLineMoved, 6: ErrServerLink,
-		7: ErrServerUnsafe, 8: ErrServerRollbackFailed, 1: ErrServerRolledBack, 2: ErrServerRolledBack} {
-		got := classifyExit(code, []byte(scriptRolledBack), false)
+		7: ErrServerUnsafe, 8: ErrServerRollbackFailed, 9: ErrServerRolledBack, 1: ErrServerRolledBack, 2: ErrServerRolledBack} {
+		// A refusal (3 to 7) comes with its own line; a failure after the
+		// change with the rollback's.
+		stderr := []byte(scriptRolledBack)
+		if lines := serverfix.ExitLines(code); len(lines) > 0 {
+			stderr = []byte(lines[0])
+		}
+		got := classifyExit(code, stderr, false)
 		if !errors.Is(got, want) {
 			t.Errorf("exit %d: %v", code, got)
 		}

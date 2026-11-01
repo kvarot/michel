@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
 
@@ -62,6 +63,10 @@ type ServerWork struct {
 	// proven, that preprod attempt: the only proof that opens the level 3
 	// rules for this fix.
 	PreprodAttemptID string `json:"preprod_attempt_id,omitempty"`
+	// Reproposed is set on a fix Michel made again by itself after a line
+	// moved (exit 5): when that one meets a moved line too, Michel makes no
+	// third one and alerts instead.
+	Reproposed bool `json:"reproposed,omitempty"`
 }
 
 // ServerFix is the validated server fix a proposal carries next to its
@@ -113,6 +118,9 @@ var (
 	// ErrScriptChanged: the scripts are not the ones validated (stored
 	// record altered, or the server changed since): nothing was sent.
 	ErrScriptChanged = errors.New("the scripts are not the ones that were validated: nothing was sent")
+	// ErrScriptsUnreadable: the scripts are not valid text, so the page
+	// cannot show them: they are never approved unseen.
+	ErrScriptsUnreadable = errors.New("the scripts cannot be shown: they are not approved")
 	// ErrSimulationRefused: the package manager's simulation shows a
 	// removal, an error or not the expected upgrade: nothing was applied.
 	ErrSimulationRefused = errors.New("the package simulation refuses this upgrade: nothing was applied")
@@ -173,6 +181,7 @@ func serverErrorKey(err error) string {
 		{ErrPreprodMissing, "fix.server.preprod_missing"},
 		{ErrSnapshotRequired, "fix.server.snapshot_required"},
 		{ErrScriptChanged, "fix.server.script_changed"},
+		{ErrScriptsUnreadable, "fix.server.scripts_unreadable"},
 		{ErrSimulationRefused, "fix.server.simulation_refused"},
 		{ErrNotMichelExecutor, "fix.server.not_michel"},
 		{ErrNotUserExecutor, "fix.server.not_user"},
@@ -410,7 +419,7 @@ func (d Deps) proposeServerAs(ctx context.Context, t target.Target, f scan.Findi
 	if err != nil {
 		return Attempt{}, err
 	}
-	if busy, err := d.busy(ctx, t.ID); err != nil {
+	if busy, err := d.serverBusy(ctx, t.ID); err != nil {
 		return Attempt{}, err
 	} else if busy {
 		return Attempt{}, ErrBusy
@@ -663,6 +672,12 @@ func (d Deps) approveServer(ctx context.Context, a Attempt, prop Proposal, hash 
 	}
 	if prop.Server == nil || prop.Scripts == nil {
 		return ErrScriptChanged
+	}
+	if !utf8.ValidString(prop.Scripts.Apply) || !utf8.ValidString(prop.Scripts.Undo) {
+		// The page shows no script it cannot show as is: nothing is
+		// approved unseen, by the user or by a rule.
+		_ = d.record(ctx, "server_fix.approve", a.ID, "refused", map[string]any{"attempt_id": a.ID, "reason": "scripts unreadable", "hash": prop.Hash})
+		return ErrScriptsUnreadable
 	}
 	if prop.Server.NeedsSnapshot {
 		_, _, ok, err := repo.SnapshotAck(ctx, a.ID)

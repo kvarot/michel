@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -235,6 +236,10 @@ func (c *collector) find() map[string]string {
 		if (broken || (res.Exit != 0 && res.Exit != 1 && res.Exit != 127)) && c.err == nil {
 			failed = true
 		}
+		if argv[2] == sentinel && !broken && c.err == nil && !sentinelFound(string(res.Stdout)) {
+			// No path for sh: the shell did not look, whatever its status.
+			failed = true
+		}
 		for _, p := range parseFound(string(res.Stdout)) {
 			for _, asked := range argv[2:] {
 				if asked == p || (!strings.HasPrefix(asked, "/") && strings.HasSuffix(p, "/"+asked)) {
@@ -250,6 +255,17 @@ func (c *collector) find() map[string]string {
 		c.unseen("discovery", ReasonProbe)
 	}
 	return found
+}
+
+// sentinelFound tells whether `command -v` printed an absolute path to the
+// sentinel (sh).
+func sentinelFound(out string) bool {
+	for _, l := range lines(out) {
+		if p := cleanPath(l); strings.HasPrefix(p, "/") && path.Base(p) == sentinel {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *collector) packages() {

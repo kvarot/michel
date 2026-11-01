@@ -282,13 +282,15 @@ export function needsSnapshot(p) {
 
 /**
  * canApproveServer tells whether Valider may be offered for a server fix: a
- * proposed attempt with its proposal, and the snapshot done when it needs
- * one (never without it, even at level 3).
+ * proposed attempt with its proposal, scripts the page can show (never
+ * validated unseen), and the snapshot done when it needs one (never without
+ * it, even at level 3).
  * @param {object|null} attempt AttemptView with server
  * @param {object|null} proposal its current proposal (with its hash)
  */
 export function canApproveServer(attempt, proposal) {
   if (!attempt || !attempt.server || attempt.state !== 'proposed' || !proposal || !proposal.hash) return false
+  if (attempt.server.scripts_unreadable) return false
   return !needsSnapshot(attempt.server) || !!attempt.server.snapshot_done
 }
 
