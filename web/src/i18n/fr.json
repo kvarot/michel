@@ -802,6 +802,6 @@
   "servers.sheet.runtime": "PHP {sapi} ({binary})",
   "servers.sheet.runtime_nobin": "PHP {sapi}",
   "servers.discover.pick_one": "Coche un serveur",
-  "fix.intro_server": "Pour un serveur, Michel prépare les scripts d'après ses propres règles, sans agent. Rien ne change sur le serveur sans ta validation, ou celle des règles que tu as autorisées.",
+  "fix.intro_server": "Pour un serveur, Michel prépare lui-même les corrections connues, d'après ses propres règles ; un agent sert seulement à discuter d'un cas précis. Rien ne change sur le serveur sans ta validation, ou celle des règles que tu as autorisées.",
   "srvfix.scripts_unreadable": "Michel ne peut pas afficher ces scripts tels quels (texte illisible). Ne lance rien : prépare une nouvelle correction."
 }
