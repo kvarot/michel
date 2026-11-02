@@ -57,3 +57,18 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 1: complete (commits 1030d66..2894421, review clean)
 - Task 1: minor (deferred): text of a non-ignored row refreshes on every Apply.
 - Note: push of feat/server-logs refused by the session permission check. Commits stay local until Kévin decides.
+- Task 2: implementer DONE_WITH_CONCERNS, commit 6cf93ba, BASE 21da80e. TestFilterVariants 9 of 15 skipped (mawk, busybox absent); symlink branch not run on this PC.
+- Task 2: review needs fixes (1 Critical IP and numeric shapes in Channel and Location; 2 Important wildcard cap reads oldest, SQLSTATE takes pid or user). Compressed IPv6 in cleaned text raised from Minor to fix round: § 7.3 is absolute. FIX_BASE 6cf93ba.
+- Ruling R8: FileID stays inode only, against spec § 5.2 "inode and device" — brief prescribes `ls -di` and no POSIX tool gives device portably — costs a missed rotation only if a path changes device with the same inode and a larger size.
+- Ruling R9: identifier-shaped names (`jean_dupont`) in Type, Location or Channel cannot be closed by a whitelist: accepted, to document in Task 10, and to show to Kévin — no shape separates them from a class name — costs a possible personal name in a field if a real path or forged line holds one.
+- Task 2: minor (deferred to Task 3): sshx.MaxOutput can cut output, F lines come after R lines, treat truncation as failed read; first read with no file needs an explicit decision for a later file; FileState.File must stay out of the API; ValidatePath must not accept more than the Script whitelist.
+- Task 2: minor (deferred): no lower bound on hours; mid-line resume after skip; symlink case ends with t.Logf not t.Skip; hand-copied class in shell case; `withoutMessage` drops lines by substring.
+- Task 2: fix round 1 implementer reply, commit 9e8810f, re-review dispatched. Implementer concerns: unbracketed pid or user with a valid class still passes as type; numbers of 6 digits or fewer and `ip-203-0-113-77` still pass; `Version20261102120000.php`, `messages.fr.php` and dotted channels lose detail; line numbers capped at 6 digits.
+- Task 2: fix round 1/5 (4 addressed, 0 open; commits 6cf93ba..9e8810f)
+- Ruling R10: suffixed hosts and hyphenated digit groups enter fix round 2 — "Jamais d'IP" is absolute and `ip-203-0-113-7` is a real form — costs folders such as `2026-11-02` and `v1.2.3` dropped from locations.
+- Ruling R11: a 5-digit pid or a user in a listed SQLSTATE class right before the severity still passes as a type; accepted, Task 8 wording says `%e` must come last — only an exact list of codes closes it, and a pid is not personal data — costs split signatures on such prefixes.
+- Task 2: minor (deferred): numbered rotation past the cap drops the live file (docs in Task 10); `Foo::bar` cleans to `[addr]` in opt-in text; glob expanded twice allows MAX + 1 under a race; dotted channels, `messages.fr.php` and `Version20261102120000.php` lose a field; serverlog test package takes about 250 s.
+- Task 2: fix round 2/5 (2 addressed, 0 open; commits 9e8810f..f331630)
+- Task 2: complete (commits 21da80e..f331630, review clean)
+- Task 2: minor (deferred): Laravel and Doctrine migration names and `releases/1.2.3` lose their location; two digit groups (`ip-203-0`) and letter-split groups (`203x0x113`) still pass; TestFilterVariants 9 of 15 skipped, symlink branch not run on this PC.
+- Stop point: Task 3 not started, it waits for the plan 6 real run.
