@@ -1,0 +1,29 @@
+[02-Nov-2026 10:00:01 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[23000] INSERT INTO patients VALUES ('Zoe Trappe', 'diagnostic-fictif', 199139999912345) in /var/www/demo/app/Invoice.php:42
+Stack trace:
+#0 /var/www/demo/app/Invoice.php(42): PDO->exec('INSERT INTO patients VALUES ...')
+#1 {main}
+  thrown in /var/www/demo/app/Invoice.php on line 42
+[02-Nov-2026 10:00:02 UTC] [client 203.0.113.77:52100] PHP Warning:  Undefined key "jean.trappe@example.test" on https://example.test/reset?token=urlfakeparam in /home/jtrappe/site/account.php on line 7
+[02-Nov-2026 10:00:03 UTC] PHP Notice:  Zoe Trappe, NIR 1 99 13 99 999 123 45, Bearer fakeBearerTokenAbc123 in /var/www/demo/jean.trappe@example.test/form.php on line 9
+PHP Fatal error:  Uncaught jean.trappe@example.test: x in /203.0.113.77:8080
+PHP Fatal error:  Uncaught Zoe Trappe: tok_fake_9f8e7d6c5b4a in /reset?token=urlfakeparam:3
+2026-11-02 10:00:04.123 UTC [4242] jtrappe@patients_db 203.0.113.77 23505 ERROR:  duplicate key value violates unique constraint "patients_email_key"
+2026-11-02 10:00:04.123 UTC [4242] jtrappe@patients_db 203.0.113.77 23505 DETAIL:  Key (email)=(jean.trappe@example.test) already exists.
+2026-11-02 10:00:04.123 UTC [4242] jtrappe@patients_db 203.0.113.77 23505 STATEMENT:  INSERT INTO patients (nir, name) VALUES ('199139999912345', 'Zoe Trappe')
+2026-11-02 10:00:05.000 UTC [4243] app@patients_db 198.51.100.23 FATAL:  password authentication failed for user "jtrappe"
+2026-11-02 10:00:05.000 UTC [4243] app@patients_db 198.51.100.23 HINT:  Ask jean.trappe@example.test
+2026-11-02 10:00:05.000 UTC [4243] app@patients_db 198.51.100.23 CONTEXT:  SQL function "reset" token=urlfakeparam
+	'diagnostic-fictif' ERROR:  continuation of a statement, Zoe Trappe
+[2026-11-02 10:00:06] local.ERROR: Payment refused for jean.trappe@example.test from 203.0.113.77 {"userId":199139999912345,"exception":"[object] (App\\Billing\\PaymentException(code: 0): Card of Zoe Trappe refused at /var/www/demo/src/Billing/Pay.php:88)
+[stacktrace]
+#0 /var/www/demo/src/Billing/Pay.php(88): charge('diagnostic-fictif')
+[2026-11-02T10:00:07.000000+01:00] request.CRITICAL: Uncaught PHP Exception App\Foo: "https://example.test/reset?token=urlfakeparam" at /var/www/demo/src/Foo.php line 7 {"exception":"[object] (App\\Foo(code: 0): Bearer fakeBearerTokenAbc123 at /home/jtrappe/src/Foo.php:7)"} []
+[2026-11-02 10:00:08] jean.trappe@example.test.ERROR: channel is an email {"exception":"[object] (Zoe Trappe(code: 0): x at /home/jtrappe/a@example.test/b.php:1)"}
+[2026-11-02 10:00:09] app.ERROR: message only, no context, tok_fake_9f8e7d6c5b4a
+{"level":"error","channel":"billing","message":"jean.trappe@example.test paid","ip":"203.0.113.77","nir":"199139999912345"}
+{"level":"jean.trappe@example.test","channel":"billing","message":"Zoe Trappe"}
+{"level":"critical","channel":"jean.trappe@example.test","message":"https://example.test/reset?token=urlfakeparam"}
+{"context":{"level":"critical","channel":"nested"},"message":"Zoe Trappe \"level\":\"critical\" Bearer fakeBearerTokenAbc123"}
+2026-11-02T10:00:10Z ERROR payment failed for Zoe Trappe at 203.0.113.77, diagnostic-fictif
+2026-11-02T10:00:11Z CRITICAL token=urlfakeparam for jean.trappe@example.test NIR 1 99 13 99 999 123 45
+2026-11-02T10:00:12Z WARNING SELECT * FROM patients WHERE name='Zoe Trappe' from 198.51.100.23
