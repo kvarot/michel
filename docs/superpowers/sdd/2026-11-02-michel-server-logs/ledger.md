@@ -72,3 +72,6 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 2: complete (commits 21da80e..f331630, review clean)
 - Task 2: minor (deferred): Laravel and Doctrine migration names and `releases/1.2.3` lose their location; two digit groups (`ip-203-0`) and letter-split groups (`203x0x113`) still pass; TestFilterVariants 9 of 15 skipped, symlink branch not run on this PC.
 - Stop point: Task 3 not started, it waits for the plan 6 real run.
+- Scope change 2026-11-02 evening: Kévin, asked whether to start Task 3 before the plan 6 real run, answered "et continuer le plan", after "agit en autonomie". Tasks 3-10 run here, no push. Plan 6 real run and Task 10 Step 3 remain to do on the PC with Docker; branch not finished before that (R5).
+- Ruling R12: "et continuer le plan" read as lifting the stop before Task 3 — it answered the question put to him, and work stays local — costs rework if the real run changes the server code or if he meant the home session only.
+- Task 3: dispatched, BASE f0e8e5d.
