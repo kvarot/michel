@@ -185,16 +185,22 @@ func TestApplyLifecycle(t *testing.T) {
 
 func TestApplySpike(t *testing.T) {
 	cases := []struct {
-		name string
-		cur  int64
-		want bool
-	}{{"nine times", 90, false}, {"ten times under 100", 99, false}, {"ten times and 100", 100, true}}
+		name      string
+		prev, cur int64
+		want      bool
+	}{
+		{"nine times", 10, 90, false},
+		{"ten times under 100", 10, 99, false},
+		{"ten times and 100", 10, 100, true},
+		{"under ten times of 100", 100, 900, false},
+		{"ten times of 100", 100, 1000, true},
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			e := setup(t, target.EnvProd)
 			ctx := context.Background()
 			prev, hour := t0, t0.Add(time.Hour)
-			if _, _, _, err := e.r.Apply(ctx, e.src, []Record{rec(10, prev)}, prev); err != nil {
+			if _, _, _, err := e.r.Apply(ctx, e.src, []Record{rec(c.prev, prev)}, prev); err != nil {
 				t.Fatal(err)
 			}
 			_, _, spiked, err := e.r.Apply(ctx, e.src, []Record{rec(c.cur, hour)}, hour)
@@ -207,6 +213,34 @@ func TestApplySpike(t *testing.T) {
 				t.Fatalf("spiked twice: %+v", again)
 			}
 		})
+	}
+}
+
+func TestApplyKeepsNoTextForIgnored(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	st, _ := e.r.Settings(ctx, e.tgt.ID)
+	st.StoreText = true
+	if err := e.r.SaveSettings(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	r := rec(1, t0)
+	r.Text = "cleaned text"
+	fresh, _, _, err := e.r.Apply(ctx, e.src, []Record{r}, t0)
+	if err != nil || len(fresh) != 1 {
+		t.Fatalf("apply = %+v, %v", fresh, err)
+	}
+	if err := e.r.SetStatus(ctx, fresh[0].ID, StatusIgnored); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.r.EraseText(ctx, e.tgt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := e.r.Apply(ctx, e.src, []Record{r}, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, e, `SELECT COUNT(*) FROM log_signature WHERE text_enc IS NOT NULL`); n != 0 {
+		t.Fatalf("ignored signature got text back: %d", n)
 	}
 }
 

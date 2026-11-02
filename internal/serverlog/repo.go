@@ -493,6 +493,9 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 			freshIDs = append(freshIDs, id)
 		case err == nil:
 			newStatus := Status(status)
+			if newStatus == StatusIgnored {
+				text = nil // an ignored error keeps its row, never its text
+			}
 			if newStatus == StatusResolved {
 				newStatus = StatusReopened
 				reopenedIDs = append(reopenedIDs, id)
