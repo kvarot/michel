@@ -1,0 +1,767 @@
+package serverlog
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/kvarot/michel/internal/store"
+	"github.com/kvarot/michel/internal/target"
+	"github.com/oklog/ulid/v2"
+)
+
+// Errors of the repository.
+var (
+	ErrNotFound        = errors.New("server log entry not found")
+	ErrInvalidFormat   = errors.New("unknown log format")
+	ErrInvalidPath     = errors.New("invalid log path")
+	ErrInvalidSettings = errors.New("invalid log settings")
+	ErrInvalidRecord   = errors.New("invalid log record")
+	ErrInvalidNote     = errors.New("invalid log note")
+)
+
+// Repo reads and writes the server log tables.
+//
+// text_enc holds the bytes it is given: Record.Text goes in as is, and the
+// encryption and masking of the text are added around Repo, not in its
+// signatures. A raw log line never reaches Repo.
+type Repo struct {
+	s *store.Store
+
+	mu      sync.Mutex
+	entropy *ulid.MonotonicEntropy
+}
+
+// NewRepo returns a Repo on s.
+func NewRepo(s *store.Store) *Repo {
+	return &Repo{s: s, entropy: ulid.Monotonic(rand.Reader, 0)}
+}
+
+// querier is what a *sql.DB and a *sql.Tx share.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func ts(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func parseTime(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("unreadable date %q in the server log tables: %w", s, err)
+	}
+	return t, nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (r *Repo) newID(now time.Time) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, err := ulid.New(ulid.Timestamp(now), r.entropy)
+	if err != nil {
+		return "", fmt.Errorf("cannot create an id: %w", err)
+	}
+	return id.String(), nil
+}
+
+func validLevel(l Level) bool {
+	for _, v := range Levels {
+		if l == v {
+			return true
+		}
+	}
+	return false
+}
+
+func validRoute(r Route) bool {
+	return r == RouteImmediate || r == RouteDigest || r == RouteIgnored
+}
+
+func validStatus(s Status) bool {
+	switch s {
+	case StatusNew, StatusSeen, StatusResolved, StatusReopened, StatusIgnored:
+		return true
+	}
+	return false
+}
+
+func validNoteKind(k string) bool {
+	switch k {
+	case NoteGap, NoteSkipped, NoteRotated, NoteUnseen, NoteRejected, NoteTooManyFiles:
+		return true
+	}
+	return false
+}
+
+// ---- sources ----
+
+const sourceCols = `id, target_id, path, format, level_field, channel_field, pattern, active, created_at`
+
+// checkSource refuses a relative path, "..", a wildcard outside the last
+// segment, and an unknown format.
+func checkSource(s Source) error {
+	switch s.Format {
+	case FormatPHP, FormatPostgres, FormatMonolog, FormatJSON, FormatText:
+	default:
+		return fmt.Errorf("%w %q", ErrInvalidFormat, s.Format)
+	}
+	p := s.Path
+	if !strings.HasPrefix(p, "/") {
+		return fmt.Errorf("%w %q: give an absolute path, starting with /", ErrInvalidPath, p)
+	}
+	for _, c := range p {
+		if c < 0x20 || c == 0x7f {
+			return fmt.Errorf("%w: the path holds a control character", ErrInvalidPath)
+		}
+	}
+	segs := strings.Split(p, "/")
+	for i, seg := range segs {
+		if seg == ".." {
+			return fmt.Errorf("%w %q: \"..\" is not allowed", ErrInvalidPath, p)
+		}
+		if i < len(segs)-1 && strings.ContainsAny(seg, "*?[") {
+			return fmt.Errorf("%w %q: a wildcard is only allowed in the last segment", ErrInvalidPath, p)
+		}
+	}
+	if strings.HasSuffix(p, "/") {
+		return fmt.Errorf("%w %q: give a file, not a folder", ErrInvalidPath, p)
+	}
+	return nil
+}
+
+// AddSource validates and stores s. ID and CreatedAt are set here.
+func (r *Repo) AddSource(ctx context.Context, s Source) (Source, error) {
+	if strings.TrimSpace(s.TargetID) == "" {
+		return Source{}, fmt.Errorf("%w: no server", ErrNotFound)
+	}
+	if err := checkSource(s); err != nil {
+		return Source{}, err
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	id, err := r.newID(now)
+	if err != nil {
+		return Source{}, err
+	}
+	s.ID, s.CreatedAt = id, now
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO log_source (`+sourceCols+`) VALUES (?,?,?,?,?,?,?,?,?)`,
+		s.ID, s.TargetID, s.Path, string(s.Format), s.LevelField, s.ChannelField, s.Pattern, boolInt(s.Active), ts(s.CreatedAt))
+	if err != nil {
+		return Source{}, fmt.Errorf("cannot save the log source: %w", err)
+	}
+	return s, nil
+}
+
+// UpdateSource rewrites the path, format, fields and active flag of the
+// source with s.ID. The server and the creation date do not change.
+func (r *Repo) UpdateSource(ctx context.Context, s Source) error {
+	if err := checkSource(s); err != nil {
+		return err
+	}
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE log_source SET path = ?, format = ?, level_field = ?, channel_field = ?, pattern = ?, active = ? WHERE id = ?`,
+		s.Path, string(s.Format), s.LevelField, s.ChannelField, s.Pattern, boolInt(s.Active), s.ID)
+	if err != nil {
+		return fmt.Errorf("cannot save the log source: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: source %s", ErrNotFound, s.ID)
+	}
+	return nil
+}
+
+// DeleteSource removes a source from Michel, with its positions, errors,
+// counts and notes. Nothing is touched on the server.
+func (r *Repo) DeleteSource(ctx context.Context, id string) error {
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot delete the log source: %w", err)
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM log_bucket WHERE signature_id IN (SELECT id FROM log_signature WHERE source_id = ?)`,
+		`DELETE FROM log_signature WHERE source_id = ?`,
+		`DELETE FROM log_cursor WHERE source_id = ?`,
+		`DELETE FROM log_note WHERE source_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, id); err != nil {
+			return fmt.Errorf("cannot delete the log source: %w", err)
+		}
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM log_source WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("cannot delete the log source: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: source %s", ErrNotFound, id)
+	}
+	return tx.Commit()
+}
+
+// Sources lists the sources of a server, oldest first.
+func (r *Repo) Sources(ctx context.Context, targetID string) ([]Source, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+sourceCols+` FROM log_source WHERE target_id = ? ORDER BY created_at, id`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log sources: %w", err)
+	}
+	defer rows.Close()
+	var out []Source
+	for rows.Next() {
+		var s Source
+		var format, created string
+		var active int
+		if err := rows.Scan(&s.ID, &s.TargetID, &s.Path, &format, &s.LevelField, &s.ChannelField, &s.Pattern, &active, &created); err != nil {
+			return nil, fmt.Errorf("cannot read the log sources: %w", err)
+		}
+		s.Format, s.Active = Format(format), active != 0
+		if s.CreatedAt, err = parseTime(created); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// ---- cursors ----
+
+// Cursors lists the read positions of a source, by file.
+func (r *Repo) Cursors(ctx context.Context, sourceID string) ([]Cursor, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT source_id, file, file_id, offset_bytes, read_at FROM log_cursor WHERE source_id = ? ORDER BY file`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log positions: %w", err)
+	}
+	defer rows.Close()
+	var out []Cursor
+	for rows.Next() {
+		var c Cursor
+		var at string
+		if err := rows.Scan(&c.SourceID, &c.File, &c.FileID, &c.Offset, &at); err != nil {
+			return nil, fmt.Errorf("cannot read the log positions: %w", err)
+		}
+		if c.ReadAt, err = parseTime(at); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// SaveCursors stores the given positions, replacing those of the same source
+// and file. Positions of other files are left alone.
+func (r *Repo) SaveCursors(ctx context.Context, cs []Cursor) error {
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot save the log positions: %w", err)
+	}
+	defer tx.Rollback()
+	for _, c := range cs {
+		_, err := tx.ExecContext(ctx, `INSERT INTO log_cursor (source_id, file, file_id, offset_bytes, read_at) VALUES (?,?,?,?,?)
+			ON CONFLICT (source_id, file) DO UPDATE SET file_id = excluded.file_id, offset_bytes = excluded.offset_bytes, read_at = excluded.read_at`,
+			c.SourceID, c.File, c.FileID, c.Offset, ts(c.ReadAt))
+		if err != nil {
+			return fmt.Errorf("cannot save the log positions: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// ---- settings ----
+
+func checkSettings(s Settings) error {
+	bad := func(format string, a ...any) error {
+		return fmt.Errorf("%w: %s", ErrInvalidSettings, fmt.Sprintf(format, a...))
+	}
+	switch {
+	case strings.TrimSpace(s.TargetID) == "":
+		return bad("no server")
+	case s.Interval < MinInterval || s.Interval > MaxInterval:
+		return bad("the reading interval must be between 1 minute and 24 hours")
+	case s.RetentionDays < MinRetentionDays || s.RetentionDays > MaxRetentionDays:
+		return bad("the retention must be between %d and %d days (got %d)", MinRetentionDays, MaxRetentionDays, s.RetentionDays)
+	case s.ResolveAfter <= 0:
+		return bad("the delay before an error counts as resolved must be positive")
+	case time.Duration(s.RetentionDays)*24*time.Hour < s.ResolveAfter:
+		return bad("the retention cannot be shorter than the delay before an error counts as resolved")
+	case s.ReadCap <= 0:
+		return bad("the read size cap must be positive")
+	case s.ReadTimeout <= 0:
+		return bad("the read timeout must be positive")
+	case s.MaxAlertsPerHour < 1:
+		return bad("the alert cap per hour must be at least 1")
+	}
+	for _, l := range Levels {
+		if !validRoute(s.Routes[l]) {
+			return bad("no valid rule for %s errors", l)
+		}
+	}
+	return nil
+}
+
+const settingsCols = `target_id, interval_s, store_text, alert_text, retention_days, resolve_after_s, read_cap, read_timeout_s,
+	max_alerts_per_hour, sms, route_critical, route_error, route_warning, route_info`
+
+// Settings returns the log settings of a server: the saved ones, or the
+// defaults for its environment when none were saved.
+func (r *Repo) Settings(ctx context.Context, targetID string) (Settings, error) {
+	var s Settings
+	var interval, resolve, timeout int64
+	var store, alert, sms int
+	var rc, re, rw, ri string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT `+settingsCols+` FROM log_settings WHERE target_id = ?`, targetID).Scan(
+		&s.TargetID, &interval, &store, &alert, &s.RetentionDays, &resolve, &s.ReadCap, &timeout, &s.MaxAlertsPerHour, &sms, &rc, &re, &rw, &ri)
+	if err == nil {
+		s.Interval, s.ResolveAfter, s.ReadTimeout = time.Duration(interval)*time.Second, time.Duration(resolve)*time.Second, time.Duration(timeout)*time.Second
+		s.StoreText, s.AlertText, s.SMS = store != 0, alert != 0, sms != 0
+		s.Routes = map[Level]Route{LevelCritical: Route(rc), LevelError: Route(re), LevelWarning: Route(rw), LevelInfo: Route(ri)}
+		return s, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Settings{}, fmt.Errorf("cannot read the log settings: %w", err)
+	}
+	var env string
+	err = r.s.DB().QueryRowContext(ctx, `SELECT env FROM target WHERE id = ?`, targetID).Scan(&env)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Settings{}, fmt.Errorf("%w: %s", target.ErrNotFound, targetID)
+	}
+	if err != nil {
+		return Settings{}, fmt.Errorf("cannot read the server: %w", err)
+	}
+	s = DefaultSettings(target.Env(env))
+	s.TargetID = targetID
+	return s, nil
+}
+
+// settingsOrDefault is Settings, except that the data of a server that no
+// longer exists gets the prod defaults, so that it still expires.
+func (r *Repo) settingsOrDefault(ctx context.Context, targetID string) (Settings, error) {
+	s, err := r.Settings(ctx, targetID)
+	if errors.Is(err, target.ErrNotFound) {
+		s = DefaultSettings(target.EnvProd)
+		s.TargetID = targetID
+		return s, nil
+	}
+	return s, err
+}
+
+// SaveSettings validates and stores s.
+func (r *Repo) SaveSettings(ctx context.Context, s Settings) error {
+	if err := checkSettings(s); err != nil {
+		return err
+	}
+	_, err := r.s.DB().ExecContext(ctx, `INSERT INTO log_settings (`+settingsCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT (target_id) DO UPDATE SET interval_s = excluded.interval_s, store_text = excluded.store_text, alert_text = excluded.alert_text,
+			retention_days = excluded.retention_days, resolve_after_s = excluded.resolve_after_s, read_cap = excluded.read_cap,
+			read_timeout_s = excluded.read_timeout_s, max_alerts_per_hour = excluded.max_alerts_per_hour, sms = excluded.sms,
+			route_critical = excluded.route_critical, route_error = excluded.route_error, route_warning = excluded.route_warning, route_info = excluded.route_info`,
+		s.TargetID, int64(s.Interval/time.Second), boolInt(s.StoreText), boolInt(s.AlertText), s.RetentionDays, int64(s.ResolveAfter/time.Second),
+		s.ReadCap, int64(s.ReadTimeout/time.Second), s.MaxAlertsPerHour, boolInt(s.SMS),
+		string(s.Routes[LevelCritical]), string(s.Routes[LevelError]), string(s.Routes[LevelWarning]), string(s.Routes[LevelInfo]))
+	if err != nil {
+		return fmt.Errorf("cannot save the log settings: %w", err)
+	}
+	return nil
+}
+
+// ---- signatures ----
+
+const sigCols = `id, target_id, source_id, level, type, location, channel, status, first_at, last_at, last_alert_at, total`
+
+func scanSignature(s interface{ Scan(...any) error }) (Signature, error) {
+	var g Signature
+	var level, status, first, last, alert string
+	if err := s.Scan(&g.ID, &g.TargetID, &g.SourceID, &level, &g.Type, &g.Location, &g.Channel, &status, &first, &last, &alert, &g.Total); err != nil {
+		return Signature{}, err
+	}
+	g.Level, g.Status = Level(level), Status(status)
+	var err error
+	if g.FirstAt, err = parseTime(first); err != nil {
+		return Signature{}, err
+	}
+	if g.LastAt, err = parseTime(last); err != nil {
+		return Signature{}, err
+	}
+	if g.LastAlertAt, err = parseTime(alert); err != nil {
+		return Signature{}, err
+	}
+	return g, nil
+}
+
+func loadSignature(ctx context.Context, q querier, id string) (Signature, error) {
+	g, err := scanSignature(q.QueryRowContext(ctx, `SELECT `+sigCols+` FROM log_signature WHERE id = ?`, id))
+	if err != nil {
+		return Signature{}, fmt.Errorf("cannot read the log error: %w", err)
+	}
+	return g, nil
+}
+
+// Signatures lists the errors of a server, latest first.
+func (r *Repo) Signatures(ctx context.Context, targetID string) ([]Signature, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+sigCols+` FROM log_signature WHERE target_id = ? ORDER BY last_at DESC, id`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log errors: %w", err)
+	}
+	defer rows.Close()
+	var out []Signature
+	for rows.Next() {
+		g, err := scanSignature(rows)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read the log errors: %w", err)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// SetStatus sets the status of an error (seen, ignored...).
+func (r *Repo) SetStatus(ctx context.Context, id string, st Status) error {
+	if !validStatus(st) {
+		return fmt.Errorf("%w: unknown status %q", ErrInvalidRecord, st)
+	}
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE log_signature SET status = ? WHERE id = ?`, string(st), id)
+	if err != nil {
+		return fmt.Errorf("cannot save the log error: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: error %s", ErrNotFound, id)
+	}
+	return nil
+}
+
+func spikes(cur, prev int64) bool { return cur >= spikeMin && cur >= spikeFactor*prev }
+
+// Apply adds records read on src. It returns the errors seen for the first
+// time (fresh), those that came back after being resolved (reopened), and
+// those whose count in an hour just reached ten times the hour before, with
+// at least 100 occurrences (spiked). An ignored error is counted but never
+// returned. The text of a record is stored only when the server settings
+// allow it, and never takes part in the identity.
+func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Time) (fresh, reopened, spiked []Signature, err error) {
+	for _, rc := range recs {
+		if !validLevel(rc.Level) || rc.Count <= 0 || strings.TrimSpace(rc.Type) == "" {
+			return nil, nil, nil, fmt.Errorf("%w: level %q, type %q, count %d", ErrInvalidRecord, rc.Level, rc.Type, rc.Count)
+		}
+	}
+	st, err := r.Settings(ctx, src.TargetID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("cannot save the log records: %w", err)
+	}
+	defer tx.Rollback()
+	var freshIDs, reopenedIDs, spikedIDs []string
+	has := func(l []string, id string) bool {
+		for _, v := range l {
+			if v == id {
+				return true
+			}
+		}
+		return false
+	}
+	for _, rc := range recs {
+		id := SignatureID(src.ID, rc.Level, rc.Type, rc.Location, rc.Channel)
+		hour := rc.Hour.UTC().Truncate(time.Hour)
+		var text []byte
+		if st.StoreText && rc.Text != "" {
+			text = []byte(rc.Text)
+		}
+		var status string
+		err := tx.QueryRowContext(ctx, `SELECT status FROM log_signature WHERE id = ?`, id).Scan(&status)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			_, err = tx.ExecContext(ctx, `INSERT INTO log_signature (`+sigCols+`, text_enc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				id, src.TargetID, src.ID, string(rc.Level), rc.Type, rc.Location, rc.Channel, string(StatusNew), ts(now), ts(now), "", rc.Count, text)
+			freshIDs = append(freshIDs, id)
+		case err == nil:
+			newStatus := Status(status)
+			if newStatus == StatusResolved {
+				newStatus = StatusReopened
+				reopenedIDs = append(reopenedIDs, id)
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE log_signature SET status = ?, total = total + ?, last_at = ?, text_enc = COALESCE(?, text_enc) WHERE id = ?`,
+				string(newStatus), rc.Count, ts(now), text, id)
+		}
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("cannot save the log records: %w", err)
+		}
+		var before, prev int64
+		if err := tx.QueryRowContext(ctx, `SELECT count FROM log_bucket WHERE signature_id = ? AND hour = ?`, id, ts(hour)).Scan(&before); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, nil, fmt.Errorf("cannot read the log counts: %w", err)
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT count FROM log_bucket WHERE signature_id = ? AND hour = ?`, id, ts(hour.Add(-time.Hour))).Scan(&prev); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, nil, fmt.Errorf("cannot read the log counts: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO log_bucket (signature_id, hour, count) VALUES (?,?,?)
+			ON CONFLICT (signature_id, hour) DO UPDATE SET count = count + excluded.count`, id, ts(hour), rc.Count); err != nil {
+			return nil, nil, nil, fmt.Errorf("cannot save the log counts: %w", err)
+		}
+		if !spikes(before, prev) && spikes(before+rc.Count, prev) && !has(freshIDs, id) && !has(reopenedIDs, id) && !has(spikedIDs, id) {
+			spikedIDs = append(spikedIDs, id)
+		}
+	}
+	load := func(ids []string) ([]Signature, error) {
+		var out []Signature
+		for _, id := range ids {
+			g, err := loadSignature(ctx, tx, id)
+			if err != nil {
+				return nil, err
+			}
+			if g.Status == StatusIgnored {
+				continue
+			}
+			out = append(out, g)
+		}
+		return out, nil
+	}
+	if fresh, err = load(freshIDs); err != nil {
+		return nil, nil, nil, err
+	}
+	if reopened, err = load(reopenedIDs); err != nil {
+		return nil, nil, nil, err
+	}
+	if spiked, err = load(spikedIDs); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, nil, fmt.Errorf("cannot save the log records: %w", err)
+	}
+	return fresh, reopened, spiked, nil
+}
+
+// Resolve marks as resolved the errors with no occurrence for the delay of
+// their server (ResolveAfter), except ignored ones. It returns them.
+func (r *Repo) Resolve(ctx context.Context, now time.Time) ([]Signature, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, target_id, last_at FROM log_signature WHERE status IN (?,?,?)`,
+		string(StatusNew), string(StatusSeen), string(StatusReopened))
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log errors: %w", err)
+	}
+	type cand struct {
+		id, target string
+		last       time.Time
+	}
+	var cands []cand
+	for rows.Next() {
+		var c cand
+		var last string
+		if err := rows.Scan(&c.id, &c.target, &last); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("cannot read the log errors: %w", err)
+		}
+		if c.last, err = parseTime(last); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		cands = append(cands, c)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	delay := map[string]time.Duration{}
+	var due []string
+	for _, c := range cands {
+		d, ok := delay[c.target]
+		if !ok {
+			st, err := r.settingsOrDefault(ctx, c.target)
+			if err != nil {
+				return nil, err
+			}
+			d = st.ResolveAfter
+			delay[c.target] = d
+		}
+		if !now.Before(c.last.Add(d)) {
+			due = append(due, c.id)
+		}
+	}
+	if len(due) == 0 {
+		return nil, nil
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve the log errors: %w", err)
+	}
+	defer tx.Rollback()
+	var out []Signature
+	for _, id := range due {
+		// The status is checked again: it may have changed since the read.
+		res, err := tx.ExecContext(ctx, `UPDATE log_signature SET status = ? WHERE id = ? AND status IN (?,?,?)`,
+			string(StatusResolved), id, string(StatusNew), string(StatusSeen), string(StatusReopened))
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve the log errors: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		g, err := loadSignature(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("cannot resolve the log errors: %w", err)
+	}
+	return out, nil
+}
+
+// ---- notes ----
+
+// AddNote stores a note about what could not be read.
+func (r *Repo) AddNote(ctx context.Context, n Note) error {
+	if !validNoteKind(n.Kind) {
+		return fmt.Errorf("%w: unknown kind %q", ErrInvalidNote, n.Kind)
+	}
+	id, err := r.newID(time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO log_note (id, target_id, source_id, kind, from_at, to_at, amount) VALUES (?,?,?,?,?,?,?)`,
+		id, n.TargetID, n.SourceID, n.Kind, ts(n.From), ts(n.To), n.Amount)
+	if err != nil {
+		return fmt.Errorf("cannot save the log note: %w", err)
+	}
+	return nil
+}
+
+// Notes lists the notes of a server, oldest first.
+func (r *Repo) Notes(ctx context.Context, targetID string) ([]Note, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT target_id, source_id, kind, from_at, to_at, amount FROM log_note WHERE target_id = ? ORDER BY to_at, id`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log notes: %w", err)
+	}
+	defer rows.Close()
+	var out []Note
+	for rows.Next() {
+		var n Note
+		var from, to string
+		if err := rows.Scan(&n.TargetID, &n.SourceID, &n.Kind, &from, &to, &n.Amount); err != nil {
+			return nil, fmt.Errorf("cannot read the log notes: %w", err)
+		}
+		if n.From, err = parseTime(from); err != nil {
+			return nil, err
+		}
+		if n.To, err = parseTime(to); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// ---- retention and erasure ----
+
+// Purge applies the retention of every server at now: counts, notes and
+// errors older than the retention go, except ignored errors, which keep
+// their row (so that "do not warn me again" holds) without text.
+func (r *Repo) Purge(ctx context.Context, now time.Time) error {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT target_id FROM log_signature UNION SELECT target_id FROM log_note UNION SELECT target_id FROM log_source`)
+	if err != nil {
+		return fmt.Errorf("cannot read the log servers: %w", err)
+	}
+	var targets []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("cannot read the log servers: %w", err)
+		}
+		targets = append(targets, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, tid := range targets {
+		st, err := r.settingsOrDefault(ctx, tid)
+		if err != nil {
+			return err
+		}
+		if err := r.purgeTarget(ctx, tid, ts(now.Add(-time.Duration(st.RetentionDays)*24*time.Hour))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repo) purgeTarget(ctx context.Context, targetID, cutoff string) error {
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot purge the log data: %w", err)
+	}
+	defer tx.Rollback()
+	ign := string(StatusIgnored)
+	steps := []struct {
+		q    string
+		args []any
+	}{
+		// Counts of errors that expire, then old counts of the others.
+		{`DELETE FROM log_bucket WHERE signature_id IN (SELECT id FROM log_signature WHERE target_id = ? AND last_at < ?)`, []any{targetID, cutoff}},
+		{`DELETE FROM log_bucket WHERE hour < ? AND signature_id IN (SELECT id FROM log_signature WHERE target_id = ?)`, []any{cutoff, targetID}},
+		// Ignored errors keep their row without text; the others go.
+		{`UPDATE log_signature SET text_enc = NULL WHERE target_id = ? AND status = ? AND last_at < ?`, []any{targetID, ign, cutoff}},
+		{`DELETE FROM log_signature WHERE target_id = ? AND status <> ? AND last_at < ?`, []any{targetID, ign, cutoff}},
+		{`DELETE FROM log_note WHERE target_id = ? AND to_at < ?`, []any{targetID, cutoff}},
+	}
+	for _, s := range steps {
+		if _, err := tx.ExecContext(ctx, s.q, s.args...); err != nil {
+			return fmt.Errorf("cannot purge the log data: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// EraseTarget removes all log data of a server held by Michel: errors
+// (ignored ones too), counts, positions and notes. The sources and the
+// settings stay, and nothing is touched on the server.
+func (r *Repo) EraseTarget(ctx context.Context, targetID string) error {
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot erase the log data: %w", err)
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM log_bucket WHERE signature_id IN (SELECT id FROM log_signature WHERE target_id = ?)`,
+		`DELETE FROM log_signature WHERE target_id = ?`,
+		`DELETE FROM log_cursor WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`,
+		`DELETE FROM log_note WHERE target_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, targetID); err != nil {
+			return fmt.Errorf("cannot erase the log data: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// EraseText removes the stored text of every error of a server, and returns
+// how many rows held some.
+func (r *Repo) EraseText(ctx context.Context, targetID string) (int64, error) {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE log_signature SET text_enc = NULL WHERE target_id = ? AND text_enc IS NOT NULL`, targetID)
+	if err != nil {
+		return 0, fmt.Errorf("cannot erase the log text: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
