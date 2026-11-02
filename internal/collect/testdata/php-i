@@ -1,0 +1,38 @@
+phpinfo()
+PHP Version => 8.2.20
+
+System => Linux srv-demo 6.1.0-21-amd64 #1 SMP x86_64
+Server API => Command Line Interface
+Configuration File (php.ini) Path => /etc/php/8.2/cli
+Loaded Configuration File => /etc/php/8.2/cli/php.ini
+Scan this dir for additional .ini files => /etc/php/8.2/cli/conf.d
+Additional .ini files parsed => /etc/php/8.2/cli/conf.d/10-mysqlnd.ini,
+/etc/php/8.2/cli/conf.d/10-opcache.ini
+
+Core
+
+PHP Version => 8.2.20
+
+Directive => Local Value => Master Value
+allow_url_fopen => On => On
+allow_url_include => Off => Off
+display_errors => Off => Off
+expose_php => Off => Off
+memory_limit => 256M => 256M
+open_basedir => no value => no value
+
+mysqli
+
+Directive => Local Value => Master Value
+mysqli.default_pw => hunter2-demo => hunter2-demo
+mysqli.default_user => no value => no value
+
+session
+
+Directive => Local Value => Master Value
+session.cookie_secure => 0 => 0
+
+Environment
+
+Variable => Value
+DATABASE_URL => mysql://u:p@db/x

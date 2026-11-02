@@ -576,21 +576,33 @@ func TestFindingViewCarriesKEVAndEPSS(t *testing.T) {
 	}
 }
 
+func TestPatchProjectRejectsServerFixLevel(t *testing.T) {
+	f := newFixture(t, nil)
+	resp, body := f.do("PATCH", "/api/v1/projects/demo", testToken, `{"server_fix_level":2}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	resp, body = f.do("PATCH", "/api/v1/projects/demo", testToken, `{"fix_level":2,"server_fix_level":2}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("mixed: status %d: %s", resp.StatusCode, body)
+	}
+}
+
 func TestPatchProjectLevels(t *testing.T) {
 	f := newFixture(t, nil)
-	resp, body := f.do("PATCH", "/api/v1/projects/demo", testToken, `{"fix_level":3,"server_fix_level":2,"auto_fix_minor":true}`)
+	resp, body := f.do("PATCH", "/api/v1/projects/demo", testToken, `{"fix_level":3,"auto_fix_minor":true}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d: %s", resp.StatusCode, body)
 	}
 	var pv ProjectView
-	if err := json.Unmarshal([]byte(body), &pv); err != nil || pv.FixLevel != 3 || pv.ServerFixLevel != 2 || !pv.AutoFixMinor {
+	if err := json.Unmarshal([]byte(body), &pv); err != nil || pv.FixLevel != 3 || !pv.AutoFixMinor {
 		t.Fatalf("view = %+v, %v", pv, err)
 	}
 	if strings.Contains(body, f.proj.Path) || strings.Contains(body, testCmdMarker) || strings.Contains(body, installCmdMarker) {
 		t.Errorf("the answer leaks a path or a command: %s", body)
 	}
 	got, err := project.NewRepo(f.st).Get(context.Background(), "demo")
-	if err != nil || got.FixLevel != 3 || got.ServerFixLevel != 2 || !got.AutoFixMinor || got.TestCmd != testCmdMarker {
+	if err != nil || got.FixLevel != 3 || !got.AutoFixMinor || got.TestCmd != testCmdMarker {
 		t.Fatalf("stored = %+v, %v", got, err)
 	}
 	var n int
@@ -604,7 +616,7 @@ func TestPatchProjectLevels(t *testing.T) {
 	if got, _ = project.NewRepo(f.st).Get(context.Background(), "demo"); got.FixLevel != 3 || got.AutoFixMinor {
 		t.Errorf("stored = %+v", got)
 	}
-	for _, bad := range []string{`{"fix_level":4}`, `{"server_fix_level":-1}`, `{}`, `{"path":"/etc"}`} {
+	for _, bad := range []string{`{"fix_level":4}`, `{"fix_level":-1}`, `{}`, `{"path":"/etc"}`} {
 		resp, body := f.do("PATCH", "/api/v1/projects/demo", testToken, bad)
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: status %d: %s", bad, resp.StatusCode, body)

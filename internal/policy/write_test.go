@@ -308,3 +308,30 @@ func TestSetModeSwitchesToStandardWithExternalAI(t *testing.T) {
 		t.Fatalf("absent file: %v %v", changed, err)
 	}
 }
+
+func TestRemoveAllowRulesWritesOnceAndKeepsTheOthers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	a := AllowRule{Host: "a.example.test", Purpose: PurposeTargetSSH}
+	b := AllowRule{Host: "b.example.test", Purpose: PurposeTargetSSH}
+	c := AllowRule{Host: "a.example.test", Purpose: PurposeTargetHTTP}
+	if n, err := AddAllowRules(path, a, b, c); err != nil || n != 3 {
+		t.Fatalf("add = %d %v", n, err)
+	}
+	n, err := RemoveAllowRules(path, a, c, AllowRule{Host: "none.example.test", Purpose: "x"})
+	if err != nil || n != 2 {
+		t.Fatalf("remove = %d %v", n, err)
+	}
+	p, _, err := Load(path, t.TempDir())
+	if err != nil || len(p.Sovereignty.Network.Allow) != 1 || p.Sovereignty.Network.Allow[0] != b {
+		t.Fatalf("rules = %+v %v", p.Sovereignty.Network.Allow, err)
+	}
+	if n, err := RemoveAllowRules(path, a); err != nil || n != 0 {
+		t.Errorf("removing what is gone = %d %v", n, err)
+	}
+	if n, err := RemoveAllowRules(path, b); err != nil || n != 1 {
+		t.Fatalf("last = %d %v", n, err)
+	}
+	if p, _, err := Load(path, t.TempDir()); err != nil || len(p.Sovereignty.Network.Allow) != 0 {
+		t.Errorf("after the last = %+v %v", p.Sovereignty.Network.Allow, err)
+	}
+}

@@ -1,0 +1,5 @@
+Configuration File (php.ini) Path: /etc/php/8.2/cli
+Loaded Configuration File:         /etc/php/8.2/cli/php.ini
+Scan for additional .ini files in: /etc/php/8.2/cli/conf.d
+Additional .ini files parsed:      /etc/php/8.2/cli/conf.d/10-mysqlnd.ini,
+/etc/php/8.2/cli/conf.d/10-opcache.ini

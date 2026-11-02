@@ -402,7 +402,7 @@ func TestTechRoundTrip(t *testing.T) {
 	}
 }
 
-func TestProjectServerFixLevelRange(t *testing.T) {
+func TestProjectAutoFixMinor(t *testing.T) {
 	r := newRepo(t)
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -410,25 +410,15 @@ func TestProjectServerFixLevelRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ServerFixLevel != 1 || p.AutoFixMinor {
-		t.Fatalf("defaults = %d %v", p.ServerFixLevel, p.AutoFixMinor)
+	if p.AutoFixMinor {
+		t.Fatalf("default = %v", p.AutoFixMinor)
 	}
-	if _, err := r.Add(ctx, Project{Name: "b", Path: dir, ServerFixLevel: 4}); !errors.Is(err, ErrInvalidFixLevel) {
-		t.Fatalf("add with 4 = %v", err)
-	}
-	if z, err := r.Add(ctx, Project{Name: "z", Path: dir, ServerFixLevelSet: true}); err != nil || z.ServerFixLevel != 0 {
-		t.Fatalf("explicit 0 = %+v %v", z, err)
-	}
-	p.ServerFixLevel = 4
-	if err := r.Update(ctx, p); !errors.Is(err, ErrInvalidFixLevel) {
-		t.Fatalf("update with 4 = %v", err)
-	}
-	p.ServerFixLevel, p.AutoFixMinor = 3, true
+	p.AutoFixMinor = true
 	if err := r.Update(ctx, p); err != nil {
 		t.Fatal(err)
 	}
 	got, err := r.Get(ctx, "a")
-	if err != nil || got.ServerFixLevel != 3 || !got.AutoFixMinor {
+	if err != nil || !got.AutoFixMinor {
 		t.Fatalf("got %+v %v", got, err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/web"
 	"github.com/spf13/cobra"
 )
@@ -130,11 +132,22 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			// hands them to the gateway at once.
 			sd := sourceDeps(cmd, deps)
 			dataDir, _ := cmd.Flags().GetString("data-dir")
+			// The checks of the servers, for the scheduler and for the page: a
+			// server checked to its end has its findings queued for the fix
+			// levels 2 and 3 (the worker of the page prepares them).
+			cd := serverCheckDeps(cmd, deps)
+			cd.OnChecked = func(ctx context.Context, targetID string) {
+				if _, err := fix.QueueEligibleServer(ctx, fd, targetID); err != nil {
+					slog.Warn("serve: cannot queue the findings of a server", "target", targetID)
+				}
+			}
+			home, _ := userHomeDir()
 			d := api.Deps{Store: deps.Store, Audit: deps.Audit, Policy: deps.Policy, Secrets: secrets, Now: deps.Now,
 				Version: buildinfo.Version, OSVRoot: dbRoot(cmd, deps), Lang: deps.Lang,
 				AllowedHosts: []string{bound, net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("localhost", port), net.JoinHostPort("::1", port)},
-				PolicyPath:   sd.PolicyPath, Reload: sd.Reload, Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir},
-				Fix: &fd, FixWorker: true}
+				PolicyPath:   sd.PolicyPath, Reload: sd.Reload,
+				Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir, Rematch: serverRematch(cmd, deps)},
+				Fix:     &fd, FixWorker: true, Servers: api.Servers{Check: cd, Home: home}}
 			if fsys, ok := web.Dist(); ok {
 				d.Web = fsys
 			}
@@ -152,6 +165,21 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			fmt.Fprintln(deps.Stdout, deps.T("cli.serve.url", url))
 			served := make(chan error, 1)
 			go func() { served <- srv.Serve(ln) }()
+			// The servers due for a check are checked one at a time in the
+			// background; the scheduler stops with serve.
+			schedCtx, stopSched := context.WithCancel(ctx)
+			schedDone := make(chan struct{})
+			go func() {
+				defer close(schedDone)
+				servercheck.Scheduler(schedCtx, cd, serverCheckInterval)
+			}()
+			// Server fixes left running by a process that stopped end
+			// unknown, with an urgent alert, once past their own bound.
+			sweepDone := make(chan struct{})
+			go func() {
+				defer close(sweepDone)
+				fix.RunningSweeper(schedCtx, fd, fix.RunningSweepInterval)
+			}()
 			if open {
 				if err := openBrowser(url); err != nil {
 					fmt.Fprintln(deps.Stderr, deps.T("cli.serve.open_failed", err))
@@ -168,6 +196,9 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			shutdown, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
+			stopSched()
+			<-schedDone
+			<-sweepDone
 			// The plugin runs the page started, the fix queue and the agents
 			// are stopped and waited for.
 			h.Close()

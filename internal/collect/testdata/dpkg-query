@@ -1,0 +1,4 @@
+php8.2-cli	php8.2	8.2.20-1+deb12u1	amd64
+php8.2-fpm	php8.2	8.2.20-1+deb12u1	amd64
+nginx	nginx	1.22.1-9	amd64
+openssl	openssl	3.0.13-1~deb12u1	amd64

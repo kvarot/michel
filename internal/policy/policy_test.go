@@ -209,7 +209,7 @@ func TestValidateNotifyRules(t *testing.T) {
 		{"valid", []ChannelConfig{email, hook, toast}, rules, nil},
 		{"duplicate name", []ChannelConfig{email, with(toast, func(c *ChannelConfig) { c.Name = "mail-perso" })}, rules, []string{`"mail-perso"`, "twice"}},
 		{"no name", []ChannelConfig{with(toast, func(c *ChannelConfig) { c.Name = "" })}, rules, []string{"name"}},
-		{"unknown type", []ChannelConfig{with(toast, func(c *ChannelConfig) { c.Type = "sms" })}, rules, []string{`"sms"`, "email, webhook or toast"}},
+		{"unknown type", []ChannelConfig{with(toast, func(c *ChannelConfig) { c.Type = "pager" })}, rules, []string{`"pager"`, "email, webhook, toast or sms"}},
 		{"port 25", []ChannelConfig{with(email, func(c *ChannelConfig) { c.Port = 25 })}, rules, []string{"587", "465"}},
 		{"empty to", []ChannelConfig{with(email, func(c *ChannelConfig) { c.To = nil })}, rules, []string{"to"}},
 		{"bad from", []ChannelConfig{with(email, func(c *ChannelConfig) { c.From = "michel@example.org\r\nBcc: x@example.org" })}, rules, []string{"from"}},
@@ -297,7 +297,7 @@ func TestExampleConfigStillLoads(t *testing.T) {
 		lines = append(lines, l)
 	}
 	uncommented := strings.Join(lines, "\n")
-	if !strings.Contains(uncommented, "type: email") || !strings.Contains(uncommented, "type: webhook") || !strings.Contains(uncommented, "type: toast") {
+	if !strings.Contains(uncommented, "type: email") || !strings.Contains(uncommented, "type: webhook") || !strings.Contains(uncommented, "type: toast") || !strings.Contains(uncommented, "type: sms") {
 		t.Fatalf("the example lacks the commented channels:\n%s", uncommented)
 	}
 	upath := filepath.Join(dir, "c.yaml")
@@ -308,13 +308,13 @@ func TestExampleConfigStillLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("uncommented example: %v", err)
 	}
-	if len(q.Notify.Channels) != 3 {
+	if len(q.Notify.Channels) != 4 {
 		t.Fatalf("channels = %+v", q.Notify.Channels)
 	}
 	if err := Validate(q); err == nil || !strings.Contains(err.Error(), "needs a network rule") {
 		t.Errorf("uncommented example without rules: %v", err)
 	}
-	q.Sovereignty.Network.Allow = []AllowRule{{Host: "smtp.example.org", Purpose: PurposeEmail}, {Host: "hooks.example.org", Purpose: PurposeWebhook}}
+	q.Sovereignty.Network.Allow = []AllowRule{{Host: "smtp.example.org", Purpose: PurposeEmail}, {Host: "hooks.example.org", Purpose: PurposeWebhook}, {Host: "smsapi.free-mobile.fr", Purpose: PurposeNotifySMS}}
 	if err := Validate(q); err != nil {
 		t.Errorf("uncommented example with rules: %v", err)
 	}

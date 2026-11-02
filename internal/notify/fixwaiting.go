@@ -22,13 +22,29 @@ func (e *email) message(ctx context.Context, title, body string) (int, error) {
 }
 
 func (w *webhook) message(ctx context.Context, title, body string) (int, error) {
+	return w.marked(ctx, map[string]any{"michel_fix_waiting": 1}, title, body)
+}
+
+// serverAlert is a server alert on the webhook: its own marker and its
+// kind, so a consumer never takes it for the "a fix waits" message.
+func (w *webhook) serverAlert(ctx context.Context, kind, title, body string) (int, error) {
+	return w.marked(ctx, map[string]any{"michel_server_alert": 1, "kind": kind}, title, body)
+}
+
+// marked posts a short message; the generic format carries the fields of
+// marker besides the title and the text.
+func (w *webhook) marked(ctx context.Context, marker map[string]any, title, body string) (int, error) {
 	var raw []byte
 	var err error
 	switch w.cfg.Format {
 	case policy.FormatSlack, policy.FormatDiscord:
 		raw, err = chatBody(w.cfg.Format, title+"\n"+body)
 	default:
-		raw, err = json.Marshal(map[string]any{"michel_fix_waiting": 1, "title": title, "text": body})
+		doc := map[string]any{"title": title, "text": body}
+		for k, v := range marker {
+			doc[k] = v
+		}
+		raw, err = json.Marshal(doc)
 	}
 	if err != nil {
 		return 0, err

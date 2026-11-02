@@ -219,6 +219,8 @@ type Digest struct {
 	EmptyProjects int    `json:"empty_projects"`
 	ShowEmpty     bool   `json:"show_empty"`
 	PageURL       string `json:"page_url,omitempty"`
+	// Servers lists the servers touched in the window (see ServerDigest).
+	Servers []ServerDigest `json:"servers,omitempty"`
 	// Catalog is the state of the sources after the last source update.
 	Catalog Catalog `json:"catalog"`
 	// Reading lists the feed items to read: unread, published in the
@@ -356,6 +358,9 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 		d.OSVStale = !d.OSVFetchedAt.IsZero() && now.Sub(d.OSVFetchedAt) > StaleAfter
 	}
 
+	if d.Servers, err = c.servers(ctx); err != nil {
+		return Digest{}, err
+	}
 	if d.Catalog, err = catalogOf(ctx, s, opt.Allowed); err != nil {
 		return Digest{}, err
 	}
@@ -426,6 +431,9 @@ func Filter(d Digest, names []string) Digest {
 		keep[n] = true
 	}
 	out := d
+	// A server is not a project: a channel restricted to some projects
+	// does not get the servers.
+	out.Servers = nil
 	out.Projects = []ProjectDigest{}
 	out.NewTotal, out.AttentionTotal, out.FailedScans, out.EmptyProjects = 0, 0, 0, 0
 	out.Exploited, out.ExploitedDecided = []Exploited{}, 0

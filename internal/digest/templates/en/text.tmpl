@@ -42,6 +42,10 @@ open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "hi
 {{range .Due}}  {{.Package}} {{.OSVID}}: deferred until {{day .DueAt}}{{if .Overdue}} (overdue){{end}}
 {{end}}{{end}}
 {{- end}}
+{{- if .Servers}}
+{{serversTitle}}:
+{{range .Servers}}  {{serverLine .}}
+{{end}}{{end}}
 {{- if .Reading}}
 To read:
 {{range .Reading}}  {{.Source}}: {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}

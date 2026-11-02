@@ -22,6 +22,17 @@ var dynamicPrefixes = []string{
 	// fix.consent.* are rendered by the page and the CLI from ConsentText.What;
 	// fix.cause.* from the agent's end causes.
 	"fix.consent.", "fix.cause.",
+	// fix.server.* are named by the error table of a server fix (ErrorKey).
+	"fix.server.",
+	// collect.unseen.* are the reasons stored in an inventory's Unseen lines;
+	// collect.secret_value is shown in place of a masked directive value.
+	"collect.unseen.", "collect.secret_value",
+	// serverrules.<rule>.title/.explain are named by the Key of each rule in
+	// the embedded rules.yaml.
+	"serverrules.",
+	// api.target.* are named by the refusals of the server routes (servererr.Key),
+	// their hints (the key and _hint) and the state of a server.
+	"api.target.",
 }
 
 // family says how a call names a catalog key: the prefix added to the

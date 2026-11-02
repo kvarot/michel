@@ -1,0 +1,13 @@
+[PHP Modules]
+Core
+ctype
+curl
+date
+json
+mysqli
+openssl
+pdo_mysql
+Zend OPcache
+
+[Zend Modules]
+Zend OPcache

@@ -438,23 +438,23 @@ func TestProjectSetExclude(t *testing.T) {
 	}
 }
 
-func TestProjectSetServerFixLevelAndAutoFixMinor(t *testing.T) {
+func TestProjectSetAutoFixMinor(t *testing.T) {
 	dir, proj := t.TempDir(), t.TempDir()
-	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "shop", "--server-fix-level", "2", "--auto-fix-minor"); err != nil {
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "shop", "--auto-fix-minor"); err != nil {
 		t.Fatal(err)
 	}
 	_, list, _, err := run(t, dir, "project", "list", "--json")
-	if err != nil || !strings.Contains(list, `"server_fix_level":2`) || !strings.Contains(list, `"auto_fix_minor":true`) {
+	if err != nil || !strings.Contains(list, `"auto_fix_minor":true`) {
 		t.Fatalf("list = %s, %v", list, err)
 	}
-	if _, _, _, err := run(t, dir, "project", "set", "shop", "--server-fix-level", "0", "--auto-fix-minor=false"); err != nil {
+	if _, _, _, err := run(t, dir, "project", "set", "shop", "--auto-fix-minor=false"); err != nil {
 		t.Fatal(err)
 	}
 	_, list, _, _ = run(t, dir, "project", "list", "--json")
-	if !strings.Contains(list, `"server_fix_level":0`) || !strings.Contains(list, `"auto_fix_minor":false`) {
+	if !strings.Contains(list, `"auto_fix_minor":false`) {
 		t.Errorf("list = %s", list)
 	}
-	if _, _, _, err := run(t, dir, "project", "set", "shop", "--server-fix-level", "4"); err == nil || !strings.HasPrefix(err.Error(), "Cannot update project") {
+	if _, _, _, err := run(t, dir, "project", "set", "shop", "--fix-level", "4"); err == nil || !strings.HasPrefix(err.Error(), "Cannot update project") {
 		t.Errorf("level 4: err = %v", err)
 	}
 }

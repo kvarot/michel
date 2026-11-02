@@ -1,0 +1,461 @@
+package fix
+
+import (
+	"context"
+	"errors"
+	"path"
+	"time"
+
+	"github.com/kvarot/michel/internal/decide"
+	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/servercheck"
+	"github.com/kvarot/michel/internal/serverfix"
+	"github.com/kvarot/michel/internal/serverrules"
+	"github.com/kvarot/michel/internal/target"
+)
+
+// The autonomy levels of a server (spec § 9): at level 2 Michel prepares a
+// fix for each open finding by itself and the fix waits for the user; at
+// level 3 it also runs, without a click, the fixes that keep every rule of
+// AutoApplicableServer.
+
+// EligibleServer reports whether Michel prepares a fix of server finding f
+// by itself (fix level 2 or more): an open finding of a server (new,
+// pending, or decided "fix"), never deferred nor ignored, on an active
+// server at level 2 or more. decided gives the action of the decision in
+// force ("" when none). Attempts already made are checked by the queue.
+func EligibleServer(f scan.Finding, t target.Target, decided func(id string) string) bool {
+	if !t.Active || t.FixLevel < 2 || f.ProjectID != t.ID {
+		return false
+	}
+	if f.Kind != scan.KindServerConfig && f.Kind != scan.KindServerPackage {
+		return false
+	}
+	action := ""
+	if decided != nil {
+		action = decided(f.ID)
+	}
+	switch f.Status {
+	case scan.StatusNew, scan.StatusPending:
+		return action != string(decide.Defer) && action != string(decide.Ignore)
+	case scan.StatusDecided:
+		return action == string(decide.Fix)
+	}
+	return false
+}
+
+// AutoApplicableServer tells whether a validated server fix runs without a
+// click (spec § 9), checked by Michel, never by the agent. Every rule is
+// required: the server is active, at level 3, its rule « corriger seul les
+// réglages à risque connus » is checked (AutoConfig) and Michel runs its
+// fixes (executor michel); the fix is Michel's own (origin michel.server or
+// manual, never an agent's); it only sets directives of Michel's embedded
+// rules to their advised value (no package upgrade, no snapshot needed),
+// with a configuration test and a site check (the server has a site_url);
+// a fix of files owned by root needs sudo without a password; and when the
+// server has a preprod, the same fix was proven there first
+// (preprodProven, which the caller looks up).
+func AutoApplicableServer(t target.Target, p serverfix.Plan, origin string, preprodProven bool) bool {
+	if !t.Active || t.FixLevel != 3 || !t.AutoConfig || t.Executor != target.ExecMichel || t.SiteURL == "" {
+		return false
+	}
+	if origin != OriginServer && origin != OriginManual {
+		return false
+	}
+	if t.PreprodID != "" && !preprodProven {
+		return false
+	}
+	if p.NeedsSnapshot || len(p.Actions) == 0 {
+		return false
+	}
+	set, err := serverrules.Rules()
+	if err != nil {
+		return false
+	}
+	advised := map[string]string{}
+	for _, r := range set.Config {
+		if r.Advised != "" {
+			advised[r.Directive] = r.Advised
+		}
+	}
+	writes, tests, sites, root := 0, 0, 0, false
+	for _, a := range p.Actions {
+		switch a.Op {
+		case serverfix.OpBackup, serverfix.OpReload:
+		case serverfix.OpTestConfig:
+			tests++
+		case serverfix.OpCheckSite:
+			sites++
+		case serverfix.OpSetDirective:
+			want, ok := advised[a.Directive]
+			if !ok || a.Value != want {
+				return false
+			}
+			writes++
+			if path.Base(a.Path) != ".user.ini" {
+				root = true
+			}
+		default:
+			// package_upgrade and anything else.
+			return false
+		}
+	}
+	if writes == 0 || tests == 0 || sites == 0 {
+		return false
+	}
+	if root && t.Sudo != target.SudoNopasswd {
+		return false
+	}
+	return true
+}
+
+// QueueEligibleServer puts the eligible findings of server targetID in the
+// queue of automatic attempts and returns how many it queued. A server
+// below level 2 queues nothing. A finding Michel already tried (any attempt,
+// on the server or on its preprod) is not queued again: Michel tries once
+// alone, the user starts the next try.
+func QueueEligibleServer(ctx context.Context, d Deps, targetID string) (int, error) {
+	if d.Targets == nil {
+		return 0, errors.New("the fix service needs the server registry")
+	}
+	t, err := d.Targets.Get(ctx, targetID)
+	if err != nil {
+		return 0, err
+	}
+	if t.FixLevel < 2 || !t.Active {
+		return 0, nil
+	}
+	findings, err := scan.NewRepo(d.Store).ListServerFindings(ctx, t.ID)
+	if err != nil {
+		return 0, err
+	}
+	current, err := decide.NewRepo(d.Store).CurrentByProject(ctx, t.ID)
+	if err != nil {
+		return 0, err
+	}
+	decided := func(id string) string {
+		if dec, ok := current[id]; ok {
+			return string(dec.Action)
+		}
+		return ""
+	}
+	// A finding Michel has no ready-made fix for is queued only when an
+	// agent may help (the server's consent, never a health server).
+	lt, err := d.leavingTarget(ctx, t)
+	if err != nil {
+		return 0, err
+	}
+	agentOK, err := d.serverConsentOK(ctx, lt)
+	if err != nil {
+		return 0, err
+	}
+	inv, hasInv, err := d.Targets.LatestInventory(ctx, t.ID)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, f := range findings {
+		if !EligibleServer(f, t, decided) {
+			continue
+		}
+		if tried, err := d.serverTried(ctx, t, f); err != nil {
+			return n, err
+		} else if tried {
+			continue
+		}
+		if !agentOK {
+			if !hasInv {
+				continue
+			}
+			if _, err := planFor(f, t, inv); errors.Is(err, ErrNeedsAgent) {
+				continue
+			}
+		}
+		if err := d.repo().Enqueue(ctx, f.ID, t.ID); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// serverTried reports whether finding f of t has an attempt: its own, or
+// one on t's preprod made for it.
+func (d Deps) serverTried(ctx context.Context, t target.Target, f scan.Finding) (bool, error) {
+	attempts, err := d.repo().AttemptsOf(ctx, f.ID)
+	if err != nil {
+		return false, err
+	}
+	if len(attempts) > 0 {
+		return true, nil
+	}
+	if t.PreprodID == "" {
+		return false, nil
+	}
+	pre, err := d.repo().ListAttempts(ctx, t.PreprodID, "")
+	if err != nil {
+		return false, err
+	}
+	for _, a := range pre {
+		if a.Work.Server != nil && a.Work.Server.ProdFindingID == f.ID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// workServer is WorkOnce for a queued finding of a server: Michel's own fix
+// when it has one, else (and only with the server's AI consent, never for a
+// health server) an agent started alone. It reports whether an attempt was
+// started; requeue is true when the server was busy.
+func (d Deps) workServer(ctx context.Context, f scan.Finding, t target.Target) (started, requeue bool, err error) {
+	dec, has, err := decide.NewRepo(d.Store).Current(ctx, f.ID)
+	if err != nil {
+		return false, false, err
+	}
+	decided := func(string) string {
+		if has {
+			return string(dec.Action)
+		}
+		return ""
+	}
+	if !EligibleServer(f, t, decided) {
+		return false, false, nil
+	}
+	if tried, err := d.serverTried(ctx, t, f); err != nil || tried {
+		return false, false, err
+	}
+	auto := d
+	auto.Actor = "serve"
+	_, err = StartServer(ctx, auto, f.ID)
+	if errors.Is(err, ErrNeedsAgent) {
+		lt, lerr := d.leavingTarget(ctx, t)
+		if lerr != nil {
+			return false, false, lerr
+		}
+		switch ok, cerr := d.serverConsentOK(ctx, lt); {
+		case cerr != nil:
+			return false, false, cerr
+		case healthTarget(t) || healthTarget(lt):
+			err = ErrHealthForbidden
+		case !ok:
+			err = ErrConsentRequired
+		default:
+			_, err = auto.startServerAgent(ctx, f.ID, OriginAgentAuto)
+		}
+	}
+	switch {
+	case err == nil:
+		return true, false, nil
+	case errors.Is(err, ErrBusy):
+		return false, true, nil
+	}
+	if key := ErrorKey(err); key != "" {
+		_ = d.record(ctx, "fix.start", f.ID, "refused", map[string]any{"finding_id": f.ID, "target_id": t.ID, "origin": "serve", "reason": key})
+		return false, false, nil
+	}
+	return false, false, err
+}
+
+// ApplyAutoServer runs, without a click, the server fixes that keep every
+// level 3 rule (AutoApplicableServer), one after the other, and returns how
+// many it ran. It looks at the fixes waiting for the user, and at the fixes
+// a rule approved whose run could not start (server unreachable): those are
+// tried again once after each new check of the server, never in a loop.
+// The fix is validated again against the server's latest inventory first.
+// A server with a fix whose state is unknown, running or applied gets none. A fix
+// that ran tells the user (Alert applied_auto); one that could not start
+// tells it once (Alert auto_not_run); one that failed was told by its run.
+// An error is audited once per attempt and reason, not at every pass. The
+// worker of michel serve calls it at each pass.
+func ApplyAutoServer(ctx context.Context, d Deps) (int, error) {
+	if d.Targets == nil {
+		return 0, nil
+	}
+	n := 0
+	for _, st := range []State{StateProposed, StateApproved} {
+		list, err := d.repo().ListAttempts(ctx, "", string(st))
+		if err != nil {
+			return n, err
+		}
+		for _, a := range list {
+			if a.Work.Server == nil || (a.Origin != OriginServer && a.Origin != OriginManual) {
+				continue
+			}
+			if st == StateApproved && a.ApprovedBy != ActorAuto {
+				continue
+			}
+			ran, err := d.autoServer(ctx, a)
+			d.sessions().autoErrorOnce(ctx, d, a, err)
+			if ran {
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+// autoErrorOnce audits err for attempt a when its reason differs from the
+// last one recorded for a (nil forgets it).
+func (s *Sessions) autoErrorOnce(ctx context.Context, d Deps, a Attempt, err error) {
+	key := ""
+	if err != nil {
+		if key = serverErrorKey(err); key == "" {
+			key = auditDetail(d, err)
+		}
+	}
+	s.mu.Lock()
+	last := s.autoErr[a.ID]
+	if key == "" {
+		delete(s.autoErr, a.ID)
+	} else {
+		s.autoErr[a.ID] = key
+	}
+	s.mu.Unlock()
+	if key != "" && key != last {
+		_ = d.record(ctx, "server_fix.auto", a.ID, "error", map[string]any{"attempt_id": a.ID, "target_id": a.ProjectID,
+			"error": serverErrorKey(err), "detail": auditDetail(d, err)})
+	}
+}
+
+// autoServer applies one server fix alone when the level 3 rules allow it;
+// ran tells whether its script was sent.
+func (d Deps) autoServer(ctx context.Context, a Attempt) (ran bool, err error) {
+	t, err := d.Targets.Get(ctx, a.ProjectID)
+	if errors.Is(err, target.ErrNotFound) {
+		// The server is gone: nothing to run, nothing to tell.
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if t.FixLevel != 3 || !t.AutoConfig {
+		return false, nil
+	}
+	prop, ok, err := d.repo().CurrentProposal(ctx, a.ID)
+	if err != nil || !ok || prop.Server == nil || prop.Scripts == nil {
+		return false, err
+	}
+	// No fix runs alone next to one whose outcome is not known, or whose
+	// steps after the script (site check, undo, recollection) still run.
+	for _, st := range []State{StateUnknown, StateRunning, StateApplied} {
+		list, err := d.repo().ListAttempts(ctx, t.ID, string(st))
+		if err != nil {
+			return false, err
+		}
+		if len(list) > 0 {
+			return false, nil
+		}
+	}
+	inv, ok, err := d.Targets.LatestInventory(ctx, t.ID)
+	if err != nil || !ok {
+		return false, err
+	}
+	retry := a.State == StateApproved
+	if retry && !d.sessions().retryDue(a.ID, inv.At) {
+		return false, nil
+	}
+	sf := *prop.Server
+	v, err := serverfix.Validate(serverfix.Plan{TargetID: sf.TargetID, FindingID: sf.FindingID, Mitigation: sf.Mitigation, Actions: sf.Actions}, t, inv)
+	if err != nil {
+		// Validate refuses an untestable binary, among others.
+		return false, nil
+	}
+	proven, err := d.preprodProven(ctx, t, a)
+	if err != nil {
+		return false, err
+	}
+	if !AutoApplicableServer(t, v, a.Origin, proven) || sf.Executor != target.ExecMichel ||
+		(prop.Scripts.RunAsRoot && t.Sudo != target.SudoNopasswd) || executorFor(t, *prop.Scripts) != target.ExecMichel {
+		return false, nil
+	}
+	auto := d
+	auto.Actor = ActorAuto
+	if !retry {
+		if err := Approve(ctx, auto, a.ID, prop.Hash); err != nil {
+			return false, err
+		}
+	}
+	_ = auto.record(ctx, "server_fix.auto", a.ID, "ok", map[string]any{"attempt_id": a.ID, "target_id": t.ID, "finding_id": sf.FindingID,
+		"hash": prop.Hash, "retry": retry})
+	aerr := Apply(ctx, auto, a.ID)
+	got, gerr := d.repo().GetAttempt(ctx, a.ID)
+	if gerr != nil {
+		return true, errors.Join(aerr, gerr)
+	}
+	switch got.State {
+	case StateApproved:
+		// Nothing ran (the server could not be reached): Michel tries
+		// again after the next check, and tells the user once.
+		d.sessions().triedAt(a.ID, inv.At)
+		if d.sessions().alertOnce(a.ID) {
+			d.alert(ctx, servercheck.AlertInput{Target: t, Kind: servercheck.AlertAutoNotRun})
+			_ = auto.record(ctx, "server_fix.auto", a.ID, "not_run", map[string]any{"attempt_id": a.ID, "target_id": t.ID})
+		}
+		return false, nil
+	case StateApplied, StateProvenFixed, StateInconclusive:
+		d.alert(ctx, servercheck.AlertInput{Target: t, Kind: servercheck.AlertAppliedAuto})
+	}
+	d.sessions().forgetAuto(a.ID)
+	return true, aerr
+}
+
+// retryDue tells whether a fix approved by a rule whose run could not
+// start may be tried again: once per new check (inventory at). One this
+// process never tried (another process approved it) waits for the next
+// check.
+func (s *Sessions) retryDue(id string, at time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	last, ok := s.autoTried[id]
+	if !ok {
+		s.autoTried[id] = at
+		return false
+	}
+	return at.After(last)
+}
+
+func (s *Sessions) triedAt(id string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.autoTried[id] = at
+}
+
+// alertOnce tells whether the auto_not_run alert of id is still to send.
+func (s *Sessions) alertOnce(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.autoAlerted[id] {
+		return false
+	}
+	s.autoAlerted[id] = true
+	return true
+}
+
+func (s *Sessions) forgetAuto(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.autoTried, id)
+	delete(s.autoAlerted, id)
+}
+
+// preprodProven tells whether the production fix a was built from a fix of
+// Michel's own proven on t's preprod: the preprod attempt the promotion
+// recorded (ServerWork.PreprodAttemptID), proven_fixed, of origin
+// michel.server, made on t's preprod for this very production finding. An
+// agent's proof, or the proof of another fix, opens nothing.
+func (d Deps) preprodProven(ctx context.Context, t target.Target, a Attempt) (bool, error) {
+	if t.PreprodID == "" || a.Work.Server == nil || a.Work.Server.PreprodAttemptID == "" {
+		return false, nil
+	}
+	p, err := d.repo().GetAttempt(ctx, a.Work.Server.PreprodAttemptID)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	w := p.Work.Server
+	return p.State == StateProvenFixed && p.Origin == OriginServer && p.ProjectID == t.PreprodID && w != nil &&
+		w.TargetID == t.PreprodID && w.ProdTargetID == t.ID && w.ProdFindingID == a.FindingID, nil
+}

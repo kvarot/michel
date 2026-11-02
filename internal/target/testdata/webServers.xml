@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="11111111-1111-1111-1111-111111111111" name="prod-demo" url="http://example.test">
+        <fileTransfer accessType="SFTP" host="example.test" port="2222" rootFolder="/" userName="deploy" password="hunter2-secret" passphrase="p4ss-secret" sshConfigId="x">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Default" keepAliveTimeout="0" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="22222222-2222-2222-2222-222222222222" name="nested-demo" url="http://192.0.2.10">
+        <fileTransfer accessType="SFTP">
+          <option name="host" value="192.0.2.10" />
+          <option name="port" value="22" />
+          <option name="userName" value="deploy" />
+          <option name="password" value="nested-secret" />
+        </fileTransfer>
+      </webServer>
+      <webServer id="33333333-3333-3333-3333-333333333333" name="ftp-demo" url="ftp://example.test">
+        <fileTransfer accessType="FTP" host="ftp.example.test" port="21" />
+      </webServer>
+    </option>
+  </component>
+</project>

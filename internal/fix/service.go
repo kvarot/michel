@@ -29,7 +29,10 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/secret"
+	"github.com/kvarot/michel/internal/servercheck"
+	"github.com/kvarot/michel/internal/sshx"
 	"github.com/kvarot/michel/internal/store"
+	"github.com/kvarot/michel/internal/target"
 	"github.com/kvarot/michel/internal/workcopy"
 )
 
@@ -115,6 +118,37 @@ type Deps struct {
 	MaxTurns       int
 	WorkerInterval time.Duration
 	PollInterval   time.Duration
+
+	// Server fixes (StartServer, Apply and AppliedByMe of a server finding).
+	//
+	// Targets is the server registry; SSH the client's services (every
+	// connection goes through the egress gateway and the strict host key
+	// check). CheckServer checks a server again (servercheck.Check in
+	// michel serve). SiteCheck makes the GET of check_site from the
+	// workstation (purpose target.http): nil means "no site check
+	// possible", a fix with a check_site is then not proven. Alert tells
+	// the user (servercheck.AlertInput kinds rolled_back, rollback_failed,
+	// undo_now); nil tells no one. OnStep, when set, is told each step of a
+	// run as it is known.
+	Targets     *target.Repo
+	SSH         sshx.Deps
+	CheckServer func(ctx context.Context, targetID string) (servercheck.CheckResult, error)
+	SiteCheck   func(ctx context.Context, url string) error
+	Alert       func(ctx context.Context, in servercheck.AlertInput)
+	OnStep      func(attemptID string, s StepResult)
+	// ConfigApplyTimeout and PackageApplyTimeout bound a fix script's run
+	// (0: DefaultConfigApplyTimeout, DefaultPackageApplyTimeout). They
+	// replace the per-command cap of the collection for the scripts only.
+	ConfigApplyTimeout  time.Duration
+	PackageApplyTimeout time.Duration
+	RecordTimeout       time.Duration
+	// SiteCheckTimeout bounds one site check (0: DefaultSiteCheckTimeout),
+	// CheckTimeout one recollection (0: DefaultCheckTimeout).
+	SiteCheckTimeout time.Duration
+	CheckTimeout     time.Duration
+	// BackupKeyWait is how long a process waits for the backup key another
+	// one is writing before it takes the key for lost (0: 10 s).
+	BackupKeyWait time.Duration
 }
 
 // DefaultMaxTurns caps the agentic turns of a session when Deps.MaxTurns
@@ -217,6 +251,12 @@ type Sessions struct {
 	m         map[string]*running
 	lock      map[string]*sync.Mutex
 	proposing map[string]*sync.Mutex
+	// The level 3 runner's memory (ApplyAutoServer) and the agents' package
+	// simulations, per attempt.
+	autoErr     map[string]string
+	autoTried   map[string]time.Time
+	autoAlerted map[string]bool
+	sims        map[string]int
 }
 
 // running is one attempt's session: the agent, its proxy, its masker and
@@ -252,7 +292,8 @@ func (r *running) mask(st secret.Store, attemptID, text string) string {
 
 // NewSessions returns an empty registry.
 func NewSessions() *Sessions {
-	return &Sessions{m: map[string]*running{}, lock: map[string]*sync.Mutex{}, proposing: map[string]*sync.Mutex{}}
+	return &Sessions{m: map[string]*running{}, lock: map[string]*sync.Mutex{}, proposing: map[string]*sync.Mutex{},
+		autoErr: map[string]string{}, autoTried: map[string]time.Time{}, autoAlerted: map[string]bool{}, sims: map[string]int{}}
 }
 
 // proposeLock is the mutex held for a whole Propose of one attempt: two
@@ -375,7 +416,18 @@ func (d Deps) find(ctx context.Context, id string) (scan.Finding, project.Projec
 // busy reports whether the project has an attempt being worked on or
 // waiting for the user.
 func (d Deps) busy(ctx context.Context, projectID string) (bool, error) {
-	for _, st := range []State{StatePreparing, StateProposed, StateApproved} {
+	return d.busyIn(ctx, projectID, StatePreparing, StateProposed, StateApproved, StateRunning)
+}
+
+// serverBusy is busy for a server: an applied attempt (its site check, undo
+// and recollection still run) or one whose outcome is unknown counts too,
+// so a server never has two fixes at once.
+func (d Deps) serverBusy(ctx context.Context, targetID string) (bool, error) {
+	return d.busyIn(ctx, targetID, StatePreparing, StateProposed, StateApproved, StateRunning, StateApplied, StateUnknown)
+}
+
+func (d Deps) busyIn(ctx context.Context, projectID string, states ...State) (bool, error) {
+	for _, st := range states {
 		list, err := d.repo().ListAttempts(ctx, projectID, string(st))
 		if err != nil {
 			return false, err
@@ -727,10 +779,15 @@ func (d Deps) run(id string, r *running) {
 		d.cleanup(ctx, a, true)
 	case StateProposed:
 		// The agent is gone: no more proposal can come. The copy stays
-		// until the user decides.
+		// until the user decides; a server agent's empty folder goes.
 		_ = DeleteAttemptToken(d.Secrets, id)
+		if a.Work.Server != nil {
+			d.cleanup(ctx, a, true)
+		}
 	case StateApproved:
-		if a.ApprovedBy == ActorAuto {
+		// A server fix is never applied from here: an agent's proposal is
+		// never approved by a rule.
+		if a.ApprovedBy == ActorAuto && a.Work.Server == nil {
 			d.applyAuto(ctx, a)
 		}
 	}
@@ -765,7 +822,9 @@ func (d Deps) applyApproved(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if a.State != StateApproved {
+	// A server fix never runs at a restart: it runs when the user (or a
+	// level 3 rule, at the time) asked for it, never later on its own.
+	if a.State != StateApproved || a.Work.Server != nil {
 		return nil
 	}
 	d.applyAuto(ctx, a)
@@ -782,6 +841,11 @@ func (d Deps) cleanup(ctx context.Context, a Attempt, removeCopy bool) {
 	}
 	if removeCopy && a.Work.Copy.Dir != "" {
 		_ = workcopy.Remove(d.work(), a.Work.Copy)
+	}
+	// A server agent's empty working folder.
+	if removeCopy && a.Work.Server != nil && d.DataDir != "" && filepath.IsAbs(d.DataDir) && idFolder.MatchString(a.ID) && idFolder.MatchString(a.ProjectID) {
+		_ = os.RemoveAll(serverAgentDir(d.DataDir, a.ProjectID, a.ID))
+		_ = os.Remove(filepath.Join(d.DataDir, "worktrees", a.ProjectID))
 	}
 }
 
@@ -1426,6 +1490,9 @@ func Approve(ctx context.Context, d Deps, attemptID, hash string) error {
 	if !ok {
 		return ErrNoProposal
 	}
+	if a.Work.Server != nil {
+		return d.approveServer(ctx, a, prop, hash)
+	}
 	if hash == "" || prop.Hash != hash {
 		_ = d.record(ctx, "fix.approve", attemptID, "refused", map[string]any{"attempt_id": attemptID, "reason": "stale proposal", "current_hash": prop.Hash})
 		return ErrStaleProposal
@@ -1453,8 +1520,14 @@ func Apply(ctx context.Context, d Deps, attemptID string) error {
 	if err != nil {
 		return err
 	}
+	if a.Work.Server != nil && a.State == StateRunning {
+		return ErrBusy
+	}
 	if a.State != StateApproved {
 		return fmt.Errorf("%w (the attempt is %s)", ErrBadTransition, a.State)
+	}
+	if a.Work.Server != nil {
+		return d.applyServer(ctx, a)
 	}
 	return d.applyLocked(ctx, a)
 }
@@ -1631,7 +1704,7 @@ var idFolder = regexp.MustCompile(`^[0-9A-Za-z]{1,64}$`)
 // finished are the states whose copy has no use any more.
 func finished(s State) bool {
 	switch s {
-	case StateRefused, StateFailed, StateApplied, StateProvenFixed, StateInconclusive, StateSuperseded:
+	case StateRefused, StateFailed, StateApplied, StateProvenFixed, StateInconclusive, StateSuperseded, StateUnknown:
 		return true
 	}
 	return false
@@ -1697,6 +1770,10 @@ func Sweep(ctx context.Context, d Deps) error {
 			}
 		}
 		_ = os.Remove(dir) // only when empty
+	}
+	// A server fix left running by a stopped process.
+	if _, err := SweepRunning(ctx, d); err != nil {
+		return err
 	}
 	approved, err := repo.ListAttempts(ctx, "", string(StateApproved))
 	if err != nil {
@@ -1766,6 +1843,9 @@ func (d Deps) purge(ctx context.Context) error {
 	repo := d.repo()
 	before := d.now().Add(-MessageRetention)
 	if _, err := repo.PurgeMessages(ctx, before); err != nil {
+		return err
+	}
+	if _, err := repo.PurgeBackups(ctx, d.now().Add(-BackupRetention)); err != nil {
 		return err
 	}
 	if d.Secrets == nil {

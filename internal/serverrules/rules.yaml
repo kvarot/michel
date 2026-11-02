@@ -1,0 +1,103 @@
+# Embedded server rules. Bump `version` here and Version in rules.go together
+# whenever a rule, an advisory or a branch changes.
+version: 2
+
+# Risky PHP settings. risky: "on" | "off" | "empty". A directive that is not
+# set anywhere is judged only when missing_is_risky is true (PHP's own
+# default is the risky one). context: all must hold (prod, shared, https,
+# sapi:<fpm|cli>). mitigates: ids or aliases of upstream advisories the
+# advised value only holds back; the flaw stays open. changeable: system (only
+# php.ini or a pool php_admin_* line can set it), perdir (a pool php_value or a
+# .user.ini can too) or all.
+config:
+  - id: display_errors_prod
+    changeable: all
+    directive: display_errors
+    risky: "on"
+    advised: "0"
+    severity: medium
+    context: [prod, "sapi:fpm"]
+    key: serverrules.display_errors_prod
+  - id: expose_php
+    changeable: system
+    directive: expose_php
+    risky: "on"
+    advised: "0"
+    severity: low
+    context: ["sapi:fpm"]
+    key: serverrules.expose_php
+  - id: allow_url_include
+    changeable: system
+    directive: allow_url_include
+    risky: "on"
+    advised: "0"
+    severity: high
+    key: serverrules.allow_url_include
+  - id: open_basedir_shared
+    changeable: all
+    directive: open_basedir
+    risky: empty
+    advised: ""
+    severity: medium
+    missing_is_risky: true
+    context: [shared, "sapi:fpm"]
+    key: serverrules.open_basedir_shared
+  - id: session_cookie_secure
+    changeable: all
+    directive: session.cookie_secure
+    risky: "off"
+    advised: "1"
+    severity: medium
+    context: [https, "sapi:fpm"]
+    key: serverrules.session_cookie_secure
+  - id: session_upload_progress_off
+    changeable: perdir
+    directive: session.upload_progress.enabled
+    risky: "on"
+    advised: "0"
+    severity: medium
+    missing_is_risky: true
+    context: ["sapi:fpm"]
+    mitigates: [CVE-2026-109618, CVE-2026-109619]
+    mitigation: true
+    key: serverrules.session_upload_progress_off
+  - id: fatal_error_backtraces_off
+    changeable: all
+    directive: fatal_error_backtraces
+    risky: "on"
+    advised: "0"
+    severity: medium
+    missing_is_risky: true
+    branches: ["8.5"]
+    context: ["sapi:fpm"]
+    mitigates: [CVE-2026-109618, CVE-2026-109619]
+    mitigation: true
+    key: serverrules.fatal_error_backtraces_off
+
+# Upstream advisories judged on the version number of runtimes that do not
+# come from a distribution package.
+upstream:
+  - id: PHP2SHELL
+    aliases: [CVE-2026-109618, CVE-2026-109619]
+    severity: critical
+    cvss: 9.2
+    key: serverrules.php2shell
+    branches:
+      - {branch: "8.2", fixed: "8.2.35"}
+      - {branch: "8.3", fixed: "8.3.36"}
+      - {branch: "8.4", fixed: "8.4.27"}
+      - {branch: "8.5", fixed: "8.5.12"}
+    mitigations: [session_upload_progress_off, fatal_error_backtraces_off]
+
+# PHP branches that no longer get security fixes: the listed ones, and every
+# branch older than eol_before (so 5.5 or 4.4 are covered too).
+eol_before: "8.2"
+eol:
+  - {branch: "5.6"}
+  - {branch: "7.0"}
+  - {branch: "7.1"}
+  - {branch: "7.2"}
+  - {branch: "7.3"}
+  - {branch: "7.4"}
+  - {branch: "8.0"}
+  - {branch: "8.1"}

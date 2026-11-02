@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kvarot/michel/internal/store"
@@ -197,6 +198,71 @@ func ApplyExternal(ctx context.Context, tx *sql.Tx, projectID, sourceKey, runID 
 	return newN, still + reappeared, gone, superseded, err
 }
 
+// ServerApply shapes ApplyServerFindings. Unread lists the manifest keys
+// (such as "os-packages" or "fpm:/usr/sbin/php-fpm8.2") the check could not
+// judge: their findings are neither refreshed nor closed. Enriched tells
+// that the findings carry their enrichment (see applyScan).
+//
+// UnreadPrefixes protects, the same way, every stored manifest of the
+// server that starts with one of them ("cli:", "fpm:"): the check could not
+// even tell which runtimes are there.
+type ServerApply struct {
+	Unread         []string
+	UnreadPrefixes []string
+	Enriched       bool
+}
+
+// ApplyServerFindings records the findings of one check of a server
+// (targetID, runID) inside tx with the statuses of a scan (see applyScan):
+// a finding the check no longer sees, without a fix by Michel, becomes gone.
+// Server findings keep the target id in project_id and are stored as OSV
+// findings (source_key ""), so a plugin's findings are never touched. A
+// finding that comes back counts in still. The decisions superseded are
+// returned for the audit log, which the caller writes after the commit.
+func ApplyServerFindings(ctx context.Context, tx *sql.Tx, targetID, runID string, now time.Time, fs []Finding, o ServerApply) (newN, still, gone int, superseded []Superseded, err error) {
+	if targetID == "" {
+		return 0, 0, 0, nil, errors.New("a server finding needs the id of its server")
+	}
+	for _, f := range fs {
+		if f.ProjectID != targetID || (f.Kind != KindServerPackage && f.Kind != KindServerConfig) {
+			return 0, 0, 0, nil, fmt.Errorf("finding %s is not a finding of server %s", label(f), targetID)
+		}
+	}
+	current, err := currentDecisions(ctx, tx, targetID)
+	if err != nil {
+		return 0, 0, 0, nil, err
+	}
+	unread := map[string]bool{}
+	for _, m := range o.Unread {
+		unread[m] = true
+	}
+	if len(o.UnreadPrefixes) > 0 {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT manifest_rel_path FROM finding WHERE project_id = ? AND source_key = ''`, targetID)
+		if err != nil {
+			return 0, 0, 0, nil, fmt.Errorf("cannot read the existing findings: %w", err)
+		}
+		for rows.Next() {
+			var m string
+			if err := rows.Scan(&m); err != nil {
+				rows.Close()
+				return 0, 0, 0, nil, err
+			}
+			for _, p := range o.UnreadPrefixes {
+				if strings.HasPrefix(m, p) {
+					unread[m] = true
+				}
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return 0, 0, 0, nil, err
+		}
+	}
+	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, targetID, "", runID, now, fs, unread, current, o.Enriched)
+	return newN, still + reappeared, gone, superseded, err
+}
+
 // apply is applyScan for the findings of one source: "" for the OSV scan, a
 // plugin key for a plugin run. Only the findings of that source are read and
 // closed; the findings are stored with that source key.
@@ -233,15 +299,15 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 	ins, err := tx.PrepareContext(ctx, `INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id,
 		aliases, severity_label, cvss_score, installed_version, fixed_versions, dep_groups, status,
 		first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, summary, status_changed_at, kind, malicious,
-		kev, kev_added, epss, epss_percentile, cvss_enriched, source_key, rule_id, location, fingerprint)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		kev, kev_added, epss, epss_percentile, cvss_enriched, source_key, rule_id, location, fingerprint, mitigation, sapi)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
 	}
 	defer ins.Close()
 	upd, err := tx.PrepareContext(ctx, `UPDATE finding SET aliases=?, severity_label=?, cvss_score=?, installed_version=?,
 		fixed_versions=?, dep_groups=?, status=?, last_seen_scan=?, last_seen_at=?, summary=?, malicious=?,
-		kev=?, kev_added=?, epss=?, epss_percentile=?, cvss_enriched=?, location=?,
+		kev=?, kev_added=?, epss=?, epss_percentile=?, cvss_enriched=?, location=?, mitigation=?, sapi=?,
 		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id=?`)
 	if err != nil {
 		return 0, 0, 0, 0, nil, err
@@ -275,7 +341,7 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 			if _, err := ins.ExecContext(ctx, f.ID, projectID, f.ManifestRelPath, f.Ecosystem, f.Package, f.OSVID,
 				jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion, jsonList(f.FixedVersions), jsonList(f.DepGroups),
 				StatusNew, scanID, scanID, ts, ts, f.Summary, ts, kindOf(f), boolInt(f.Malicious),
-				boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, sourceKey, f.RuleID, f.Location, f.Fingerprint); err != nil {
+				boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, sourceKey, f.RuleID, f.Location, f.Fingerprint, boolInt(f.Mitigation), f.SAPI); err != nil {
 				return 0, 0, 0, 0, nil, fmt.Errorf("cannot save finding %s: %w", label(f), err)
 			}
 			newN++
@@ -303,7 +369,7 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 		}
 		if _, err := upd.ExecContext(ctx, jsonList(f.Aliases), f.SeverityLabel, cvss, f.InstalledVersion,
 			jsonList(f.FixedVersions), jsonList(f.DepGroups), status, scanID, ts, f.Summary, boolInt(f.Malicious),
-			boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, f.Location, status, ts, f.ID); err != nil {
+			boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, f.Location, boolInt(f.Mitigation), f.SAPI, status, ts, f.ID); err != nil {
 			return 0, 0, 0, 0, nil, fmt.Errorf("cannot update finding %s: %w", label(f), err)
 		}
 		if k.status == StatusGone {
@@ -339,21 +405,21 @@ func NewRepo(s *store.Store) *Repo { return &Repo{s: s} }
 // findingColumns are the columns scanFinding reads, in order.
 const findingColumns = `id, project_id, manifest_rel_path, ecosystem, package, osv_id, aliases, severity_label, cvss_score,
 	installed_version, fixed_versions, dep_groups, status, first_seen_at, last_seen_at, summary, kind, malicious,
-	kev, kev_added, epss, epss_percentile, cvss_enriched, source_key, rule_id, location, fingerprint`
+	kev, kev_added, epss, epss_percentile, cvss_enriched, source_key, rule_id, location, fingerprint, mitigation, sapi`
 
 // scanFinding reads one row of findingColumns.
 func scanFinding(rows *sql.Rows) (Finding, error) {
 	var f Finding
 	var cvss sql.NullFloat64
 	var aliases, fixed, groups string
-	var malicious, kev int
+	var malicious, kev, mitigation int
 	if err := rows.Scan(&f.ID, &f.ProjectID, &f.ManifestRelPath, &f.Ecosystem, &f.Package, &f.OSVID, &aliases,
 		&f.SeverityLabel, &cvss, &f.InstalledVersion, &fixed, &groups, &f.Status, &f.FirstSeenAt, &f.LastSeenAt, &f.Summary,
 		&f.Kind, &malicious, &kev, &f.KEVAdded, &f.EPSS, &f.EPSSPercentile, &f.CVSSEnriched,
-		&f.SourceKey, &f.RuleID, &f.Location, &f.Fingerprint); err != nil {
+		&f.SourceKey, &f.RuleID, &f.Location, &f.Fingerprint, &mitigation, &f.SAPI); err != nil {
 		return Finding{}, err
 	}
-	f.CVSS, f.Malicious, f.KEV = cvss.Float64, malicious != 0, kev != 0
+	f.CVSS, f.Malicious, f.KEV, f.Mitigation = cvss.Float64, malicious != 0, kev != 0, mitigation != 0
 	_ = json.Unmarshal([]byte(aliases), &f.Aliases)
 	_ = json.Unmarshal([]byte(fixed), &f.FixedVersions)
 	_ = json.Unmarshal([]byte(groups), &f.DepGroups)
@@ -365,7 +431,7 @@ func scanFinding(rows *sql.Rows) (Finding, error) {
 // (EffectiveSeverity). An empty status means everything except "gone"; "all"
 // means everything; "actionable" means new or pending.
 func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Finding, error) {
-	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ?`
+	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ? AND kind NOT IN ('server_package', 'server_config')`
 	args := []any{projectID}
 	switch status {
 	case "all":
@@ -427,6 +493,24 @@ func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, er
 		len(prefix), prefix, MaxPrefixMatches)
 	if err != nil {
 		return nil, fmt.Errorf("cannot look the finding up: %w", err)
+	}
+	defer rows.Close()
+	out := []Finding{}
+	for rows.Next() {
+		f, err := scanFinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// ListServerFindings returns every finding of a server (any status), by id.
+func (r *Repo) ListServerFindings(ctx context.Context, targetID string) ([]Finding, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+findingColumns+` FROM finding WHERE project_id = ? AND source_key = '' AND kind IN ('server_package', 'server_config') ORDER BY id`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the findings of the server: %w", err)
 	}
 	defer rows.Close()
 	out := []Finding{}

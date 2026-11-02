@@ -68,7 +68,8 @@ func sourceUpdate(cmd *cobra.Command, deps *Deps, keys []string, kind source.Kin
 		return sourceupdate.Report{}, deps.Wrapf("cli.secret.open_failed", err, dir)
 	}
 	return sourceupdate.Run(ctx, sourceupdate.Deps{Store: deps.Store, Repo: repo, Audit: deps.Audit, Gateway: deps.Gateway,
-		Secrets: secrets, OSVRoot: dbRoot(cmd, deps), Now: deps.Now, Budget: sourceupdate.BudgetFor(secrets), Actor: "cli"},
+		Secrets: secrets, OSVRoot: dbRoot(cmd, deps), Now: deps.Now, Budget: sourceupdate.BudgetFor(secrets), Actor: "cli",
+		Rematch: serverRematch(cmd, deps)},
 		keys, kind)
 }
 

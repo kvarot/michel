@@ -20,10 +20,14 @@ sovereignty:
     # 'michel source enable <key>' adds the rule a source needs here, after your consent
     # (keeping a copy of this file as config.yaml.bak); 'michel source disable <key> --forget' removes it.
     # Purposes: osv.db, source.enrich, source.feed, source.repo, source.discover, notify.email,
-    # notify.webhook, fix.install, agent.claude. plugin.<key> is never allowed. Hosts of each
+    # notify.webhook, notify.sms, target.ssh, target.http, fix.install, agent.claude. plugin.<key> is never allowed. Hosts of each
     # source: docs/sources.md; of the fix agent: docs/security/network-egress.md.
     # Example written by 'michel source enable enrich.kev':
     #   - {host: www.cisa.gov, purpose: source.enrich}
+    # Rules written when you add a server ('michel target add', or the Servers page; removed with the server,
+    # only those Michel wrote). docs/servers.md:
+    #   - {host: srv.example.test, purpose: target.ssh}    # SSH to the server
+    #   - {host: www.example.test, purpose: target.http}   # the site address, if you gave one
     # Rules written by a project's AI consent for the fix agent (docs/fix.md):
     #   - {host: api.anthropic.com, purpose: agent.claude}
     #   - {host: platform.claude.com, purpose: agent.claude}
@@ -56,8 +60,9 @@ risk:
   auto_fix_below: 30            # score < 30 -> auto_fix
   handoff_up_to: 60             # 30..60 -> handoff, > 60 -> handoff with a warning
 # Where the digest is sent (michel digest --send). No channel by default.
-# An enabled email or webhook channel needs its own rule in sovereignty.network.allow,
-# for example {host: smtp.example.org, purpose: notify.email} or {host: hooks.example.org, purpose: notify.webhook}.
+# An enabled email, webhook or sms channel needs its own rule in sovereignty.network.allow,
+# for example {host: smtp.example.org, purpose: notify.email}, {host: hooks.example.org, purpose: notify.webhook}
+# or {host: smsapi.free-mobile.fr, purpose: notify.sms}.
 # Passwords and signing keys are never written here: store them with 'michel secret set <name>'.
 notify:
   page_url: http://127.0.0.1:7331/ # link to the "Today" page put in the digests; never carries the access token
@@ -79,3 +84,20 @@ notify:
   #     secret: hook-n8n           # name of the HMAC signing key; required unless the url is on this machine
   #   - name: bureau
   #     type: toast                # a notification on this computer's desktop
+  #   - name: sms-urgent           # SMS: only for an urgent server alert (a flaw exploited in the wild or critical
+  #     type: sms                  # on a production server, or a fix that could not be undone); never the digest
+  #     provider: freemobile       # freemobile | generic
+  #     user: "12345678"           # your Free Mobile login
+  #     secret: sms-urgent         # name of the secret holding the Free Mobile key (michel secret set sms-urgent)
+  #     urgent: true               # must be true for this channel to send anything
+  #     # url: only for tests (a local receiver); the key goes wherever it points. Leave it out for Free Mobile.
+  #     # generic provider instead: url: https://sms.example.org/send  (POST {"text"}, signed with the secret like a webhook)
+  # sms_per_day: 3               # most SMS in a day (local time), all channels together (default 3)
+
+# Michel's SSH client for the servers it checks. It signs in with the keys of your SSH agent only.
+# ssh:
+#   agent_pipe: ""                 # leave empty for the system agent; or the agent to use instead, for example
+#                                  # \.\pipe\openssh-ssh-agent on Windows (Pageant in OpenSSH mode has its own pipe)
+#                                  # or, for an agent that offers one, the full path of a Unix socket (also on Windows).
+#                                  # A socket must sit in a folder only you can write to: whoever controls it sees
+#                                  # Michel's sign-in requests.

@@ -264,3 +264,57 @@ func TestRunKeepsAnOnDemandReadCutByTime(t *testing.T) {
 		t.Errorf("entry = %q %q %d", e.LastReadResult, e.LastReadError, e.LastReadItems)
 	}
 }
+
+func TestRunRematchesServersAfterAnOSVUpdate(t *testing.T) {
+	skipped := false
+	useReaders(t, &fakeReader{kinds: []source.Kind{source.KindOSV}, fn: func(ctx context.Context, e source.Entry, deps Deps) (Result, error) {
+		if skipped {
+			return Result{Skipped: SkipNotModified}, nil
+		}
+		return Result{Items: 3}, nil
+	}}, &fakeReader{kinds: []source.Kind{source.KindFeed}, fn: func(ctx context.Context, e source.Entry, deps Deps) (Result, error) {
+		return Result{Items: 1}, nil
+	}})
+	rules := []policy.AllowRule{{Host: "osv.example.org", Purpose: policy.PurposeOSV}, {Host: "a.example.org", Purpose: policy.PurposeFeed}}
+	osv := source.Entry{Key: "osv.zzz", Kind: source.KindOSV, Hosts: []string{"osv.example.org"}, Purpose: policy.PurposeOSV,
+		Config: source.Config{User: map[string]any{"ecosystem": "Zzz"}}}
+	d := env(t, nil, rules, osv, feedEntry("feed.a", "a.example.org"))
+	calls := 0
+	d.Rematch = func(context.Context) (int, error) { calls++; return 2, nil }
+
+	rep, err := Run(context.Background(), d, nil, "")
+	if err != nil || calls != 1 || rep.Rematched != 2 {
+		t.Fatalf("after an update: calls %d, report %+v, err %v", calls, rep, err)
+	}
+	// A feed alone, or a database the server reports unchanged, rematches nothing.
+	if _, err := Run(context.Background(), d, []string{"feed.a"}, ""); err != nil || calls != 1 {
+		t.Fatalf("feed only: calls %d, err %v", calls, err)
+	}
+	skipped = true
+	if _, err := Run(context.Background(), d, nil, ""); err != nil || calls != 1 {
+		t.Fatalf("not modified: calls %d, err %v", calls, err)
+	}
+	skipped = false
+	d.Rematch = func(context.Context) (int, error) { return 0, errors.New("rematch broke") }
+	rep, err = Run(context.Background(), d, nil, "")
+	if !errors.Is(err, ErrSomeFailed) || rep.RematchError != "rematch broke" {
+		t.Fatalf("a failed rematch: %+v, %v", rep, err)
+	}
+}
+
+func TestRematchPastTheDeadlineKeepsTheUpdate(t *testing.T) {
+	useReaders(t, &fakeReader{kinds: []source.Kind{source.KindOSV}, fn: func(ctx context.Context, e source.Entry, deps Deps) (Result, error) {
+		return Result{Items: 3}, nil
+	}})
+	rules := []policy.AllowRule{{Host: "osv.example.org", Purpose: policy.PurposeOSV}}
+	osv := source.Entry{Key: "osv.zzz", Kind: source.KindOSV, Hosts: []string{"osv.example.org"}, Purpose: policy.PurposeOSV,
+		Config: source.Config{User: map[string]any{"ecosystem": "Zzz"}}}
+	d := env(t, nil, rules, osv)
+	d.Rematch = func(ctx context.Context) (int, error) { <-ctx.Done(); return 0, ctx.Err() }
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	rep, err := Run(ctx, d, nil, "")
+	if !errors.Is(err, ErrSomeFailed) || rep.RematchError == "" || !reflect.DeepEqual(rep.Updated, []string{"osv.zzz"}) {
+		t.Fatalf("report %+v, err %v", rep, err)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/fix"
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/mask"
 )
 
@@ -47,7 +48,7 @@ func (s *server) fixEvents(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	st := &stream{w: w, flush: func() error { return rc.Flush() }, m: s.displayMasker(a.ID), seen: map[string]bool{}}
+	st := &stream{w: w, flush: func() error { return rc.Flush() }, m: s.displayMasker(a.ID), seen: map[string]bool{}, lang: lang}
 	if _, err := io.WriteString(w, "retry: 3000\n\n"); err != nil {
 		return
 	}
@@ -87,6 +88,7 @@ type stream struct {
 	state StateView
 	sent  bool
 	prop  string // id and hash of the proposal sent
+	lang  i18n.Lang
 }
 
 // event writes one event; data is JSON (one line).
@@ -143,7 +145,7 @@ func (st *stream) step(ctx context.Context, s *server, id string) error {
 		st.prop, wrote = prop.ID+" "+prop.Hash, true
 	}
 	// The state last: when it says proposed, the proposal is already sent.
-	if v := stateView(st.m, a); !st.sent || v != st.state {
+	if v := stateView(st.m, a, st.lang); !st.sent || v != st.state {
 		if err := st.event("state", "", v); err != nil {
 			return err
 		}

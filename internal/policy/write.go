@@ -77,6 +77,40 @@ func RemoveAllowRule(path string, r AllowRule) (bool, error) {
 	}, false)
 }
 
+// RemoveAllowRules removes the rules in one edit of the file, with the same
+// care as RemoveAllowRule (all or none). It returns how many it removed.
+func RemoveAllowRules(path string, rules ...AllowRule) (int, error) {
+	removed := 0
+	_, err := editAllow(path, func(seq *yaml.Node) bool {
+		kept := seq.Content[:0:0]
+		for _, item := range seq.Content {
+			drop := false
+			for _, r := range rules {
+				if sameRule(ruleOf(item), r) {
+					drop = true
+				}
+			}
+			if drop {
+				removed++
+			} else {
+				kept = append(kept, item)
+			}
+		}
+		if removed == 0 {
+			return false
+		}
+		seq.Content = kept
+		if len(kept) == 0 {
+			seq.Style = yaml.FlowStyle // "allow: []"
+		}
+		return true
+	}, false)
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
 func scalar(v string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v} }
 
 func sameRule(a, b AllowRule) bool {

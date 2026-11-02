@@ -93,11 +93,20 @@ func newDBUpdateCmd(deps *Deps) *cobra.Command {
 			if err := record("ok", ev); err != nil {
 				return deps.Wrapf("cli.db.update.audit_failed", err)
 			}
+			// The stored server inventories are judged again against the new
+			// databases, offline; a failure there does not undo the update.
+			rematched, rerr := serverRematch(cmd, deps)(ctx)
+			if rerr != nil {
+				fmt.Fprintln(deps.Stderr, deps.T("cli.db.update.rematch_failed", rerr))
+			}
 			if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
 				return json.NewEncoder(deps.Stdout).Encode(st)
 			}
 			for _, s := range st {
 				fmt.Fprintln(deps.Stdout, deps.T("cli.db.update.done", s.Ecosystem, s.SizeBytes))
+			}
+			if rematched > 0 {
+				fmt.Fprintln(deps.Stdout, deps.N("cli.db.update.rematched", rematched))
 			}
 			return nil
 		},

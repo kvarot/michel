@@ -34,6 +34,12 @@ describe('groupAttempts', () => {
     expect(ids('done')).toEqual(['a3', 'a6', 'a8'])
   })
 
+  test('a server fix running is "running", one of unknown outcome waits for the user', () => {
+    const groups = groupAttempts([attempt('s1', 'running', 'f1'), attempt('s2', 'unknown', 'f2')])
+    expect(groups.find((g) => g.key === 'running').items.map((i) => i.attempt.id)).toEqual(['s1'])
+    expect(groups.find((g) => g.key === 'review').items.map((i) => i.attempt.id)).toEqual(['s2'])
+  })
+
   test('keeps one line per finding: its newest attempt', () => {
     const groups = groupAttempts([attempt('new', 'proposed', 'f1'), attempt('old', 'refused', 'f1')])
     expect(groups[0].items).toEqual([])

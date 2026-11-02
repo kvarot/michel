@@ -17,6 +17,7 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/secret"
+	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/workcopy"
 	"github.com/spf13/cobra"
 )
@@ -57,6 +58,14 @@ func fixDeps(cmd *cobra.Command, deps *Deps, secrets secret.Store, actor string)
 		// A session ends at its time limit or at its turn cap (spec § 7.1).
 		MaxTurns: fix.DefaultMaxTurns,
 	}
+	// Server fixes: the registry, SSH through the gateway, a check of the
+	// server again, the GET of its site from this computer and the alerts.
+	cd := serverCheckDeps(cmd, deps)
+	d.Targets, d.SSH, d.Alert = cd.Repo, cd.SSH, cd.Alert
+	d.CheckServer = func(ctx context.Context, targetID string) (servercheck.CheckResult, error) {
+		return servercheck.Check(ctx, cd, targetID)
+	}
+	d.SiteCheck = siteCheck(deps)
 	d.Notify = func(ctx context.Context, waiting int) {
 		nd, err := notifyDeps(cmd, deps, false)
 		if err != nil {
@@ -81,7 +90,7 @@ func newFixCmd(deps *Deps) *cobra.Command {
 			"michel/fix-<id> in your repository from the proposal status showed, refuse ends an attempt, clean removes the " +
 			"copies Michel no longer needs, and consent gives a project's AI consent. None of them is needed to use the page.",
 	}
-	c.AddCommand(newFixPrepareCmd(deps), newFixStatusCmd(deps), newFixApproveCmd(deps), newFixRefuseCmd(deps),
+	c.AddCommand(newFixPrepareCmd(deps), newFixStatusCmd(deps), newFixApproveCmd(deps), newFixRefuseCmd(deps), newFixResolveCmd(deps),
 		newFixCleanCmd(deps), newFixConsentCmd(deps))
 	return c
 }
@@ -545,4 +554,31 @@ func newFixConsentCmd(deps *Deps) *cobra.Command {
 	}
 	c.Flags().BoolVar(&yes, "yes", false, "give the consent (without it, Michel only shows what you would accept)")
 	return c
+}
+
+func newFixResolveCmd(deps *Deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "resolve <attempt-id-or-prefix>",
+		Short: "Say you checked a server yourself after a fix whose outcome Michel could not tell",
+		Long: "Resolve is the way out of a server fix left in state unknown (its script ran past its time limit or the " +
+			"connection dropped): look at the server yourself first, then run this command. The attempt ends failed, with " +
+			"the cause that you checked the server. Michel changes nothing on the server.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			a, err := resolveAttempt(ctx, deps, args[0])
+			if err != nil {
+				return err
+			}
+			d, err := fixService(cmd, deps)
+			if err != nil {
+				return err
+			}
+			if err := fix.ResolveUnknown(ctx, d, a.ID, "cli"); err != nil {
+				return fixError(deps, err, "")
+			}
+			fmt.Fprintln(deps.Stdout, deps.T("cli.fix.resolve.done", a.ID))
+			return nil
+		},
+	}
 }

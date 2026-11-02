@@ -246,7 +246,7 @@ func TestMCPInitializeAndList(t *testing.T) {
 }
 
 func TestMCPHasNoApprovalTool(t *testing.T) {
-	for _, tl := range tools() {
+	for _, tl := range append(codeTools(), serverTools()...) {
 		for _, bad := range []string{"approve", "apply", "merge", "policy", "setting"} {
 			if strings.Contains(strings.ToLower(tl.Name), bad) {
 				t.Errorf("tool %s looks like %s", tl.Name, bad)

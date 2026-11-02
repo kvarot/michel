@@ -82,3 +82,39 @@ func TestApplyExternalGoneLimitedToSourceKey(t *testing.T) {
 		t.Errorf("reappeared: new %d still %d", n, still)
 	}
 }
+
+func TestServerFindingKeepsMitigationAndSAPI(t *testing.T) {
+	e := newEnv(t, "project-a")
+	f := Finding{ID: FindingID(e.proj.ID, "fpm:/opt/php/sbin/php-fpm", "php-config", "session.upload_progress.enabled", "session_upload_progress_off"),
+		ProjectID: e.proj.ID, Kind: KindServerConfig, SeverityLabel: "medium", Summary: "m", Mitigation: true, SAPI: "fpm"}
+	e.applyExternal(t, "server", "run-1", []Finding{f})
+	rows, err := e.st.DB().Query(`SELECT `+findingColumns+` FROM finding WHERE id = ?`, f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("finding not stored")
+	}
+	got, err := scanFinding(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Mitigation || got.SAPI != "fpm" {
+		t.Fatalf("read back %+v", got)
+	}
+}
+
+func TestServerFindingMitigationRefreshedOnUpdate(t *testing.T) {
+	e := newEnv(t, "project-a")
+	f := Finding{ID: FindingID(e.proj.ID, "fpm:/b", "php-config", "x", "r"), ProjectID: e.proj.ID, Kind: KindServerConfig,
+		SeverityLabel: "medium", Summary: "m", Mitigation: false, SAPI: "fpm"}
+	e.applyExternal(t, "server", "run-1", []Finding{f})
+	f.Mitigation, f.SAPI = true, "cli"
+	e.applyExternal(t, "server", "run-2", []Finding{f})
+	var m int
+	var sapi string
+	if err := e.st.DB().QueryRow(`SELECT mitigation, sapi FROM finding WHERE id = ?`, f.ID).Scan(&m, &sapi); err != nil || m != 1 || sapi != "cli" {
+		t.Fatalf("mitigation %d sapi %q err %v", m, sapi, err)
+	}
+}

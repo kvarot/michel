@@ -126,7 +126,14 @@ func WorkOnce(ctx context.Context, d Deps) (bool, error) {
 		if err != nil || !ok {
 			return false, err
 		}
-		n, err := repo.StartedToday(ctx, projectID, d.now())
+		// A server's agents may run on its preprod: they count too.
+		counted := []string{projectID}
+		if d.Targets != nil {
+			if t, err := d.Targets.Get(ctx, projectID); err == nil && t.PreprodID != "" {
+				counted = append(counted, t.PreprodID)
+			}
+		}
+		n, err := repo.StartedToday(ctx, projectID, d.now(), counted[1:]...)
 		if err != nil {
 			return false, err
 		}
@@ -135,6 +142,32 @@ func WorkOnce(ctx context.Context, d Deps) (bool, error) {
 				return false, err
 			}
 			capped = append(capped, projectID)
+			continue
+		}
+		// A finding of a server: Michel's own fix, or its agent.
+		switch sfi, st, err := d.serverFinding(ctx, findingID); {
+		case err == nil:
+			started, requeue, err := d.workServer(ctx, sfi, st)
+			if err != nil {
+				return false, err
+			}
+			if requeue {
+				if err := repo.Enqueue(ctx, findingID, projectID); err != nil {
+					return false, err
+				}
+				capped = append(capped, projectID)
+				continue
+			}
+			if started {
+				return true, nil
+			}
+			continue
+		case errors.Is(err, ErrNotServerFinding):
+		case errors.Is(err, ErrNotFound):
+			continue
+		default:
+			// The server is gone or unreadable: the finding is dropped.
+			_ = d.record(ctx, "fix.start", findingID, "refused", map[string]any{"finding_id": findingID, "target_id": projectID, "origin": "serve", "reason": "server_unreadable"})
 			continue
 		}
 		f, p, err := d.find(ctx, findingID)
@@ -199,6 +232,10 @@ func Worker(ctx context.Context, d Deps) {
 		}
 		if _, err := WorkOnce(ctx, d); err != nil {
 			_ = d.record(ctx, "fix.worker", "serve", "error", map[string]any{"error": "worker_failed", "detail": auditDetail(d, err)})
+		}
+		// Level 3 of the servers: the fixes that keep every rule run alone.
+		if _, err := ApplyAutoServer(ctx, d); err != nil {
+			_ = d.record(ctx, "fix.worker", "serve", "error", map[string]any{"error": "auto_server_failed", "detail": auditDetail(d, err)})
 		}
 		if d.now().Sub(lastPurge) >= 24*time.Hour {
 			_ = d.purge(ctx)

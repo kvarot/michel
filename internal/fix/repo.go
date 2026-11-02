@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kvarot/michel/internal/serverfix"
 	"github.com/kvarot/michel/internal/store"
+	"github.com/kvarot/michel/internal/target"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -55,7 +57,17 @@ func parseTime(s string) (time.Time, error) {
 
 // busyStates are the states of an attempt that is still being worked on or
 // waits for the user: the project has no other attempt meanwhile.
-const busyStates = `('preparing','proposed','approved')`
+const busyStates = `('preparing','proposed','approved','running')`
+
+// serverBusyStates are busyStates for a server, plus applied (the steps
+// after the script: site check, undo, recollection) and unknown (what the
+// script changed is not known): one server fix at a time on a server.
+const serverBusyStates = `('preparing','proposed','approved','running','applied','unknown')`
+
+// serverRunStates are the states of a server attempt whose script may be
+// touching the server, or whose outcome is not known: no other fix of the
+// same server is claimed meanwhile.
+const serverRunStates = `('running','applied','unknown')`
 
 const attemptCols = `id, finding_id, project_id, origin, state, clone_dir, session_id, cause, created_at, updated_at, work_json, approved_by, approved_proposal, approved_hash, cause_detail`
 
@@ -71,7 +83,9 @@ func workJSON(w Work) (string, error) {
 // CreateAttempt stores a new attempt in state preparing; ID, State and the
 // dates are set here. The insert is conditional on the project having no
 // attempt being worked on or waiting for the user (one statement, so two
-// callers cannot both succeed): ErrBusy otherwise.
+// callers cannot both succeed): ErrBusy otherwise. For a server fix
+// (Work.Server set), an applied or unknown attempt of the server counts
+// too (serverBusyStates).
 func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	now := r.now()
 	id, err := r.newID(now)
@@ -83,9 +97,13 @@ func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	if err != nil {
 		return Attempt{}, err
 	}
+	busy := busyStates
+	if a.Work.Server != nil {
+		busy = serverBusyStates
+	}
 	res, err := r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`)
 		SELECT ?,?,?,?,?,?,?,?,?,?,?,'','','',''
-		WHERE NOT EXISTS (SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN `+busyStates+`)`,
+		WHERE NOT EXISTS (SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN `+busy+`)`,
 		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now), work, a.ProjectID)
 	if err != nil {
 		return Attempt{}, fmt.Errorf("cannot save the fix attempt: %w", err)
@@ -249,7 +267,38 @@ func (r *Repo) SetRun(ctx context.Context, id, cloneDir, sessionID string) error
 	return nil
 }
 
-const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version, commands`
+const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version, commands, scripts, steps`
+
+// serverRecord is what the scripts column holds for a server fix.
+type serverRecord struct {
+	Bundle serverfix.Bundle `json:"bundle"`
+	Server ServerFix        `json:"server"`
+}
+
+func scriptsJSON(p Proposal) (string, error) {
+	if p.Scripts == nil && p.Server == nil {
+		return "", nil
+	}
+	if p.Scripts == nil || p.Server == nil {
+		return "", errors.New("cannot save the proposal: a server fix needs both its scripts and its server record")
+	}
+	b, err := json.Marshal(serverRecord{Bundle: *p.Scripts, Server: *p.Server})
+	if err != nil {
+		return "", fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	return string(b), nil
+}
+
+func stepsJSON(steps []StepResult) (string, error) {
+	if steps == nil {
+		steps = []StepResult{}
+	}
+	b, err := json.Marshal(steps)
+	if err != nil {
+		return "", fmt.Errorf("cannot save the steps: %w", err)
+	}
+	return string(b), nil
+}
 
 // AddProposal stores p for its attempt and marks the attempt's previous
 // proposals Superseded, in one transaction that also checks the attempt is
@@ -278,6 +327,14 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
+	scripts, err := scriptsJSON(p)
+	if err != nil {
+		return Proposal{}, err
+	}
+	stepsDone, err := stepsJSON(p.Steps)
+	if err != nil {
+		return Proposal{}, err
+	}
 	tx, err := r.s.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
@@ -301,9 +358,9 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)`,
 		p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
-		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds)); err != nil {
+		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds), scripts, stepsDone); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -329,10 +386,23 @@ func b2i(b bool) int {
 func scanProposal(s scanner) (Proposal, error) {
 	var p Proposal
 	var err error
-	var files, steps, created, raw, cmds string
+	var files, steps, created, raw, cmds, scripts, ran string
 	var rescan, superseded int
-	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion, &cmds); err != nil {
+	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion, &cmds, &scripts, &ran); err != nil {
 		return Proposal{}, err
+	}
+	if scripts != "" {
+		var rec serverRecord
+		if err := json.Unmarshal([]byte(scripts), &rec); err != nil {
+			return Proposal{}, fmt.Errorf("proposal %s has unreadable scripts: %w", p.ID, err)
+		}
+		p.Scripts, p.Server = &rec.Bundle, &rec.Server
+	}
+	if err := json.Unmarshal([]byte(ran), &p.Steps); err != nil {
+		return Proposal{}, fmt.Errorf("proposal %s has unreadable steps: %w", p.ID, err)
+	}
+	if p.Steps == nil {
+		p.Steps = []StepResult{}
 	}
 	if p.DiffRaw, err = base64.StdEncoding.DecodeString(raw); err != nil {
 		return Proposal{}, fmt.Errorf("proposal %s has an unreadable patch: %w", p.ID, err)
@@ -463,7 +533,8 @@ func (r *Repo) NextQueued(ctx context.Context, except ...string) (findingID, pro
 	}
 	defer tx.Rollback()
 	q := `SELECT finding_id, project_id FROM fix_queue
-		WHERE project_id NOT IN (SELECT project_id FROM fix_attempt WHERE state IN ` + busyStates + `)`
+		WHERE project_id NOT IN (SELECT project_id FROM fix_attempt WHERE state IN ` + busyStates + `
+			OR (state IN ('applied','unknown') AND project_id IN (SELECT id FROM target)))`
 	args := []any{}
 	for _, p := range except {
 		q += ` AND project_id <> ?`
@@ -486,12 +557,38 @@ func (r *Repo) NextQueued(ctx context.Context, except ...string) (findingID, pro
 }
 
 // StartedToday counts the attempts Michel started alone (origin
-// agent.claude.auto) for the project on the UTC day of now.
-func (r *Repo) StartedToday(ctx context.Context, projectID string, now time.Time) (int, error) {
+// agent.claude.auto) for the project on the UTC day of now, plus those made
+// for it on the servers of also (a production server's agents run on its
+// preprod).
+func (r *Repo) StartedToday(ctx context.Context, projectID string, now time.Time, also ...string) (int, error) {
 	day := now.UTC().Truncate(24 * time.Hour)
-	var n int
-	err := r.s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM fix_attempt WHERE project_id = ? AND origin = ? AND created_at >= ? AND created_at < ?`,
-		projectID, OriginAgentAuto, ts(day), ts(day.Add(24*time.Hour))).Scan(&n)
+	q := `SELECT project_id, work_json FROM fix_attempt WHERE project_id IN (?` + strings.Repeat(",?", len(also)) + `) AND origin = ? AND created_at >= ? AND created_at < ?`
+	args := []any{projectID}
+	for _, a := range also {
+		args = append(args, a)
+	}
+	args = append(args, OriginAgentAuto, ts(day), ts(day.Add(24*time.Hour)))
+	rows, err := r.s.DB().QueryContext(ctx, q, args...)
+	if err != nil {
+		return 0, fmt.Errorf("cannot count today's fix attempts: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var pid, work string
+		if err := rows.Scan(&pid, &work); err != nil {
+			return 0, fmt.Errorf("cannot count today's fix attempts: %w", err)
+		}
+		if pid == projectID {
+			n++
+			continue
+		}
+		var w Work
+		if json.Unmarshal([]byte(work), &w) == nil && w.Server != nil && w.Server.ProdTargetID == projectID {
+			n++
+		}
+	}
+	err = rows.Err()
 	if err != nil {
 		return 0, fmt.Errorf("cannot count today's fix attempts: %w", err)
 	}
@@ -580,4 +677,277 @@ func (r *Repo) DeleteConsent(ctx context.Context, projectID string) error {
 		return fmt.Errorf("cannot delete the consent: %w", err)
 	}
 	return nil
+}
+
+// SetSteps records the steps Michel ran for a server proposal.
+func (r *Repo) SetSteps(ctx context.Context, proposalID string, steps []StepResult) error {
+	js, err := stepsJSON(steps)
+	if err != nil {
+		return err
+	}
+	if _, err := r.s.DB().ExecContext(ctx, `UPDATE fix_proposal SET steps = ? WHERE id = ?`, js, proposalID); err != nil {
+		return fmt.Errorf("cannot save the steps: %w", err)
+	}
+	return nil
+}
+
+// AckSnapshot records that the user made a snapshot of the server before a
+// package upgrade of the attempt (the latest acknowledgement wins).
+func (r *Repo) AckSnapshot(ctx context.Context, attemptID, actor string) error {
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot record the snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM server_snapshot_ack WHERE attempt_id = ?`, attemptID); err != nil {
+		return fmt.Errorf("cannot record the snapshot: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO server_snapshot_ack (attempt_id, at, actor) VALUES (?,?,?)`, attemptID, ts(r.now()), actor); err != nil {
+		return fmt.Errorf("cannot record the snapshot: %w", err)
+	}
+	return tx.Commit()
+}
+
+// SnapshotAck tells whether, when and by whom the snapshot of the attempt
+// was acknowledged.
+func (r *Repo) SnapshotAck(ctx context.Context, attemptID string) (at time.Time, actor string, ok bool, err error) {
+	var when string
+	err = r.s.DB().QueryRowContext(ctx, `SELECT at, actor FROM server_snapshot_ack WHERE attempt_id = ?`, attemptID).Scan(&when, &actor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, "", false, nil
+	}
+	if err != nil {
+		return time.Time{}, "", false, fmt.Errorf("cannot read the snapshot: %w", err)
+	}
+	at, err = parseTime(when)
+	return at, actor, err == nil, err
+}
+
+// ServerBackup is the copy of a server file a fix backed up, kept on the
+// workstation. Content is the plain file; the store only ever holds it
+// sealed (see Deps.addBackup).
+type ServerBackup struct {
+	ID         string
+	AttemptID  string
+	TargetID   string
+	RemotePath string
+	SHA256     string
+	Content    []byte
+	CreatedAt  time.Time
+	// KeyFingerprint names the key the copy was sealed with ("" for a copy
+	// stored before Michel recorded it).
+	KeyFingerprint string
+}
+
+// AddBackup stores a sealed backup: blob is the encrypted content, b.Content
+// is not stored.
+func (r *Repo) AddBackup(ctx context.Context, b ServerBackup, blob []byte) (ServerBackup, error) {
+	now := r.now()
+	id, err := r.newID(now)
+	if err != nil {
+		return ServerBackup{}, err
+	}
+	b.ID, b.CreatedAt = id, now
+	if _, err := r.s.DB().ExecContext(ctx, `INSERT INTO server_backup (id, attempt_id, target_id, remote_path, sha256, blob, created_at, key_fingerprint) VALUES (?,?,?,?,?,?,?,?)`,
+		b.ID, b.AttemptID, b.TargetID, b.RemotePath, b.SHA256, base64.StdEncoding.EncodeToString(blob), ts(now), b.KeyFingerprint); err != nil {
+		return ServerBackup{}, fmt.Errorf("cannot save the backup: %w", err)
+	}
+	return b, nil
+}
+
+// BackupSize is the size in bytes of the backups the workstation keeps for
+// server targetID (the sealed copies, about their plain size) and how many
+// files they are.
+func (r *Repo) BackupSize(ctx context.Context, targetID string) (bytes int64, files int, err error) {
+	var n, total sql.NullInt64
+	// The blobs are base64: three bytes for four characters.
+	if err := r.s.DB().QueryRowContext(ctx, `SELECT COUNT(*), SUM(LENGTH(blob)) FROM server_backup WHERE target_id = ?`, targetID).Scan(&n, &total); err != nil {
+		return 0, 0, fmt.Errorf("cannot read the size of the backups: %w", err)
+	}
+	return total.Int64 / 4 * 3, int(n.Int64), nil
+}
+
+// SealedBackup is a stored backup with its encrypted content.
+type SealedBackup struct {
+	ServerBackup
+	Blob []byte
+}
+
+// Backups returns the stored backups of an attempt, oldest first, still
+// sealed.
+func (r *Repo) Backups(ctx context.Context, attemptID string) ([]SealedBackup, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, attempt_id, target_id, remote_path, sha256, blob, created_at, key_fingerprint FROM server_backup WHERE attempt_id = ? ORDER BY created_at, id`, attemptID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the backups: %w", err)
+	}
+	defer rows.Close()
+	var out []SealedBackup
+	for rows.Next() {
+		var b SealedBackup
+		var blob, created string
+		if err := rows.Scan(&b.ID, &b.AttemptID, &b.TargetID, &b.RemotePath, &b.SHA256, &blob, &created, &b.KeyFingerprint); err != nil {
+			return nil, err
+		}
+		if b.Blob, err = base64.StdEncoding.DecodeString(blob); err != nil {
+			return nil, fmt.Errorf("backup %s is unreadable: %w", b.ID, err)
+		}
+		if b.CreatedAt, err = parseTime(created); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// PurgeBackups deletes the workstation copies of the backups made before
+// before. The backups on the servers are never touched.
+func (r *Repo) PurgeBackups(ctx context.Context, before time.Time) (int, error) {
+	res, err := r.s.DB().ExecContext(ctx, `DELETE FROM server_backup WHERE created_at < ?`, ts(before))
+	if err != nil {
+		return 0, fmt.Errorf("cannot purge the backups: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// Claim moves an approved attempt to running in one conditional update and
+// reports whether this caller got it: only one Apply, in any process, ever
+// runs a server fix's script, and never while another attempt of the same
+// server is running, applied or unknown (serverRunStates). deadline is when
+// the run's own bound ends.
+func (r *Repo) Claim(ctx context.Context, id string, deadline time.Time) (bool, error) {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, updated_at = ?, run_deadline = ? WHERE id = ? AND state = ?
+		AND NOT EXISTS (SELECT 1 FROM fix_attempt o WHERE o.project_id = (SELECT p.project_id FROM fix_attempt p WHERE p.id = ?)
+			AND o.id <> ? AND o.state IN `+serverRunStates+`)`,
+		string(StateRunning), ts(r.now()), ts(deadline), id, string(StateApproved), id, id)
+	if err != nil {
+		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	return n == 1, nil
+}
+
+// RunEnd is an attempt that is running or applied, with the end of its
+// run's bound (zero when the record has none).
+type RunEnd struct {
+	Attempt  Attempt
+	Deadline time.Time
+}
+
+// RunEnds lists the running and applied attempts with their run deadline.
+func (r *Repo) RunEnds(ctx context.Context) ([]RunEnd, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, run_deadline FROM fix_attempt WHERE state IN (?, ?)`, string(StateRunning), string(StateApplied))
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
+	}
+	type row struct{ id, deadline string }
+	var list []row
+	for rows.Next() {
+		var x row
+		if err := rows.Scan(&x.id, &x.deadline); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		list = append(list, x)
+	}
+	// Closed before reading the attempts: the store has one connection.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var out []RunEnd
+	for _, x := range list {
+		a, err := r.GetAttempt(ctx, x.id)
+		if err != nil {
+			return nil, err
+		}
+		e := RunEnd{Attempt: a}
+		if x.deadline != "" {
+			if e.Deadline, err = parseTime(x.deadline); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// BackupKeyFingerprint is the fingerprint of the backup key, "" when none
+// was made yet.
+func (r *Repo) BackupKeyFingerprint(ctx context.Context) (string, error) {
+	var fp string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT fingerprint FROM server_backup_key WHERE id = 1`).Scan(&fp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("cannot read the backup key: %w", err)
+	}
+	return fp, nil
+}
+
+// SetBackupKeyFingerprint records fp as the backup key's when the current
+// one is old ("" for none), in one conditional statement: it reports
+// whether this caller won.
+func (r *Repo) SetBackupKeyFingerprint(ctx context.Context, old, fp string) (bool, error) {
+	var res sql.Result
+	var err error
+	if old == "" {
+		res, err = r.s.DB().ExecContext(ctx, `INSERT INTO server_backup_key (id, fingerprint) VALUES (1, ?) ON CONFLICT (id) DO NOTHING`, fp)
+	} else {
+		res, err = r.s.DB().ExecContext(ctx, `UPDATE server_backup_key SET fingerprint = ? WHERE id = 1 AND fingerprint = ?`, fp, old)
+	}
+	if err != nil {
+		return false, fmt.Errorf("cannot record the backup key: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// What stands between a server and its removal.
+const (
+	// BlockWait: a fix is being prepared or run (or approved to be run by
+	// Michel): it ends by itself.
+	BlockWait = "wait"
+	// BlockUnknown: a fix of unknown outcome: only the user can end it
+	// (ResolveUnknown).
+	BlockUnknown = "unknown"
+	// BlockApproved: a fix the user runs themselves is approved and waits for
+	// their word: they run it (applied-by-me) or refuse it.
+	BlockApproved = "approved"
+)
+
+// TargetBlock says what, if anything, must end before server targetID can
+// leave Michel: BlockWait (preparing, running, applied, approved for Michel to run),
+// BlockUnknown, BlockApproved, or "" when nothing is pending. The first
+// that applies wins, in that order.
+func (r *Repo) TargetBlock(ctx context.Context, targetID string) (string, error) {
+	list, err := r.ListAttempts(ctx, targetID, "")
+	if err != nil {
+		return "", err
+	}
+	rank := map[string]int{"": 0, BlockApproved: 1, BlockUnknown: 2, BlockWait: 3}
+	block := ""
+	for _, a := range list {
+		b := ""
+		switch a.State {
+		case StatePreparing, StateRunning, StateApplied:
+			// Applied: the steps after the script (site check, undo,
+			// recollection) still need the server.
+			b = BlockWait
+		case StateUnknown:
+			b = BlockUnknown
+		case StateApproved:
+			b = BlockWait
+			if p, ok, err := r.CurrentProposal(ctx, a.ID); err == nil && ok && p.Server != nil && p.Server.Executor == target.ExecUser {
+				b = BlockApproved
+			}
+		}
+		if rank[b] > rank[block] {
+			block = b
+		}
+	}
+	return block, nil
 }
