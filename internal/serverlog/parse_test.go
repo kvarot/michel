@@ -156,6 +156,22 @@ func TestParseRejectsOutOfSchema(t *testing.T) {
 		{"text with a compressed address", "R\terror\t\t\t\t\t1\tsecret abcd::ef", mono, FilterOptions{Text: true}},
 		{"text with a compressed address, end", "R\terror\t\t\t\t\t1\tsecret fe80::", mono, FilterOptions{Text: true}},
 		{"text with a full address", "R\terror\t\t\t\t\t1\tsecret ab:cd:ef:ab", mono, FilterOptions{Text: true}},
+		{"folder is a host and a number", "R\terror\t\tsecret.example.test.1/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder is a host and a word", "R\terror\t\tsecret.example.test-x/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder is a host with an underscore", "R\terror\t\tsecret.fr_old/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder with hyphen groups", "R\terror\t\tip-203-0-113-7/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder with underscore groups", "R\terror\t\tip_203_0_113_7/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder with dotted groups", "R\terror\t\tip-203.0.113/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder is a phone number", "R\terror\t\t06-12-34-56-78/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder is a date", "R\terror\t\t2026-11-02/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder is a version", "R\terror\t\tv1.2.3/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"file with hyphen groups", "R\terror\t\tip-203-0-113-7.php:1\t\t\t1", mono, FilterOptions{}},
+		{"file with underscore groups", "R\terror\t\tip_203_0_113_7.php:1\t\t\t1", mono, FilterOptions{}},
+		{"file is a phone number", "R\terror\t\t06-12-34-56-78.php:1\t\t\t1", mono, FilterOptions{}},
+		{"channel with hyphen groups", "R\terror\t\t\tip-203-0-113-7\t\t1", mono, FilterOptions{}},
+		{"channel with underscore groups", "R\terror\t\t\tip_203_0_113_7\t\t1", mono, FilterOptions{}},
+		{"channel is a phone number", "R\terror\t\t\t06-12-34-56-78\t\t1", mono, FilterOptions{}},
+		{"type with underscore groups", "R\terror\tIp_203_0_113_7\t\t\t\t1", mono, FilterOptions{}},
 		{"negative count", "R\terror\t\t\t\t\t-1", mono, FilterOptions{}},
 		{"zero count", "R\terror\t\t\t\t\t0", mono, FilterOptions{}},
 		{"count not a number", "R\terror\t\t\t\t\t1e9", mono, FilterOptions{}},
@@ -227,10 +243,14 @@ func TestParseBoundaries(t *testing.T) {
 		t.Errorf("longest text: %+v", out)
 	}
 	// Real code stays possible.
-	for _, loc := range []string{"foo.blade.php:1", "templates/home.html.twig:3", "php8.1/a.php:2", ".hidden/a.php:1", "a-b_c/2026/x.php:123456", ".env.php:1"} {
+	for _, loc := range []string{"foo.blade.php:1", "templates/home.html.twig:3", "php8.1/a.php:2", ".hidden/a.php:1", "a-b_c/2026/x.php:123456", ".env.php:1", "php8.1/.hidden/a.php:1"} {
 		if out := parseOne("R\terror\t\t"+loc+"\t\t\t1", mono, FilterOptions{}); len(out.Records) != 1 {
 			t.Errorf("%s: %+v", loc, out)
 		}
+	}
+	// Two groups of digits are not yet a value.
+	if out := parseOne("R\terror\tFoo_1_x\t\tapp-2_x\t\t1", mono, FilterOptions{}); len(out.Records) != 1 {
+		t.Errorf("two groups: %+v", out)
 	}
 	// A wildcard source takes what matches its last segment, nothing beyond.
 	wild := Source{Path: "/var/log/demo/app-*.log", Format: FormatPHP}

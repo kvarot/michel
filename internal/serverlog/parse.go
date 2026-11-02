@@ -42,21 +42,23 @@ var (
 )
 
 // Shapes that are values, not names, even when each character is allowed: a
-// national number, an address, a host. The filter has the same rules (safe_word,
-// safe_path), and an identifier like jean_dupont stays out of their reach.
+// national number, an address or a phone number in 3 or more digit groups, a
+// host in a folder, with or without a suffix. The price: a dated or versioned
+// folder (2026-11-02, v1.2.3) leaves the location. The filter has the same rules
+// (safe_word, safe_path), and an identifier like jean_dupont stays out of reach.
 var (
 	longDigitsRe   = regexp.MustCompile(`[0-9]{7}`)
-	addressRe      = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+`)
+	digitGroupsRe  = regexp.MustCompile(`[0-9]+[-_.][0-9]+[-_.][0-9]+`)
 	dottedNumberRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)+$`)
-	hostEndRe      = regexp.MustCompile(`\.[A-Za-z]{2,}$`)
+	folderHostRe   = regexp.MustCompile(`\.[A-Za-z]`)
 	fileExtRe      = regexp.MustCompile(`\.[A-Za-z]+$`)
 	doubleExtRe    = regexp.MustCompile(`^[^.]+\.(blade|html|class|inc|tpl|config|module|interface|trait)$`)
 	fullIPv6Re     = regexp.MustCompile(`[0-9A-Fa-f]+(:[0-9A-Fa-f]+){3}`)
 )
 
-// safeWord refuses a word holding a long digit run or a dotted address.
+// safeWord refuses a word holding a long digit run or 3 or more digit groups.
 func safeWord(w string) bool {
-	return !longDigitsRe.MatchString(w) && !addressRe.MatchString(w)
+	return !longDigitsRe.MatchString(w) && !digitGroupsRe.MatchString(w)
 }
 
 // safeLocation checks each segment of a "path:line" location.
@@ -65,7 +67,7 @@ func safeLocation(loc string) bool {
 	last := len(segments) - 1
 	for _, s := range segments[:last] {
 		s = strings.TrimPrefix(s, ".")
-		if !safeWord(s) || dottedNumberRe.MatchString(s) || hostEndRe.MatchString(s) {
+		if !safeWord(s) || dottedNumberRe.MatchString(s) || folderHostRe.MatchString(s) {
 			return false
 		}
 	}

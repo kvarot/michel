@@ -441,6 +441,7 @@ func TestScriptQuotesHostilePaths(t *testing.T) {
 var trapMarkers = []string{
 	"trappe", "example.test", "203.0.113", "198.51.100", "1 99 13", "199139", "diagnostic", "patients",
 	"token", "fakebearer", "tok_fake", "urlfakeparam", "insert", "select", "reset", "bearer",
+	"example.fr", "203-0-113", "203_0_113", "06-12-34",
 }
 
 func assertNoMarker(t *testing.T, where, s string, markers []string) {
@@ -912,7 +913,31 @@ func TestValueShapesNeverLeaveTheFilter(t *testing.T) {
 		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/a.php:199139999", "", "", ""},
 		{Source{Format: FormatPHP}, "PHP Fatal error:  Uncaught Zoe199139999912345: x in /var/www/demo/a.php:1", "", "a.php:1", ""},
 		{Source{Format: FormatMonolog}, `[2026-11-02 10:00:00] app.ERROR: m [object] (Zoe199139999912345(code: 0): x at /var/www/demo/a.php:1)`, "app", "a.php:1", ""},
+		// A host with a suffix, and digits in separated groups.
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/jean.trappe.example.test.1/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/jean.trappe.example.test-x/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/example.fr_old/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/ip-203-0-113-7/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/06-12-34-56-78/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/ip-203.0.113/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/ip_203_0_113_7/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/2026-11-02/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/v1.2.3/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /srv/ip-203-0-113-7.php on line 1", "", "", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /srv/06-12-34-56-78.php on line 1", "", "", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /srv/ip_203_0_113_7.php on line 1", "", "", ""},
+		{Source{Format: FormatPHP}, "PHP Fatal error:  Uncaught Ip_203_0_113_7: x in /var/www/demo/a.php:1", "", "a.php:1", ""},
+		{Source{Format: FormatMonolog}, `[2026-11-02 10:00:00] app.ERROR: m [object] (Ip_203_0_113_7(code: 0): x at /var/www/demo/a.php:1)`, "app", "a.php:1", ""},
+		{Source{Format: FormatMonolog}, "[2026-11-02 10:00:00] ip-203-0-113-7.ERROR: x", "", "", ""},
+		{Source{Format: FormatMonolog}, "[2026-11-02 10:00:00] 06-12-34-56-78.ERROR: x", "", "", ""},
+		{Source{Format: FormatMonolog}, "[2026-11-02 10:00:00] ip_203_0_113_7.ERROR: x", "", "", ""},
+		{json, `{"level":"error","channel":"ip-203-0-113-7"}`, "", "", ""},
+		{json, `{"level":"error","channel":"06-12-34-56-78"}`, "", "", ""},
+		{json, `{"level":"error","channel":"ip_203_0_113_7"}`, "", "", ""},
 		// Real code keeps its place.
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/php8.1/a.php on line 1", "", "php8.1/a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/.hidden/a.php on line 1", "", ".hidden/a.php:1", ""},
+		{Source{Format: FormatMonolog}, "[2026-11-02 10:00:00] app-2_x.ERROR: x", "app-2_x", "", ""},
 		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/resources/views/home.blade.php on line 1", "", "resources/views/home.blade.php:1", ""},
 		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/templates/home.html.twig on line 1", "", "templates/home.html.twig:1", ""},
 		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/php8.1/2026/a.php on line 1", "", "php8.1/2026/a.php:1", ""},
@@ -923,7 +948,7 @@ func TestValueShapesNeverLeaveTheFilter(t *testing.T) {
 		if r.Channel != c.channel || r.Location != c.location || r.Type != c.typ {
 			t.Errorf("%q gave %+v", c.line, r)
 		}
-		for _, bad := range []string{"203.0.113", "199139", "example.test"} {
+		for _, bad := range []string{"203.0.113", "199139", "example.test", "example.fr", "203-0-113", "203_0_113", "06-12-34", "2026-11-02/", "v1.2.3"} {
 			if bytes.Contains(raw, []byte(bad)) {
 				t.Errorf("%q: %q left the filter: %q", c.line, bad, raw)
 			}

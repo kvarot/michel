@@ -43,3 +43,18 @@ PHP Warning:  x in /srv/jean.trappe.example.test.php on line 1
 PHP Warning:  x in /var/www/demo/a.php:199139999
 PHP Fatal error:  Uncaught Zoe199139999912345: x in /var/www/demo/a.php:1
 [2026-11-02 10:00:23] app.ERROR: m {"exception":"[object] (Zoe199139999912345(code: 0): x at /var/www/demo/203.0.113.77/a.php:1)"}
+PHP Warning:  x in /var/www/demo/jean.trappe.example.test.1/a.php on line 1
+PHP Warning:  x in /var/www/demo/jean.trappe.example.test-x/a.php on line 1
+PHP Warning:  x in /var/www/demo/example.fr_old/a.php on line 1
+PHP Warning:  x in /var/www/demo/ip-203-0-113-7/a.php on line 1
+PHP Warning:  x in /var/www/demo/06-12-34-56-78/a.php on line 1
+PHP Warning:  x in /var/www/demo/ip-203.0.113/a.php on line 1
+PHP Warning:  x in /var/www/demo/ip_203_0_113_7/a.php on line 1
+PHP Warning:  x in /srv/ip-203-0-113-7.php on line 1
+PHP Warning:  x in /srv/06-12-34-56-78.php on line 1
+PHP Fatal error:  Uncaught Ip_203_0_113_7: x in /var/www/demo/a.php:1
+[2026-11-02 10:00:24] ip-203-0-113-7.ERROR: an address as a channel
+[2026-11-02 10:00:25] 06-12-34-56-78.ERROR: a phone number as a channel
+[2026-11-02 10:00:26] ip_203_0_113_7.ERROR: an address as a channel
+{"level":"error","channel":"ip-203-0-113-7"}
+{"level":"error","channel":"06-12-34-56-78"}

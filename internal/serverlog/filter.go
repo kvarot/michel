@@ -374,7 +374,7 @@ BEGIN {
 }
 function safe_word(w) {
 	if (w ~ /[0-9][0-9][0-9][0-9][0-9][0-9][0-9]/) return 0
-	if (w ~ /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/) return 0
+	if (w ~ /[0-9]+[-_.][0-9]+[-_.][0-9]+/) return 0
 	return 1
 }
 function safe_channel(w) {
@@ -385,7 +385,7 @@ function safe_path(r,   n, i, parts, s) {
 	for (i = 1; i < n; i++) {
 		s = parts[i]
 		sub(/^\./, "", s)
-		if (!safe_word(s) || s ~ /^[0-9]+(\.[0-9]+)+$/ || s ~ /\.[A-Za-z][A-Za-z]+$/) return 0
+		if (!safe_word(s) || s ~ /^[0-9]+(\.[0-9]+)+$/ || s ~ /\.[A-Za-z]/) return 0
 	}
 	s = parts[n]
 	sub(/\.[A-Za-z]+$/, "", s)
