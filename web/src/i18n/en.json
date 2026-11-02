@@ -802,6 +802,6 @@
   "servers.sheet.runtime": "PHP {sapi} ({binary})",
   "servers.sheet.runtime_nobin": "PHP {sapi}",
   "servers.discover.pick_one": "Tick a server",
-  "fix.intro_server": "For a server, Michel prepares the known fixes himself, from his own rules; an agent only helps discuss a case. Nothing changes on the server without your approval, or that of the rules you allowed.",
+  "fix.intro_server": "For a server, Michel prepares the usual planned fixes himself. An agent only helps discuss a specific case and changes nothing on its own. Nothing changes on the server without your approval or a rule you turned on yourself.",
   "srvfix.scripts_unreadable": "Michel cannot show these scripts as they are (unreadable text). Run nothing: prepare a new fix."
 }
