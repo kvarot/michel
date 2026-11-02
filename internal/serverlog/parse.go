@@ -32,14 +32,46 @@ type Output struct {
 // hostile: visitors write part of the log lines it reads.
 var (
 	typeRe     = regexp.MustCompile(`^[A-Za-z_\\][A-Za-z0-9_\\]{0,127}$`)
-	sqlstateRe = regexp.MustCompile(`^[0-9A-Z]{5}$`)
-	locationRe = regexp.MustCompile(`^[A-Za-z0-9_.-][A-Za-z0-9_./-]{0,199}\.(php|phtml|inc|module|twig|tpl):[0-9]{1,9}$`)
-	channelRe  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+	sqlstateRe = regexp.MustCompile(`^(00|01|02|03|08|09|0A|0B|0F|0L|0P|0Z|20|21|22|23|24|25|26|27|28|2B|2D|2F|34|38|39|3B|3D|3F|40|42|44|53|54|55|57|58|72|F0|HV|P0|XX)[0-9A-Z]{3}$`)
+	locationRe = regexp.MustCompile(`^[A-Za-z0-9_.-][A-Za-z0-9_./-]{0,199}\.(php|phtml|inc|module|twig|tpl):[0-9]{1,6}$`)
+	channelRe  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	countRe    = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
 	numberRe   = regexp.MustCompile(`^[0-9]{1,18}$`)
 	fileIDRe   = regexp.MustCompile(`^[0-9]{1,40}$`)
 	cleanRe    = regexp.MustCompile("^[ !#-&(-/:-?A-_a-~]{0,200}$")
 )
+
+// Shapes that are values, not names, even when each character is allowed: a
+// national number, an address, a host. The filter has the same rules (safe_word,
+// safe_path), and an identifier like jean_dupont stays out of their reach.
+var (
+	longDigitsRe   = regexp.MustCompile(`[0-9]{7}`)
+	addressRe      = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+`)
+	dottedNumberRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)+$`)
+	hostEndRe      = regexp.MustCompile(`\.[A-Za-z]{2,}$`)
+	fileExtRe      = regexp.MustCompile(`\.[A-Za-z]+$`)
+	doubleExtRe    = regexp.MustCompile(`^[^.]+\.(blade|html|class|inc|tpl|config|module|interface|trait)$`)
+	fullIPv6Re     = regexp.MustCompile(`[0-9A-Fa-f]+(:[0-9A-Fa-f]+){3}`)
+)
+
+// safeWord refuses a word holding a long digit run or a dotted address.
+func safeWord(w string) bool {
+	return !longDigitsRe.MatchString(w) && !addressRe.MatchString(w)
+}
+
+// safeLocation checks each segment of a "path:line" location.
+func safeLocation(loc string) bool {
+	segments := strings.Split(loc[:strings.LastIndex(loc, ":")], "/")
+	last := len(segments) - 1
+	for _, s := range segments[:last] {
+		s = strings.TrimPrefix(s, ".")
+		if !safeWord(s) || dottedNumberRe.MatchString(s) || hostEndRe.MatchString(s) {
+			return false
+		}
+	}
+	stem := strings.TrimPrefix(fileExtRe.ReplaceAllString(segments[last], ""), ".")
+	return safeWord(stem) && (!strings.Contains(stem, ".") || doubleExtRe.MatchString(stem))
+}
 
 // maxOutputLine is longer than any line the filter can write.
 const maxOutputLine = 4096
@@ -158,16 +190,16 @@ func parseRecord(f []string, src Source, o FilterOptions, now time.Time) (Record
 
 // validForFormat checks each field against what the format may hold at all.
 func validForFormat(r Record, format Format) bool {
-	validType := r.Type == "" || typeRe.MatchString(r.Type)
-	validLocation := r.Location == "" || (locationRe.MatchString(r.Location) && !strings.Contains(r.Location, ".."))
-	validChannel := r.Channel == "" || channelRe.MatchString(r.Channel)
+	validType := r.Type == "" || (typeRe.MatchString(r.Type) && safeWord(r.Type))
+	validLocation := r.Location == "" || (locationRe.MatchString(r.Location) && !strings.Contains(r.Location, "..") && safeLocation(r.Location))
+	validChannel := r.Channel == "" || (channelRe.MatchString(r.Channel) && safeWord(r.Channel))
 	switch format {
 	case FormatPHP:
 		return validType && validLocation && r.Channel == ""
 	case FormatMonolog:
 		return validType && validLocation && validChannel
 	case FormatPostgres:
-		return (r.Type == "" || sqlstateRe.MatchString(r.Type)) && r.Location == "" && r.Channel == ""
+		return (r.Type == "" || (sqlstateRe.MatchString(r.Type) && strings.ContainsAny(r.Type, "0123456789"))) && r.Location == "" && r.Channel == ""
 	case FormatJSON:
 		return r.Type == "" && r.Location == "" && validChannel
 	case FormatText:
@@ -177,9 +209,10 @@ func validForFormat(r Record, format Format) bool {
 }
 
 // validText is the second barrier on the cleaned text: cleanRe holds printable
-// ASCII without digit, at sign or quote, which the filter has all replaced.
+// ASCII without digit, at sign or quote, which the filter has all replaced. An
+// IPv6 address can be made of letters alone: those forms are refused too.
 func validText(s string) bool {
-	return cleanRe.MatchString(s) && !strings.Contains(s, "://")
+	return cleanRe.MatchString(s) && !strings.Contains(s, "://") && !strings.Contains(s, "::") && !fullIPv6Re.MatchString(s)
 }
 
 // parseHour reads the hour of a line, or takes the hour of the read if the line

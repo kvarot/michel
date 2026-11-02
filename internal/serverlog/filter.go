@@ -244,8 +244,10 @@ func parserFor(src Source) (string, []string, error) {
 //	U file
 //	M
 //
-// The file class of the case below is plainPathRe's. A file name out of it, or
+// The file class of plain_name below is plainPathRe's. A file name out of it, or
 // one holding "..", is never named: the source as a whole is reported unseen.
+// Past MaxFiles, the first names in glob order are left out: dated names sort
+// oldest first, and the errors of today are the ones that matter.
 const shellProgram = `LC_ALL=C
 export LC_ALL
 found=$(for tool in awk tail head tr ls wc; do command -v "$tool" || echo '!'; done)
@@ -314,19 +316,32 @@ read_one() {
 		printf 'U\t%s\n' "$f"
 	fi
 }
+plain_name() {
+	case "$1" in
+	*[!A-Za-z0-9._/+=,:~\ -]*|*..*) return 1 ;;
+	esac
+	return 0
+}
+total=0
+for f in @GLOB@; do
+	if plain_name "$f"; then
+		total=$((total + 1))
+	fi
+done
+drop=$((total - @MAX@))
+if [ "$drop" -gt 0 ]; then
+	printf 'M\n'
+fi
 count=0
 bad=0
 for f in @GLOB@; do
-@NOMATCH@	case "$f" in
-	*[!A-Za-z0-9._/+=,:~\ -]*|*..*)
+@NOMATCH@	if ! plain_name "$f"; then
 		bad=1
 		continue
-		;;
-	esac
+	fi
 	count=$((count + 1))
-	if [ "$count" -gt @MAX@ ]; then
-		printf 'M\n'
-		break
+	if [ "$count" -le "$drop" ]; then
+		continue
 	fi
 	read_one
 done
@@ -357,8 +372,30 @@ BEGIN {
 	mon["Sep"] = "09"; mon["Oct"] = "10"; mon["Nov"] = "11"; mon["Dec"] = "12"
 	init_levels()
 }
+function safe_word(w) {
+	if (w ~ /[0-9][0-9][0-9][0-9][0-9][0-9][0-9]/) return 0
+	if (w ~ /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/) return 0
+	return 1
+}
+function safe_channel(w) {
+	return length(w) <= 64 && w ~ /^[A-Za-z0-9_-]+$/ && safe_word(w)
+}
+function safe_path(r,   n, i, parts, s) {
+	n = split(r, parts, "/")
+	for (i = 1; i < n; i++) {
+		s = parts[i]
+		sub(/^\./, "", s)
+		if (!safe_word(s) || s ~ /^[0-9]+(\.[0-9]+)+$/ || s ~ /\.[A-Za-z][A-Za-z]+$/) return 0
+	}
+	s = parts[n]
+	sub(/\.[A-Za-z]+$/, "", s)
+	sub(/^\./, "", s)
+	if (!safe_word(s)) return 0
+	if (index(s, ".") && s !~ /^[^.]+\.(blade|html|class|inc|tpl|config|module|interface|trait)$/) return 0
+	return 1
+}
 function place(p, ln,   i, d, r) {
-	if (index(p, "..") || 9 < length(ln)) return ""
+	if (index(p, "..") || 6 < length(ln)) return ""
 	r = ""
 	for (i = 1; i <= ndirs; i++) {
 		d = dirs[i] "/"
@@ -367,11 +404,11 @@ function place(p, ln,   i, d, r) {
 			break
 		}
 	}
-	if (r == "" || substr(r, 1, 1) == "/") {
+	if (r == "" || substr(r, 1, 1) == "/" || !safe_path(r)) {
 		r = p
 		sub(/^.*\//, "", r)
 	}
-	if (r == "" || 200 < length(r) || r !~ /\.(php|phtml|inc|module|twig|tpl)$/) return ""
+	if (r == "" || 200 < length(r) || r !~ /\.(php|phtml|inc|module|twig|tpl)$/ || !safe_path(r)) return ""
 	return r ":" ln
 }
 function hourof(s,   z, d) {
@@ -467,7 +504,7 @@ function parse(l,   h, p, lab, rest, v, t, ln) {
 		v = substr(rest, RSTART, RLENGTH)
 		sub(/^ *Uncaught +/, "", v)
 		sub(/(: | in \/)$/, "", v)
-		if (length(v) <= 128) typ = v
+		if (length(v) <= 128 && safe_word(v)) typ = v
 	}
 	t = l
 	if (1024 < length(t)) t = substr(t, length(t) - 1023)
@@ -489,7 +526,8 @@ function parse(l,   h, p, lab, rest, v, t, ln) {
 
 // postgresParser takes the leftmost severity of a line: the prefix of
 // log_line_prefix comes first, and whatever a message holds comes after. With
-// %e written right before the severity, the word there is the SQLSTATE. A line
+// %e written right before the severity, the word there is the SQLSTATE when it
+// starts with a known class and holds a digit: a pid or a user must not pass. A line
 // starting with a tab continues a statement: it holds values, never a severity.
 const postgresParser = `
 function init_levels() {
@@ -516,7 +554,7 @@ function parse(l,   h, s, before, at, n, v) {
 		v = substr(before, RSTART, RLENGTH)
 		sub(/^ /, "", v)
 		sub(/:$/, "", v)
-		if (v ~ /[0-9]/) typ = v
+		if (v ~ /^(00|01|02|03|08|09|0A|0B|0F|0L|0P|0Z|20|21|22|23|24|25|26|27|28|2B|2D|2F|34|38|39|3B|3D|3F|40|42|44|53|54|55|57|58|72|F0|HV|P0|XX)/ && v ~ /[0-9]/) typ = v
 	}
 }
 `
@@ -550,7 +588,7 @@ function parse(l,   h, head, lab, n, rest, v, m, ln) {
 	level = lv[lab]
 	v = head
 	sub(/\.[A-Z]+$/, "", v)
-	if (length(v) <= 64) chan = v
+	if (safe_channel(v)) chan = v
 	hour = hourof(h)
 	msg = before_context(substr(h, n + 1))
 	if (65536 < length(l) || !match(l, /.*\[object\] \(/)) return
@@ -558,7 +596,7 @@ function parse(l,   h, head, lab, n, rest, v, m, ln) {
 	if (!match(rest, /^[A-Za-z_\\][A-Za-z0-9_\\]*\(code: [-A-Za-z0-9]*\): /)) return
 	v = substr(rest, 1, RLENGTH)
 	sub(/\(code: .*$/, "", v)
-	if (length(v) <= 128) typ = v
+	if (length(v) <= 128 && safe_word(v)) typ = v
 	if (!match(rest, ".* at /[A-Za-z0-9_./-]+:[0-9]+[)]")) return
 	m = substr(rest, 1, RLENGTH)
 	if (!match(m, " at /[A-Za-z0-9_./-]+:[0-9]+[)]$")) return
@@ -608,7 +646,7 @@ function parse(l,   s, n, i, ch, d, ins, esc, b, str, val, k, lf, cf, lvl, chn) 
 	lvl = tolower(lvl)
 	if (!(lvl in lv)) return
 	level = lv[lvl]
-	if (length(chn) <= 64 && chn ~ /^[A-Za-z0-9_.-]+$/) chan = chn
+	if (safe_channel(chn)) chan = chn
 }
 `
 
@@ -656,6 +694,7 @@ function clean(s,   q1, q3) {
 	gsub(/[^ ]*@[^ ]*/, "[email]", s)
 	gsub(/\/[^ ]*/, "[path]", s)
 	gsub(/[A-Za-z0-9_.-]+=[^ ]*/, "[val]", s)
+	gsub(/[A-Za-z0-9_.%-]*::[A-Za-z0-9_.%:-]*/, "[addr]", s)
 	gsub(/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/, "[ip]", s)
 	gsub(/[0-9A-Fa-f]*:[0-9A-Fa-f]*:[0-9A-Fa-f]*:[0-9A-Fa-f:]*/, "[ip]", s)
 	gsub(/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+/, "[host]", s)

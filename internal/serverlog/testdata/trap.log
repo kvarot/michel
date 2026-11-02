@@ -27,3 +27,19 @@ PHP Fatal error:  Uncaught Zoe Trappe: tok_fake_9f8e7d6c5b4a in /reset?token=url
 2026-11-02T10:00:10Z ERROR payment failed for Zoe Trappe at 203.0.113.77, diagnostic-fictif
 2026-11-02T10:00:11Z CRITICAL token=urlfakeparam for jean.trappe@example.test NIR 1 99 13 99 999 123 45
 2026-11-02T10:00:12Z WARNING SELECT * FROM patients WHERE name='Zoe Trappe' from 198.51.100.23
+[2026-11-02 10:00:20] 203.0.113.77.ERROR: an address as a channel
+[2026-11-02 10:00:21] 199139999912345.ERROR: a national number as a channel
+[2026-11-02 10:00:22] jean.trappe.example.test.ERROR: a host as a channel
+{"level":"error","channel":"203.0.113.77"}
+{"level":"error","channel":"199139999912345"}
+{"level":"error","channel":"jean.trappe.example.test"}
+PHP Warning:  x in /var/www/demo/203.0.113.77/a.php on line 1
+PHP Warning:  x in /srv/203.0.113.77.php on line 1
+PHP Warning:  x in /var/www/demo/ip-203.0.113.77/a.php on line 1
+PHP Warning:  x in /var/www/demo/199139999912345/a.php on line 1
+PHP Warning:  x in /srv/199139999912345.php on line 1
+PHP Warning:  x in /var/www/demo/jean.trappe.example.test/a.php on line 1
+PHP Warning:  x in /srv/jean.trappe.example.test.php on line 1
+PHP Warning:  x in /var/www/demo/a.php:199139999
+PHP Fatal error:  Uncaught Zoe199139999912345: x in /var/www/demo/a.php:1
+[2026-11-02 10:00:23] app.ERROR: m {"exception":"[object] (Zoe199139999912345(code: 0): x at /var/www/demo/203.0.113.77/a.php:1)"}

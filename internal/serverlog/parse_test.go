@@ -135,6 +135,27 @@ func TestParseRejectsOutOfSchema(t *testing.T) {
 		{"location is a host", "R\terror\t\tsecret.example.test:8080\t\t\t1", mono, FilterOptions{}},
 		{"long channel", "R\terror\t\t\t" + strings.Repeat("c", 65) + "\t\t1", mono, FilterOptions{}},
 		{"channel with email", "R\terror\t\t\t" + secret + "\t\t1", mono, FilterOptions{}},
+		{"channel is an address", "R\terror\t\t\t203.0.113.7\t\t1", mono, FilterOptions{}},
+		{"channel is a number", "R\terror\t\t\t199139999912345\t\t1", mono, FilterOptions{}},
+		{"channel holds a number", "R\terror\t\t\tnir-199139999912345\t\t1", mono, FilterOptions{}},
+		{"channel is a host", "R\terror\t\t\tsecret.example.test\t\t1", mono, FilterOptions{}},
+		{"folder is an address", "R\terror\t\t203.0.113.77/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder holds an address", "R\terror\t\tip-203.0.113.77/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder is a number", "R\terror\t\t199139999912345/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"folder is a host", "R\terror\t\tsecret.example.test/a.php:1\t\t\t1", mono, FilterOptions{}},
+		{"file is an address", "R\terror\t\t203.0.113.77.php:1\t\t\t1", mono, FilterOptions{}},
+		{"file is a number", "R\terror\t\t199139999912345.php:1\t\t\t1", mono, FilterOptions{}},
+		{"file is a host", "R\terror\t\tsecret.example.test.php:1\t\t\t1", mono, FilterOptions{}},
+		{"file is a short host", "R\terror\t\texample.test.php:1\t\t\t1", mono, FilterOptions{}},
+		{"line is a number", "R\terror\t\ta.php:199139999\t\t\t1", mono, FilterOptions{}},
+		{"type holds a number", "R\terror\tZoe199139999912345\t\t\t\t1", mono, FilterOptions{}},
+		{"sqlstate is a pid", "R\terror\t12345\t\t\t\t1", Source{Format: FormatPostgres}, FilterOptions{}},
+		{"sqlstate is a user", "R\terror\tDR123\t\t\t\t1", Source{Format: FormatPostgres}, FilterOptions{}},
+		{"sqlstate is a name", "R\terror\tALICE\t\t\t\t1", Source{Format: FormatPostgres}, FilterOptions{}},
+		{"sqlstate without a digit", "R\terror\tHVABC\t\t\t\t1", Source{Format: FormatPostgres}, FilterOptions{}},
+		{"text with a compressed address", "R\terror\t\t\t\t\t1\tsecret abcd::ef", mono, FilterOptions{Text: true}},
+		{"text with a compressed address, end", "R\terror\t\t\t\t\t1\tsecret fe80::", mono, FilterOptions{Text: true}},
+		{"text with a full address", "R\terror\t\t\t\t\t1\tsecret ab:cd:ef:ab", mono, FilterOptions{Text: true}},
 		{"negative count", "R\terror\t\t\t\t\t-1", mono, FilterOptions{}},
 		{"zero count", "R\terror\t\t\t\t\t0", mono, FilterOptions{}},
 		{"count not a number", "R\terror\t\t\t\t\t1e9", mono, FilterOptions{}},
@@ -204,6 +225,12 @@ func TestParseBoundaries(t *testing.T) {
 	}
 	if out := parseOne("R\terror\t\t\t\t\t1\t"+strings.Repeat("a", 200), mono, FilterOptions{Text: true}); len(out.Records) != 1 || len(out.Records[0].Text) != 200 {
 		t.Errorf("longest text: %+v", out)
+	}
+	// Real code stays possible.
+	for _, loc := range []string{"foo.blade.php:1", "templates/home.html.twig:3", "php8.1/a.php:2", ".hidden/a.php:1", "a-b_c/2026/x.php:123456", ".env.php:1"} {
+		if out := parseOne("R\terror\t\t"+loc+"\t\t\t1", mono, FilterOptions{}); len(out.Records) != 1 {
+			t.Errorf("%s: %+v", loc, out)
+		}
 	}
 	// A wildcard source takes what matches its last segment, nothing beyond.
 	wild := Source{Path: "/var/log/demo/app-*.log", Format: FormatPHP}

@@ -171,8 +171,21 @@ func TestPostgresKeepsSeverityAndSqlstateOnly(t *testing.T) {
 	if _, out := scanLog(t, src, "\tSELECT 1 FATAL:  y\n", FilterOptions{}); len(out.Records) != 0 {
 		t.Errorf("a continuation line made a record: %+v", out.Records)
 	}
-	// A bracketed pid and a user name are not a SQLSTATE.
-	for _, l := range []string{"2026-11-02 10:00:00 UTC [12345] ERROR:  x", "2026-11-02 10:00:00 UTC ALICE ERROR:  x"} {
+	// The known classes are all taken, with letters or not.
+	for _, code := range []string{"57P01", "42P01", "XX000", "HV00P", "P0001", "F0000", "0A000"} {
+		_, out = scanLog(t, src, "2026-11-02 10:00:00 UTC [1] "+code+" ERROR:  x\n", FilterOptions{})
+		if r := oneRecord(t, out); r.Type != code {
+			t.Errorf("%s: %+v", code, r)
+		}
+	}
+	// A pid and a user name are not a SQLSTATE.
+	for _, l := range []string{
+		"2026-11-02 10:00:00 UTC [12345] ERROR:  x",
+		"2026-11-02 10:00:00 UTC ALICE ERROR:  x",
+		"2026-11-02 10:00:00 UTC 12345 ERROR:  x",
+		"2026-11-02 10:00:00 UTC DR123 ERROR:  x",
+		"2026-11-02 10:00:00 UTC HVABC ERROR:  x",
+	} {
 		_, out = scanLog(t, src, l+"\n", FilterOptions{})
 		if r := oneRecord(t, out); r.Type != "" {
 			t.Errorf("%q: %+v", l, r)
@@ -521,6 +534,11 @@ func TestCleanedTextRemovesValues(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", c.src.Format, r.Text, c.want)
 		}
 	}
+	// No address survives in its compressed form, nor any word holding "::".
+	_, out = scanLog(t, Source{Format: FormatPHP}, "PHP Warning:  from abcd::ef to fe80::abcd or ::1 or ::ffff:203.0.113.7 or ab:cd:ef:ab end\n", FilterOptions{Text: true})
+	if r := oneRecord(t, out); r.Text != "from [addr] to [addr] or [addr] or [addr] or [ip] end" {
+		t.Errorf("compressed addresses: %q", r.Text)
+	}
 	// A long line is capped, control characters and an open quote go away.
 	long := "PHP Warning:  " + strings.Repeat("word ", 2000) + "\n"
 	_, out = scanLog(t, Source{Format: FormatPHP}, long, FilterOptions{Text: true})
@@ -710,21 +728,29 @@ func TestMissingAndNotRegularAreUnseen(t *testing.T) {
 func TestWildcardReadsEachFileUpToTheCap(t *testing.T) {
 	needTools(t)
 	dir := t.TempDir()
-	for i := 0; i < 4; i++ {
-		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("app-%d.log", i)), []byte(warnLine), 0o644); err != nil {
+	for _, day := range []string{"2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02"} {
+		if err := os.WriteFile(filepath.Join(dir, "app-"+day+".log"), []byte(warnLine), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	read := func(out Output) string {
+		var days []string
+		for _, f := range out.Files {
+			days = append(days, strings.TrimSuffix(strings.TrimPrefix(f.File, shPath(dir)+"/app-"), ".log"))
+		}
+		return strings.Join(days, " ")
 	}
 	if err := os.WriteFile(filepath.Join(dir, "other.log"), []byte(warnLine), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	pat := shPath(dir) + "/app-*.log"
 	out := pass(t, pat, earlier, FilterOptions{MaxFiles: 10})
-	if len(out.Files) != 4 || out.TooManyFiles || oneRecord(t, out).Count != 4 {
+	if read(out) != "2026-10-30 2026-10-31 2026-11-01 2026-11-02" || out.TooManyFiles || oneRecord(t, out).Count != 4 {
 		t.Errorf("wildcard: %+v", out)
 	}
 	out = pass(t, pat, earlier, FilterOptions{MaxFiles: 3})
-	if len(out.Files) != 3 || !out.TooManyFiles || oneRecord(t, out).Count != 3 {
+	// Past the cap, the newest files are read: today's errors come first.
+	if read(out) != "2026-10-31 2026-11-01 2026-11-02" || !out.TooManyFiles || oneRecord(t, out).Count != 3 {
 		t.Errorf("capped: %+v", out)
 	}
 	// Each file has its own position.
@@ -852,6 +878,56 @@ func TestGroupsAreCapped(t *testing.T) {
 	}
 	if total != int64(n) {
 		t.Errorf("%d occurrences counted, want %d", total, n)
+	}
+}
+
+// Addresses, national numbers and hosts have a shape the fields cannot hold,
+// in any format, even when every character is allowed.
+func TestValueShapesNeverLeaveTheFilter(t *testing.T) {
+	needTools(t)
+	o := FilterOptions{RemoteDirs: []string{"/var/www/demo"}}
+	json := Source{Format: FormatJSON, LevelField: "level", ChannelField: "channel"}
+	for _, c := range []struct {
+		src      Source
+		line     string
+		channel  string
+		location string
+		typ      string
+	}{
+		{Source{Format: FormatMonolog}, "[2026-11-02 10:00:00] 203.0.113.7.ERROR: x", "", "", ""},
+		{Source{Format: FormatMonolog}, "[2026-11-02 10:00:00] 199139999912345.ERROR: x", "", "", ""},
+		{Source{Format: FormatMonolog}, "[2026-11-02 10:00:00] a.example.test.ERROR: x", "", "", ""},
+		{Source{Format: FormatMonolog}, "[2026-11-02 10:00:00] app-1_x.ERROR: x", "app-1_x", "", ""},
+		{json, `{"level":"error","channel":"203.0.113.7"}`, "", "", ""},
+		{json, `{"level":"error","channel":"199139999912345"}`, "", "", ""},
+		{json, `{"level":"error","channel":"a.example.test"}`, "", "", ""},
+		{json, `{"level":"error","channel":"billing"}`, "billing", "", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/203.0.113.77/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/ip-203.0.113.77/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /srv/203.0.113.77.php on line 1", "", "", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/199139999912345/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /srv/199139999912345.php on line 1", "", "", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/jean.example.test/a.php on line 1", "", "a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /srv/jean.example.test.php on line 1", "", "", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/a.php:199139999", "", "", ""},
+		{Source{Format: FormatPHP}, "PHP Fatal error:  Uncaught Zoe199139999912345: x in /var/www/demo/a.php:1", "", "a.php:1", ""},
+		{Source{Format: FormatMonolog}, `[2026-11-02 10:00:00] app.ERROR: m [object] (Zoe199139999912345(code: 0): x at /var/www/demo/a.php:1)`, "app", "a.php:1", ""},
+		// Real code keeps its place.
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/resources/views/home.blade.php on line 1", "", "resources/views/home.blade.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/templates/home.html.twig on line 1", "", "templates/home.html.twig:1", ""},
+		{Source{Format: FormatPHP}, "PHP Warning:  x in /var/www/demo/php8.1/2026/a.php on line 1", "", "php8.1/2026/a.php:1", ""},
+		{Source{Format: FormatPHP}, "PHP Fatal error:  Uncaught App\\Foo2: x in /var/www/demo/.hidden/a.php:123456", "", ".hidden/a.php:123456", `App\Foo2`},
+	} {
+		raw, out := scanLog(t, c.src, c.line+"\n", o)
+		r := oneRecord(t, out)
+		if r.Channel != c.channel || r.Location != c.location || r.Type != c.typ {
+			t.Errorf("%q gave %+v", c.line, r)
+		}
+		for _, bad := range []string{"203.0.113", "199139", "example.test"} {
+			if bytes.Contains(raw, []byte(bad)) {
+				t.Errorf("%q: %q left the filter: %q", c.line, bad, raw)
+			}
+		}
 	}
 }
 
