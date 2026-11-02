@@ -13,7 +13,10 @@ import (
 // new position, Skipped the bytes left unread because of the cap, Rotated tells
 // that the file was replaced or truncated, First that it was only located.
 type FileState struct {
-	File, FileID    string
+	// File is a server path, which can hold a user name: it never goes into an
+	// API answer.
+	File            string `json:"-"`
+	FileID          string `json:"-"`
 	Offset, Skipped int64
 	Rotated, First  bool
 }
