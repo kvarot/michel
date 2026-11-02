@@ -10,6 +10,36 @@ Règles du run :
 
 Remplace `<hôte>` et `<site>` par tes valeurs. Commandes en PowerShell, sauf les blocs marqués « sur le serveur ».
 
+## Sans serveur jetable : le conteneur Docker
+
+`test/docker-server` construit un Debian avec systemd, `sshd`, PHP-FPM et nginx. **Cette image n'a pas encore été construite ni lancée** : le PC où elle a été écrite n'a pas Docker. Attends-toi à devoir l'ajuster la première fois.
+
+Le conteneur remplace les étapes 1 et 3 : le compte `michel`, le canari et `expose_php = On` sont déjà dans l'image. L'étape 2 (agent SSH et clé) reste à faire, avant ceci :
+
+```powershell
+docker build -t michel-test test\docker-server
+docker run -d --name michel-test --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock -p 127.0.0.1:2222:22 -p 127.0.0.1:8080:80 michel-test
+docker cp $env:USERPROFILE\.ssh\michel_test_ed25519.pub michel-test:/home/michel/.ssh/authorized_keys
+docker exec michel-test sh -c "chown michel:michel /home/michel/.ssh/authorized_keys; chmod 600 /home/michel/.ssh/authorized_keys"
+docker exec michel-test systemctl is-system-running --wait
+docker exec michel-test ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+curl.exe http://127.0.0.1:8080/
+```
+
+`--privileged` donne au conteneur de larges droits sur la machine virtuelle de Docker : ne le lance que pour ce test, et garde `127.0.0.1` dans les `-p`. `systemctl is-system-running` peut répondre `degraded` : ce n'est pas bloquant si `curl.exe` répond `ok`.
+
+Ensuite, suis la checklist avec ces différences :
+
+| Étape | Dans le conteneur |
+|---|---|
+| Étape 4, ajout | `m target add 127.0.0.1 --user michel --port 2222 --env dev --interval manual --site-url http://127.0.0.1:8080 --name essai` |
+| « Sur le serveur » | `docker exec -it michel-test bash` |
+| Snapshot de l'étape 6 | `docker commit michel-test michel-test:propre` |
+| Étape 6E, couper le site | `docker exec michel-test systemctl stop nginx` |
+| Étape 9, nettoyage du serveur | `docker rm -f michel-test`, puis `docker rmi michel-test michel-test:propre` |
+
+Ce test ne prouve pas tout : ni les réglages d'un vrai hébergeur, ni le mutualisé, ni le réseau réel. Dans ce cas, à l'étape 10, je reformule la ligne « les auteurs n'ont pas encore essayé » des guides au lieu de la retirer.
+
 ## 1. Ce qu'il te faut
 
 - Debian ou Ubuntu récent, avec PHP-FPM dans `/usr/sbin` et un site qui répond. Michel ne prépare aucun script pour un PHP compilé sous `/opt`.
