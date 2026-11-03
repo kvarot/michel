@@ -38,6 +38,9 @@
               <span class="m-small m-muted">{{ kindText(t) }} · {{ envText(t) }}</span>
             </span>
             <span class="m-voice m-small" :class="{ 'm-srv__hot': t.open_findings > 0 }">{{ sentence(t) }}</span>
+            <span v-if="badgesOf(t).length" class="m-srv__badges">
+              <span v-for="b in badgesOf(t)" :key="b.key" class="m-tag m-small" :class="{ 'm-tag--hot': b.key !== 'new' }">{{ b.text }}</span>
+            </span>
           </a>
         </li>
       </ul>
@@ -58,6 +61,7 @@ import DiscoverServersDialog from './DiscoverServersDialog.vue'
 import HostKeyDialog from './HostKeyDialog.vue'
 import ServerSheet from './ServerSheet.vue'
 import { api } from '../api.js'
+import { logBadges } from '../lib/serverLogsView.js'
 import { envLabel, kindLabel, serversHash, stateSentence } from '../lib/serversView.js'
 
 // ServersPage is the "Serveurs" page: the list of servers (name, kind,
@@ -111,6 +115,9 @@ export default {
     },
     sentence(t) {
       return stateSentence(t, this.lang)
+    },
+    badgesOf(t) {
+      return logBadges(t, this.lang)
     },
     async load() {
       this.loading = !this.list.length
@@ -189,5 +196,8 @@ export default {
 .m-srv__item:hover { border-color: rgba(var(--v-theme-primary), 0.45); }
 .m-srv__item-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; }
 .m-srv__name { font-weight: 650; font-size: 1.05rem; overflow-wrap: anywhere; }
+.m-srv__badges { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.m-tag { padding: 0 0.45rem; border-radius: 999px; background: rgba(var(--v-theme-on-surface), 0.08); }
+.m-tag--hot { background: rgba(var(--v-theme-error), 0.14); color: rgb(var(--v-theme-error)); font-weight: 600; }
 .m-srv__hot { color: rgb(var(--v-theme-error)); }
 </style>

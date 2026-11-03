@@ -106,6 +106,14 @@
         <p v-if="cards.length && view.fix_level === 3" class="m-muted m-small">{{ level3Warn }}</p>
       </section>
 
+      <section class="m-sheet__block" :aria-labelledby="`srv-${id}-logs`">
+        <h3 :id="`srv-${id}-logs`" class="m-sheet__title">{{ $t('logs.title') }}</h3>
+        <ul v-if="logBadgeList.length" class="m-sheet__badges" :aria-label="$t('logs.title')">
+          <li v-for="b in logBadgeList" :key="b.key" class="m-tag m-small" :class="{ 'm-tag--hot': b.key !== 'new' }">{{ b.text }}</li>
+        </ul>
+        <ServerLogs :id="id" :kind="view.kind" :env="view.env" @changed="refreshView" />
+      </section>
+
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-seen`">
         <h3 :id="`srv-${id}-seen`" class="m-sheet__title">{{ $t('servers.sheet.seen') }}</h3>
         <p v-if="!inv" class="m-muted">{{ $t('servers.sheet.seen_none') }}</p>
@@ -285,9 +293,11 @@
 <script>
 import AiConsentDialog from './AiConsentDialog.vue'
 import HostKeyDialog from './HostKeyDialog.vue'
+import ServerLogs from './ServerLogs.vue'
 import { api } from '../api.js'
 import { formatDate, severityOf } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
+import { logBadges } from '../lib/serverLogsView.js'
 import {
   envLabel, envs, findingTitle, intervalLabel, intervals, isServerFinal, kindLabel, kinds, levelLabel, mergeFindings, serverAttemptLine,
   serverLevels, sortFindings, stateSentence,
@@ -303,7 +313,7 @@ const checkEvery = 3000
 // Michel".
 export default {
   name: 'ServerSheet',
-  components: { AiConsentDialog, HostKeyDialog },
+  components: { AiConsentDialog, HostKeyDialog, ServerLogs },
   props: {
     id: { type: String, required: true },
   },
@@ -355,6 +365,9 @@ export default {
     },
     sentence() {
       return stateSentence(this.view, this.lang)
+    },
+    logBadgeList() {
+      return logBadges(this.view, this.lang)
     },
     keyChanged() {
       return this.view?.last_check?.code === 'api.target.hostkey_changed'
@@ -501,6 +514,16 @@ export default {
       } finally {
         this.loading = false
       }
+    },
+    /** refreshView reads the server again, quietly: the log badges follow what the Journaux block changed. */
+    async refreshView() {
+      try {
+        const v = await api.get(this.q(`/targets/${this.enc(this.id)}`))
+        if (this.alive) this.view = v
+      } catch {
+        // The badge stays as it was; the next load tells.
+      }
+      this.$emit('changed')
     },
     async loadInventory() {
       try {
@@ -733,6 +756,7 @@ export default {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
 }
 .m-sheet__title { font-size: 1.1rem; font-weight: 650; margin: 0; }
+.m-sheet__badges { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .m-sheet__sub { font-size: 0.95rem; font-weight: 650; margin: 0.6rem 0 0; }
 .m-sheet__flaws { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
 .m-sheet__flaw { display: grid; gap: 0.3rem; padding-top: 0.75rem; border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); }
