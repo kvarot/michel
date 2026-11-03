@@ -725,7 +725,7 @@ func TestCheckProposesDistroSource(t *testing.T) {
 	}
 	e2.deps.OSVRoot = t.TempDir()
 	res = e2.check(tg2.ID)
-	if res.SourceToEnable != "osv.debian" || res.Clean() {
+	if res.SourceToEnable != "osv.debian" || !res.DatabaseMissing || res.Clean() {
 		t.Fatalf("result %+v", res)
 	}
 }

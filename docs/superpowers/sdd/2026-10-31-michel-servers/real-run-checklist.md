@@ -12,7 +12,7 @@ Remplace `<hôte>` et `<site>` par tes valeurs. Commandes en PowerShell, sauf le
 
 ## Sans serveur jetable : le conteneur Docker
 
-`test/docker-server` construit un Debian avec systemd, `sshd`, PHP-FPM et nginx. **Cette image n'a pas encore été construite ni lancée** : le PC où elle a été écrite n'a pas Docker. Attends-toi à devoir l'ajuster la première fois.
+`test/docker-server` construit un Debian avec systemd, `sshd`, PHP-FPM et nginx. L'image a été construite et lancée avec le Docker de WSL (voir ci-dessous).
 
 Le conteneur remplace les étapes 1 et 3 : le compte `michel`, le canari et `expose_php = On` sont déjà dans l'image. L'étape 2 (agent SSH et clé) reste à faire, avant ceci :
 
@@ -27,6 +27,17 @@ curl.exe http://127.0.0.1:8080/
 ```
 
 `--privileged` donne au conteneur de larges droits sur la machine virtuelle de Docker : ne le lance que pour ce test, et garde `127.0.0.1` dans les `-p`. `systemctl is-system-running` peut répondre `degraded` : ce n'est pas bloquant si `curl.exe` répond `ok`.
+
+Avec le Docker de WSL (cgroup v1, WSL avec systemd), préfixe les commandes par `wsl -d Ubuntu --` et lance plutôt :
+
+```powershell
+wsl -d Ubuntu -- docker run -d --name michel-test --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock -p 127.0.0.1:2222:22 -p 127.0.0.1:8080:80 michel-test
+```
+
+- Sans montage de `/sys/fs/cgroup` : le conteneur ne touche pas aux cgroups de la distribution.
+- WSL s'arrête quand aucune session n'est ouverte, et le conteneur avec. Garde une session ouverte pendant tout le test (`wsl -d Ubuntu -- sleep 21600`).
+- Juste après un démarrage de WSL, `docker start` peut échouer une fois (`devices.allow: invalid argument`). Relance-le.
+- `docker cp` ne connaît pas les chemins Windows : envoie la clé publique par l'entrée standard de `docker exec -i`.
 
 Ensuite, suis la checklist avec ces différences :
 
@@ -124,7 +135,7 @@ Sur ton poste :
 m target check essai
 ```
 
-`check` affiche la commande `michel source enable …` si une base manque. Lance-la, puis relance `check`.
+`check` affiche la commande à lancer si une base manque : `michel source enable …`, puis `michel db update`. Lance-les, puis relance `check`.
 
 | Vérifie | Attendu |
 |---|---|
@@ -168,7 +179,7 @@ Fais un snapshot du serveur maintenant.
 4. Vérifie : la copie existe dans `/var/lib/michel/backups/<correction>/`, le fichier ne diffère que sur la ligne voulue.
 5. Lance `annuler` : le fichier revient à l'identique (compare avec `sha256sum`), PHP est rechargé.
 
-**B. La ligne a changé** (code 5). Prépare et valide de nouveau la correction. Avant de lancer le script, change à la main la ligne `expose_php` sur le serveur, puis lance `appliquer`. Attendu : code `5`, aucun fichier modifié. Remets la ligne.
+**B. Le fichier a changé** (code 5). Prépare et valide de nouveau la correction. Avant de lancer le script, change à la main la ligne `expose_php` sur le serveur, puis lance `appliquer`. Attendu : code `5`, aucun fichier modifié, aucune sauvegarde créée. Remets la ligne.
 
 **C. Michel lance le script, sans sudo.**
 

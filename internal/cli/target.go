@@ -473,7 +473,10 @@ func newTargetCheckCmd(deps *Deps) *cobra.Command {
 			if res.Unseen > 0 {
 				fmt.Fprintln(deps.Stdout, deps.N("cli.target.check.unseen", res.Unseen))
 			}
-			if res.SourceToEnable != "" {
+			switch {
+			case res.DatabaseMissing:
+				fmt.Fprintln(deps.Stdout, deps.T("cli.target.check.db_hint", res.SourceToEnable))
+			case res.SourceToEnable != "":
 				fmt.Fprintln(deps.Stdout, deps.T("cli.target.check.source_hint", res.SourceToEnable, res.SourceToEnable))
 			}
 			if res.Clean() {
