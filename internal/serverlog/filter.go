@@ -295,7 +295,9 @@ func parserFor(src Source) (string, []string, error) {
 // N says that the first read found nothing at all, and could tell: the file or
 // its folder is really absent. Without it no placeholder is left (see Read).
 // A file present but unreadable is located by its metadata only (ls), at its
-// end, and stays unseen; nothing of its content is read.
+// end, and stays unseen; nothing of its content is read. A file gone between the
+// listing and these checks (a rotation at that moment) is "other": neither a
+// refusal nor a missing tool. The missing tools are told by the check at the top.
 const shellProgram = `LC_ALL=C
 export LC_ALL
 found=$(for tool in awk tail head tr ls wc; do command -v "$tool" || echo '!'; done)
@@ -361,6 +363,11 @@ read_one() {
 		size=$(wc -c < "$f" | tr -d ' ')
 	fi
 	if ! digits "$size"; then
+		if [ ! -e "$f" ]; then
+			unknown=1
+			printf 'U\t%s\tother\n' "$f"
+			return
+		fi
 		if [ @FIRST@ = 1 ]; then
 			set -- $(ls -dnl "$f")
 			size=$5
@@ -376,7 +383,11 @@ read_one() {
 	fi
 	if ! digits "$id"; then
 		unknown=1
-		printf 'U\t%s\ttools\n' "$f"
+		if [ -e "$f" ]; then
+			printf 'U\t%s\ttools\n' "$f"
+		else
+			printf 'U\t%s\tother\n' "$f"
+		fi
 		return
 	fi
 	if [ @FIRST@ = 1 ]; then

@@ -1077,3 +1077,57 @@ func TestUnlistableFolderLeavesNoPlaceholderForAWildcard(t *testing.T) {
 		t.Fatalf("unlistable folder: out=%+v cursors=%+v err=%v", out, next, err)
 	}
 }
+
+// lsShim is an environment with a program of its own named ls first on the PATH.
+func lsShim(t *testing.T, body string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ls"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// A file that disappears while the filter looks at it (a rotation at that very
+// moment) is neither a refusal nor a missing tool.
+func TestFileVanishingUnderTheFilterIsOther(t *testing.T) {
+	for name, cs := range map[string][]Cursor{"activation": nil, "after it": earlier} {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "app.log")
+			appendTo(t, p, readLine)
+			src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
+			h := startLogHost(t, func(h *logHost) sshtest.ShellFunc {
+				return h.realShell(lsShim(t, "rm -f '"+src.Path+"'\nexit 2"))
+			})
+			out, next, err := Read(context.Background(), h.client, src, cs, FilterOptions{}, 30*time.Second, readNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.UnseenCause[src.Path] != CauseOther || len(out.Files) != 0 || out.None || len(next) != 0 {
+				t.Fatalf("vanished: %+v, next %+v", out, next)
+			}
+		})
+	}
+}
+
+// An ls that says nothing about a file that is there is a tool that does not do
+// its job: that stays "tools".
+func TestBrokenLsIsStillTools(t *testing.T) {
+	for name, cs := range map[string][]Cursor{"activation": nil, "after it": earlier} {
+		t.Run(name, func(t *testing.T) {
+			h := startLogHost(t, func(h *logHost) sshtest.ShellFunc {
+				return h.realShell(lsShim(t, "exit 0"))
+			})
+			p := filepath.Join(t.TempDir(), "app.log")
+			appendTo(t, p, readLine)
+			src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
+			out, _, err := Read(context.Background(), h.client, src, cs, FilterOptions{}, 30*time.Second, readNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.UnseenCause[src.Path] != CauseTools || len(out.Files) != 0 {
+				t.Fatalf("broken ls: %+v", out)
+			}
+		})
+	}
+}
