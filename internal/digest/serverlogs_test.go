@@ -143,7 +143,7 @@ func TestDigestListsNewAndFrequentErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Server logs:", "srv-demo: 1 new error, 1 came back", "- FreshException, Demo.php:42, 37 times (new)",
+	for _, want := range []string{"Server logs:", "srv-demo: 1 new error, 1 error came back", "- FreshException, Demo.php:42, 37 times (new)",
 		"- BackException, Demo.php:42, 4 times (back)", "- SpikeException, Demo.php:42, 305 times (far more often than before)"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text lacks %q:\n%s", want, text)
@@ -159,7 +159,7 @@ func TestDigestListsNewAndFrequentErrors(t *testing.T) {
 		t.Errorf("html: %v\n%s", err, page)
 	}
 	fr, err := RenderText(l.compute(i18n.FR, Options{}))
-	for _, want := range []string{"Journaux des serveurs :", "srv-demo : 1 nouvelle erreur, 1 de retour", "FreshException, Demo.php:42, 37 fois (nouvelle)"} {
+	for _, want := range []string{"Journaux des serveurs :", "srv-demo : 1 nouvelle erreur, 1 erreur revenue", "FreshException, Demo.php:42, 37 fois (nouvelle)"} {
 		if err != nil || !strings.Contains(fr, want) {
 			t.Errorf("fr lacks %q: %v\n%s", want, err, fr)
 		}
@@ -218,11 +218,11 @@ func TestDigestShowsReadGap(t *testing.T) {
 		t.Fatalf("gaps = %+v", s.Gaps)
 	}
 	text, _ := RenderText(d)
-	if !strings.Contains(text, "srv-demo") || !strings.Contains(text, "from 2026-10-22 22:30 UTC to 2026-10-23 05:30 UTC") {
+	if !strings.Contains(text, "srv-demo") || !strings.Contains(text, "between 2026-10-22 22:30 UTC and 2026-10-23 05:30 UTC") {
 		t.Errorf("text:\n%s", text)
 	}
 	fr, _ := RenderText(l.compute(i18n.FR, Options{}))
-	if !strings.Contains(fr, "du 22/10/2026 à 22h30 UTC au 23/10/2026 à 05h30 UTC") {
+	if !strings.Contains(fr, "entre le 22/10/2026 à 22h30 UTC et le 23/10/2026 à 05h30 UTC") {
 		t.Errorf("fr:\n%s", fr)
 	}
 	// Past the window it is gone.
@@ -309,7 +309,7 @@ func TestDeviationRemindedWeekly(t *testing.T) {
 		t.Fatalf("deviations = %v", s.Deviations)
 	}
 	text, _ := RenderText(d)
-	for _, want := range []string{"Reminder, once a week", "keeps the cleaned text", "sent in the alerts"} {
+	for _, want := range []string{"Reminder, once a week", "keeps the text of the errors", "sent in the alerts"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text lacks %q:\n%s", want, text)
 		}
