@@ -52,3 +52,6 @@ Ruling: C44 (14c), screens poll the project and attempt every 3 s while `scannin
 Ruling: C45 (14c), `guideGitQuestion` returns `{name, mode}` so a folder without repository shows `git.none`; repositories first — it returned only repositories, so `git.none` could never show — none.
 Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scans` named in T14 — the rule of C2 and the name `TestUpdateRefusedWhileScanning` needs — none.
 - Task 1: dispatched, BASE c6977aa.
+- Task 1: a9e6064, review clean, 3 minors deferred (high not tested on tag fills, main.js registration not tested, .m-tag padding left to the screens).
+- Task 1: complete.
+- Task 2: dispatched, BASE a9e6064.
