@@ -4,7 +4,7 @@
 
 Local-first, open-source daily watch for known vulnerabilities in your projects' dependencies (Composer, npm; Go next), with the cost and side effects of each fix laid out so you decide, proof before any "fixed" status, and compact fix briefs (Markdown, Claude Code skill, MCP) for the coding AI of your choice.
 
-Status: plans 1 to 6 delivered. Plan 1: offline scan of Composer and npm lockfiles against local OSV databases, SQLite findings store, hash-chained audit log, deny-by-default network gateway. Plan 2: local analysis of each finding (how the package is reached, which upgrade fixes it, where your code uses it, which tests cover it, local changelog) with a public risk score, explained in three sentences in English or French (`michel analyze`, `michel finding`). Plan 3: decisions (fix, defer, ignore; never asked again unless something changes), a daily digest sent by email, signed webhook or desktop notification, secrets kept outside the policy file, and a local "Today" page installable as an app (`michel decide`, `michel digest`, `michel serve`); every message in English or French. Plan 4: a registry of sources (`michel source`, Sources page): more OSV databases, `yarn.lock` and `pnpm-lock.yaml`, CISA KEV and EPSS at the head of the digest, vendor advisories to read, Trivy and Semgrep findings, pinned skills and MCP servers; each source contacts its hosts only after your consent. Plan 5: fix briefs (`michel brief`, MCP, skill) and a fix agent: Claude Code prepares the fix on a copy, Michel checks and tests it, you approve and get a branch (Fix page, `michel fix`). Plan 6: servers (`michel target`, Servers page): what runs on your servers over SSH, compared with the distributions' advisories and PHP rules (PHP2Shell included), alerts and SMS, and fixes as `apply` and `undo` scripts with rollback. Still missing: an AI that runs on your computer, a scheduler for project scans.
+Status: plans 1 to 7 delivered. Plan 1: offline scan of Composer and npm lockfiles against local OSV databases, SQLite findings store, hash-chained audit log, deny-by-default network gateway. Plan 2: local analysis of each finding (how the package is reached, which upgrade fixes it, where your code uses it, which tests cover it, local changelog) with a public risk score, explained in three sentences in English or French (`michel analyze`, `michel finding`). Plan 3: decisions (fix, defer, ignore; never asked again unless something changes), a daily digest sent by email, signed webhook or desktop notification, secrets kept outside the policy file, and a local "Today" page installable as an app (`michel decide`, `michel digest`, `michel serve`); every message in English or French. Plan 4: a registry of sources (`michel source`, Sources page): more OSV databases, `yarn.lock` and `pnpm-lock.yaml`, CISA KEV and EPSS at the head of the digest, vendor advisories to read, Trivy and Semgrep findings, pinned skills and MCP servers; each source contacts its hosts only after your consent. Plan 5: fix briefs (`michel brief`, MCP, skill) and a fix agent: Claude Code prepares the fix on a copy, Michel checks and tests it, you approve and get a branch (Fix page, `michel fix`). Plan 6: servers (`michel target`, Servers page): what runs on your servers over SSH, compared with the distributions' advisories and PHP rules (PHP2Shell included), alerts and SMS, and fixes as `apply` and `undo` scripts with rollback. Plan 7: server logs (Logs block of the server sheet): Michel reads the log files you declare over SSH, sorts them on the server, and warns you by itself about PHP, PostgreSQL and application errors, with no log line kept or sent. Still missing: an AI that runs on your computer, a scheduler for project scans.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ bin/michel audit verify
 
 - Sources (registry, consent, KEV/EPSS, feeds, plugins, skills, MCP): `docs/sources.md`
 - Fix agent (levels, consent, work copy, proof, residual risks): `docs/fix.md`
-- Servers (SSH, scripts, levels, SMS, troubleshooting): `docs/servers.md`
+- Servers (SSH, scripts, levels, SMS, troubleshooting, logs): `docs/servers.md`
 - Risk score: `docs/remediation-risk.md`
 - Offline installation and scripting: `docs/operations/offline-installation.md`
 - Decisions, daily digest, channels, Today page, scheduled task: `docs/operations/daily-digest.md`
@@ -68,5 +68,7 @@ bin/michel target check <id>                    # am I affected?
 ```
 
 Preparing an SSH user and a key, what Michel reads and never reads, the scripts and their actions, snapshot and backups, levels, SMS and troubleshooting: `docs/servers.md`.
+
+Michel can also **read the logs** you declare and warn you by itself about errors, without keeping or sending a single log line. It works from the Logs block of the server sheet, only while your computer is on and `michel serve` runs. What is read, what leaves the server, how long it is kept and what to put in your record of processing activities: `docs/servers.md`, section 13. This is not legal advice: have your DPO check it.
 
 License: Apache-2.0.

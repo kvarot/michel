@@ -22,6 +22,7 @@ Everything is done from the **Servers** page (`michel serve`). The command line 
 10. [Alerts and SMS](#10-alerts-and-sms)
 11. [Troubleshooting](#11-troubleshooting)
 12. [Limits you should know](#12-limits-you-should-know)
+13. [Server logs: be warned without copying them](#13-server-logs-be-warned-without-copying-them)
 
 ## 1. Find your servers
 
@@ -72,7 +73,7 @@ Michel runs a **closed list of read commands**, built by itself, in one SSH sess
 - packages: `dpkg-query`, `rpm -qa`, `apk info` according to the system;
 - configuration files: only those PHP and the web server name, the `.user.ini` of the linked deployment folders, and the ones you add (capped in size).
 
-What Michel does **not** read, ever: data folders, databases, the homes of other users, logs, private keys, and anything that is not a configuration file. On a server of kind `hds` you cannot add a path at all.
+What this check does **not** read, ever: data folders, databases, the homes of other users, logs, private keys, and anything that is not a configuration file. On a server of kind `hds` you cannot add a path at all. Log files are a separate path: only the ones you declare, through their own filter, on every kind of server ([section 13](#13-server-logs-be-warned-without-copying-them)).
 
 - **Secrets never get stored.** Values of `password`, `secret`, `key`, `token`, DSN and the known secret settings are masked before storage; the database keeps the directive name, a non-secret value, the file and the line, plus the file's fingerprint, never the raw file.
 - **Symbolic links** are not followed to read a file outside what PHP names.
@@ -229,5 +230,96 @@ Michel shows these messages in your language; here is what to do.
 - A Pageant agent is untested.
 - Debian records marked `unimportant` (no security impact in Debian, by its own security team) are not reported. Records with no verdict from Debian yet are.
 - The authors ran this once from end to end on a throwaway Debian 13 container with systemd, sshd, PHP-FPM and nginx. Not tried yet: a hosting provider's real settings, shared hosting, a real network, and the Windows OpenSSH agent (that run used a test agent through `ssh.agent_pipe`). Try it first on a test server.
+- The logs (section 13) were run for real on the same kind of container, with PHP-FPM, PostgreSQL and Monolog: at the default interval of 5 minutes, the alert came within 5 minutes of the error. Not tried: a real server, a real network, a server of kind `hds`, a server on local time, and the Windows OpenSSH agent (that run also used a test agent through `ssh.agent_pipe`).
+
+## 13. Server logs: be warned without copying them
+
+Plan 7 saves you from digging through logs to see the PHP, PostgreSQL and application errors. Michel reads the log files you declare, at regular intervals, and warns you by itself. By default **no content of a log leaves the server**: only fields of a known shape. The page for all of this is the **Logs** block of the server sheet.
+
+**This is not legal advice: have your DPO check it.** Logs can hold personal data, and health data on a server of kind `hds`. Michel reduces what leaves the server and says what it does; it does not decide whether this suits your obligations.
+
+### What is read
+
+- **Only what you declare and tick.** A server without a source is not read at all. **Look for logs on this server** proposes, from what Michel already knows, and creates nothing:
+  - the `error_log` of PHP, command line and PHP-FPM, pools included. A FPM value holding `$pool` is **not proposed**: Michel does not know which pool name goes with it, so declare those files by hand;
+  - `/var/log/postgresql/postgresql-*.log`, the default folder of Debian and Ubuntu. Michel does not read `postgresql.conf` here: on a server whose logs sit elsewhere, this proposal is wrong, so declare the real path by hand;
+  - `storage/logs/*.log` and `var/log/*.log` under the remote folders of the linked projects.
+- **A path you add by hand** must be absolute, without `..`. A star or a `?` is allowed in the file name only (`laravel-*.log`, for dated files): Michel then reads all the files that match, each with its own position.
+- **Try it** runs the filter once and shows exactly what would come back, without storing anything. It is the way to check that the chosen format suits the file.
+- **No file written, nothing installed.** Michel sends a filter over SSH (`sh -s`, with `awk`, `tail`, `head`), run with the rights of the SSH user. If a tool is missing, the file is listed as not read: Michel never copies the file to sort it on your computer. The sort happens on the server.
+- **Never `sudo`.** An unreadable file is listed as not read, with the reason. The usual way out is to add the SSH user to the group that reads the logs: `adm` on Debian and Ubuntu (`sudo usermod -aG adm <user>`, effective at its next connection). PostgreSQL's files are readable by `adm` there. A PHP or application log has the group and rights your configuration gives it. The same rules apply on a server of kind `hds`.
+- **Symbolic links are refused**, file by file, with a limit: the check looks at the last part of the path only, just before the read. A linked parent folder is followed, and a file swapped between the check and the read would be read. Both need write access to that folder. A deployment path such as `current/storage/logs` must be declared by its real path if the file itself is a link.
+
+### What leaves the server
+
+| Format | Fields read | What to know |
+|---|---|---|
+| `php` | level, exception type if present, `file:line` | The message is ignored. Two different errors at the same line count as one. |
+| `postgres` | severity, error code (`SQLSTATE`) if `%e` is in `log_line_prefix` | User, database, address, `DETAIL`, `STATEMENT`, `HINT` and `CONTEXT` never. See below for `%e`. |
+| `monolog` (Laravel, Symfony…) | level, channel, exception class, `file:line` | Only the class and the place are taken from the context, by fixed patterns. |
+| `json` | the level and channel fields you name | A field is kept only if it has a closed shape: a known level, a short identifier. |
+| `text` | level only, by keywords or by a word you give | The alert just says how many errors. |
+
+Michel also keeps the count per hour, by the date of the line when it can read one, and the dates when it first and last read the error: the sheet shows those, so an error read late shows the date of the read.  Only the first line of a multi-line trace counts. A `file:line` is made relative to the linked project's folder, otherwise it is the file name alone: a path such as `/home/<name>/…` does not come back as is.
+
+**PostgreSQL and `%e`.** Without it, Michel sees the severity only. Put `%e` **last in `log_line_prefix`, right before the message**, for example `log_line_prefix = '%m [%p] %q%u@%d %e '`. Elsewhere in the prefix, it is not read. Michel explains this but writes nothing on the server.
+
+**Never, under any setting:** a raw log line stored or sent, an IP address, an email, a URL with parameters, a number that looks like an identifier. Michel checks every line that comes back against a strict shape, and throws away what does not fit, counted as "could not be understood". No log data goes to an AI agent, on any server. The audit log holds no content: it says which server and source, the window, the volume, the number of records and a fingerprint of the result (`log.read`), and traces `log.source_add`, `log.settings` and `log.purge`.
+
+**The limit of a whitelist.** A name written like an identifier (`jean_dupont`) can stay in a type, a location or a channel: no shape tells it from a class name. It takes a forged line, or a real path or file holding that name.
+
+**To see the detail**, the sheet gives the SSH command to copy (`grep` on the file, for the date of the error). Michel does not run it, and the lines stay on the server. It looks for the date of the last line, as a **UTC date**: a server on local time can miss lines around midnight, so widen the search if you need to.
+
+### Your choices, and what Michel recommends
+
+| Setting | Recommended (default) | Other choices |
+|---|---|---|
+| Text of the message kept by Michel | None | Cleaned text |
+| Text of the message in alerts | None | Cleaned text, only if the previous setting allows it |
+| Retention | 90 days | 7 to 365 days, never shorter than the delay before "not seen again" |
+
+- The recommended choice comes first. Any other asks for a **confirmation** that says what can leave and where it ends up: your computer, the recipient of the webhook, the mail provider. On a server of kind `hds` the warning is stronger and names health data: that data would end up outside the `hds` hosting, and the responsibility is yours. Michel does not block.
+- While a setting differs, a **badge** stays on the sheet and on the list of servers, and the morning summary reminds you once a week. Choices, returns to the recommended one and confirmations are audited.
+- **Cleaned text** is made on the server by the filter: quoted strings, numbers, addresses, emails and URLs are replaced, and the length is capped at 200 characters. It then goes through Michel's masking, on your computer. **A name written without quotes can stay.** Cleaning reduces the risk and guarantees nothing.
+- **Cleaned text is encrypted at rest on Windows only**, like the other masked data of Michel (`mask_entry`). On Linux and macOS the protection is the rights of the data folder.
+- The summary follows the alert setting: no text until alerts may carry it. **Going back to "None"** erases at once the text kept for this server, and the erasure is audited.
+- **Erase the log data of this server** forgets everything Michel kept for it, including errors you chose to ignore. Nothing is erased on the server. Removing the server from Michel does the same, and forgets its sources and settings too.
+- After the retention, counts, text and errors are purged. Only an error you chose to ignore keeps its line, without text, so that "stop warning me" holds.
+
+### When you hear of it
+
+- **Reading interval** per server: 5 minutes by default, from 1 minute to 24 hours, or only when you ask. Above 10 minutes, the worst case goes past the 10-minute target. The page says so.
+- **"Only when I ask"** has no button on the page: the read is `michel target logs read <server>`. Nobody is warned in between.
+- **The 10 minutes hold only while your computer is on**, `michel serve` runs and the key is in the SSH agent. Michel cannot warn you when it is off. When it comes back, Michel reads what was written within the cap, and the morning summary gives the period not read, with its dates, when it lasted at least 30 minutes and more than two reading intervals.
+- **"I can no longer read"**: after 3 failures in a row and at least 30 minutes without a successful read, once per incident. At once on a `prod` server, in the summary on `preprod` and `dev`. A cause shared by all servers (SSH agent locked or absent) gives one alert. The sheet always shows the last successful read of each source.
+- **Who is warned, by default:** on `prod`, a critical error at once, an ordinary error in the summary; on `preprod` and `dev`, both in the summary; warnings and information nowhere. All of it can be changed per server. A click on an error stops the warnings for that one.
+- **Not too many alerts:** one per new error, grouped by read; again only if it comes back after being "not seen again" for 7 days (adjustable, and never a proof of a fix), or if it reaches 10 times the previous hour and at least 100 occurrences. At most 10 errors told per hour and per server (adjustable through the API), then a single message saying that more are coming and that the summary will carry them. A first read that finds 10 new errors uses up the hour.
+- **Content of an alert:** `PDOException, Invoice.php:42, 37 times`, the server's name and a link. A webhook goes to a third party: the same rule applies. SMS stays off for log errors unless you tick it per server, because the 3 SMS a day should stay with flaws. With no channel configured you can still read a log, with a warning and a badge: nobody will be told.
+- **Morning summary:** see [daily-digest.md](operations/daily-digest.md) for `notify.digest_at` (08:00 by default).
+- **Not on the page:** the delay before "not seen again", the read caps, the spike threshold and the alerts per hour change only through the API (`PATCH /api/v1/targets/<id>/logs/settings`).
+
+### Rotation, volume and wildcards
+
+- **First read:** from the end of the files present when you activate the source. Michel does not go back through the past. A file that appears later is read from its start.
+- **Rotation:** if the file changed (inode) or got shorter, Michel starts at the beginning of the new one. What was left unread in the old one is lost, unless the wildcard also covers it. The sheet says so. With `copytruncate` the file stays the same: Michel sees the rotation only if the file is shorter than its position at the next read. If it has already grown past that position, the beginning of the new content is missed and nothing says so. Prefer `create` when you can.
+- **Volume:** at most 5 MiB and 30 seconds per source and per read, adjustable. Past that, Michel jumps to the end and says how much it did not read, and a log that swells is told by itself, with the same rule as the errors of level `error`.
+- **Wildcards:** at most 50 files per read, and the budget of 5 MiB is shared between them. "Newest" here means **the last name in alphabetical order (C order), not the date of change**: POSIX `sh` has no portable sort by date. It suits dated names (`laravel-2026-11-02.log`). On a pattern such as `app.log*`, it does not: the older numbered files come after the live file, so they use the budget first, and the volume left out is stated. **Past 50 files, the first names are dropped, and `app.log` is the first: the live file is no longer read.** Declare `app.log` alone, or use a pattern that does not match the numbered copies.
+
+### For your record of processing activities
+
+To help you fill it in, with the same reminder: this is not legal advice, have your DPO check it.
+
+| Question | Answer |
+|---|---|
+| Purpose | Detecting errors. Nothing about people. |
+| Data read | The log files you declare, on the server, with the rights of the SSH user |
+| Data taken out | Level, type, `file:line`, channel, counts per hour and dates. Cleaned text only if you choose it |
+| Where it is kept | Michel's database, on your computer. Encrypted text on Windows only |
+| How long | 90 days by default, 7 to 365 |
+| Who receives it | You, through the channels you configured: mail, desktop notification, webhook, SMS if ticked. Their providers receive the same content |
+| Trace | Michel's audit log, without content |
+| Erasure | Automatic at the end of the retention, or the button of the sheet. Nothing is ever erased on the server |
+
+Fixed rules: no agent on a server of kind `hds`, no log data to an agent on any server, same network purpose `target.ssh` for the read. Commands: `michel target logs list <server>` and `michel target logs read <server>`, optional.
 
 Network destinations: [security/network-egress.md](security/network-egress.md) (`target.ssh`, `target.http`, `notify.sms`). Fix levels for code: [fix.md](fix.md).

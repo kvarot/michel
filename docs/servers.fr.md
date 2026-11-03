@@ -22,6 +22,7 @@ Tout se fait depuis la page **Serveurs** (`michel serve`). La ligne de commande 
 10. [Alertes et SMS](#10-alertes-et-sms)
 11. [En cas de problème](#11-en-cas-de-problème)
 12. [Les limites à connaître](#12-les-limites-à-connaître)
+13. [Les journaux des serveurs : être prévenu sans les copier](#13-les-journaux-des-serveurs--être-prévenu-sans-les-copier)
 
 ## 1. Trouver tes serveurs
 
@@ -72,7 +73,7 @@ Michel lance une **liste fermée de commandes de lecture**, construites par lui,
 - paquets : `dpkg-query`, `rpm -qa`, `apk info` selon le système ;
 - fichiers de configuration : seulement ceux que PHP et le serveur web désignent, les `.user.ini` des dossiers de déploiement liés, et ceux que tu ajoutes (taille plafonnée).
 
-Ce que Michel ne lit **jamais** : les dossiers de données, les bases de données, les dossiers personnels des autres utilisateurs, les journaux, les clés privées, et tout ce qui n'est pas un fichier de configuration. Sur un serveur de type `hds`, tu ne peux ajouter aucun chemin.
+Ce que cette vérification ne lit **jamais** : les dossiers de données, les bases de données, les dossiers personnels des autres utilisateurs, les journaux, les clés privées, et tout ce qui n'est pas un fichier de configuration. Sur un serveur de type `hds`, tu ne peux ajouter aucun chemin. Les fichiers de journaux sont un chemin à part : seulement ceux que tu déclares, avec leur propre filtre, sur tout type de serveur ([section 13](#13-les-journaux-des-serveurs--être-prévenu-sans-les-copier)).
 
 - **Aucun secret n'est conservé.** Les valeurs de `password`, `secret`, `key`, `token`, les DSN et les réglages secrets connus sont masquées avant d'être stockées ; la base garde le nom du réglage, une valeur non secrète, le fichier et la ligne, plus l'empreinte du fichier, jamais le fichier brut.
 - **Les liens symboliques** ne sont pas suivis pour lire un fichier que PHP ne désigne pas.
@@ -242,5 +243,96 @@ Michel affiche ces messages dans ta langue ; voici quoi faire.
 - Un agent Pageant n'est pas testé.
 - Les fiches Debian marquées `unimportant` (sans effet sur la sécurité dans Debian, d'après son équipe de sécurité) ne sont pas signalées. Celles que Debian n'a pas encore jugées le sont.
 - Les auteurs ont fait un essai complet sur un conteneur Debian 13 jetable, avec systemd, sshd, PHP-FPM et nginx. Pas encore essayés : les réglages d'un vrai hébergeur, le mutualisé, un vrai réseau et l'agent OpenSSH de Windows (cet essai passait par un agent de test, avec `ssh.agent_pipe`). Essaie d'abord sur un serveur de test.
+- Les journaux (section 13) ont été essayés pour de vrai sur le même type de conteneur, avec PHP-FPM, PostgreSQL et Monolog : à l'intervalle par défaut de 5 minutes, l'alerte est arrivée moins de 5 minutes après l'erreur. Pas encore essayés : un vrai serveur, un vrai réseau, un serveur de type `hds`, un serveur à l'heure locale et l'agent OpenSSH de Windows (cet essai passait aussi par un agent de test, avec `ssh.agent_pipe`).
+
+## 13. Les journaux des serveurs : être prévenu sans les copier
+
+Le plan 7 t'évite de fouiller les journaux pour voir les erreurs PHP, PostgreSQL et applicatives. Michel lit les fichiers que tu déclares, à intervalle régulier, et te prévient de lui-même. Par défaut, **aucun contenu de journal ne quitte le serveur** : seulement des champs de forme connue. Tout se passe dans le bloc **Journaux** de la fiche du serveur.
+
+**Ce n'est pas un avis juridique, fais valider par ton DPO.** Les journaux peuvent contenir des données personnelles, et des données de santé sur un serveur de type `hds`. Michel réduit ce qui sort du serveur et dit ce qu'il fait ; il ne décide pas si cela répond à tes obligations.
+
+### Ce qui est lu
+
+- **Seulement ce que tu déclares et coches.** Un serveur sans source n'est pas lu du tout. **Chercher des journaux sur ce serveur** propose, à partir de ce que Michel sait déjà, et ne crée rien :
+  - le `error_log` de PHP, en ligne de commande et dans PHP-FPM, pools compris. Une valeur FPM qui contient `$pool` n'est **pas proposée** : Michel ne sait pas quel nom de pool va avec, déclare ces fichiers à la main ;
+  - `/var/log/postgresql/postgresql-*.log`, le dossier par défaut de Debian et Ubuntu. Michel ne lit pas `postgresql.conf` pour cela : sur un serveur dont les journaux sont ailleurs, cette proposition est fausse, déclare le vrai chemin à la main ;
+  - `storage/logs/*.log` et `var/log/*.log` sous les dossiers distants des projets liés.
+- **Un chemin ajouté à la main** doit être absolu, sans `..`. Une étoile ou un `?` n'est permis que dans le nom du fichier (`laravel-*.log`, pour les fichiers datés) : Michel lit alors tous les fichiers qui correspondent, chacun avec sa position.
+- **Essayer** lance le filtre une fois et montre exactement ce qui reviendrait, sans rien garder. C'est le moyen de vérifier que le format choisi convient au fichier.
+- **Aucun fichier écrit, rien d'installé.** Michel envoie un filtre par SSH (`sh -s`, avec `awk`, `tail`, `head`), lancé avec les droits de l'utilisateur SSH. Si un outil manque, le fichier est indiqué comme non lu : Michel ne copie jamais le fichier pour le trier sur ton ordinateur. Le tri se fait sur le serveur.
+- **Jamais de `sudo`.** Un fichier illisible est indiqué comme non lu, avec la raison. La solution habituelle est d'ajouter l'utilisateur SSH au groupe qui lit les journaux : `adm` sur Debian et Ubuntu (`sudo usermod -aG adm <utilisateur>`, valable à sa prochaine connexion). Les fichiers de PostgreSQL y sont lisibles par `adm`. Un journal PHP ou applicatif a le groupe et les droits que ta configuration lui donne. Les mêmes règles valent sur un serveur de type `hds`.
+- **Les liens symboliques sont refusés**, fichier par fichier, avec une limite : la vérification ne regarde que la dernière partie du chemin, juste avant la lecture. Un dossier parent qui est un lien est suivi, et un fichier échangé entre la vérification et la lecture serait lu. Dans les deux cas, il faut pouvoir écrire dans ce dossier. Un chemin de déploiement comme `current/storage/logs` se déclare par son vrai chemin si le fichier lui-même est un lien.
+
+### Ce qui sort du serveur
+
+| Format | Champs lus | À savoir |
+|---|---|---|
+| `php` | niveau, type d'exception s'il y en a un, `fichier:ligne` | Le message est ignoré. Deux erreurs différentes à la même ligne comptent pour une. |
+| `postgres` | sévérité, code d'erreur (`SQLSTATE`) si `%e` est dans `log_line_prefix` | Utilisateur, base, adresse, `DETAIL`, `STATEMENT`, `HINT` et `CONTEXT` : jamais. Voir plus bas pour `%e`. |
+| `monolog` (Laravel, Symfony…) | niveau, canal, classe de l'exception, `fichier:ligne` | Du contexte, seuls la classe et l'endroit sont repris, par des motifs fixes. |
+| `json` | les champs de niveau et de canal que tu nommes | Un champ n'est gardé que s'il a une forme fermée : un niveau connu, un identifiant court. |
+| `text` | le niveau seulement, par mots-clés ou par un mot que tu donnes | L'alerte dit juste combien d'erreurs. |
+
+Michel garde aussi le nombre par heure, selon la date de la ligne quand il sait la lire, et les dates où il a lu l'erreur pour la première et la dernière fois : c'est ce que montre la fiche, donc une erreur lue en retard montre la date de la lecture.  Seule la première ligne d'une trace sur plusieurs lignes compte. Un `fichier:ligne` est relatif au dossier du projet lié, sinon c'est le nom du fichier seul : un chemin comme `/home/<nom>/…` ne revient pas tel quel.
+
+**PostgreSQL et `%e`.** Sans lui, Michel ne voit que la sévérité. Mets `%e` **à la fin de `log_line_prefix`, juste avant le message**, par exemple `log_line_prefix = '%m [%p] %q%u@%d %e '`. Ailleurs dans le préfixe, il n'est pas lu. Michel l'explique mais n'écrit rien sur le serveur.
+
+**Jamais, quel que soit le réglage :** une ligne brute de journal gardée ou envoyée, une adresse IP, un email, une URL avec paramètres, un nombre qui ressemble à un identifiant. Michel vérifie chaque ligne qui revient contre une forme stricte, et jette ce qui ne convient pas, compté comme « illisible ». Aucune donnée de journal ne part vers un agent d'IA, quel que soit le serveur. Le journal d'audit ne contient aucun contenu : il dit quel serveur et quelle source, la période, le volume, le nombre d'enregistrements et une empreinte du résultat (`log.read`), et il trace `log.source_add`, `log.settings` et `log.purge`.
+
+**La limite d'une liste blanche.** Un nom écrit comme un identifiant (`jean_dupont`) peut rester dans un type, un emplacement ou un canal : aucune forme ne le distingue d'un nom de classe. Il faut pour cela une ligne fabriquée, ou un vrai chemin ou fichier qui contient ce nom.
+
+**Pour voir le détail**, la fiche donne la commande SSH à copier (`grep` sur le fichier, à la date de l'erreur). Michel ne la lance pas, et les lignes restent sur le serveur. Elle cherche la date de la dernière ligne, en **date UTC** : un serveur à l'heure locale peut manquer des lignes autour de minuit, élargis la recherche si besoin.
+
+### Tes choix, et ce que Michel recommande
+
+| Réglage | Recommandé (par défaut) | Autres choix |
+|---|---|---|
+| Texte du message gardé par Michel | Aucun | Texte nettoyé |
+| Texte du message dans les alertes | Aucun | Texte nettoyé, seulement si le réglage précédent l'autorise |
+| Conservation | 90 jours | 7 à 365 jours, jamais moins que le délai avant « plus revue depuis un moment » |
+
+- Le choix recommandé vient en premier. Tout autre choix demande une **confirmation** qui dit ce qui peut sortir et où cela finit : ton ordinateur, le destinataire du webhook, le fournisseur de mail. Sur un serveur de type `hds`, l'avertissement est plus fort et cite les données de santé : elles se retrouveraient hors de l'hébergement `hds`, et la responsabilité t'en revient. Michel ne bloque pas.
+- Tant qu'un réglage s'écarte, un **badge** reste sur la fiche et sur la liste des serveurs, et le résumé du matin te le rappelle une fois par semaine. Les choix, les retours au recommandé et les confirmations sont audités.
+- Le **texte nettoyé** est fait sur le serveur par le filtre : chaînes entre guillemets, nombres, adresses, emails et URL sont remplacés, et la longueur est plafonnée à 200 caractères. Il passe ensuite par le masquage de Michel, sur ton ordinateur. **Un nom écrit sans guillemets peut rester.** Le nettoyage réduit le risque et ne garantit rien.
+- **Le texte nettoyé n'est chiffré au repos que sur Windows**, comme les autres données masquées de Michel (`mask_entry`). Sur Linux et macOS, la protection, ce sont les droits du dossier de données.
+- Le résumé suit le réglage des alertes : pas de texte tant que les alertes ne peuvent pas en porter. **Revenir à « Aucun »** efface tout de suite le texte gardé pour ce serveur, et l'effacement est audité.
+- **Effacer les données de journaux de ce serveur** oublie tout ce que Michel a gardé pour lui, y compris les erreurs que tu as choisi d'ignorer. Rien n'est effacé sur le serveur. Retirer le serveur de Michel fait la même chose, et oublie aussi ses sources et ses réglages.
+- À la fin de la conservation, les comptes, le texte et les erreurs sont purgés. Seule une erreur que tu as choisi d'ignorer garde sa ligne, sans texte, pour que « ne plus me prévenir » tienne.
+
+### Quand tu es prévenu
+
+- **Intervalle de lecture** par serveur : 5 minutes par défaut, de 1 minute à 24 heures, ou seulement quand tu le demandes. Au-dessus de 10 minutes, le pire cas dépasse la cible de 10 minutes. La page le dit.
+- **« Seulement quand je le demande »** n'a pas de bouton sur la page : la lecture se lance avec `michel target logs read <serveur>`. Personne n'est prévenu entre-temps.
+- **Les 10 minutes ne valent que si ton ordinateur est allumé**, `michel serve` lancé et la clé dans l'agent SSH. Michel ne peut pas te prévenir quand il est éteint. À son retour, Michel lit ce qui a été écrit dans la limite du plafond, et le résumé du matin donne la période non lue, avec ses dates, si elle a duré au moins 30 minutes et plus de deux intervalles de lecture.
+- **« Je ne lis plus »** : après 3 échecs de suite et au moins 30 minutes sans lecture réussie, une fois par incident. Tout de suite sur un serveur `prod`, dans le résumé sur `preprod` et `dev`. Une cause commune à tous les serveurs (agent SSH verrouillé ou absent) donne une seule alerte. La fiche montre toujours la dernière lecture réussie de chaque source.
+- **Qui est prévenu, par défaut :** sur `prod`, une erreur critique tout de suite, une erreur ordinaire dans le résumé ; sur `preprod` et `dev`, les deux dans le résumé ; les avertissements et les informations nulle part. Tout se change par serveur. Un clic sur une erreur arrête les alertes pour celle-là.
+- **Pas trop d'alertes :** une par nouvelle erreur, regroupées par lecture ; à nouveau seulement si elle revient après 7 jours sans être revue (réglable, et jamais une preuve de correction), ou si elle atteint 10 fois l'heure précédente et au moins 100 occurrences. Au plus 10 erreurs annoncées par heure et par serveur (réglable par l'API), puis un seul message qui dit que d'autres arrivent et que le résumé les reprendra. Une première lecture qui trouve 10 nouvelles erreurs épuise donc l'heure.
+- **Contenu d'une alerte :** `PDOException, Invoice.php:42, 37 fois`, le nom du serveur et un lien. Un webhook part chez un tiers : la même règle s'applique. Le SMS reste désactivé pour les erreurs de journaux, sauf si tu le coches pour un serveur, car les 3 SMS par jour doivent rester aux failles. Sans canal configuré, tu peux quand même lire un journal, avec un avertissement et un badge : personne ne sera prévenu.
+- **Résumé du matin :** voir [daily-digest.fr.md](operations/daily-digest.fr.md) pour `notify.digest_at` (8 h par défaut).
+- **Pas sur la page :** le délai avant « plus revue depuis un moment », les plafonds de lecture, le seuil de hausse et le nombre d'alertes par heure ne se changent que par l'API (`PATCH /api/v1/targets/<id>/logs/settings`).
+
+### Rotation, volume et étoiles
+
+- **Première lecture :** à partir de la fin des fichiers présents quand tu actives la source. Michel ne remonte pas le passé. Un fichier apparu ensuite est lu depuis son début.
+- **Rotation :** si le fichier a changé (inode) ou raccourci, Michel repart du début du nouveau. Ce qui restait à lire dans l'ancien est perdu, sauf si l'étoile le couvre aussi. La fiche le dit. Avec `copytruncate`, le fichier reste le même : Michel ne voit la rotation que si le fichier est plus court que sa position à la lecture suivante. S'il a déjà dépassé cette position, le début du nouveau contenu est manqué et rien ne le dit. Préfère `create` quand tu peux.
+- **Volume :** au plus 5 Mio et 30 secondes par source et par lecture, réglables. Au-delà, Michel saute à la fin et dit combien il n'a pas lu, et un journal qui gonfle est signalé lui-même, avec la même règle que les erreurs de niveau `error`.
+- **Étoiles :** au plus 50 fichiers par lecture, et le budget de 5 Mio se partage entre eux. « Le plus récent » veut dire ici **le dernier nom dans l'ordre alphabétique (ordre C), pas la date de modification** : le `sh` POSIX n'a pas de tri par date portable. Cela convient aux noms datés (`laravel-2026-11-02.log`). Sur un motif comme `app.log*`, non : les vieux fichiers numérotés passent après le fichier vivant dans l'ordre, ils consomment donc le budget d'abord, et le volume laissé de côté est indiqué. **Au-delà de 50 fichiers, les premiers noms sont écartés, et `app.log` est le premier : le fichier vivant n'est plus lu.** Déclare `app.log` seul, ou prends un motif qui ne couvre pas les copies numérotées.
+
+### Pour ton registre des traitements
+
+Pour t'aider à le remplir, avec le même rappel : ce n'est pas un avis juridique, fais valider par ton DPO.
+
+| Question | Réponse |
+|---|---|
+| Finalité | Détecter des erreurs. Rien sur les personnes. |
+| Données lues | Les fichiers de journaux que tu déclares, sur le serveur, avec les droits de l'utilisateur SSH |
+| Données sorties | Niveau, type, `fichier:ligne`, canal, nombres par heure et dates. Texte nettoyé seulement si tu le choisis |
+| Où elles sont gardées | La base de Michel, sur ton ordinateur. Texte chiffré sur Windows seulement |
+| Combien de temps | 90 jours par défaut, de 7 à 365 |
+| Qui les reçoit | Toi, par les canaux que tu as configurés : mail, notification du bureau, webhook, SMS si coché. Leurs fournisseurs reçoivent le même contenu |
+| Trace | Le journal d'audit de Michel, sans contenu |
+| Effacement | Automatique à la fin de la conservation, ou par le bouton de la fiche. Rien n'est jamais effacé sur le serveur |
+
+Règles fixes : aucun agent sur un serveur de type `hds`, aucune donnée de journal vers un agent sur aucun serveur, même finalité réseau `target.ssh` pour la lecture. Commandes facultatives : `michel target logs list <serveur>` et `michel target logs read <serveur>`.
 
 Destinations réseau : [security/network-egress.fr.md](security/network-egress.fr.md) (`target.ssh`, `target.http`, `notify.sms`). Niveaux de correction du code : [fix.fr.md](fix.fr.md).
