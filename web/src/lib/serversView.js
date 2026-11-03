@@ -346,22 +346,28 @@ export function backupLine(b, lang) {
 }
 
 /**
- * serversRoute reads the Servers page's address: "#/servers" (the list) or
- * "#/servers/<id>" (a server's sheet). null when the hash is not the page.
+ * serversRoute reads the Servers page's address: "#/servers" (the list),
+ * "#/servers/<id>" (a server's sheet) or "#/servers/<id>?finding=<fid>" (the
+ * sheet, with one flaw chosen). null when the hash is not the page.
  * @param {string} hash
- * @returns {{id: string}|null}
+ * @returns {{id: string, finding: string}|null}
  */
 export function serversRoute(hash) {
-  const m = String(hash || '').match(/^#\/servers(?:\/([^/?#]+))?\/?$/)
+  const m = String(hash || '').match(/^#\/servers(?:\/([^/?#]+))?\/?(?:\?finding=([^&#]+))?$/)
   if (!m) return null
-  try {
-    return { id: decodeURIComponent(m[1] || '') }
-  } catch {
-    return { id: '' }
+  const dec = (s) => {
+    try {
+      return decodeURIComponent(s || '')
+    } catch {
+      return ''
+    }
   }
+  return { id: dec(m[1]), finding: dec(m[2]) }
 }
 
-/** serversHash is the address of a server's sheet ("" for the list). */
-export function serversHash(id) {
-  return id ? `#/servers/${encodeURIComponent(id)}` : '#/servers'
+/** serversHash is the address of a server's sheet ("" for the list), with a flaw chosen when finding is given. */
+export function serversHash(id, finding = '') {
+  if (!id) return '#/servers'
+  const base = `#/servers/${encodeURIComponent(id)}`
+  return finding ? `${base}?finding=${encodeURIComponent(finding)}` : base
 }

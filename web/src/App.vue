@@ -1,34 +1,22 @@
 <template>
   <v-app>
     <a class="m-skip" href="#main">{{ $t('app.skip') }}</a>
-    <header class="m-top">
-      <div class="m-top__row" :class="page === 'fix' ? 'm-wide' : 'm-column'">
-        <span class="m-brand">
-          <img src="/icons/icon-192.png" alt="" width="28" height="28">
-          <span>{{ assistant }}</span>
-        </span>
-        <v-tabs
-          v-if="state === 'ready'"
-          :model-value="page"
-          density="compact"
-          color="primary"
-          class="m-top__tabs"
-          :aria-label="$t('nav.label')"
-          @update:model-value="go"
-        >
-          <v-tab value="today">{{ $t('nav.today') }}</v-tab>
-          <v-tab value="fix">{{ $t('nav.fix') }}</v-tab>
-          <v-tab value="servers">{{ $t('nav.servers') }}</v-tab>
-          <v-tab value="sources">{{ $t('nav.sources') }}</v-tab>
-        </v-tabs>
-        <nav class="m-top__actions">
-          <v-btn v-if="state === 'ready' && page === 'today'" variant="text" :loading="refreshing" @click="loadToday(true)">{{ $t('app.refresh') }}</v-btn>
-          <v-btn variant="text" @click="settingsOpen = true">{{ $t('app.settings') }}</v-btn>
-        </nav>
-      </div>
-    </header>
+    <AppNav v-if="state === 'ready'" :page="page" :assistant="assistant" />
 
     <v-main>
+      <header v-if="showHeader" class="m-top">
+        <div class="m-top__row" :class="page === 'fix' ? 'm-wide' : 'm-column'">
+          <span v-if="showBrand" class="m-brand">
+            <img src="/icons/icon-192.png" alt="" width="28" height="28">
+            <span>{{ assistant }}</span>
+          </span>
+          <span v-else />
+          <div class="m-top__actions">
+            <v-btn v-if="state === 'ready' && refreshable" variant="text" :loading="refreshing" @click="loadToday(true)">{{ $t('app.refresh') }}</v-btn>
+          </div>
+        </div>
+      </header>
+
       <div id="main" class="m-main" :class="page === 'fix' && state === 'ready' ? 'm-wide' : 'm-column'" tabindex="-1">
         <div v-if="state === 'loading'" class="m-state" role="status">
           <v-progress-circular indeterminate color="primary" size="28" width="3" />
@@ -67,28 +55,31 @@
         </section>
 
         <SourcesPage v-else-if="page === 'sources'" @changed="stale = true" />
+        <ProjectsPage v-else-if="page === 'projects'" :digest="digest" @decided="loadToday(false)" />
+        <ResolvedPage v-else-if="page === 'resolved'" />
+        <SettingsPanel
+          v-else-if="page === 'settings'"
+          :meta="meta"
+          :theme="themeName"
+          @lang="setLang"
+          @theme="setTheme"
+          @token-forgotten="onUnauthorized"
+          @token-saved="load"
+        />
         <FixPage v-else-if="page === 'fix'" :route="fixRoute" @changed="stale = true" />
         <ServersPage v-else-if="page === 'servers'" :route="serversRoute" @changed="stale = true" />
         <TodayPage v-else :digest="digest" :meta="meta" @decided="loadToday(false)" />
       </div>
     </v-main>
 
-    <v-dialog v-model="settingsOpen" max-width="480" scrollable>
-      <SettingsPanel
-        :meta="meta"
-        :theme="themeName"
-        @lang="setLang"
-        @theme="setTheme"
-        @token-forgotten="onUnauthorized"
-        @token-saved="load"
-        @close="settingsOpen = false"
-      />
-    </v-dialog>
   </v-app>
 </template>
 
 <script>
+import AppNav from './components/AppNav.vue'
 import TodayPage from './components/TodayPage.vue'
+import ProjectsPage from './components/ProjectsPage.vue'
+import ResolvedPage from './components/ResolvedPage.vue'
 import SourcesPage from './components/SourcesPage.vue'
 import FixPage from './components/FixPage.vue'
 import ServersPage from './components/ServersPage.vue'
@@ -96,14 +87,8 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import { api } from './api.js'
 import { keys, save } from './lib/storage.js'
 import { fixRoute } from './lib/fixView.js'
+import { pageOf, navMode } from './lib/navView.js'
 import { serversRoute } from './lib/serversView.js'
-
-/** pageOf reads the page from the address hash: #/sources, #/fix…, #/servers…, else today. */
-function pageOf(hash) {
-  if (hash === '#/sources') return 'sources'
-  if (serversRoute(hash)) return 'servers'
-  return fixRoute(hash) ? 'fix' : 'today'
-}
 
 /** serversOf is the Servers page's {id} in the address ('' for the list). */
 function serversOf(hash) {
@@ -117,7 +102,7 @@ function routeOf(hash) {
 
 export default {
   name: 'App',
-  components: { TodayPage, SourcesPage, FixPage, ServersPage, SettingsPanel },
+  components: { AppNav, TodayPage, ProjectsPage, ResolvedPage, SourcesPage, FixPage, ServersPage, SettingsPanel },
   data() {
     return {
       state: 'loading', // loading | unauthorized | offline | error | ready
@@ -125,24 +110,33 @@ export default {
       digest: null,
       failure: { error: '', hint: '' },
       refreshing: false,
-      settingsOpen: false,
       pasted: '',
       // rejected is true when the server refused the token this page holds.
       rejected: false,
       stopListening: null,
-      // page follows the address: #/sources, else today (no router).
+      // page follows the address (see navView.pageOf); there is no router.
       page: pageOf(window.location.hash),
       // fixRoute is the attempt or the finding the Fix page shows.
       fixRoute: routeOf(window.location.hash),
       // serversRoute is the server whose sheet the Servers page shows.
       serversRoute: serversOf(window.location.hash),
-      // stale is set when the Sources page changed something the Today page shows.
+      // stale is set when another page changed something the digest shows.
       stale: false,
     }
   },
   computed: {
     assistant() {
       return this.digest?.assistant || this.meta?.assistant || 'Michel'
+    },
+    // The menu stands at the bottom below 960 px; the brand then sits in the header.
+    showBrand() {
+      return this.state !== 'ready' || navMode(this.$vuetify.display.width) === 'bottom'
+    },
+    refreshable() {
+      return this.page === 'todo' || this.page === 'projects'
+    },
+    showHeader() {
+      return this.showBrand || (this.state === 'ready' && this.refreshable)
     },
     themeName() {
       return this.$vuetify.theme.global.name
@@ -169,15 +163,10 @@ export default {
       this.page = pageOf(window.location.hash)
       this.fixRoute = routeOf(window.location.hash)
       this.serversRoute = serversOf(window.location.hash)
-      if (this.page === 'today' && this.stale && this.state === 'ready') {
+      if ((this.page === 'todo' || this.page === 'projects') && this.stale && this.state === 'ready') {
         this.stale = false
         this.loadToday(false)
       }
-    },
-    /** go shows a page by changing the address, so the back button works. */
-    go(page) {
-      const hashes = { sources: '#/sources', fix: '#/fix', servers: '#/servers' }
-      window.location.hash = hashes[page] || '#/'
     },
     onUnauthorized() {
       this.rejected = !!api.token
@@ -264,7 +253,6 @@ export default {
 }
 .m-brand img { border-radius: 7px; }
 .m-top__actions { display: flex; gap: 0.25rem; margin-right: -0.5rem; }
-.m-top__tabs { flex: 1 1 auto; min-width: 0; }
 .m-main { padding-top: 2.5rem; padding-bottom: 4rem; outline: none; }
 .m-state { max-width: 34rem; display: grid; gap: 0.9rem; justify-items: start; padding-top: 1rem; }
 .m-state p { margin: 0; line-height: 1.55; }

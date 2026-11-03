@@ -1,6 +1,6 @@
 <template>
-  <v-card class="m-settings">
-    <v-card-title class="m-settings__title">{{ $t('settings.title') }}</v-card-title>
+  <v-card class="m-settings" :variant="dialog ? 'elevated' : 'flat'">
+    <h1 class="m-settings__title">{{ $t('settings.title') }}</h1>
     <v-card-text class="m-settings__body">
       <section class="m-settings__group" aria-labelledby="settings-lang">
         <h3 id="settings-lang" class="m-settings__label">{{ $t('settings.lang') }}</h3>
@@ -49,9 +49,14 @@
         </form>
       </section>
 
+      <section class="m-settings__group" aria-labelledby="settings-sources">
+        <h3 id="settings-sources" class="m-settings__label">{{ $t('settings.sources') }}</h3>
+        <v-btn variant="tonal" color="primary" href="#/sources">{{ $t('settings.sources_open') }}</v-btn>
+      </section>
+
       <p v-if="meta && meta.version" class="m-muted m-small m-settings__version">{{ $t('settings.version', { version: meta.version }) }}</p>
     </v-card-text>
-    <v-card-actions>
+    <v-card-actions v-if="dialog">
       <v-spacer />
       <v-btn variant="text" @click="$emit('close')">{{ $t('app.close') }}</v-btn>
     </v-card-actions>
@@ -67,6 +72,8 @@ export default {
   props: {
     meta: { type: Object, default: null },
     theme: { type: String, default: 'light' },
+    // dialog is true when the panel sits in a box: only then does it offer to close.
+    dialog: { type: Boolean, default: false },
   },
   emits: ['lang', 'theme', 'token-forgotten', 'token-saved', 'close'],
   data() {
@@ -95,7 +102,7 @@ export default {
 </script>
 
 <style scoped>
-.m-settings__title { font-family: var(--m-voice); font-weight: 600; font-size: 1.4rem; padding-top: 1.25rem; }
+.m-settings__title { font-family: var(--m-voice); font-weight: 600; font-size: 1.4rem; margin: 0; padding: 1.25rem 1rem 0.5rem; }
 .m-settings__body { display: grid; gap: 1.5rem; }
 .m-settings__group { display: grid; gap: 0.5rem; justify-items: start; }
 .m-settings__group p { margin: 0; }

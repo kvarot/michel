@@ -43,21 +43,6 @@
       {{ $t('today.failed_scans', { n: digest.failed_scans }) }}
     </v-alert>
 
-    <section v-if="!projects.length" class="m-empty">
-      <p>{{ $t('today.no_projects') }}</p>
-      <p class="m-muted">{{ $t('today.no_projects_hint') }}</p>
-    </section>
-
-    <div class="m-projects">
-      <ProjectCard
-        v-for="(p, i) in projects"
-        :key="p.name"
-        :project="p"
-        :items="groups[i] ? groups[i].items : []"
-        @decided="$emit('decided')"
-      />
-    </div>
-
     <ReadingList :items="digest.reading || []" />
 
     <details v-if="catalog.line" class="m-catalog">
@@ -77,16 +62,14 @@
 <script>
 import ExploitedBanner from './ExploitedBanner.vue'
 import OsvBanner from './OsvBanner.vue'
-import ProjectCard from './ProjectCard.vue'
 import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
-import { groupAttention } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
 import { serverHeadline, serversHash, stateSentence, touchedServers } from '../lib/serversView.js'
 
 export default {
   name: 'TodayPage',
-  components: { ExploitedBanner, OsvBanner, ProjectCard, ReadingList },
+  components: { ExploitedBanner, OsvBanner, ReadingList },
   props: {
     digest: { type: Object, required: true },
     meta: { type: Object, default: null },
@@ -100,12 +83,6 @@ export default {
     // projects' digest, which never says "all calm" over it.
     headline() {
       return serverHeadline(this.servers, this.$ui.lang) || { title: this.digest.title, word: this.digest.word }
-    },
-    projects() {
-      return this.digest.projects || []
-    },
-    groups() {
-      return groupAttention(this.digest)
     },
     catalog() {
       return this.digest.catalog || {}
@@ -177,9 +154,6 @@ export default {
 .m-review__item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; }
 .m-review__what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.6rem; }
 .m-review__pkg { font-weight: 600; }
-.m-empty { display: grid; gap: 0.4rem; padding: 1.5rem 0; }
-.m-empty p { margin: 0; }
-.m-projects { display: grid; gap: 1.25rem; }
 .m-catalog { margin-top: 2rem; color: rgba(var(--v-theme-on-background), 0.72); }
 .m-catalog summary { cursor: pointer; }
 .m-catalog__list { margin: 0.5rem 0 0; padding-left: 1.25rem; }

@@ -229,9 +229,9 @@ describe('backupLine', () => {
 
 describe('routes', () => {
   test('reads and writes the Servers page addresses', () => {
-    expect(serversRoute('#/servers')).toEqual({ id: '' })
-    expect(serversRoute('#/servers/01SRV')).toEqual({ id: '01SRV' })
-    expect(serversRoute('#/servers/a%20b')).toEqual({ id: 'a b' })
+    expect(serversRoute('#/servers')).toEqual({ id: '', finding: '' })
+    expect(serversRoute('#/servers/01SRV')).toEqual({ id: '01SRV', finding: '' })
+    expect(serversRoute('#/servers/a%20b')).toEqual({ id: 'a b', finding: '' })
     expect(serversRoute('#/serversx')).toBe(null)
     expect(serversRoute('#/fix')).toBe(null)
     expect(serversHash('01SRV')).toBe('#/servers/01SRV')
