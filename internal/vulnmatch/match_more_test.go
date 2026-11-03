@@ -247,3 +247,32 @@ func TestMatchSkipsBadAndOddEntries(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// Debian's security team marks some records "unimportant": no security
+// impact in Debian. They are not findings; the other urgencies are.
+func TestMatchDebianUnimportantIsNoFinding(t *testing.T) {
+	open := `"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"}]}]`
+	urgent := func(u string) string { return `"ecosystem_specific":{"urgency":"` + u + `"},` + open }
+	root := buildRoot(t, "Debian", map[string]string{
+		"a.json": adv("DEBIAN-CVE-1", "", aff("Debian:13", "glibc", urgent("unimportant"))),
+		"b.json": adv("DEBIAN-CVE-2", "", aff("Debian:13", "glibc", urgent("not yet assigned"))),
+	})
+	res := run(t, root, "Debian:13", []target.Package{{Name: "libc6", Source: "glibc", Version: "2.41-1", Arch: "amd64"}})
+	if len(res.Hits) != 1 || res.Hits[0].OSVID != "DEBIAN-CVE-2" {
+		t.Fatalf("hits %+v", res.Hits)
+	}
+	if !res.ReleaseKnown {
+		t.Error("an unimportant record still names the release")
+	}
+}
+
+// The word means something only in Debian's own records.
+func TestMatchUnimportantElsewhereStays(t *testing.T) {
+	root := buildRoot(t, "Alpine", map[string]string{
+		"a.json": adv("ALPINE-1", "", aff("Alpine:v3.20", "curl", `"ecosystem_specific":{"urgency":"unimportant"},"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"}]}]`)),
+	})
+	res := run(t, root, "Alpine:v3.20", []target.Package{{Name: "curl", Version: "8.0.0-r0", Arch: "x86_64"}})
+	if len(res.Hits) != 1 {
+		t.Fatalf("hits %+v", res.Hits)
+	}
+}

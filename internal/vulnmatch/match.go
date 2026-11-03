@@ -98,9 +98,22 @@ type advisory struct {
 			Ecosystem string `json:"ecosystem"`
 			Name      string `json:"name"`
 		} `json:"package"`
-		Ranges   []osvRange `json:"ranges"`
-		Versions []string   `json:"versions"`
+		Ranges            []osvRange      `json:"ranges"`
+		Versions          []string        `json:"versions"`
+		EcosystemSpecific json.RawMessage `json:"ecosystem_specific"`
 	} `json:"affected"`
+}
+
+// debianUnimportant says Debian's security team judged the record to have no
+// security impact in Debian. Only Debian's records use the word this way.
+func debianUnimportant(eco string, specific json.RawMessage) bool {
+	if base(eco) != "Debian" || len(specific) == 0 {
+		return false
+	}
+	var v struct {
+		Urgency any `json:"urgency"`
+	}
+	return json.Unmarshal(specific, &v) == nil && v.Urgency == "unimportant"
 }
 
 // debianFamily says whether OSV names source packages for the ecosystem
@@ -176,6 +189,9 @@ func Match(ctx context.Context, osvRoot, eco string, pkgs []target.Package) (Res
 				continue
 			}
 			res.ReleaseKnown = true
+			if debianUnimportant(eco, a.EcosystemSpecific) {
+				continue
+			}
 			for _, i := range byName[a.Package.Name] {
 				p := pkgs[i]
 				st := isAffected(eco, p.Version, a.Ranges, a.Versions)

@@ -32,6 +32,7 @@ const (
 	msgUnsafeDir  = "dossier non sur"
 	msgUnsafeFile = "fichier non sur"
 	msgNoLine     = "ligne introuvable"
+	msgChanged    = "fichier modifie depuis la verification"
 	msgRolled     = "echec: fichiers remis"
 	msgRollFailed = "retour en arriere incomplet"
 	msgSnapshot   = "retour par ton snapshot"
@@ -70,7 +71,7 @@ func ExitLines(code int) []string {
 	case ExitApplied:
 		return []string{msgApplied, msgNoBackup}
 	case ExitLineMoved:
-		return []string{msgNoLine}
+		return []string{msgNoLine, msgChanged}
 	case ExitLink:
 		return []string{msgLink}
 	case ExitUnsafe:
@@ -159,6 +160,7 @@ var Grammar = []string{
 	`mkdir -p -m 700 '` + path.Dir(RootBackups) + `'`,
 	`mkdir -p -m 700 '` + RootBackups + `'`,
 	`mkdir -p -m 700 "\$HOME/\.michel/backups"`,
+	`case "\$\(sha256sum ` + gPath + `\)" in [0-9a-f]{64}\*\) ;; \*\) echo "` + msgChanged + `" >&2; exit 5;; esac`,
 	`mkdir -m 700 "\$B" \|\| \{ echo "` + msgApplied + `" >&2; exit 4; \}`,
 	`cat ` + gPath + ` > ` + gBak,
 	`trap 'rollback' EXIT`,
@@ -180,6 +182,8 @@ var Grammar = []string{
 	`echo "` + msgDoneA + `"`,
 	`echo "` + msgDoneU + `"`,
 }
+
+var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 var grammar = func() []*regexp.Regexp {
 	out := make([]*regexp.Regexp, len(Grammar))
@@ -485,6 +489,19 @@ func Render(p Plan, t target.Target, correctionID string) (Bundle, error) {
 	if len(files) > 0 {
 		ap.l("# checks before any change")
 		fileChecks(&ap)
+		// Before any folder is made: a file that is not the one Michel read
+		// leaves the server exactly as it was.
+		hashed := map[string]bool{}
+		for _, w := range writes {
+			if w.SHA256 == "" || hashed[w.Path] {
+				continue
+			}
+			if !sha256Re.MatchString(w.SHA256) {
+				return Bundle{}, fmt.Errorf("%w: file hash %q", ErrBadAction, w.SHA256)
+			}
+			hashed[w.Path] = true
+			ap.l(`case "$(sha256sum `, q(w.Path), `)" in `, w.SHA256, `*) ;; *) echo "`+msgChanged+`" >&2; exit 5;; esac`)
+		}
 		if userMode {
 			ap.l(`mkdir -p -m 700 "$HOME/.michel/backups"`)
 		} else {

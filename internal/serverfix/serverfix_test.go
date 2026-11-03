@@ -1,6 +1,8 @@
 package serverfix_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"bytes"
 	"context"
 	"errors"
@@ -941,5 +943,49 @@ func TestScriptsRunOnSSHTest(t *testing.T) {
 	}
 	if h.file(t, rootBak+"/1") != iniText {
 		t.Error("backup missing")
+	}
+}
+
+// A value changed by hand since the collection is not overwritten: the file
+// is not the one Michel read, the script stops before any change (exit 5).
+func TestApplyStopsWhenTheFileChangedSinceTheCheck(t *testing.T) {
+	sum := sha256.Sum256([]byte(iniText))
+	inv := demoInventory()
+	for i := range inv.Files {
+		if inv.Files[i].Path == fpmIni {
+			inv.Files[i].SHA256 = hex.EncodeToString(sum[:])
+		}
+	}
+	tg := demoTarget()
+	plan, err := serverfix.Validate(setDirective("fpm", "display_errors", "0", ""), tg, inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := serverfix.Render(plan, tg, cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, &sshtest.Shell{UID: 0, Home: "/root"})
+	changed := strings.Replace(iniText, "display_errors = On", "display_errors = stderr", 1)
+	if changed == iniText {
+		t.Fatal("the fixture has no such line")
+	}
+	h.srv.SetFile(fpmIni, changed)
+	if code, stderr := h.run(b.Apply); code != serverfix.ExitLineMoved || !strings.Contains(stderr, "fichier modifie") {
+		t.Fatalf("changed file: exit %d %q", code, stderr)
+	}
+	if h.file(t, fpmIni) != changed {
+		t.Error("changed file: file written")
+	}
+	if _, ok := h.srv.File(rootBak + "/1"); ok {
+		t.Error("changed file: a backup was made")
+	}
+	// The same file as the check: the fix goes through.
+	h2 := newHarness(t, &sshtest.Shell{UID: 0, Home: "/root"})
+	if code, stderr := h2.run(b.Apply); code != 0 {
+		t.Fatalf("same file: exit %d %q", code, stderr)
+	}
+	if !strings.Contains(h2.file(t, fpmIni), "display_errors = 0") {
+		t.Error("same file: not fixed")
 	}
 }

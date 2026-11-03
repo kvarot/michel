@@ -59,6 +59,9 @@ type Action struct {
 	Key    string `json:"key,omitempty"`
 	Line   int    `json:"line,omitempty"`
 	Append bool   `json:"append,omitempty"`
+	// SHA256 is the hash of the file as the collection read it: the script
+	// stops (exit 5) on any other content. Empty when none was recorded.
+	SHA256 string `json:"sha256,omitempty"`
 	// Binary is the PHP binary a test_config runs.
 	Binary string `json:"binary,omitempty"`
 	// Manager is the service manager of a reload_service (systemctl,

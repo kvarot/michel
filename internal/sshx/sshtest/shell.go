@@ -3,6 +3,7 @@ package sshtest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -26,7 +27,7 @@ import (
 // mkdir [-p] [-m MODE], cat, cp, cmp -s, sed 'Ns|re|text|' (one
 // substitution on one line, basic regular expressions without groups),
 // stat [-L] -c (%u %a %A; a link is followed only with -L), export NAME,
-// unset NAME, readlink -f, id -u, env VAR=x... CMD, and
+// unset NAME, readlink -f, sha256sum FILE, id -u, env VAR=x... CMD, and
 // sudo -n (allowed when Options.Sudo). Any other command runs the server's
 // Options.Commands handler, with the script's own text as stdin unless
 // redirected from /dev/null. Nothing is ever deleted: the shell has no rm.
@@ -621,7 +622,7 @@ func (x *interp) capture(cmd string) string {
 		x.fail("unsupported command substitution %q", cmd)
 	}
 	c, ok := list[0][0].(simple)
-	if !ok || len(c.redirs) > 0 || (c.words[0].bare() != "id" && c.words[0].bare() != "stat" && c.words[0].bare() != "readlink") {
+	if !ok || len(c.redirs) > 0 || (c.words[0].bare() != "id" && c.words[0].bare() != "stat" && c.words[0].bare() != "readlink" && c.words[0].bare() != "sha256sum") {
 		x.fail("unsupported command substitution %q", cmd)
 	}
 	var buf bytes.Buffer
@@ -810,6 +811,16 @@ func (x *interp) command(argv []string, out, errw io.Writer) int {
 		return x.mkdir(argv[1:], root, errw)
 	case "stat":
 		return x.stat(argv[1:], out, errw)
+	case "sha256sum":
+		if len(argv) != 2 {
+			x.fail("only sha256sum FILE is supported")
+		}
+		data, ok := x.s.File(argv[1])
+		if !ok {
+			return 1
+		}
+		fmt.Fprintf(out, "%x  %s\n", sha256.Sum256([]byte(data)), argv[1])
+		return 0
 	case "readlink":
 		if len(argv) != 3 || argv[1] != "-f" {
 			x.fail("only readlink -f PATH is supported")

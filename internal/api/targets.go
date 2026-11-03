@@ -579,6 +579,12 @@ func targetFindingView(lang i18n.Lang, user string, f scan.Finding) TargetFindin
 		Installed: srvText(user, f.InstalledVersion), Fixed: srvTexts(user, f.FixedVersions), SAPI: srvText(user, f.SAPI),
 		Location: srvText(user, f.Location), Severity: severityOf(sev), Title: srvText(user, f.Summary), Status: f.Status,
 		Mitigation: f.Mitigation, KEV: f.KEV, FirstSeen: f.FirstSeenAt, LastSeen: f.LastSeenAt}
+	if f.Kind == scan.KindServerPackage {
+		v.Title = i18n.T(lang, "api.target.package_title", v.Package, v.Installed, v.Rule)
+		if len(v.Fixed) > 0 {
+			v.Title = i18n.T(lang, "api.target.package_title_fixed", v.Package, v.Installed, v.Rule, v.Fixed[0])
+		}
+	}
 	if key := ruleKeys()[f.OSVID]; key != "" && i18n.Has(key+".title") {
 		v.Title = i18n.T(lang, key+".title")
 		if i18n.Has(key + ".explain") {
