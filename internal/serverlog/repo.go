@@ -27,9 +27,9 @@ var (
 
 // Repo reads and writes the server log tables.
 //
-// text_enc holds the bytes it is given: Record.Text goes in as is, and the
-// encryption and masking of the text are added around Repo, not in its
-// signatures. A raw log line never reaches Repo.
+// text_enc holds Record.Text masked, capped and encrypted by sealText (see
+// privacy.go); the signatures of Repo stay plain. A raw log line never
+// reaches Repo.
 type Repo struct {
 	s *store.Store
 
@@ -275,6 +275,8 @@ func checkSettings(s Settings) error {
 		return bad("the reading interval must be between 1 minute and 24 hours")
 	case s.RetentionDays < MinRetentionDays || s.RetentionDays > MaxRetentionDays:
 		return bad("the retention must be between %d and %d days (got %d)", MinRetentionDays, MaxRetentionDays, s.RetentionDays)
+	case s.AlertText && !s.StoreText:
+		return bad("the text of alerts needs the text to be kept")
 	case s.ResolveAfter <= 0:
 		return bad("the delay before an error counts as resolved must be positive")
 	case time.Duration(s.RetentionDays)*24*time.Hour < s.ResolveAfter:
@@ -461,7 +463,9 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 		hour := rc.Hour.UTC().Truncate(time.Hour)
 		var text []byte
 		if st.StoreText && rc.Text != "" {
-			text = []byte(rc.Text)
+			if text, err = sealText(rc.Text); err != nil {
+				return nil, nil, nil, err
+			}
 		}
 		var status string
 		err := tx.QueryRowContext(ctx, `SELECT status FROM log_signature WHERE id = ?`, id).Scan(&status)
