@@ -159,3 +159,13 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 7: fix round 2/5 (R27b, N1, N2, R29 and 4 Minor addressed, 0 open; commits 730e431..0008fd2), wording nit commit 9da1594.
 - Task 7: minor (deferred): scan --digest keeps no memory between runs, a second run the same day after a held digest can re-send to a channel that got it; a channel removed mid-day leaves `no_channel` with the digest held.
 - Task 7: complete (commits 35361db..9da1594, review clean)
+- Ruling R30: the "non vu" list exposes the paths of declared sources and their reason, no content — the user typed those paths, wildcards resolve under the declared folder — costs a server path shown on a local page.
+- Task 8: dispatched, BASE 66f4be6.
+- Task 8: implementer DONE_WITH_CONCERNS, commit b32bfc9. Its choices: try audited as log.read with counts only; extra audit actions for source update, remove, error status; path change or re-activation resets positions; store_text off also turns alert_text off; duplicate path 409; errors list capped at 500; DELETE target leaves log data to expire. R30 in the try answer only; R11 note on postgres discover and try.
+- Task 8: French reader review done, wording applied, commit d5d2311.
+- Task 8: review needs fixes (7 Important: non vu without path or reason and last read stays fresh, removed server orphans log data, one reason for every non vu cause, try skips the masker, try audit row incomplete, copy-paste command can carry an SSH option, Linux path gap; 13 Minor). Auth and raw-line protection held. Findings: task-8-findings-1.md.
+- Ruling R31: `/sources/try` writes one audit row and no log data — spec § 7.4 and § 14 want every read traceable, § 10 says "sans rien stocker" — brief says "n'écrit rien" — costs one row to remove if Kévin reads it strictly.
+- Task 8: minor (deferred to Task 10): detail command uses the UTC date, a server on local time can miss lines around midnight; say so in the docs.
+- Task 8: minor (deferred): overlapping sources pass the duplicate check; dynamic prefix `api.logs.` turns off unused-key detection; `TestNoLogDataReachesAnAgent` checks direct imports only.
+- Task 8: fix round 1 sent, FIX_BASE d5d2311.
+- Task 8: fix round 1 implementer reply, commit dead316, migration 0020 (log_unseen, path_at, spike settings). Beyond findings: masked text could not be read back (Repo.Text refused the marker's digits), fixed; GET /errors now {errors,total,truncated}; 409 api.logs.busy while a read runs. WSL proof for api and serverlog with dash, gawk, mawk; busybox still not run.
