@@ -251,6 +251,57 @@ func TestDigestNoTextByDefault(t *testing.T) {
 	}
 }
 
+// A log that grew past the read cap is told in one line per server, with the
+// sum of the period, unless errors go nowhere on this server.
+func TestDigestTellsTheVolumeLeftUnread(t *testing.T) {
+	l := newLogFixture(t, target.EnvProd)
+	ctx := context.Background()
+	other, err := l.repo.AddSource(ctx, serverlog.Source{TargetID: l.tgt.ID, Path: "/var/log/demo/other.log", Format: serverlog.FormatPHP, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped := func(src string, to time.Time, n int64) {
+		t.Helper()
+		if err := l.repo.AddNote(ctx, serverlog.Note{TargetID: l.tgt.ID, SourceID: src, Kind: serverlog.NoteSkipped, From: to.Add(-5 * time.Minute), To: to, Amount: n}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skipped(l.src.ID, now.Add(-2*time.Hour), 30<<20)
+	skipped(other.ID, now.Add(-time.Hour), 10<<20)
+	// Before the period, and after it: not counted here.
+	skipped(l.src.ID, now.Add(-100*time.Hour), 1<<30)
+	skipped(l.src.ID, now.Add(time.Hour), 1<<30)
+
+	d, s := l.logSection(i18n.EN)
+	if s.Skipped != 40<<20 {
+		t.Fatalf("skipped = %d", s.Skipped)
+	}
+	text, _ := RenderText(d)
+	page, _ := RenderHTML(d)
+	for name, out := range map[string]string{"text": text, "html": page} {
+		if strings.Count(out, "40 MiB of the logs of this server were not read") != 1 {
+			t.Errorf("%s:\n%s", name, out)
+		}
+		if strings.Contains(out, "/var/log") {
+			t.Errorf("%s names a file:\n%s", name, out)
+		}
+	}
+	fr := l.compute(i18n.FR, Options{})
+	frText, _ := RenderText(fr)
+	frPage, _ := RenderHTML(fr)
+	for name, out := range map[string]string{"text": frText, "html": frPage} {
+		if strings.Count(out, "40 Mio des journaux de ce serveur") != 1 {
+			t.Errorf("fr %s:\n%s", name, out)
+		}
+	}
+
+	// No error of this level goes anywhere: neither does this line.
+	l.settings(func(st *serverlog.Settings) { st.Routes[serverlog.LevelError] = serverlog.RouteIgnored })
+	if d := l.compute(i18n.EN, Options{}); len(d.ServerLogs) != 0 {
+		t.Errorf("sections with the route ignored: %+v", d.ServerLogs)
+	}
+}
+
 func TestDigestTextFollowsAlertSetting(t *testing.T) {
 	l := newLogFixture(t, target.EnvProd)
 	// The text is kept but not sent in alerts: not in the digest either.

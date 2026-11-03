@@ -52,6 +52,7 @@ failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevée
 {{range .Top}}    - {{serverLogItem .}}
 {{if .Text}}      {{.Text}}
 {{end}}{{end}}{{range .Gaps}}    {{serverLogGap .}}
+{{end}}{{if .Skipped}}    {{serverLogSkipped .Skipped}}
 {{end}}{{if .Deviations}}    {{serverLogDeviations .}}
 {{end}}{{end}}{{end}}
 {{- if .Reading}}

@@ -728,6 +728,7 @@
   "digest.serverlogs.new.other": "%d new errors",
   "digest.serverlogs.reopened.one": "%d error came back",
   "digest.serverlogs.reopened.other": "%d errors came back",
+  "digest.serverlogs.skipped": "%s of the logs of this server were not read: they grew faster than Michel can read. Errors written in that part may be missing.",
   "digest.serverlogs.title": "Server logs",
   "digest.servers.fixed.one": "%d flaw fixed",
   "digest.servers.fixed.other": "%d flaws fixed",

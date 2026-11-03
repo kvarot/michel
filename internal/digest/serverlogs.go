@@ -41,6 +41,10 @@ type ServerLogDigest struct {
 	// Gaps are the periods the logs were not read; the notes of the sources
 	// of the server that overlap are joined into one.
 	Gaps []serverlog.Note `json:"gaps,omitempty"`
+	// Skipped is the volume in bytes left unread in the period because a log grew
+	// past the read cap, all sources of the server together. It is left out when
+	// errors of level error go nowhere on this server.
+	Skipped int64 `json:"skipped,omitempty"`
 	// Deviations are the keys of the settings that are not the recommended
 	// ones (serverlog.Deviation*), set once a week only.
 	Deviations []string `json:"deviations,omitempty"`
@@ -177,10 +181,14 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 			return nil, err
 		}
 		sl.Gaps = gapsSince(notes, c.since)
+		// A log that swells counts as a signal, with the rule of the level error.
+		if st.Routes[serverlog.LevelError] != serverlog.RouteIgnored {
+			sl.Skipped = skippedIn(notes, since, until)
+		}
 		if remind {
 			sl.Deviations = serverlog.Deviations(st)
 		}
-		if sl.New+sl.Reopened+len(sl.Top)+len(sl.Gaps)+len(sl.Deviations) > 0 {
+		if int64(sl.New+sl.Reopened+len(sl.Top)+len(sl.Gaps)+len(sl.Deviations))+sl.Skipped > 0 {
 			out = append(out, sl)
 		}
 	}
@@ -209,6 +217,18 @@ func gapsSince(notes []serverlog.Note, since time.Time) []serverlog.Note {
 		out = append(out, g)
 	}
 	return out
+}
+
+// skippedIn adds up the volume left unread in the period: each note counts in the
+// one period where its read ended, like the errors of that read.
+func skippedIn(notes []serverlog.Note, since, until time.Time) int64 {
+	var n int64
+	for _, note := range notes {
+		if note.Kind == serverlog.NoteSkipped && note.To.After(since) && !note.To.After(until) {
+			n += note.Amount
+		}
+	}
+	return n
 }
 
 // serverLogHead is the line of a server: its name and the counts.
@@ -258,6 +278,15 @@ func serverLogItem(lang i18n.Lang, it serverlog.AlertItem) string {
 func serverLogGap(lang i18n.Lang, g serverlog.Note) string {
 	layout := i18n.T(lang, "digest.serverlogs.moment_layout")
 	return i18n.T(lang, "digest.serverlogs.gap", g.From.UTC().Format(layout), g.To.UTC().Format(layout))
+}
+
+// serverLogSkipped says how much of the logs of a server was left unread.
+func serverLogSkipped(lang i18n.Lang, n int64) string {
+	size := serverlog.ByteSize(n)
+	if lang == i18n.FR {
+		size = strings.NewReplacer("GiB", "Gio", "MiB", "Mio", "KiB", "Kio", " B", " o").Replace(size)
+	}
+	return i18n.T(lang, "digest.serverlogs.skipped", size)
 }
 
 // serverLogDeviations is the weekly reminder about the settings of a server.

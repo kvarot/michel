@@ -282,20 +282,6 @@ func LogChannelHears(p policy.Policy, st serverlog.Settings) bool {
 // it is what the page sends back.
 func LogPath(p string) string { return localPaths(srvText("", p)) }
 
-// byteSize writes a size in bytes in KiB, MiB or GiB.
-func byteSize(n int64) string {
-	const k = 1024
-	switch {
-	case n >= k*k*k:
-		return fmt.Sprintf("%d GiB", n/(k*k*k))
-	case n >= k*k:
-		return fmt.Sprintf("%d MiB", n/(k*k))
-	case n >= k:
-		return fmt.Sprintf("%d KiB", n/k)
-	}
-	return fmt.Sprintf("%d B", n)
-}
-
 func noteTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
 
 // noteText is the sentence of a note.
@@ -304,7 +290,7 @@ func noteText(lang i18n.Lang, n serverlog.Note) string {
 	case serverlog.NoteGap:
 		return i18n.T(lang, "api.logs.note.gap", noteTime(n.From), noteTime(n.To))
 	case serverlog.NoteSkipped:
-		return i18n.T(lang, "api.logs.note.skipped", byteSize(n.Amount))
+		return i18n.T(lang, "api.logs.note.skipped", serverlog.ByteSize(n.Amount))
 	case serverlog.NoteRotated:
 		return i18n.T(lang, "api.logs.note.rotated")
 	case serverlog.NoteUnseen:

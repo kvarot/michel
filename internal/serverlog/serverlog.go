@@ -6,6 +6,7 @@ package serverlog
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"time"
 
 	"github.com/kvarot/michel/internal/target"
@@ -120,6 +121,20 @@ type Note struct {
 	From     time.Time `json:"from"`
 	To       time.Time `json:"to"`
 	Amount   int64     `json:"amount,omitempty"`
+}
+
+// ByteSize writes a size in bytes in KiB, MiB or GiB.
+func ByteSize(n int64) string {
+	const k = 1024
+	switch {
+	case n >= k*k*k:
+		return fmt.Sprintf("%d GiB", n/(k*k*k))
+	case n >= k*k:
+		return fmt.Sprintf("%d MiB", n/(k*k))
+	case n >= k:
+		return fmt.Sprintf("%d KiB", n/k)
+	}
+	return fmt.Sprintf("%d B", n)
 }
 
 // Settings are the log settings of one server.
