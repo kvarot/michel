@@ -242,6 +242,17 @@ func TestNotReadingMessageSaysWhy(t *testing.T) {
 	}
 }
 
+// The cap skips the start of a big log and reads its end: the message says so.
+func TestVolumeMessageSaysTheEndIsRead(t *testing.T) {
+	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertVolume, Items: []serverlog.AlertItem{{Kind: serverlog.AlertVolume, Count: 9 << 20}}}
+	if _, body := logMessage(i18n.EN, in, ""); !strings.Contains(body, "read only the end") {
+		t.Errorf("en: %q", body)
+	}
+	if _, body := logMessage(i18n.FR, in, ""); !strings.Contains(body, "que la fin") {
+		t.Errorf("fr: %q", body)
+	}
+}
+
 func TestVolumeAndCapMessagesHideTheSource(t *testing.T) {
 	vol := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertVolume,
 		Items: []serverlog.AlertItem{{Kind: serverlog.AlertVolume, SourceID: "01SRCDEMO", Count: 9 << 20}}}
