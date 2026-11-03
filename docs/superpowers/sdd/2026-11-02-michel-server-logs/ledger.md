@@ -103,3 +103,14 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 3: skips on this PC: symlink, unsearchable and unlistable folder cases, mawk, busybox and dash variants of TestFilterVariants; whole package passes under WSL (dash, gawk, mawk), busybox not run anywhere.
 - Task 3: complete (commits 79261da..cc6e9c9, review clean)
 - Stop point: Task 4 not started. Branch wip/plan7-task3 not merged into feat/server-logs, Kévin decides.
+- Scope 2026-11-03: Kévin, relayed by the starting session: "Continue le plan en autonomie". Tasks 4-10 in order on wip/plan7-task3, no merge into feat/server-logs or main, he decides at the end. Rulings marked "to show to Kévin" are decided and go in the final report.
+- Resume 2026-11-03 07:55: new session, Kévin: "Reprend le plan". Earlier session idle. Untracked internal/serverlog/privacy.go (implementer stopped before tests, builds, vet clean) kept as Task 4 starting point, unreviewed.
+- Task 4: dispatched, BASE 678460b.
+- Kévin 2026-11-03: "Tu peux fusionner en autonomie". feat/server-logs fast-forwarded to 678460b (Task 3). After each reviewed task the same; main after final review and real run.
+- Task 4: implementer DONE_WITH_CONCERNS, commit e36bc48. Added beyond the draft: `sealText` re-checks `validText` (a text with an IP, email, URL or quote is dropped, the error still counted); erasure runs on every save with text off, so a failed erase heals on retry.
+- Task 4: `secret.Protect` is identity off Windows, same as `mask_entry`: text is encrypted at rest on Windows only. Existing limit, to state in Task 10 docs and final report.
+- Task 4: reviewer approved, no Critical or Important. Cannot-verify items resolved: `PurgeAudited` has no caller yet, Task 5 wires it in the serve retention loop (R2); `EraseTextAudited` goes to Task 8; page texts through i18n in Task 9.
+- Task 4: minor (deferred to Task 5): `PurgeAudited` writes an audit event each tick even with nothing removed; skip it when all counts are 0.
+- Task 4: minor (deferred): `log.settings` audited after the save, an audit failure leaves a saved setting with an error returned; before/after purge counts are outside one transaction and can mislead; read-check-save of settings not atomic, low risk single user; new masker per text restarts token numbers; no test of `Apply` with StoreText off storing nothing, nor of the 200 cap after masking grows a text.
+- Task 4: complete (commits 678460b..e36bc48, review clean)
+- Task 5: dispatched, BASE e36bc48.
