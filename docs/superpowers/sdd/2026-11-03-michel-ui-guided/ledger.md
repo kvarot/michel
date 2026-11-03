@@ -122,3 +122,5 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Ruling R53: in simple mode an explained "numéro d'accès" shows only inside "Que faire ?" and the dialog — two identical "Base de données" rows cannot be told apart otherwise — costs one small piece of jargon, explained.
 - Test digest: 8a176d8, the test's clock only; production fine. `digest_at: "00:00"` can give two copies within an hour across midnight, allowed by R29.
 - Task 8b fix 2: 14c42e8, cbca0c7. Task 8b: complete. Next to close, with final fixes: `$config['password'] = '…'` and `new mysqli(...)` unmasked. Noise rate on real code not measured.
+- Task 13 fix: 008180f. Task 13: complete; final review covers it. "Michel t'en reparle demain" to soften in Task 15's text pass. Check `ServerLogs` TypeError against the real API in Task 16.
+- Task 14: dispatched, BASE 008180f.
