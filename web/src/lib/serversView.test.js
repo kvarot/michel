@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, restoreNeeded,
-  cardOfFinding, lastAttemptOf, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers,
+  canOfferAgent, cardLine, cardOfFinding, doneKey, guideServerTitle, healthServer, lastAttemptOf, serverAttemptLine, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers,
 } from './serversView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -276,5 +276,90 @@ describe('the cards of a sheet', () => {
     const fixes = [{ id: 'x', finding: { id: 'other' } }, { id: 'n', state: 'failed', finding: { id: 'f2' } }, { id: 'o', state: 'proven_fixed', finding: { id: 'f1' } }]
     expect(lastAttemptOf(fixes, cards[0]).id).toBe('n')
     expect(lastAttemptOf(fixes, cards[1])).toBe(null)
+  })
+})
+
+describe('the line of a card', () => {
+  const on = (state, extra = {}) => ({ id: 'a', state, server: { target: { id: 'srv', name: 'srv-demo' } }, ...extra })
+  test('a final attempt: the path says its state, no second sentence', () => {
+    for (const s of ['proven_fixed', 'failed', 'refused', 'inconclusive', 'superseded']) expect(cardLine(on(s), 'fr', 'srv'), s).toBe('')
+  })
+  test('an attempt under way keeps its line', () => {
+    expect(cardLine(on('proposed'), 'fr', 'srv')).toBe('Une correction attend ta validation.')
+  })
+  test('on its preprod: the line names where it runs', () => {
+    const pre = { id: 'p', state: 'proposed', server: { target: { id: 'pre', name: 'srv-pre' } } }
+    expect(cardLine(pre, 'fr', 'srv')).toBe('Sur ta préprod srv-pre : Une correction attend ta validation.')
+    expect(cardLine({ ...pre, state: 'failed' }, 'fr', 'srv')).toBe('Ce dernier essai a eu lieu sur ta préprod srv-pre.')
+  })
+})
+
+describe('the sentence under a server proposal', () => {
+  test('a flaw that came back is not said corrected', () => {
+    expect(doneKey({ state: 'proven_fixed', finding: { status: 'new' } })).toBe('')
+    expect(doneKey({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe('srvfix.done.proven_fixed')
+  })
+  test('the other final states', () => {
+    for (const s of ['inconclusive', 'refused', 'superseded']) expect(doneKey({ state: s, finding: {} })).toBe(`srvfix.done.${s}`)
+    expect(doneKey({ state: 'failed', cause: '' })).toBe('srvfix.done.failed')
+    expect(doneKey({ state: 'failed', cause: 'x' })).toBe('')
+    expect(doneKey({ state: 'proposed' })).toBe('')
+  })
+})
+
+describe('an agent at work is named', () => {
+  test('preparing, by origin', () => {
+    expect(serverAttemptLine({ state: 'preparing', origin: 'agent' }, 'fr')).toContain("agent d'IA")
+    expect(serverAttemptLine({ state: 'preparing', origin: 'agent.auto' }, 'fr')).toContain("agent d'IA")
+    expect(serverAttemptLine({ state: 'preparing', origin: 'michel.server' }, 'fr')).toBe('Michel prépare les scripts.')
+  })
+})
+
+describe('the attempt on a production card', () => {
+  const cards = [{ key: 'a', finding: { id: 'f1' }, ids: ['f1', 'f2'] }]
+  const pre = (state, extra = {}) => ({ id: 'p', state, created_at: '2026-11-03T10:00:00Z', finding: { id: 'pf', status: 'new' }, server: { prod_finding_id: 'f2' }, ...extra })
+  const own = { id: 'o', state: 'failed', created_at: '2026-11-02T10:00:00Z', finding: { id: 'f1' } }
+  test('the preprod attempt tried for this flaw shows', () => {
+    expect(lastAttemptOf([], cards[0], [pre('proposed')]).id).toBe('p')
+    expect(lastAttemptOf([], cards[0], [pre('failed')]).id).toBe('p')
+    expect(lastAttemptOf([], cards[0], [{ ...pre('proposed'), server: { prod_finding_id: 'other' } }])).toBe(null)
+  })
+  test('the newest of the two', () => {
+    expect(lastAttemptOf([own], cards[0], [pre('proposed')]).id).toBe('p')
+    expect(lastAttemptOf([{ ...own, created_at: '2026-11-04T10:00:00Z' }], cards[0], [pre('proposed')]).id).toBe('o')
+  })
+  test('proven or gone on the preprod says nothing of the production: never « Vérifiée » here', () => {
+    expect(lastAttemptOf([], cards[0], [pre('proven_fixed')])).toBe(null)
+    expect(lastAttemptOf([], cards[0], [pre('failed', { finding: { id: 'pf', status: 'gone' } })])).toBe(null)
+    expect(lastAttemptOf([], cards[0], [pre('superseded')])).toBe(null)
+  })
+  test('only the newest preprod attempt counts: an older failure does not come back', () => {
+    expect(lastAttemptOf([], cards[0], [pre('proven_fixed'), pre('failed', { id: 'older' })])).toBe(null)
+  })
+})
+
+describe('who may be offered an agent', () => {
+  test('never when the API refuses for health', () => {
+    expect(healthServer({ kind: 'hds' })).toBe(true)
+    expect(healthServer({ kind: 'vps', classification: 'health' })).toBe(true)
+    expect(healthServer({ kind: 'vps', classification: 'sensitive' })).toBe(false)
+    expect(healthServer(null)).toBe(false)
+    expect(canOfferAgent({ kind: 'vps' }, null)).toBe(true)
+    expect(canOfferAgent({ kind: 'hds' }, null)).toBe(false)
+    expect(canOfferAgent({ kind: 'vps', classification: 'health' }, null)).toBe(false)
+    expect(canOfferAgent({ kind: 'vps' }, { kind: 'hds' })).toBe(false)
+  })
+})
+
+describe('the title of a verified fix', () => {
+  const f = { osv_id: 'expose_php', summary: 'expose_php is risky; advised: Off', package: 'expose_php' }
+  test('the flaw is gone from the sheet: the proposal has the translated words', () => {
+    expect(guideServerTitle(f, null, { proposal: { summary: 'Régler expose_php sur Off.' } }, 'fr')).toBe('Régler expose_php sur Off.')
+  })
+  test('the sheet has the flaw: its title', () => {
+    expect(guideServerTitle(f, { rule: 'r', title: 'PHP dit sa version' }, { proposal: { summary: 'x' } }, 'fr')).toBe('PHP dit sa version')
+  })
+  test('nothing else known: the finding', () => {
+    expect(guideServerTitle(f, null, null, 'fr')).toBe('expose_php is risky; advised: Off')
   })
 })

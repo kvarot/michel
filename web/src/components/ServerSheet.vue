@@ -82,13 +82,15 @@
               :finding="c.finding"
               :sheet="c.finding"
               :target="view"
+              :tried="tried(c)"
+              :preprod-health="preprodHealth"
               :can-start="!startingFor"
               :starting="startingFor === c.finding.id"
               @start="fix(c.finding)"
             />
             <div v-if="lastAttempt(c)" class="m-sheet__flaw-actions">
               <v-btn size="small" variant="tonal" color="primary" :href="fixHref(lastAttempt(c).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
-              <span class="m-small m-voice">{{ attemptLine(lastAttempt(c)) }}</span>
+              <span v-if="cardText(c)" class="m-small m-voice">{{ cardText(c) }}</span>
             </div>
             <!-- The answer of "Corriger" stays next to the card it was asked for. -->
             <v-alert v-if="actionError && errorFor === c.finding.id" type="error" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert" closable @click:close="clearError">
@@ -266,10 +268,10 @@
     <v-dialog v-model="unknownOpen" max-width="500">
       <v-card aria-labelledby="srv-unknown-title">
         <v-card-title id="srv-unknown-title" class="m-sheet__dialog-title">{{ $t('servers.unknown.title') }}</v-card-title>
-        <v-card-text><p class="m-sheet__dialog-body">{{ $t('servers.unknown.body') }}</p></v-card-text>
+        <v-card-text><p class="m-sheet__dialog-body">{{ unknownBody }}</p></v-card-text>
         <v-card-actions class="m-sheet__dialog-actions">
-          <v-btn variant="text" @click="prepareAnyway">{{ $t('servers.unknown.anyway') }}</v-btn>
-          <v-btn color="primary" variant="flat" :href="unknownAttempt ? fixHref(unknownAttempt.id) : undefined" @click="unknownOpen = false">{{ $t('servers.unknown.open') }}</v-btn>
+          <v-btn variant="text" @click="unknownOpen = false">{{ $t('app.close') }}</v-btn>
+          <v-btn color="primary" variant="flat" :href="blockingUnknown ? fixHref(blockingUnknown.id) : undefined" @click="unknownOpen = false">{{ $t('servers.unknown.open') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -318,8 +320,8 @@ import { fixHash } from '../lib/fixView.js'
 import { plainRisk, showsPlan } from '../lib/pathView.js'
 import { logBadges } from '../lib/serverLogsView.js'
 import {
-  cardOfFinding, envLabel, envs, findingTitle, intervalLabel, intervals, kindLabel, kinds, lastAttemptOf, levelLabel, mergeFindings, serverAttemptLine,
-  serverLevels, sortFindings, stateSentence,
+  canOfferAgent, cardLine, cardOfFinding, envLabel, envs, findingTitle, healthServer, intervalLabel, intervals, kindLabel, kinds, lastAttemptOf, levelLabel,
+  mergeFindings, serverAttemptLine, serverLevels, sortFindings, stateSentence, triedOnPreprod,
 } from '../lib/serversView.js'
 
 // checkEvery is how often the sheet reads the server again while a check runs.
@@ -346,6 +348,8 @@ export default {
       view: null,
       inv: null,
       fixes: [],
+      // preprodFixes: a server with a preprod starts there first.
+      preprodFixes: [],
       others: [],
       consent: null,
       consentBusy: false,
@@ -367,7 +371,6 @@ export default {
       saveError: '',
       hostKeyOpen: false,
       unknownOpen: false,
-      pendingFix: null,
       removeOpen: false,
       removing: false,
       removeError: null,
@@ -405,6 +408,21 @@ export default {
     // unknownAttempt is a fix of this server whose outcome Michel cannot tell.
     unknownAttempt() {
       return this.fixes.find((a) => a.state === 'unknown') || null
+    },
+    // blockingUnknown is what stops a new fix here: StartServer works on the preprod first.
+    blockingUnknown() {
+      return this.unknownAttempt || this.preprodFixes.find((a) => a.state === 'unknown') || null
+    },
+    unknownBody() {
+      const a = this.blockingUnknown
+      if (a && a !== this.unknownAttempt) return this.$t('servers.unknown.body_preprod', { name: a.server?.target?.name || '' })
+      return this.$t('servers.unknown.body')
+    },
+    preprodView() {
+      return this.others.find((o) => o.id === this.view?.preprod?.id) || null
+    },
+    preprodHealth() {
+      return healthServer(this.preprodView)
     },
     // cards are the flaws, the most severe first, one card per flaw.
     cards() {
@@ -508,12 +526,15 @@ export default {
     fixHref(attemptID) {
       return fixHash({ attempt: attemptID })
     },
-    attemptLine(a) {
-      return serverAttemptLine(a, this.lang)
-    },
-    /** lastAttempt is the newest fix of a card's flaws, whatever its state: the path starts from it. */
+    /** lastAttempt is the newest fix of a card's flaws, here or on the preprod, whatever its state: the path starts from it. */
     lastAttempt(c) {
-      return lastAttemptOf(this.fixes, c)
+      return lastAttemptOf(this.fixes, c, this.preprodFixes)
+    },
+    cardText(c) {
+      return cardLine(this.lastAttempt(c), this.lang, this.id)
+    },
+    tried(c) {
+      return triedOnPreprod(this.preprodFixes, c)
     },
     /** risk says what a card's flaw means, and nothing when it would only repeat the title. */
     risk(f) {
@@ -606,10 +627,14 @@ export default {
     async loadFixes() {
       try {
         const list = (await api.get(this.q(`/fixes?target=${this.enc(this.id)}`))) || []
+        const pre = this.view?.preprod?.id
+        const onPreprod = pre ? (await api.get(this.q(`/fixes?target=${this.enc(pre)}`))) || [] : []
         this.keepFocus()
         this.fixes = list
+        this.preprodFixes = onPreprod
       } catch {
         this.fixes = []
+        this.preprodFixes = []
       }
     },
     async loadOthers() {
@@ -681,16 +706,11 @@ export default {
     },
     /** fix prepares Michel's fix of a finding; a fix of unknown outcome on the server warns first. */
     fix(f) {
-      this.pendingFix = f
-      if (this.unknownAttempt) {
+      if (this.blockingUnknown) {
         this.unknownOpen = true
         return
       }
       this.startFix(f)
-    },
-    prepareAnyway() {
-      this.unknownOpen = false
-      if (this.pendingFix) this.startFix(this.pendingFix)
     },
     async startFix(f) {
       this.startingFor = f.id
@@ -707,8 +727,8 @@ export default {
         this.actionError = err
         this.errorFor = f.id
         this.focusCard(f.id)
-        // No ready-made fix: the agent may study it (never on an HDS server).
-        if (err?.data?.code === 'fix.server.needs_agent' && this.view.kind !== 'hds') this.agentOffer = f
+        // No ready-made fix: the agent may study it, where the API would not refuse it.
+        if (err?.data?.code === 'fix.server.needs_agent' && canOfferAgent(this.view, this.preprodView)) this.agentOffer = f
       } finally {
         this.startingFor = ''
       }

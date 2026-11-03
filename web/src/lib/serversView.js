@@ -2,6 +2,7 @@
 // fix proposal: no DOM, no fetch, no storage. Vitest covers them
 // (serversView.test.js).
 import { translate } from '../i18n/index.js'
+import { cameBack } from './pathView.js'
 import { agoText } from './sourcesView.js'
 
 /** The fix levels of a server (target.fix_level), see the spec § 9. */
@@ -178,13 +179,102 @@ export function cardOfFinding(cards, id) {
 }
 
 /**
- * lastAttemptOf is the newest fix of a card's flaws, whatever its state: the
- * card's path starts from it.
- * @param {object[]} fixes GET /fixes?target=, newest first
+ * preprodAttemptOf is the newest attempt on the preprod tried for one of a
+ * card's flaws, or null when that one says nothing of the production: proven or
+ * gone there, this server's flaw is still open and never « Vérifiée » for it.
+ */
+function preprodAttemptOf(preprodFixes, card) {
+  const a = (preprodFixes || []).find((x) => card.ids.includes(x.server?.prod_finding_id))
+  if (!a || ['proven_fixed', 'superseded'].includes(a.state) || a.finding?.status === 'gone') return null
+  return a
+}
+
+/**
+ * triedOnPreprod says an attempt on the preprod was made for a card's flaws,
+ * which serverTried (internal/fix/server_auto.go) counts: Michel will not try
+ * alone again.
+ * @param {object[]} preprodFixes GET /fixes?target=<preprod>
  * @param {{ids: string[]}} card
  */
-export function lastAttemptOf(fixes, card) {
-  return (fixes || []).find((a) => card.ids.includes(a.finding?.id)) || null
+export function triedOnPreprod(preprodFixes, card) {
+  return (preprodFixes || []).some((x) => card.ids.includes(x.server?.prod_finding_id))
+}
+
+/**
+ * lastAttemptOf is the newest fix of a card's flaws, whatever its state: the
+ * card's path starts from it. A server with a preprod starts there first, so its
+ * attempt counts as well.
+ * @param {object[]} fixes GET /fixes?target=, newest first
+ * @param {{ids: string[]}} card
+ * @param {object[]} [preprodFixes] GET /fixes?target=<preprod>, newest first
+ */
+export function lastAttemptOf(fixes, card, preprodFixes = []) {
+  const own = (fixes || []).find((a) => card.ids.includes(a.finding?.id)) || null
+  const pre = preprodAttemptOf(preprodFixes, card)
+  if (!pre || !own) return own || pre
+  return String(pre.created_at) > String(own.created_at) ? pre : own
+}
+
+/**
+ * cardLine is the sentence next to a card's attempt. A final attempt has none:
+ * the path's note says its state (« Corrigée » next to « revenue » was both). An
+ * attempt on the preprod says so, as the card is the production's.
+ * @param {object} attempt
+ * @param {string} lang
+ * @param {string} targetId the card's server
+ */
+export function cardLine(attempt, lang, targetId) {
+  const on = attempt.server?.target
+  const elsewhere = !!on?.id && on.id !== targetId
+  if (isServerFinal(attempt.state)) return elsewhere ? translate(lang, 'servers.line.on_preprod_done', { name: on.name }) : ''
+  const line = serverAttemptLine(attempt, lang)
+  return elsewhere ? translate(lang, 'servers.line.on_preprod', { name: on.name, line }) : line
+}
+
+/**
+ * doneKey is the sentence under a server proposal once it is over ('' for none).
+ * A flaw that came back has its note on the path, and is not said corrected.
+ * @param {object} attempt
+ */
+export function doneKey(attempt) {
+  if (cameBack(attempt)) return ''
+  const s = attempt.state
+  if (['proven_fixed', 'inconclusive', 'refused', 'superseded'].includes(s)) return `srvfix.done.${s}`
+  return s === 'failed' && !attempt.cause ? 'srvfix.done.failed' : ''
+}
+
+/**
+ * healthServer says a server holds health data: healthTarget (internal/fix),
+ * for which startServerAgent refuses.
+ * @param {object|null} target TargetView
+ */
+export function healthServer(target) {
+  return !!target && (target.kind === 'hds' || target.classification === 'health')
+}
+
+/**
+ * canOfferAgent says the agent can be asked: the API refuses on a health server,
+ * and on a server whose preprod is one (the agent would start there).
+ * @param {object|null} target TargetView
+ * @param {object|null} preprod its preprod's TargetView, if known
+ */
+export function canOfferAgent(target, preprod) {
+  return !healthServer(target) && !healthServer(preprod)
+}
+
+/**
+ * guideServerTitle is the title of a server's flaw on the Fix page. A verified
+ * flaw has left the sheet (targetView keeps open flaws) and the finding only has
+ * Go's English: the proposal's summary is translated.
+ * @param {object} finding the attempt's FixFindingView
+ * @param {object|null} sheet the TargetFindingView
+ * @param {object|null} attempt
+ * @param {string} lang
+ */
+export function guideServerTitle(finding, sheet, attempt, lang) {
+  if (!sheet && attempt?.proposal?.summary) return attempt.proposal.summary
+  const f = finding || {}
+  return findingTitle(sheet || { rule: f.osv_id, title: f.summary, package: f.package }, lang)
 }
 
 /**
@@ -328,6 +418,8 @@ export function serverAttemptLine(attempt, lang) {
       if (s.executor === 'user') return t('approved_user')
       return a.approved_by === 'auto' ? t('approved_auto') : t('approved')
     case 'preparing':
+      // Only an agent stays in preparing: Michel's own fix is proposed in one call.
+      return t(String(a.origin || '').startsWith('agent') ? 'preparing_agent' : 'preparing')
     case 'running':
     case 'unknown':
     case 'applied':

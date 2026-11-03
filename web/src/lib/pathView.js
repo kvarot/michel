@@ -99,13 +99,15 @@ export function canPrepareServer(attempt, gone = false) {
 
 /**
  * showsPlan says the plan is still ahead: it speaks of what will happen, so it
- * goes once the proposal is there (the proposal says what happened).
+ * goes once the proposal is there (the proposal says what happened). On a
+ * server only an agent's attempt stays in preparing, and the plan speaks of a
+ * script Michel writes himself.
  * @param {object|null|undefined} attempt
  * @param {boolean} [gone] isGone()
  * @returns {boolean}
  */
 export function showsPlan(attempt, gone = false) {
-  if (attempt?.server && canPrepareServer(attempt, gone)) return true
+  if (attempt?.server) return canPrepareServer(attempt, gone)
   return canRestart(attempt, gone) || attempt?.state === 'preparing'
 }
 
@@ -186,7 +188,8 @@ function attemptPath(attempt, gone, vanished, target) {
       // Not proven in the code either: gone but not merged, or merged but seen.
       return out(server ? 4 : 3, 'stopped', true, causeNote(attempt, 'inconclusive'))
     case 'refused':
-      return out(2, 'stopped', true, { key: 'refused' })
+      // A script the person runs may have run: on a server only Michel's part is known.
+      return out(2, 'stopped', true, { key: server ? 'refused_server' : 'refused' })
     case 'unknown':
       return out(3, 'stopped', true, { key: server ? 'unknown_server' : 'unknown' })
     case 'failed': {
@@ -299,26 +302,38 @@ function rootScript(f) {
  * checked against internal/fix (server.go, server_auto.go, server_exec.go) and
  * internal/serverfix/validate.go. A plan with action null is terminal: it holds
  * only its own lines, since « always » is only true of a script that will exist.
- * @param {{finding: object, target: object|null, attempt?: object|null}} args
- *   finding is the TargetFindingView, target the TargetView.
+ * @param {{finding: object, target: object|null, attempt?: object|null, tried?: boolean, preprodHealth?: boolean}} args
+ *   finding is the TargetFindingView, target the TargetView. tried: an attempt on
+ *   its preprod was made for this flaw, which serverTried counts. preprodHealth:
+ *   the preprod holds health data, so startServerAgent refuses here too.
  * @returns {{title: string, lines: {key: string, params?: object}[], action: 'prepare'|null, why: string, warn: string|null}}
  */
-export function serverPlan({ finding, target, attempt = null }) {
+export function serverPlan({ finding, target, attempt = null, tried = false, preprodHealth = false }) {
   const title = 'plan.server.title'
-  const none = (lines, why) => ({ title, lines: lines.map((key) => ({ key })), action: null, why, warn: null })
+  const none = (lines, why) => ({ title, lines: lines.map((l) => (typeof l === 'string' ? { key: l } : l)), action: null, why, warn: null })
   if (!target) return none([], '')
   const f = finding || {}
   if (f.kind === 'server_exposure') return none(['plan.exposure', 'expo.how'], 'exposure')
   if (target.fix_level === 0) return none(['plan.server.report_only'], 'report_only')
   const health = target.kind === 'hds' || target.classification === 'health'
+  const noAgent = health ? { key: 'plan.server.hds' } : { key: 'plan.server.hds_preprod', params: { name: target.preprod?.name || '' } }
   const pkg = f.kind === 'server_package'
-  // planFor (server.go) has no plan for a package without a fixed version.
-  const ready = !pkg || (f.fixed_versions || []).length > 0
-  if (!ready && health) return none(['plan.server.no_ready', 'plan.server.hds'], 'no_ready')
+  // planFor (server.go) plans a package only of the system (ecosystem os), with a
+  // fixed version. PHP's own flaws (php-upstream) have no plan.
+  const ready = !pkg || (f.ecosystem === 'os' && !!(f.fixed_versions || [])[0])
+  if (!ready && (health || preprodHealth)) return none(['plan.server.no_ready', noAgent], 'no_ready')
 
-  const lines = [{ key: ready ? 'plan.server.who' : 'plan.server.no_ready' }]
-  lines.push(target.preprod ? { key: 'plan.server.preprod', params: { name: target.preprod.name } } : { key: 'plan.server.no_copy' })
   const site = !!target.site_url
+  // executorFor (server.go): a root script is Michel's only with sudo without a password.
+  const root = rootScript(f)
+  const michel = target.executor === 'michel' && (!root || target.sudo === 'nopasswd')
+  // AutoApplicableServer (server_auto.go): only a tested configuration, so a root
+  // file. ApplyAutoServer takes it right after it is prepared, even after a click.
+  const auto = michel && !pkg && root && target.fix_level === 3 && target.auto_config && site
+
+  const lines = [{ key: !ready ? 'plan.server.no_ready' : auto ? 'plan.server.who_auto' : 'plan.server.who' }]
+  if (target.preprod) lines.push({ key: 'plan.server.preprod', params: { name: target.preprod.name } })
+  else lines.push({ key: auto ? 'plan.server.no_copy_auto' : 'plan.server.no_copy' })
   if (!pkg) lines.push({ key: site ? 'plan.server.checks' : 'plan.server.no_site' })
   else if (ready) {
     lines.push({ key: 'plan.server.package' })
@@ -326,17 +341,13 @@ export function serverPlan({ finding, target, attempt = null }) {
   }
   lines.push({ key: 'plan.server.no_tests' })
 
-  // executorFor (server.go): a root script is Michel's only with sudo without a password.
-  const root = rootScript(f)
-  const michel = target.executor === 'michel' && (!root || target.sudo === 'nopasswd')
-  // AutoApplicableServer (server_auto.go): only a tested configuration, so a root file.
-  const auto = michel && !pkg && root && target.fix_level === 3 && target.auto_config && site
   lines.push({ key: `plan.server.approval_${auto ? 'auto' : michel ? 'michel' : 'user'}` })
+  if (michel && !auto && root) lines.push({ key: 'plan.server.root' })
 
   // EligibleServer and serverTried (server_auto.go): once, on an active server;
   // a decision may be to defer or ignore, and this view does not say which.
-  if (target.fix_level >= 2 && ready && target.active !== false && !attempt && f.status !== 'decided') lines.push({ key: 'plan.server.self_prepare' })
-  lines.push({ key: health ? 'plan.server.hds' : 'plan.server.agent' })
+  if (target.fix_level >= 2 && ready && target.active !== false && !attempt && !tried && f.status !== 'decided') lines.push({ key: 'plan.server.self_prepare' })
+  lines.push(health || preprodHealth ? noAgent : { key: 'plan.server.agent' })
   return { title, lines, action: 'prepare', why: '', warn: target.fix_level === 3 ? 'servers.level.3.warn' : null }
 }
 

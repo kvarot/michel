@@ -278,8 +278,10 @@ describe('the words of the plan (F1, F6, F7, F9, FR)', () => {
     expect(en['path.note.deploy_unchecked']).toContain('Michel saw it in your project (he could not check it before). Remember to publish')
   })
   test('the branch is named where PhpStorm shows it', () => {
-    expect(fr['git.manual.lead']).toContain('le nom est affiché en bas à droite de PhpStorm')
-    expect(en['git.manual.lead']).toContain('the name is shown at the bottom right of PhpStorm')
+    expect(fr['git.manual.lead']).toContain('le nom de ta branche est affiché dans PhpStorm')
+    expect(fr['git.manual.lead']).not.toContain('bas à droite')
+    expect(en['git.manual.lead']).toContain('the name of your branch is shown in PhpStorm')
+    expect(en['git.manual.lead']).not.toContain('bottom right')
   })
   test('self_start names the consent', () => {
     expect(fr['plan.project.self_start']).toContain('une fois ton accord donné pour ce projet')
@@ -513,7 +515,7 @@ describe('pathSteps', () => {
 describe('server plan tells the truth for each case', () => {
   const target = (extra = {}) => ({ id: 't1', name: 'srv-demo', kind: 'vps', classification: 'sensitive', env: 'prod', fix_level: 1, executor: 'user', sudo: 'none', auto_config: false, site_url: 'https://example.test', preprod: null, active: true, ...extra })
   const cfg = (extra = {}) => ({ id: 'sf1', kind: 'server_config', rule: 'PHP-INI-1', package: 'expose_php', fixed_versions: [], location: '/etc/php/php.ini:12', status: 'new', explain: 'PHP says its version.', ...extra })
-  const pkg = (extra = {}) => ({ id: 'sf2', kind: 'server_package', rule: 'USN-1', package: 'openssl', fixed_versions: ['3.0.13'], status: 'new', ...extra })
+  const pkg = (extra = {}) => ({ id: 'sf2', kind: 'server_package', ecosystem: 'os', rule: 'USN-1', package: 'openssl', fixed_versions: ['3.0.13'], status: 'new', ...extra })
   const expo = (extra = {}) => ({ id: 'sf3', kind: 'server_exposure', rule: 'EXPO-1', package: 'redis', fixed_versions: [], status: 'new', ...extra })
   const keys = (f, t, a = null) => serverPlan({ finding: f, target: t, attempt: a }).lines.map((l) => l.key.replace('plan.server.', ''))
   const serverTexts = Object.entries(fr).filter(([k]) => k.startsWith('plan.server.'))
@@ -575,12 +577,12 @@ describe('server plan tells the truth for each case', () => {
   })
   test('the word IA is used only for the agent', () => {
     const withIA = serverTexts.filter(([, v]) => /\bIA\b/.test(v)).map(([k]) => k).sort()
-    expect(withIA).toEqual(['plan.server.agent', 'plan.server.hds', 'plan.server.who'])
+    expect(withIA).toEqual(['plan.server.agent', 'plan.server.hds', 'plan.server.hds_preprod', 'plan.server.who', 'plan.server.who_auto'])
     expect(serverTexts.filter(([, v]) => v.includes("l'IA"))).toEqual([])
   })
   test('the agent is not said to wait for a click: at level 2 it can start alone', () => {
     expect(fr['plan.server.agent']).not.toContain('proposera')
-    expect(fr['plan.server.agent']).toContain('inventaire masqué')
+    expect(fr['plan.server.agent']).toContain('ce que Michel reconnaît comme secret')
   })
   test('terminal plans stand alone', () => {
     const r = serverPlan({ finding: cfg(), target: target({ fix_level: 0 }) })

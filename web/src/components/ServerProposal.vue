@@ -132,7 +132,7 @@
           {{ $t('srvfix.again') }}
         </v-btn>
       </template>
-      <p v-else class="m-muted">{{ $t(attempt.state === 'preparing' ? 'servers.line.preparing' : 'fix.proposal.none_idle') }}</p>
+      <p v-else class="m-muted">{{ attempt.state === 'preparing' ? preparingLine : $t('fix.proposal.none_idle') }}</p>
     </section>
 
     <v-dialog v-model="refuseOpen" max-width="440">
@@ -155,7 +155,7 @@
 import FieldHelp from './FieldHelp.vue'
 import { formatDate, severityOf } from '../lib/digestView.js'
 import { canPrepareServer, isGone } from '../lib/pathView.js'
-import { backupLine, canApproveServer, envLabel, findingTitle, needsSnapshot, restoreNeeded, serversHash } from '../lib/serversView.js'
+import { backupLine, canApproveServer, doneKey, envLabel, findingTitle, needsSnapshot, restoreNeeded, serverAttemptLine, serversHash } from '../lib/serversView.js'
 
 // ServerProposal is the right of the Fix page for a fix of a server: the
 // flaw in plain words, then the proposal: its sentence, « réduit le risque,
@@ -243,10 +243,11 @@ export default {
       return ['failed', 'unknown'].includes(this.attempt.state) && this.serverBackups.length > 0
     },
     doneText() {
-      const s = this.attempt.state
-      if (['proven_fixed', 'inconclusive', 'refused', 'superseded'].includes(s)) return this.$t(`srvfix.done.${s}`)
-      if (s === 'failed' && !this.attempt.cause) return this.$t('srvfix.done.failed')
-      return ''
+      const key = doneKey(this.attempt)
+      return key ? this.$t(key) : ''
+    },
+    preparingLine() {
+      return serverAttemptLine(this.attempt, this.lang)
     },
     // canAgain: once the server's sheet is there, the guide above holds this button with its plan.
     canAgain() {

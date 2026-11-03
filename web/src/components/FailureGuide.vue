@@ -33,7 +33,7 @@
     <v-btn v-if="proposed && !card" class="m-guide__go" color="primary" variant="flat" block @click="$emit('to-proposal')">{{ $t('path.to_proposal') }}</v-btn>
 
     <div class="m-guide__two">
-      <section v-if="!card" class="m-guide__block m-panel" aria-labelledby="fix-means-title">
+      <section v-if="!card && !fromProposal" class="m-guide__block m-panel" aria-labelledby="fix-means-title">
         <component :is="subHeading" id="fix-means-title" class="m-guide__sub">{{ $t('path.means') }}</component>
         <p class="m-guide__text">{{ risk }}</p>
       </section>
@@ -61,7 +61,7 @@ import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
 import { causeSentence } from '../lib/fixView.js'
 import { canPrepareServer, canRestart, failurePath, isGone, mergeStep, pathSteps, plainRisk, projectPlan, serverPlan, showsPlan } from '../lib/pathView.js'
-import { findingTitle } from '../lib/serversView.js'
+import { guideServerTitle } from '../lib/serversView.js'
 import { guideTitle } from '../lib/todoView.js'
 
 // FailureGuide is the head of a flaw: where it stands, what it means, what will
@@ -88,6 +88,10 @@ export default {
     server: { type: Boolean, default: false },
     target: { type: Object, default: null },
     card: { type: Boolean, default: false },
+    // tried: an attempt on the preprod was made for this flaw. preprodHealth: the
+    // preprod holds health data. The sheet knows both; serverPlan reads them.
+    tried: { type: Boolean, default: false },
+    preprodHealth: { type: Boolean, default: false },
   },
   emits: ['start', 'to-proposal'],
   data() {
@@ -132,15 +136,19 @@ export default {
     },
     title() {
       if (!this.server) return guideTitle(this.finding, this.sheet, this.$ui.lang)
-      const f = this.finding
-      return findingTitle(this.sheet || { rule: f.osv_id, title: f.summary, package: f.package }, this.$ui.lang)
+      return guideServerTitle(this.finding, this.sheet, this.attempt, this.$ui.lang)
+    },
+    // fromProposal: the flaw left the server's sheet (it is verified), so all that is
+    // known of it is the proposal, in the title, and Go's English, which is not shown.
+    fromProposal() {
+      return this.server && !this.sheet
     },
     risk() {
       return plainRisk(this.finding, this.sheet, this.$ui.lang, this.$ui.advanced)
     },
     plan() {
       if (!showsPlan(this.attempt, this.gone)) return null
-      if (this.server) return serverPlan({ finding: this.sheet || this.finding, target: this.target, attempt: this.attempt })
+      if (this.server) return serverPlan({ finding: this.sheet || this.finding, target: this.target, attempt: this.attempt, tried: this.tried, preprodHealth: this.preprodHealth })
       return projectPlan({ finding: this.sheet || this.finding, project: this.projectView, attempt: this.attempt })
     },
     steps() {
