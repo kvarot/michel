@@ -6,8 +6,9 @@ import { findJargon } from './jargon.js'
 // visible in simple mode, so its texts are checked too.
 const families = ['nav.', 'todo.', 'resolved.', 'path.', 'plan.', 'expo.', 'guide.', 'empty.', 'help.', 'git.', 'exploited.']
 // Keys allowed to use port, paquet or SSH because their own sentence explains it.
-// Empty for now: a task that adds one lists it here, in the same commit.
-const jargonExceptions = []
+// A task that adds one lists it here, in the same commit.
+// help.server.port explains the word port in its own sentence.
+const jargonExceptions = ['help.server.port']
 
 const simpleEntries = Object.entries(fr).filter(([k]) => families.some((f) => k.startsWith(f)))
 

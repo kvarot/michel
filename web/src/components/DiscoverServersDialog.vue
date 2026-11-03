@@ -57,18 +57,37 @@
       <section v-if="manualOnly || showManual" class="m-disc__manual" :aria-label="$t('servers.discover.manual')">
         <h3 v-if="!manualOnly" class="m-disc__label">{{ $t('servers.discover.manual') }}</h3>
         <div class="m-disc__grid">
-          <v-text-field v-model.trim="manual.host" :label="$t('servers.discover.host')" autocomplete="off" spellcheck="false" hide-details="auto" />
-          <v-text-field v-model.trim="manual.user" :label="$t('servers.discover.user')" autocomplete="off" spellcheck="false" hide-details="auto" />
-          <v-text-field v-model.number="manual.port" :label="$t('servers.discover.port')" type="number" min="1" max="65535" hide-details="auto" />
-          <v-text-field v-model.trim="manual.name" :label="$t('servers.discover.name')" autocomplete="off" hide-details="auto" />
+          <div>
+            <v-text-field v-model.trim="manual.host" :label="$t('servers.discover.host')" autocomplete="off" spellcheck="false" hide-details="auto" />
+            <FieldHelp id="server.host" :field="$t('servers.discover.host')" />
+          </div>
+          <div>
+            <v-text-field v-model.trim="manual.user" :label="$t('servers.discover.user')" autocomplete="off" spellcheck="false" hide-details="auto" />
+            <FieldHelp id="server.user" :field="$t('servers.discover.user')" />
+          </div>
+          <div>
+            <v-text-field v-model.number="manual.port" :label="$t('servers.discover.port')" type="number" min="1" max="65535" hide-details="auto" />
+            <FieldHelp id="server.port" :field="$t('servers.discover.port')" />
+          </div>
+          <div>
+            <v-text-field v-model.trim="manual.name" :label="$t('servers.discover.name')" autocomplete="off" hide-details="auto" />
+            <FieldHelp id="server.name" :field="$t('servers.discover.name')" />
+          </div>
         </div>
         <v-text-field v-model.trim="manual.site" :label="$t('servers.discover.site')" placeholder="https://" autocomplete="off" spellcheck="false" hide-details="auto" />
+        <FieldHelp id="server.site" :field="$t('servers.discover.site')" />
         <p class="m-muted m-small">{{ $t('servers.discover.key_only') }}</p>
       </section>
 
       <div class="m-disc__grid">
-        <v-select v-model="kind" :items="kindItems" :label="$t('servers.discover.kind')" density="comfortable" variant="outlined" hide-details />
-        <v-select v-model="env" :items="envItems" :label="$t('servers.discover.env')" density="comfortable" variant="outlined" hide-details />
+        <div>
+          <v-select v-model="kind" :items="kindItems" :label="$t('servers.discover.kind')" density="comfortable" variant="outlined" hide-details />
+          <FieldHelp id="server.kind" :field="$t('servers.discover.kind')" />
+        </div>
+        <div>
+          <v-select v-model="env" :items="envItems" :label="$t('servers.discover.env')" density="comfortable" variant="outlined" hide-details />
+          <FieldHelp id="server.env" :field="$t('servers.discover.env')" />
+        </div>
       </div>
       <p v-if="kind === 'hds'" class="m-muted m-small">{{ $t('servers.settings.hds_note') }}</p>
 
@@ -89,6 +108,7 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import { api } from '../api.js'
 import { envLabel, envs, kindLabel, kinds } from '../lib/serversView.js'
 
@@ -100,6 +120,7 @@ import { envLabel, envs, kindLabel, kinds } from '../lib/serversView.js'
 // the page can ask for their fingerprints.
 export default {
   name: 'DiscoverServersDialog',
+  components: { FieldHelp },
   props: {
     // manualOnly opens the form for a server added by hand.
     manualOnly: { type: Boolean, default: false },

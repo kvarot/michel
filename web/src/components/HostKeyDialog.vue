@@ -34,6 +34,7 @@
         </template>
       </template>
 
+      <FieldHelp v-if="key" id="server.fingerprint" :field="$t('servers.hostkey.title', { name: target.name })" />
       <p v-if="error" class="m-hk__error" role="alert">{{ error }}</p>
       <p v-if="errorHint" class="m-muted m-small">{{ errorHint }}</p>
     </v-card-text>
@@ -52,6 +53,7 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import { api } from '../api.js'
 
 // HostKeyDialog shows the fingerprint a server presents so the user can
@@ -62,6 +64,7 @@ import { api } from '../api.js'
 // fingerprint that changed meanwhile pins nothing.
 export default {
   name: 'HostKeyDialog',
+  components: { FieldHelp },
   props: {
     // target is the TargetView (id, name).
     target: { type: Object, required: true },

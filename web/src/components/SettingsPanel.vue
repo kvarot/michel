@@ -18,6 +18,7 @@
           </v-btn>
         </div>
         <p v-if="meta && meta.lang" class="m-muted m-small">{{ $t('settings.lang_default', { lang: $t(`lang.${metaLang}`) }) }}</p>
+        <FieldHelp id="settings.lang" :field="$t('settings.lang')" />
       </section>
 
       <section class="m-settings__group" aria-labelledby="settings-theme">
@@ -34,6 +35,7 @@
             {{ $t(`settings.theme_${t}`) }}
           </v-btn>
         </div>
+        <FieldHelp id="settings.theme" :field="$t('settings.theme')" />
       </section>
 
       <section class="m-settings__group" aria-labelledby="settings-advanced">
@@ -48,12 +50,14 @@
           @update:model-value="setAdvanced"
         />
         <p id="settings-advanced-hint" class="m-muted m-small">{{ $t('settings.advanced_hint') }}</p>
+        <FieldHelp id="settings.advanced" :field="$t('settings.advanced')" />
       </section>
 
       <section class="m-settings__group" aria-labelledby="settings-token">
         <h3 id="settings-token" class="m-settings__label">{{ $t('settings.token') }}</h3>
         <p class="m-small">{{ hasToken ? $t('settings.token_saved') : $t('settings.token_missing') }}</p>
         <p class="m-muted m-small">{{ $t('auth.why') }}</p>
+        <FieldHelp id="settings.token" :field="$t('settings.token')" />
         <form class="m-settings__token" @submit.prevent="useToken">
           <v-text-field v-model="pasted" :label="$t('settings.token_paste')" type="password" autocomplete="off" spellcheck="false" hide-details />
           <div class="m-settings__row">
@@ -78,12 +82,14 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import { api } from '../api.js'
 import { languages } from '../i18n/index.js'
 import { keys, save } from '../lib/storage.js'
 
 export default {
   name: 'SettingsPanel',
+  components: { FieldHelp },
   props: {
     meta: { type: Object, default: null },
     theme: { type: String, default: 'light' },

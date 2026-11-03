@@ -41,6 +41,7 @@
           >
             {{ $t('srvfix.snapshot.done') }}
           </v-btn>
+          <FieldHelp id="server.snapshot" :field="$t('srvfix.snapshot.title')" />
         </div>
 
         <template v-if="attempt.state === 'proposed'">
@@ -50,6 +51,8 @@
             </v-btn>
             <v-btn variant="outlined" :loading="refusing" :disabled="approving || refusing" @click="refuseOpen = true">{{ $t('fix.proposal.refuse') }}</v-btn>
           </div>
+          <FieldHelp id="fix.approve" :field="$t('fix.proposal.approve')" />
+          <FieldHelp id="fix.refuse" :field="$t('fix.proposal.refuse')" />
           <p v-if="approving" class="m-voice m-sprop__busy" role="status">
             <v-progress-circular indeterminate size="16" width="2" color="primary" />
             {{ $t('srvfix.approving') }}
@@ -149,6 +152,7 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import { formatDate, severityOf } from '../lib/digestView.js'
 import { backupLine, canApproveServer, envLabel, findingTitle, needsSnapshot, serversHash } from '../lib/serversView.js'
 
@@ -161,6 +165,7 @@ import { backupLine, canApproveServer, envLabel, findingTitle, needsSnapshot, se
 // outcome the button that says the user checked the server.
 export default {
   name: 'ServerProposal',
+  components: { FieldHelp },
   props: {
     attempt: { type: Object, required: true },
     // flaw is the finding as the server's sheet lists it (TargetFindingView), or null.

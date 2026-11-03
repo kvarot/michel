@@ -85,6 +85,7 @@
               </v-btn>
             </div>
             <p class="m-muted m-small">{{ $t('logs.add.try_hint') }} {{ $t('logs.add.start_hint') }}</p>
+            <FieldHelp id="logs.try" :field="$t('logs.add.try')" />
           </template>
           <TryResult v-if="tries[candKey(c)]" :result="tries[candKey(c)]" :lang="lang" @close="delete tries[candKey(c)]" />
         </li>
@@ -94,7 +95,9 @@
       <h5 v-if="$ui.advanced" :id="`${uid}-manual`" class="m-logs__minor">{{ $t('logs.add.manual') }}</h5>
       <form v-if="$ui.advanced" class="m-logs__form" :aria-labelledby="`${uid}-manual`" @submit.prevent="tryDraft('manual', manualDraft)">
         <v-text-field v-model.trim="draft.path" :label="$t('logs.add.path')" :hint="$t('logs.add.path_hint')" persistent-hint autocomplete="off" spellcheck="false" density="compact" />
+        <FieldHelp id="logs.path" :field="$t('logs.add.path')" />
         <v-select v-model="draft.format" :items="formatItems" :label="$t('logs.add.format')" :hint="$t('logs.add.format_hint')" persistent-hint density="compact" variant="outlined" class="m-logs__select" />
+        <FieldHelp id="logs.format" :field="$t('logs.add.format')" />
         <template v-if="draft.format === 'json'">
           <v-text-field v-model.trim="draft.level_field" :label="$t('logs.add.level_field')" :hint="$t('logs.add.level_field_hint')" persistent-hint autocomplete="off" spellcheck="false" density="compact" />
           <v-text-field v-model.trim="draft.channel_field" :label="$t('logs.add.channel_field')" autocomplete="off" spellcheck="false" hide-details density="compact" />
@@ -168,6 +171,7 @@
           :disabled="busy"
           @update:model-value="(v) => change({ interval: v })"
         />
+        <FieldHelp id="logs.interval" :field="$t('logs.interval.title')" />
         <p v-if="intervalWarn" class="m-logs__warn m-small">{{ intervalWarn }}</p>
 
         <!-- Who is told -->
@@ -189,6 +193,7 @@
         </div>
         <v-switch :model-value="settings.sms" :label="$t('logs.alerts.sms')" color="primary" density="comfortable" hide-details inset :disabled="busy" @update:model-value="(v) => change({ sms: !!v })" />
         <p class="m-muted m-small">{{ $t('logs.alerts.sms_hint') }}</p>
+        <FieldHelp id="logs.sms" :field="$t('logs.alerts.sms')" />
         <p v-for="w in settingNotes" :key="w" class="m-logs__warn m-small">{{ w }}</p>
 
         <!-- What Michel keeps -->
@@ -198,6 +203,9 @@
           <p :id="`${uid}-p-${g.key}`" class="m-logs__q">{{ $t(`logs.privacy.${g.key}`) }}</p>
           <p v-if="g.key === 'alert_text'" class="m-muted m-small">{{ $t('logs.privacy.alert_text_hint') }}</p>
           <p v-if="g.key === 'retention'" class="m-muted m-small">{{ $t('logs.privacy.retention_hint') }}</p>
+          <FieldHelp v-if="g.key === 'store_text'" id="logs.store_text" :field="$t('logs.privacy.store_text')" />
+          <FieldHelp v-else-if="g.key === 'alert_text'" id="logs.alert_text" :field="$t('logs.privacy.alert_text')" />
+          <FieldHelp v-else-if="g.key === 'retention'" id="logs.retention" :field="$t('logs.privacy.retention')" />
           <v-radio-group
             :model-value="current(g)"
             :aria-labelledby="`${uid}-p-${g.key}`"
@@ -268,6 +276,7 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import TryResult from './LogTryResult.vue'
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
@@ -290,7 +299,7 @@ const settingField = { store_text: 'store_text', alert_text: 'alert_text', reten
 // returns it.
 export default {
   name: 'ServerLogs',
-  components: { TryResult },
+  components: { FieldHelp, TryResult },
   props: {
     id: { type: String, required: true },
     kind: { type: String, default: 'vps' },

@@ -36,6 +36,7 @@
           </v-btn>
           <v-btn variant="text" size="small" @click="removeOpen = true">{{ $t('servers.sheet.remove') }}</v-btn>
         </div>
+        <FieldHelp id="server.check" :field="$t('servers.sheet.check')" />
         <p v-if="view.checking || checking" class="m-muted m-small" role="status">{{ $t('servers.sheet.checking') }}</p>
         <v-alert v-if="lastFailure" type="warning" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert">
           <p>{{ lastFailure.error || $t('servers.sheet.last_failed') }}</p>
@@ -180,9 +181,11 @@
             <template #label><span class="m-sheet__radio"><strong>{{ l.title }}</strong> — {{ l.text }}</span></template>
           </v-radio>
         </v-radio-group>
+        <FieldHelp id="server.level" :field="$t('servers.settings.level')" />
         <template v-if="view.fix_level === 3">
           <v-checkbox :model-value="view.auto_config" :label="$t('servers.settings.auto')" color="primary" density="comfortable" hide-details :disabled="saving" @update:model-value="(v) => set('auto_config', !!v)" />
           <p class="m-muted m-small m-sheet__indent">{{ $t('servers.settings.auto_hint') }}</p>
+          <FieldHelp id="server.auto" :field="$t('servers.settings.auto')" />
         </template>
 
         <h4 :id="`srv-${id}-exec`" class="m-sheet__sub">{{ $t('servers.settings.executor') }}</h4>
@@ -190,12 +193,14 @@
           <v-radio value="user" color="primary" :label="$t('servers.settings.executor.user')" />
           <v-radio value="michel" color="primary" :label="$t('servers.settings.executor.michel')" />
         </v-radio-group>
+        <FieldHelp id="server.executor" :field="$t('servers.settings.executor')" />
 
         <h4 :id="`srv-${id}-sudo`" class="m-sheet__sub">{{ $t('servers.settings.sudo') }}</h4>
         <v-radio-group :model-value="view.sudo" :aria-labelledby="`srv-${id}-sudo`" hide-details density="comfortable" :disabled="saving" @update:model-value="(v) => set('sudo', v)">
           <v-radio value="none" color="primary" :label="$t('servers.settings.sudo.none')" />
           <v-radio value="nopasswd" color="primary" :label="$t('servers.settings.sudo.nopasswd')" />
         </v-radio-group>
+        <FieldHelp id="server.sudo" :field="$t('servers.settings.sudo')" />
 
         <h4 class="m-sheet__sub">{{ $t('servers.settings.site') }}</h4>
         <p class="m-small">{{ view.site_url ? $t('servers.settings.site_sentence', { url: view.site_url }) : $t('servers.settings.site_none') }}</p>
@@ -203,15 +208,18 @@
           <v-text-field v-model.trim="site" :label="$t('servers.settings.site')" placeholder="https://" autocomplete="off" spellcheck="false" hide-details="auto" density="compact" />
           <v-btn type="submit" size="small" variant="tonal" color="primary" :disabled="saving || site === (view.site_url || '')">{{ $t('servers.settings.site_save') }}</v-btn>
         </form>
+        <FieldHelp id="server.site" :field="$t('servers.settings.site')" />
 
         <h4 class="m-sheet__sub">{{ $t('servers.settings.interval') }}</h4>
         <p class="m-small">{{ $t('servers.settings.interval_sentence', { when: intervalText }) }}</p>
         <v-select :model-value="intervalValue" :items="intervalItems" :label="$t('servers.settings.interval')" density="compact" variant="outlined" hide-details class="m-sheet__select" :disabled="saving" @update:model-value="(v) => set('check_interval', v)" />
+        <FieldHelp id="server.interval" :field="$t('servers.settings.interval')" />
 
         <template v-if="view.env === 'prod'">
           <h4 class="m-sheet__sub">{{ $t('servers.settings.preprod') }}</h4>
           <p class="m-small">{{ view.preprod ? $t('servers.settings.preprod_sentence', { name: view.preprod.name }) : $t('servers.settings.preprod_empty') }}</p>
           <v-select :model-value="view.preprod ? view.preprod.id : ''" :items="preprodItems" :label="$t('servers.settings.preprod')" density="compact" variant="outlined" hide-details class="m-sheet__select" :disabled="saving" @update:model-value="(v) => set('preprod', v || '')" />
+          <FieldHelp id="server.preprod" :field="$t('servers.settings.preprod')" />
         </template>
 
         <h4 class="m-sheet__sub">{{ $t('servers.settings.kind_env') }}</h4>
@@ -219,8 +227,11 @@
           <v-select :model-value="view.kind" :items="kindItems" :label="$t('servers.discover.kind')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('kind', v)" />
           <v-select :model-value="view.env" :items="envItems" :label="$t('servers.discover.env')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('env', v)" />
         </div>
+        <FieldHelp id="server.kind" :field="$t('servers.discover.kind')" />
+        <FieldHelp id="server.env" :field="$t('servers.discover.env')" />
         <p v-if="view.kind === 'hds'" class="m-muted m-small">{{ $t('servers.settings.hds_note') }}</p>
         <v-switch :model-value="view.active" :label="$t('servers.settings.active')" color="primary" density="comfortable" hide-details inset :disabled="saving" @update:model-value="(v) => set('active', !!v)" />
+        <FieldHelp id="server.active" :field="$t('servers.settings.active')" />
 
         <p v-if="saved" class="m-small m-sheet__saved" role="status">{{ $t('servers.settings.saved') }}</p>
         <p v-if="saveError" class="m-small m-sheet__error" role="alert">{{ saveError }}</p>
@@ -292,6 +303,7 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import AiConsentDialog from './AiConsentDialog.vue'
 import HostKeyDialog from './HostKeyDialog.vue'
 import ServerLogs from './ServerLogs.vue'
@@ -314,7 +326,7 @@ const checkEvery = 3000
 // Michel".
 export default {
   name: 'ServerSheet',
-  components: { AiConsentDialog, HostKeyDialog, ServerLogs },
+  components: { AiConsentDialog, FieldHelp, HostKeyDialog, ServerLogs },
   props: {
     id: { type: String, required: true },
   },

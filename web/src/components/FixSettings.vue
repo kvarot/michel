@@ -25,6 +25,7 @@
             </template>
           </v-radio>
         </v-radio-group>
+        <FieldHelp id="project.level" :field="$t('fixset.code')" />
         <p v-if="view.fix_level >= 2 && consent && !consent.ready" class="m-fixset__note m-small">{{ $t('fixset.ai_levels') }}</p>
         <v-checkbox
           :model-value="view.auto_fix_minor"
@@ -36,10 +37,12 @@
           @update:model-value="setAuto"
         />
         <p class="m-muted m-small m-fixset__hint">{{ $t('fixset.auto_hint') }}</p>
+        <FieldHelp id="project.auto" :field="$t('fixset.auto')" />
       </section>
 
       <section class="m-fixset__group" :aria-labelledby="`${uid}-ai`">
         <h4 :id="`${uid}-ai`" class="m-fixset__label">{{ $t('fixset.ai') }}</h4>
+        <FieldHelp id="project.ai" :field="$t('fixset.ai')" />
         <template v-if="consent">
           <template v-if="consent.switch_mode">
             <p class="m-small">{{ $t('fixset.ai_strict') }}</p>
@@ -86,6 +89,7 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import AiConsentDialog from './AiConsentDialog.vue'
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
@@ -100,7 +104,7 @@ let seq = 0
 // deployed on (each one's fix settings live on its own sheet).
 export default {
   name: 'FixSettings',
-  components: { AiConsentDialog },
+  components: { AiConsentDialog, FieldHelp },
   props: {
     name: { type: String, required: true },
   },
