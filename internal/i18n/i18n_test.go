@@ -193,3 +193,23 @@ func TestTemplateIsCachedPerLanguage(t *testing.T) {
 		t.Error("unsupported language must fail")
 	}
 }
+
+// A key written in code is in the copy: mask.ScanFiles only detects it, and the
+// agent reads the file. The consent must not say the secrets stay.
+func TestConsentDoesNotPromiseThatSecretsStay(t *testing.T) {
+	for lang, want := range map[Lang]struct{ false1, false2, leaves, sensitive string }{
+		FR: {"pas les secrets", "secrets sont masqués et", "part avec lui", "pas dans les fichiers que l'agent lit"},
+		EN: {"not the secrets", "secrets are masked and", "goes with it", "not in the files the agent reads"},
+	} {
+		leaves, sensitive := T(lang, "fix.consent.what_leaves"), T(lang, "fix.consent.sensitive")
+		if strings.Contains(strings.ToLower(leaves), want.false1) {
+			t.Errorf("%s what_leaves still says the secrets stay: %q", lang, leaves)
+		}
+		if !strings.Contains(leaves, want.leaves) {
+			t.Errorf("%s what_leaves does not say a written key leaves: %q", lang, leaves)
+		}
+		if strings.Contains(sensitive, want.false2) || !strings.Contains(sensitive, want.sensitive) {
+			t.Errorf("%s sensitive does not bound the masking: %q", lang, sensitive)
+		}
+	}
+}

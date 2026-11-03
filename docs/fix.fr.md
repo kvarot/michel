@@ -48,9 +48,9 @@ Sinon, la proposition t'attend. « Appliquer » veut dire « créer la branche �
 
 Claude Code envoie à Anthropic ce qu'il lit : c'est une IA externe au sens de la [politique de souveraineté](security/sovereignty-policy.md). Le premier clic sur **Corriger** dans un projet affiche donc un écran d'accord, un par projet. Il dit :
 
-- ce qui sort : le code de la copie que l'agent lit, la fiche (secrets masqués) et tes messages ; pas les fichiers exclus, pas les secrets masqués ;
+- ce qui sort : le code de la copie que l'agent lit, la fiche (secrets masqués) et tes messages ; une clé ou un mot de passe écrit dans ce code part avec lui ; les fichiers exclus ne sortent pas ;
 - ce qui tourne : « Michel lance composer/npm et tes tests sur une copie, avec tes droits Windows ; le code écrit par l'agent s'exécute. » (voir « Risques qui restent ») ;
-- que le projet est classé sensible, quand c'est le cas (c'est le réglage par défaut) : le masquage est actif et les fichiers exclus ne sont pas copiés ;
+- que le projet est classé sensible, quand c'est le cas (c'est le réglage par défaut) : les secrets sont masqués dans la fiche et dans ce que Michel affiche, pas dans les fichiers que l'agent lit, et les fichiers exclus ne sont pas copiés ;
 - chaque site (« hôte ») pour lequel il n'existe pas encore de règle réseau :
   - Anthropic, usage `agent.claude` : `api.anthropic.com` (le service de l'IA) et `platform.claude.com` (où une connexion par abonnement renouvelle son accès) ;
   - les dépôts de paquets, usage `fix.install` : `repo.packagist.org`, `packagist.org`, `api.github.com`, `codeload.github.com` (les archives que Composer télécharge), `registry.npmjs.org` ;
@@ -79,7 +79,7 @@ L'agent ne travaille jamais dans ton dossier. Pour chaque tentative, Michel pré
 
 La copie ne contient que les fichiers de ton dernier commit. Restent donc dehors : tout ce que git ignore ou ne suit pas, les fichiers `.env*`, `*.pem`, `*.key`, `id_*` (dans tous les dossiers, majuscules comprises), les dossiers que tu as exclus (`michel project set <nom> --exclude <dossier>`), les liens symboliques et les fichiers spéciaux. Une copie est limitée à 30 000 fichiers, 256 Mio par fichier et 4 Gio en tout ; un projet plus gros est refusé (voir « En cas de problème »). Pendant la préparation, Michel n'écrit rien dans ton projet (c'est vérifié par un test).
 
-Avant que l'agent démarre, Michel passe ses détecteurs de secrets sur les fichiers de la copie. Un secret écrit dans ton code est signalé dans la conversation (« 2 secrets semblent écrits dans ton code (…) : l'agent peut les lire »), avec les fichiers concernés, pour que tu puisses les tenir à l'écart : sors le secret du code (mets-le dans une variable d'environnement ou un fichier `.env`, qui n'est jamais copié), ou exclus le ou les dossiers qui le contiennent (le message les nomme ; `--exclude` prend des noms de dossiers, pas de fichiers).
+Avant que l'agent démarre, Michel passe ses détecteurs de secrets sur les fichiers de la copie. Michel ne retient pas l'agent pour ce qu'ils trouvent : l'agent démarre et peut lire ces fichiers. Un secret écrit dans ton code est signalé dans la conversation au démarrage (« 2 secrets semblent écrits dans ton code (…) : l'agent peut les lire »), avec les fichiers concernés, pour que tu puisses les tenir à l'écart : sors le secret du code (mets-le dans une variable d'environnement ou un fichier `.env`, qui n'est jamais copié), ou exclus le ou les dossiers qui le contiennent (le message les nomme ; `--exclude` prend des noms de dossiers, pas de fichiers).
 
 ## Ce que l'agent peut faire, et ce qu'il ne peut pas faire
 
@@ -122,7 +122,7 @@ Avant d'installer quoi que ce soit, Michel vérifie les réglages de ton projet.
 
 ## La proposition et la validation par empreinte
 
-Une proposition ne change plus une fois faite. Elle contient : un résumé en clair, les modifications (le « diff ») **calculées par Michel** à partir de l'instantané (pas recopiées de l'agent), les fichiers touchés, les commandes lancées par Michel, le résultat des tests (`passed` réussis, `failed` échoués, `not_run` pas lancés), le nouveau scan de la copie, le risque, et une empreinte de l'ensemble (SHA-256 : un code qui change dès que le moindre détail du contenu change). Si l'agent continue et propose à nouveau, la nouvelle proposition remplace l'ancienne (`superseded`) et la page l'affiche.
+Une proposition ne change plus une fois faite. Elle contient : un résumé en clair, les modifications (le « diff ») **calculées par Michel** à partir de l'instantané (pas recopiées de l'agent), les fichiers touchés, les commandes lancées par Michel, le résultat des tests (`passed` réussis, `failed` échoués, `not_run` pas lancés), le nouveau scan de la copie (une faille hors dépendance ne peut pas être scannée à nouveau sur la copie : la page dit que Michel n'a pas pu la contrôler), le risque, et une empreinte de l'ensemble (SHA-256 : un code qui change dès que le moindre détail du contenu change). Si l'agent continue et propose à nouveau, la nouvelle proposition remplace l'ancienne (`superseded`) et la page l'affiche.
 
 Michel refuse une modification qui touche un fichier hors de la copie (`..`, chemin complet, lien), un fichier protégé ou un fichier exclu : la tentative passe `failed`, la cause est dite en clair, rien n'est appliqué.
 
@@ -150,7 +150,7 @@ Avant que ce que Michel donne lui-même arrive à l'agent (la fiche, les répons
 - La page et l'API ne remettent jamais la vraie valeur : un secret y reste affiché comme un repère.
 - Michel ne met **jamais** de repère dans un commit : une modification qui en contient un est refusée (l'agent a pu le recopier depuis la fiche). Au moment de la proposition, l'agent est prévenu et peut proposer à nouveau ; si un repère arrivait quand même à l'étape de la branche, Michel ne crée pas la branche et la tentative passe `failed` avec cette cause (c'est un refus de Michel, pas le tien). Si une correction a vraiment besoin d'une valeur secrète dans le code, tu l'ajoutes à la main.
 - Les modifications affichées sur la page sont masquées, mais la branche contient la modification telle qu'elle a été écrite : une ligne de ton code qui ressemble à un mot de passe n'est pas une raison de refuser la modification.
-- **La limite** : les fichiers de la copie ne sont **pas** masqués. La copie contient ton vrai code, Claude Code le lit, donc il part chez Anthropic. Ce qui protège tes secrets, c'est que les fichiers exclus ne sont pas copiés ; un secret écrit dans un fichier de ton commit est lu par l'agent. C'est pour ça que Michel te les signale avant que l'agent démarre. La détection des secrets n'est jamais parfaite : certaines formes (`<password>` en XML, valeurs YAML sur plusieurs lignes, mot de passe contenant un `@` non encodé dans une adresse…) peuvent passer.
+- **La limite** : les fichiers de la copie ne sont **pas** masqués. La copie contient ton vrai code, Claude Code le lit, donc il part chez Anthropic. Ce qui protège tes secrets, c'est que les fichiers exclus ne sont pas copiés ; un secret écrit dans un fichier de ton commit est lu par l'agent. C'est pour ça que Michel te les signale dans la conversation ; le signalement arrive une fois l'agent démarré, donc sors un secret du code avant de lancer une correction. La détection des secrets n'est jamais parfaite : certaines formes (`<password>` en XML, valeurs YAML sur plusieurs lignes, mot de passe contenant un `@` non encodé dans une adresse…) peuvent passer.
 
 ## Corrections de serveur (plan 6)
 

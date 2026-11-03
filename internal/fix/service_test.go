@@ -1285,3 +1285,19 @@ func TestConsentSwitchesStrictLocalOnlyOnTheClick(t *testing.T) {
 		t.Errorf("the policy changed for a health project:\n%s", b)
 	}
 }
+
+// The page reads an empty ecosystem as "no rescan could run" (pathView.js): it
+// rests on this, that a rescan of such a finding fails instead of reporting a
+// clean copy.
+func TestRescanOfAFlawWithoutEcosystemCannotReportClean(t *testing.T) {
+	f := newFixture(t)
+	f.d.Rescan = nil
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "composer.lock"), []byte(`{"packages":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clean, err := f.d.rescan(context.Background(), dir, scan.Finding{Kind: "code", Package: "", OSVID: "rule.x"}, project.Project{})
+	if err == nil || clean {
+		t.Fatalf("rescan = %v, %v; want an error and not clean", clean, err)
+	}
+}

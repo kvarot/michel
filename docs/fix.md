@@ -48,9 +48,9 @@ Otherwise the proposal waits for you. "Apply" means "create the branch", never m
 
 Claude Code sends what it reads to Anthropic: it is an external AI provider in the sense of the [sovereignty policy](security/sovereignty-policy.md). So the first **Fix** on a project shows a consent screen, one per project. It says:
 
-- what leaves: the code of the copy the agent reads, the brief (secrets masked) and your messages; not the excluded files, not the masked secrets;
+- what leaves: the code of the copy the agent reads, the brief (secrets masked) and your messages; a key or password written in that code goes with it; the excluded files do not leave;
 - what runs: "Michel runs composer/npm and your tests on a copy, with your Windows rights; the code written by the agent runs." (see "Residual risks");
-- that the project is classified sensitive, when it is (the default): the masking is on and the excluded files are not copied;
+- that the project is classified sensitive, when it is (the default): secrets are masked in the brief and in what Michel shows, not in the files the agent reads, and the excluded files are not copied;
 - each host that has no allow rule yet:
   - Anthropic, purpose `agent.claude`: `api.anthropic.com` (the API) and `platform.claude.com` (where a subscription login renews its token);
   - the package registries, purpose `fix.install`: `repo.packagist.org`, `packagist.org`, `api.github.com`, `codeload.github.com` (the archives Composer downloads), `registry.npmjs.org`;
@@ -79,7 +79,7 @@ The agent never works in your folder. For each attempt Michel makes, in its data
 
 The copy holds only the files of your last commit. So left out are: whatever git ignores or does not track, `.env*`, `*.pem`, `*.key`, `id_*` files (in every folder, ignoring case), the folders you excluded (`michel project set <name> --exclude <folder>`), symbolic links and special files. A copy is capped at 30,000 files, 256 MiB per file and 4 GiB in all; a larger project is refused (see "Troubleshooting"). During the preparation Michel writes nothing in your project (checked by a test).
 
-Before the agent starts, Michel runs its secret detectors on the files of the copy. A secret written in your code is reported in the conversation ("2 secrets seem written in your code (…): the agent can read them") with the relative files, so that you can keep them out: take the secret out of the code (into an environment variable or a `.env` file, which is never copied), or exclude the folder or folders that hold it (the message names them; `--exclude` takes folder names, not files).
+Before the agent starts, Michel runs its secret detectors on the files of the copy. Michel does not hold the agent for what they find: the agent starts and can read those files. A secret written in your code is reported in the conversation as it starts ("2 secrets seem written in your code (…): the agent can read them") with the relative files, so that you can keep them out: take the secret out of the code (into an environment variable or a `.env` file, which is never copied), or exclude the folder or folders that hold it (the message names them; `--exclude` takes folder names, not files).
 
 ## What the agent can and cannot do
 
@@ -118,7 +118,7 @@ Only **Composer and npm** are installed. A yarn or pnpm project is read and can 
 
 ## The proposal and the validation by fingerprint
 
-A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy, the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
+A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy (a flaw that is not in a dependency cannot be re-scanned on the copy: the page says Michel could not check it), the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
 
 Michel refuses a change that touches a file outside the copy (`..`, absolute path, link), a protected file or an excluded file: the attempt is `failed`, the cause is said in plain words, nothing is applied.
 
@@ -146,7 +146,7 @@ Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks
 - The page and the API never unmask: a secret shows as a token there.
 - Michel **never** unmasks into a commit: a change that holds a token is refused (the agent may have copied it from the brief). At the proposal, the agent is told and can propose again; should one reach the branch step, Michel creates no branch and the attempt is `failed` with that cause (it is Michel's refusal, not yours). If a fix really needs a secret value in code, you add it by hand.
 - The diff shown on the page is masked, but the branch holds the change as written: a password-like line of your own code is not a reason to refuse the change.
-- **The limit**: the files of the copy are **not** masked. The copy holds your real code, and Claude Code reads it, so it goes to Anthropic. What protects your secrets is that the excluded files are not copied; a secret written in a committed file is read by the agent. That is why Michel reports those before the agent starts. Secret detection is never perfect: some forms (XML `<password>`, YAML block values, a password with an unencoded `@` in a URL…) can slip through.
+- **The limit**: the files of the copy are **not** masked. The copy holds your real code, and Claude Code reads it, so it goes to Anthropic. What protects your secrets is that the excluded files are not copied; a secret written in a committed file is read by the agent. That is why Michel reports those in the conversation; the report comes once the agent has started, so take a secret out of the code before you start a fix. Secret detection is never perfect: some forms (XML `<password>`, YAML block values, a password with an unencoded `@` in a URL…) can slip through.
 
 ## Server fixes (plan 6)
 
