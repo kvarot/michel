@@ -235,7 +235,7 @@
   "cli.digest.json_and_html": "Choisis --json ou --html, pas les deux.",
   "cli.digest.no_channel": "Aucun canal n'est activé : personne n'a reçu le résumé. Michel ne l'a pas compté comme envoyé. Le prochain résumé repartira de la même date, rien n'est perdu. Regarde « michel notify list ».",
   "cli.digest.not_delivered": "Personne n'a reçu le résumé. Michel ne l'a pas compté comme envoyé. Le prochain résumé repartira de la même date, rien n'est perdu.",
-  "cli.digest.partly_delivered": "Le résumé est arrivé sur certains canaux, mais sur aucun de ceux qui portent les rubriques des serveurs. Michel ne l'a pas compté comme envoyé : le prochain résumé repartira de la même date, rien n'est perdu.",
+  "cli.digest.partly_delivered": "Le résumé est arrivé sur certains canaux, mais pas sur ceux qui reçoivent la rubrique des serveurs. Michel ne l'a pas compté comme envoyé : le prochain résumé repartira de la même date, rien n'est perdu.",
   "cli.finding.ambiguous": "Le début d'identifiant %q correspond à %d failles. Tape plus de caractères de l'identifiant. Possibilités :",
   "cli.finding.ambiguous_candidate": "%s  %s %s (%s) dans le projet %s",
   "cli.finding.ambiguous_capped": "Le début d'identifiant %q correspond à au moins %d failles. Tape plus de caractères de l'identifiant. Possibilités :",
