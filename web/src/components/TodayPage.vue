@@ -35,7 +35,7 @@
       </ul>
     </section>
 
-    <ExploitedBanner v-if="$ui.advanced" :exploited="digest.exploited || []" :decided="digest.exploited_decided || 0" @decided="$emit('decided')" />
+    <ExploitedBanner :exploited="digest.exploited || []" :decided="digest.exploited_decided || 0" @decided="$emit('decided')" />
 
     <OsvBanner :fetched-at="osvFetchedAt" :stale="digest.osv_stale" />
 

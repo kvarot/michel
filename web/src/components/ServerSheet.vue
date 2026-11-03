@@ -167,8 +167,9 @@
         <template v-if="view.backup_files">
           <p class="m-small">{{ $t('servers.sheet.backups', { n: view.backup_files, size: sizeText }) }}</p>
         </template>
-        <p class="m-muted m-small">{{ $t('servers.sheet.backups_server') }}</p>
       </section>
+
+      <p class="m-muted m-small">{{ $t('servers.sheet.backups_server') }}</p>
 
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-settings`">
         <h3 :id="`srv-${id}-settings`" class="m-sheet__title">{{ $t('servers.settings.title') }}</h3>

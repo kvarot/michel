@@ -65,7 +65,7 @@
       </div>
       <p class="m-muted m-small">{{ $t('logs.add.find_hint') }}</p>
       <p v-if="discovering" class="m-muted m-small" role="status">{{ $t('logs.add.finding') }}</p>
-      <p v-else-if="candidates && !candidates.length" class="m-small" role="status">{{ $t('logs.add.none') }}</p>
+      <p v-else-if="candidates && !candidates.length" class="m-small" role="status">{{ $t($ui.advanced ? 'logs.add.none' : 'logs.add.none_simple') }}</p>
       <ul v-if="candidates && candidates.length" class="m-logs__list" :aria-labelledby="`${uid}-add`">
         <li v-for="c in candidates" :key="candKey(c)" class="m-logs__item">
           <p>

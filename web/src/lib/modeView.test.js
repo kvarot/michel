@@ -31,3 +31,15 @@ describe('stripTechnicalIds', () => {
     expect(stripTechnicalIds(undefined)).toBe('')
   })
 })
+
+describe('stripTechnicalIds grammar', () => {
+  test('capitalises a sentence that began with an id', () => {
+    expect(stripTechnicalIds('CVE-2024-12345 permet de lire des fichiers.')).toBe('Permet de lire des fichiers.')
+  })
+  test('drops a dangling et or comma at the edges', () => {
+    expect(stripTechnicalIds('CVE-2024-1111 et CVE-2024-2222 sont corrigées.')).toBe('Sont corrigées.')
+    expect(stripTechnicalIds('Corrigées : CVE-2024-1111 et CVE-2024-2222')).toBe('Corrigées')
+    expect(stripTechnicalIds('Failles CVE-2024-1111, CVE-2024-2222.')).toBe('Failles.')
+    expect(stripTechnicalIds('Fixed: CVE-2024-1111 and CVE-2024-2222')).toBe('Fixed')
+  })
+})

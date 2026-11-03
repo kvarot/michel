@@ -24,5 +24,13 @@ const idPattern = /\s*\(?\b(?:CVE-\d{4}-\d{4,}|GHSA(?:-[a-z0-9]{4}){3})\b\)?/gi
  */
 export function stripTechnicalIds(text) {
   if (!text) return ''
-  return String(text).replace(idPattern, '').replace(/\s+([,.;:])/g, '$1').replace(/\s{2,}/g, ' ').trim()
+  const s = String(text)
+  const startsWithId = /^\s*\(?(?:CVE-|GHSA-)/i.test(s)
+  let out = s.replace(idPattern, '').replace(/\s+([,.;:])/g, '$1').replace(/\s{2,}/g, ' ').trim()
+  // What an id leaves behind: a dangling "et"/"and" or comma at either end.
+  out = out.replace(/^(?:(?:et|and)\s+|[,;:]\s*)+/i, '')
+  out = out.replace(/\s*[,;:]?\s*\b(?:et|and)\s*$/i, '')
+  out = out.replace(/[,;:]+(?=[.!?]?$)/, '').trim()
+  if (startsWithId) out = out.charAt(0).toUpperCase() + out.slice(1)
+  return out
 }
