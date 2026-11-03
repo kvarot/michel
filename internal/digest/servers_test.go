@@ -140,7 +140,7 @@ func TestDigestServersCountsExposure(t *testing.T) {
 	store(now.Add(-time.Hour), nil)
 	for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
 		d := f.compute(lang, Options{})
-		if len(d.Servers) != 1 || d.Servers[0] != (ServerDigest{Name: "srv-demo", Fixed: 2}) {
+		if len(d.Servers) != 1 || d.Servers[0] != (ServerDigest{Name: "srv-demo", NoLongerOpen: 2}) {
 			t.Fatalf("gone: servers = %+v", d.Servers)
 		}
 		noDetail(d)

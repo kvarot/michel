@@ -124,6 +124,22 @@ func storeFindings(ctx context.Context, d CheckDeps, t target.Target, invAt time
 	if err != nil {
 		return nil, nil, false, err
 	}
+	// An exposure the rules no longer open but the read still shows (the
+	// server became shared, the port became the login one) is kept by the
+	// protection against unread ports: it is not in fs, yet it is waiting.
+	var kept int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM finding WHERE project_id = ? AND source_key = '' AND kind = ? AND status <> ?`,
+		t.ID, scan.KindServerExposure, scan.StatusGone).Scan(&kept); err != nil {
+		return nil, nil, false, fmt.Errorf("cannot read the findings of the server: %w", err)
+	}
+	for _, f := range fs {
+		if f.Kind == scan.KindServerExposure {
+			kept--
+		}
+	}
+	if kept > 0 {
+		still += kept
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, nil, false, fmt.Errorf("cannot store the findings: %w", err)
 	}

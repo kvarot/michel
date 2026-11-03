@@ -639,12 +639,12 @@ describe('texts', () => {
   })
   test('exposure line says firewall', () => {
     const r = build({ servers: [server('a', { open_findings: 1 })], details: { a: { findings: [flaw('e', { kind: 'server_exposure', rule: 'exposed_database', severity: 'medium' })] } } })
-    expect(r.lines[0].title).toBe('Ta base de données écoute sur toutes les adresses : joignable si aucun pare-feu ne la bloque')
+    expect(r.lines[0].title).toBe("Une base de données semble ouverte à tous : joignable si aucun pare-feu (le filtre qui décide qui peut s'y connecter) ne la bloque")
     expect(r.lines[0]).toMatchObject({ rank: 4, word: 'À regarder', action: { label: 'Comprendre', href: '#/servers/a?finding=e' } })
   })
   test('an open cache is not called a database', () => {
     const r = build({ servers: [server('a', { open_findings: 1 })], details: { a: { findings: [flaw('e', { kind: 'server_exposure', rule: 'exposed_cache' })] } } })
-    expect(r.lines[0].title).toBe('Un cache (une mémoire rapide utilisée par le site) écoute sur toutes les adresses : joignable si aucun pare-feu ne le bloque')
+    expect(r.lines[0].title).toBe("Un cache (une mémoire rapide qu'utilisent souvent les sites) semble ouvert à tous : joignable si aucun pare-feu (le filtre qui décide qui peut s'y connecter) ne le bloque")
     expect(r.lines[0].title).not.toContain('base de données')
   })
   test('only a project attempt is told to merge', () => {

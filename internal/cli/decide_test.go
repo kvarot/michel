@@ -409,3 +409,30 @@ func TestDecidePackagePrintsOneSummaryLine(t *testing.T) {
 		t.Errorf("--verbose: %v, %d item lines\n%s", err, items, out)
 	}
 }
+
+// Michel cannot close an open service: "fix" is refused, nothing is stored,
+// and the flaw stays in the list of what is left to do.
+func TestDecideFixRefusedOnExposure(t *testing.T) {
+	dir, _ := scannedDemo(t, false)
+	id := findingByOSV(t, dir, "ACME-2026-0002")
+	s, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`UPDATE finding SET kind = 'server_exposure' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	for lang, want := range map[string]string{"en": "Michel cannot close this service. Use ignore or defer.", "fr": "Michel ne sait pas fermer ce service. Utilise ignore ou defer."} {
+		_, _, _, err := run(t, dir, "--lang", lang, "decide", id, "fix")
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", lang, err)
+		}
+	}
+	if st := findingStatusIn(t, dir, id); st != "new" {
+		t.Errorf("status %s", st)
+	}
+	if rows := auditRows(t, dir, "decision.set"); len(rows) != 0 {
+		t.Errorf("decision.set = %+v", rows)
+	}
+}

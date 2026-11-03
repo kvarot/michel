@@ -210,6 +210,11 @@ func (s *server) targetFixStart(w http.ResponseWriter, r *http.Request, withAgen
 	if !ok {
 		return
 	}
+	// An open service is the person's to close: say so, start nothing.
+	if f.Kind == scan.KindServerExposure {
+		s.failedBody(w, http.StatusConflict, lang, "api.target.exposure_no_fix", "")
+		return
+	}
 	s.runServerFix(w, r, lang, d, f.ID, withAgent)
 }
 

@@ -23,6 +23,7 @@ import (
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/collect"
+	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/policy"
@@ -1329,5 +1330,109 @@ func TestSharedServerOpensNoExposure(t *testing.T) {
 	e.check(tg.ID)
 	if st := e.status(tg.ID, exposedDB); st != "absent" {
 		t.Fatalf("status %q", st)
+	}
+}
+
+// A flaw kept open on a server that became shared is still waiting: the check
+// counts it, so it never says that nothing is left.
+func TestKeptExposureKeepsTheCheckNotClean(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	h.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg := e.server("vps-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	e.advance(time.Hour)
+	before := e.check(tg.ID)
+	ctx := context.Background()
+	got, err := e.deps.Repo.Get(ctx, tg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Kind = target.KindShared
+	if err := e.deps.Repo.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusPending {
+		t.Fatalf("status %q", st)
+	}
+	// The kept flaw is still counted, as it was while the rules opened it.
+	if before.Still == 0 || res.Still != before.Still || res.Clean() {
+		t.Errorf("before %+v, after %+v, clean %v", before, res, res.Clean())
+	}
+}
+
+// A decision on an exposure holds from one check to the next, survives the
+// service coming back, and a due deferral makes the flaw pending again.
+func TestDecisionHoldsOnExposure(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	h.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	ctx := context.Background()
+	id := e.findings(tg.ID)[exposedDB].ID
+	repo := decide.NewRepo(e.st)
+	d, err := repo.Set(ctx, decide.Decision{FindingID: id, Action: decide.Ignore, Justification: "behind the firewall", Author: "cli"}, e.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := func(ss string) {
+		t.Helper()
+		h.change(func(h *host) { h.ss = ss })
+		e.advance(time.Hour)
+		e.check(tg.ID)
+	}
+	next(ssOpenDB)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusDecided {
+		t.Fatalf("next check: %q", st)
+	}
+	next(ssQuiet)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusGone {
+		t.Fatalf("closed: %q", st)
+	}
+	e.takeAlerts()
+	next(ssOpenDB)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusDecided {
+		t.Fatalf("back: %q", st)
+	}
+	if cur, ok, err := repo.Current(ctx, id); err != nil || !ok || cur.ID != d.ID {
+		t.Errorf("decision replaced: %+v %v %v", cur, ok, err)
+	}
+	if a := e.takeAlerts(); len(a) != 0 {
+		t.Errorf("alerts %+v", a)
+	}
+
+	// A deferral that falls due on a flaw kept by a shared server.
+	e2 := newEnv(t)
+	h2 := newHost()
+	h2.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg2 := e2.server("vps-demo", h2, target.EnvProd)
+	e2.check(tg2.ID)
+	id2 := e2.findings(tg2.ID)[exposedDB].ID
+	repo2 := decide.NewRepo(e2.st)
+	if _, err := repo2.Set(ctx, decide.Decision{FindingID: id2, Action: decide.Defer, DueAt: e2.now().Add(48 * time.Hour), Author: "cli"}, e2.now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e2.deps.Repo.Get(ctx, tg2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Kind = target.KindShared
+	if err := e2.deps.Repo.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	e2.advance(24 * time.Hour)
+	e2.check(tg2.ID)
+	if st := e2.status(tg2.ID, exposedDB); st != scan.StatusDecided {
+		t.Fatalf("before the date: %q", st)
+	}
+	e2.advance(48 * time.Hour)
+	if _, err := repo2.ExpireDue(ctx, e2.now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if st := e2.status(tg2.ID, exposedDB); st != scan.StatusPending {
+		t.Fatalf("due: %q", st)
 	}
 }

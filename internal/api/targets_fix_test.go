@@ -324,8 +324,8 @@ func TestExposureCannotStartAFix(t *testing.T) {
 		status int
 		code   string
 	}{
-		"/api/v1/targets/" + v.ID + "/fix/" + id:       {http.StatusNotFound, "fix.server.not_server"},
-		"/api/v1/targets/" + v.ID + "/agent-fix/" + id: {http.StatusNotFound, "fix.server.not_server"},
+		"/api/v1/targets/" + v.ID + "/fix/" + id:       {http.StatusConflict, "api.target.exposure_no_fix"},
+		"/api/v1/targets/" + v.ID + "/agent-fix/" + id: {http.StatusConflict, "api.target.exposure_no_fix"},
 		"/api/v1/findings/" + id + "/fix":              {http.StatusNotFound, ""},
 	} {
 		code, body := tf.send("POST", path, "")

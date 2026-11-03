@@ -12,10 +12,10 @@ import (
 // firewall stays an "if".
 func TestExposureTitleIsInFrench(t *testing.T) {
 	for osv, want := range map[string][2]string{
-		"exposed_database": {"Une base de données écoute sur toutes les adresses de ce serveur",
-			"Elle est joignable depuis l'extérieur si aucun pare-feu ne la bloque. Personne dehors n'a besoin d'y accéder : c'est une porte d'entrée possible vers tes données."},
-		"exposed_cache": {"Un cache (une mémoire rapide utilisée par le site) écoute sur toutes les adresses de ce serveur",
-			"Il est joignable depuis l'extérieur si aucun pare-feu ne le bloque. Personne dehors n'a besoin d'y accéder : c'est une porte d'entrée possible vers tes données."},
+		"exposed_database": {"Une base de données semble ouverte à tous sur ce serveur",
+			"Michel le déduit du numéro d'accès qu'il voit sur le serveur, sans se connecter à ce service. Elle est joignable depuis l'extérieur si aucun pare-feu (le filtre qui décide qui peut s'y connecter) ne la bloque. D'habitude, personne dehors n'a besoin d'y accéder : si c'est le cas ici, c'est une porte d'entrée possible vers tes données."},
+		"exposed_cache": {"Un cache (une mémoire rapide qu'utilisent souvent les sites) semble ouvert à tous sur ce serveur",
+			"Michel le déduit du numéro d'accès qu'il voit sur le serveur, sans se connecter à ce service. Il est joignable depuis l'extérieur si aucun pare-feu (le filtre qui décide qui peut s'y connecter) ne le bloque. D'habitude, personne dehors n'a besoin d'y accéder : si c'est le cas ici, c'est une porte d'entrée possible vers tes données."},
 	} {
 		f := scan.Finding{Kind: scan.KindServerExposure, OSVID: osv, Package: "5432", ManifestRelPath: "exposure:5432",
 			SeverityLabel: "medium", Summary: "english summary"}
@@ -24,7 +24,7 @@ func TestExposureTitleIsInFrench(t *testing.T) {
 			t.Errorf("%s: %q / %q", osv, v.Title, v.Explain)
 		}
 		en := targetFindingView(i18n.EN, "michel", f)
-		if strings.Contains(en.Title, "écoute") || en.Title == "english summary" || !strings.Contains(en.Explain, "firewall") {
+		if strings.Contains(en.Title, "semble") || en.Title == "english summary" || !strings.Contains(en.Explain, "firewall") {
 			t.Errorf("%s en: %q / %q", osv, en.Title, en.Explain)
 		}
 		if v.Severity != "medium" {

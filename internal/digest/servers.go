@@ -21,10 +21,13 @@ const CauseRolledBack = "rolled_back"
 // that appeared, findings that went away, fixes that were undone. Counts
 // only: never a version, a path or a setting.
 type ServerDigest struct {
-	Name       string `json:"name"`
-	New        int    `json:"new"`
-	Fixed      int    `json:"fixed"`
-	RolledBack int    `json:"rolled_back"`
+	Name  string `json:"name"`
+	New   int    `json:"new"`
+	Fixed int    `json:"fixed"`
+	// NoLongerOpen counts the exposures Michel no longer sees: not a fix,
+	// the service may only have moved or stopped.
+	NoLongerOpen int `json:"no_longer_open"`
+	RolledBack   int `json:"rolled_back"`
 }
 
 // servers lists the active servers touched in the window (a server with
@@ -44,13 +47,16 @@ func (c computer) servers(ctx context.Context) ([]ServerDigest, error) {
 		if sd.New, err = countOf(ctx, c.s, `SELECT COUNT(*) FROM finding WHERE project_id = ? AND source_key = '' AND first_seen_at > ? AND status NOT IN ('gone','ignored')`, t.ID, since); err != nil {
 			return nil, err
 		}
-		if sd.Fixed, err = countOf(ctx, c.s, `SELECT COUNT(*) FROM finding WHERE project_id = ? AND source_key = '' AND status = 'gone' AND status_changed_at > ?`, t.ID, since); err != nil {
+		if sd.Fixed, err = countOf(ctx, c.s, `SELECT COUNT(*) FROM finding WHERE project_id = ? AND source_key = '' AND status = 'gone' AND kind <> 'server_exposure' AND status_changed_at > ?`, t.ID, since); err != nil {
 			return nil, err
 		}
 		if sd.RolledBack, err = countOf(ctx, c.s, `SELECT COUNT(*) FROM fix_attempt WHERE project_id = ? AND state = 'failed' AND cause = ? AND updated_at > ?`, t.ID, CauseRolledBack, since); err != nil {
 			return nil, err
 		}
-		if sd.New+sd.Fixed+sd.RolledBack > 0 {
+		if sd.NoLongerOpen, err = countOf(ctx, c.s, `SELECT COUNT(*) FROM finding WHERE project_id = ? AND source_key = '' AND status = 'gone' AND kind = 'server_exposure' AND status_changed_at > ?`, t.ID, since); err != nil {
+			return nil, err
+		}
+		if sd.New+sd.Fixed+sd.NoLongerOpen+sd.RolledBack > 0 {
 			out = append(out, sd)
 		}
 	}
@@ -74,6 +80,9 @@ func serverLine(lang i18n.Lang, s ServerDigest) string {
 	}
 	if s.Fixed > 0 {
 		parts = append(parts, i18n.N(lang, "digest.servers.fixed", s.Fixed))
+	}
+	if s.NoLongerOpen > 0 {
+		parts = append(parts, i18n.N(lang, "digest.servers.no_longer_open", s.NoLongerOpen))
 	}
 	if s.RolledBack > 0 {
 		parts = append(parts, i18n.N(lang, "digest.servers.rolled_back", s.RolledBack))
