@@ -21,6 +21,7 @@ import (
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/servererr"
+	"github.com/kvarot/michel/internal/serverlog"
 	"github.com/kvarot/michel/internal/serverrules"
 	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/sshx"
@@ -67,6 +68,7 @@ func (s *server) targetRoutes() {
 	m.HandleFunc("GET /api/v1/targets/{id}/ai-consent", s.targetConsent)
 	m.HandleFunc("POST /api/v1/targets/{id}/ai-consent", s.targetConsentGive)
 	m.HandleFunc("DELETE /api/v1/targets/{id}/ai-consent", s.targetConsentRevoke)
+	s.logRoutes()
 }
 
 // ---- views -----------------------------------------------------------------
@@ -173,6 +175,13 @@ type TargetView struct {
 	UrgentOpen   int              `json:"urgent_open"`
 	Checking     bool             `json:"checking"`
 	LastCheck    *TargetLastCheck `json:"last_check"`
+	// LogNew counts the errors of the logs not seen yet (new or back);
+	// LogDeviations names the log privacy settings away from the recommended
+	// choice (the badge); LogNoChannel says that a log is read but no
+	// channel can tell anyone.
+	LogNew        int      `json:"log_new"`
+	LogDeviations []string `json:"log_deviations"`
+	LogNoChannel  bool     `json:"log_no_channel"`
 
 	// The detail only.
 	Findings    []TargetFindingView `json:"findings,omitempty"`
@@ -670,6 +679,10 @@ func (s *server) targetView(ctx context.Context, t target.Target, lang i18n.Lang
 		}
 		v.Projects = append(v.Projects, TargetLinkView{Project: p.Name, RemoteDir: srvText(t.User, l.RemoteDir)})
 	}
+	// The log fields, in the list too: the badges and the count of new errors.
+	if err := s.logSummary(ctx, t, &v); err != nil {
+		return TargetView{}, err
+	}
 	if !detail {
 		return v, nil
 	}
@@ -1109,6 +1122,13 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
+	// Nor does a read of its logs, which would write rows back.
+	logUnlock, logFree := serverlog.TryLock(t.ID)
+	if !logFree {
+		s.logRefused(w, http.StatusConflict, lang, "api.logs.busy")
+		return
+	}
+	defer logUnlock()
 	block, err := fix.NewRepo(s.deps.Store).TargetBlock(ctx, t.ID)
 	if err != nil {
 		s.internal(w, r)
@@ -1137,7 +1157,17 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 			dependents++
 		}
 	}
-	if err := s.targets().Remove(ctx, t.ID); err != nil {
+	// What Michel read in its logs goes first: errors, text, sources, settings. If
+	// that fails the server stays, and removing it can be tried again (once it is
+	// gone, nothing could erase the logs). The page leaving does not interrupt it.
+	dctx, cancel := s.detached(r)
+	defer cancel()
+	erased, forgetErr := serverlog.ForgetTargetAudited(dctx, s.serverLogs(), s.deps.Audit, targetActor, t.ID)
+	if !erased {
+		s.failedBody(w, http.StatusInternalServerError, lang, "api.target.logs_failed", "api.target.logs_failed_hint")
+		return
+	}
+	if err := s.targets().Remove(dctx, t.ID); err != nil {
 		s.targetRefused(w, r, lang, err, false)
 		return
 	}
@@ -1149,7 +1179,7 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		removed, rulesFailed = len(gone), err != nil
 	}
 	if err := s.targetAudit(ctx, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "rules_error": rulesFailed,
-		"preprod_cleared": dependents}); err != nil {
+		"preprod_cleared": dependents, "logs_error": forgetErr != nil}); err != nil {
 		s.internal(w, r)
 		return
 	}

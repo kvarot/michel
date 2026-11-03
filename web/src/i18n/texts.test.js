@@ -4,8 +4,8 @@ import fr from './fr.json'
 
 describe('safety texts', () => {
   test('the server fix intro does not say nothing runs without a click (level 3 rules do)', () => {
-    expect(fr['fix.intro_server']).toContain('ou celle des règles que tu as autorisées')
-    expect(en['fix.intro_server']).toContain('or that of the rules you allowed')
+    expect(fr['fix.intro_server']).toContain('ou une règle que tu as toi-même activée')
+    expect(en['fix.intro_server']).toContain('or a rule you turned on yourself')
   })
   test('the backup hint shows which names to replace', () => {
     expect(fr['srvfix.backup_hint']).toContain('cp <sauvegarde> <fichier>')

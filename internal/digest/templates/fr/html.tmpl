@@ -60,6 +60,15 @@
 {{range .Servers}}<li>{{serverLine .}}</li>
 {{end}}</ul>
 {{end}}
+{{- if .ServerLogs}}<h2>{{serverLogsTitle}}</h2>
+{{range .ServerLogs}}<h3>{{serverLogHead .}}</h3>
+<ul>
+{{range .Top}}<li>{{serverLogItem .}}{{if .Text}}<br><span class="what">{{.Text}}</span>{{end}}</li>
+{{end}}{{range .Gaps}}<li>{{serverLogGap .}}</li>
+{{end}}{{if .Skipped}}<li>{{serverLogSkipped .Skipped}}</li>
+{{end}}{{if .Deviations}}<li>{{serverLogDeviations .}}</li>
+{{end}}</ul>
+{{end}}{{end}}
 {{- if .Reading}}<h2>À lire, sur les technologies que tu utilises</h2>
 <ul>
 {{range .Reading}}<li><strong>{{.Source}}</strong> : {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}{{if .URL}}<br><span class="since">{{.URL}}</span>{{end}}</li>

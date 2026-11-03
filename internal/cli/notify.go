@@ -149,8 +149,9 @@ func newNotifyTestCmd(deps *Deps) *cobra.Command {
 	}
 }
 
-// sendChannels sends d on every enabled channel of the policy.
-func sendChannels(ctx context.Context, cmd *cobra.Command, deps *Deps, d digest.Digest) ([]notify.Delivery, error) {
+// sendChannels sends d on every enabled channel of the policy, except the ones
+// named in skip (they already got this digest).
+func sendChannels(ctx context.Context, cmd *cobra.Command, deps *Deps, d digest.Digest, skip map[string]bool) ([]notify.Delivery, error) {
 	cfg := deps.Policy.Notify
 	needSecrets := false
 	for _, c := range cfg.Channels {
@@ -173,6 +174,15 @@ func sendChannels(ctx context.Context, cmd *cobra.Command, deps *Deps, d digest.
 	if err != nil {
 		return nil, deps.Wrapf("cli.notify.channels_invalid", err)
 	}
+	if len(skip) > 0 {
+		left := ns[:0:0]
+		for _, n := range ns {
+			if !skip[n.Name()] {
+				left = append(left, n)
+			}
+		}
+		ns = left
+	}
 	return notify.Deliver(ctx, ns, d), nil
 }
 
@@ -188,9 +198,19 @@ func (u unavailableSecrets) fail() error {
 	return fmt.Errorf("the secret store cannot be opened: %w", u.err)
 }
 
-// reportChannels prints one line per channel on stderr and returns how many
-// failed.
+// reportChannels prints one line per channel on stderr, then how many did not
+// get the digest (the digest is recorded anyway), and returns that number.
 func reportChannels(deps *Deps, deliveries []notify.Delivery) int {
+	failed := reportChannelLines(deps, deliveries)
+	if failed > 0 {
+		fmt.Fprintln(deps.Stderr, deps.N("cli.digest.channels_failed", failed))
+	}
+	return failed
+}
+
+// reportChannelLines prints one line per channel on stderr and returns how many
+// failed.
+func reportChannelLines(deps *Deps, deliveries []notify.Delivery) int {
 	failed := 0
 	for _, dl := range deliveries {
 		switch dl.Result {
@@ -202,9 +222,6 @@ func reportChannels(deps *Deps, deliveries []notify.Delivery) int {
 			failed++
 			fmt.Fprintln(deps.Stderr, channelMessage(deps, dl))
 		}
-	}
-	if failed > 0 {
-		fmt.Fprintln(deps.Stderr, deps.N("cli.digest.channels_failed", failed))
 	}
 	return failed
 }

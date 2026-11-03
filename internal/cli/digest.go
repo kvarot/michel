@@ -1,17 +1,12 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/kvarot/michel/internal/audit"
-	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/digest"
-	"github.com/kvarot/michel/internal/notify"
-	"github.com/kvarot/michel/internal/scan"
 	"github.com/spf13/cobra"
 )
 
@@ -44,14 +39,14 @@ func newDigestCmd(deps *Deps) *cobra.Command {
 				}
 				return printDigest(deps, d, asJSON, asHTML)
 			}
-			d, deliveries, err := sendDigest(cmd.Context(), cmd, deps, opt)
+			res, err := sendDigest(cmd.Context(), cmd, deps, opt, false, nil)
 			if err != nil {
 				return err
 			}
-			if err := printDigest(deps, d, asJSON, asHTML); err != nil {
+			if err := printDigest(deps, res.Digest, asJSON, asHTML); err != nil {
 				return err
 			}
-			if failed := reportChannels(deps, deliveries); failed > 0 {
+			if failed := reportChannels(deps, res.Deliveries); failed > 0 {
 				return &ExitError{Code: 1, Quiet: true, Err: errors.New(deps.N("cli.digest.channels_failed", failed))}
 			}
 			return nil
@@ -77,58 +72,6 @@ func digestOptions(cmd *cobra.Command, deps *Deps, since string) (digest.Options
 		opt.Since = t.UTC()
 	}
 	return opt, nil
-}
-
-// sendDigest marks stale scans as interrupted, takes the due deferrals out of
-// force, computes the digest, sends it on every enabled channel (one failure
-// never stops the others) and records it as a run with the result of each
-// channel (audit notify.send per channel, then digest.run).
-func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.Options) (digest.Digest, []notify.Delivery, error) {
-	now := deps.Now().UTC()
-	swept, err := scan.SweepStale(ctx, deps.Store.DB(), now, scan.StaleScanAfter)
-	if err != nil {
-		return digest.Digest{}, nil, err
-	}
-	if swept > 0 {
-		if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "digest", Action: "scan.sweep", Target: "digest", Result: "ok",
-			Evidence: map[string]any{"swept": swept, "max_age": scan.StaleScanAfter.String()}}); err != nil {
-			return digest.Digest{}, nil, err
-		}
-	}
-	if _, err := decide.NewRepo(deps.Store).ExpireDue(ctx, now, deps.Audit); err != nil {
-		return digest.Digest{}, nil, err
-	}
-	d, err := digest.Compute(ctx, deps.Store, now, deps.Lang, opt)
-	if err != nil {
-		return digest.Digest{}, nil, err
-	}
-	deliveries, err := sendChannels(ctx, cmd, deps, d)
-	if err != nil {
-		return digest.Digest{}, nil, err
-	}
-	run := digest.RunOf(d, now)
-	for _, dl := range deliveries {
-		run.Channels = append(run.Channels, dl.ChannelResult)
-	}
-	if err := digest.NewRepo(deps.Store).Save(ctx, run); err != nil {
-		return digest.Digest{}, nil, err
-	}
-	for _, dl := range deliveries {
-		// Never the body: the channel, where it went, how it ended, its size.
-		if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "digest", Action: "notify.send", Target: dl.Name, Result: dl.Result,
-			Evidence: map[string]any{"channel": dl.Name, "type": dl.Type, "host": dl.Host, "result": dl.Result, "bytes": dl.Bytes,
-				"run_id": run.ID}}); err != nil {
-			return digest.Digest{}, nil, err
-		}
-	}
-	if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "digest", Action: "digest.run", Target: run.ID, Result: "ok",
-		Evidence: map[string]any{
-			"run_id": run.ID, "since": run.Since.UTC().Format(time.RFC3339), "until": run.Until.UTC().Format(time.RFC3339),
-			"projects": len(d.Projects), "new_total": d.NewTotal, "attention_total": d.AttentionTotal, "channels": run.Channels,
-		}}); err != nil {
-		return digest.Digest{}, nil, err
-	}
-	return d, deliveries, nil
 }
 
 // printDigest prints d as text, JSON or HTML.

@@ -19,6 +19,7 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/servererr"
+	"github.com/kvarot/michel/internal/serverlog"
 	"github.com/kvarot/michel/internal/sshx"
 	"github.com/kvarot/michel/internal/target"
 )
@@ -38,7 +39,7 @@ func newTargetCmd(deps *Deps) *cobra.Command {
 			"server by these commands.",
 	}
 	c.AddCommand(newTargetListCmd(deps), newTargetDiscoverCmd(deps), newTargetAddCmd(deps), newTargetTrustCmd(deps),
-		newTargetCheckCmd(deps), newTargetSetCmd(deps), newTargetRemoveCmd(deps))
+		newTargetCheckCmd(deps), newTargetSetCmd(deps), newTargetRemoveCmd(deps), newTargetLogsCmd(deps))
 	return c
 }
 
@@ -593,7 +594,7 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <id>",
 		Short: "Take a server out of Michel (nothing is done on the server)",
-		Long: "Remove deletes the server from Michel's registry with its links and its stored inventories. Its findings and " +
+		Long: "Remove deletes the server from Michel's registry with its links, its stored inventories and everything Michel read in its logs. Its findings and " +
 			"fixes stay as history. Nothing is done on the server itself.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -607,6 +608,11 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 				return deps.Errorf("cli.target.remove.busy", t.Name)
 			}
 			defer unlock()
+			logUnlock, logFree := serverlog.TryLock(t.ID)
+			if !logFree {
+				return deps.Errorf("cli.target.logs.read.busy", t.Name)
+			}
+			defer logUnlock()
 			repo := target.NewRepo(deps.Store)
 			block, err := fix.NewRepo(deps.Store).TargetBlock(ctx, t.ID)
 			if err != nil {
@@ -631,6 +637,12 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 					dependents++
 				}
 			}
+			// What Michel read in its logs goes first. If that fails the server stays and
+			// removing it can be tried again (once it is gone nothing could erase the logs).
+			erased, forgetErr := serverlog.ForgetTargetAudited(context.WithoutCancel(ctx), serverlog.NewRepo(deps.Store), deps.Audit, "cli", t.ID)
+			if !erased {
+				return deps.Errorf("cli.target.remove.logs_failed", t.Name)
+			}
 			if err := repo.Remove(ctx, t.ID); err != nil {
 				return targetFailure(deps, err, false)
 			}
@@ -641,7 +653,7 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 				removed, rulesFailed = len(done), err != nil
 			}
 			if err := targetRecord(cmd, deps, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed,
-				"rules_error": rulesFailed, "preprod_cleared": dependents}); err != nil {
+				"rules_error": rulesFailed, "preprod_cleared": dependents, "logs_error": forgetErr != nil}); err != nil {
 				return err
 			}
 			if rulesFailed {

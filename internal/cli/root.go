@@ -61,6 +61,10 @@ type Deps struct {
 	Store   *store.Store
 	Audit   *audit.Logger
 	Gateway *egress.Gateway
+
+	// LogsReady, when set by michel serve, is closed when the first round of the
+	// log scheduler is over; the digest loop waits for it (see digestLogWait).
+	LogsReady <-chan struct{}
 }
 
 // Close releases the store. It is safe to call more than once.

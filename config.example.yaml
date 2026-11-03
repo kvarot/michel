@@ -66,6 +66,8 @@ risk:
 # Passwords and signing keys are never written here: store them with 'michel secret set <name>'.
 notify:
   page_url: http://127.0.0.1:7331/ # link to the "Today" page put in the digests; never carries the access token
+  digest_at: "08:00"               # local time at which michel serve sends the daily digest; "off" = serve never sends it
+                                   # (the digest also lists the errors of server logs and the periods not read: docs/servers.md)
   # channels:
   #   - name: mail-perso           # free identifier, unique
   #     type: email

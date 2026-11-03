@@ -188,7 +188,10 @@ func (f *fixture) do(method, path, token, body string, hdr ...string) (*http.Res
 		f.t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		f.t.Errorf("%s %s: reading the body: %v, partial %q", method, path, err, b)
+	}
 	return resp, string(b)
 }
 

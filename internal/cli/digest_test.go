@@ -201,6 +201,9 @@ func TestScanAllDigestChains(t *testing.T) {
 	if rows := auditRows(t, dir, "digest.run"); len(rows) != 0 {
 		t.Errorf("digest.run without --digest = %+v", rows)
 	}
+	// A digest is recorded as sent when a channel got it (without one it is
+	// only printed: TestScanDigestKeepsWindowWithoutDelivery).
+	writeHookCfg(t, dir, newHookRecorder(t).URL, "")
 	_, out, _, err := run(t, dir, "--lang", "en", "scan", "--all", "--no-analyze", "--digest", "--osv-db", db)
 	if err != nil || !strings.Contains(out, "== demo ==") {
 		t.Fatalf("scan --all --digest: %v\n%s", err, out)

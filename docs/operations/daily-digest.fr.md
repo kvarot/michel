@@ -1,4 +1,4 @@
-# Décisions, digest quotidien et page « Aujourd'hui »
+# Décisions, résumé quotidien et page « Aujourd'hui »
 
 🇬🇧 English version : [daily-digest.md](daily-digest.md)
 
@@ -23,7 +23,7 @@ michel decisions --project demo [--status fix|defer|ignore|superseded|all] [--js
 michel findings --project demo --status decided
 ```
 
-- Une faille décidée sort de la liste des failles à traiter (statut `decided`). **Michel ne te repose pas la question** tant que rien ne change. Il te la repose (la décision passe en `superseded` et apparaît dans le digest parmi les décisions à revoir) seulement quand :
+- Une faille décidée sort de la liste des failles à traiter (statut `decided`). **Michel ne te repose pas la question** tant que rien ne change. Il te la repose (la décision passe en `superseded` et apparaît dans le résumé parmi les décisions à revoir) seulement quand :
   - la gravité annoncée par l'avis de sécurité change ;
   - les versions qui corrigent la faille changent ;
   - la date d'un report est atteinte ;
@@ -33,9 +33,9 @@ michel findings --project demo --status decided
 - Une faille qui n'est plus vue (statut `gone`) ne peut pas être décidée : si elle revient, Michel ne te redemande que si quelque chose a changé.
 - Chaque décision est notée dans le journal d'audit (événement `decision.set`). Une décision ne touche jamais au dossier du projet.
 
-## Le digest
+## Le résumé
 
-Le digest est le résumé du matin.
+Le résumé est ce que Michel t'envoie chaque matin.
 
 ```
 michel digest                       # affiche ce qui a changé ; n'envoie rien, n'enregistre rien
@@ -47,23 +47,27 @@ michel scan --all --digest          # scanne tous les projets actifs, puis fait 
 michel scan --all --update --digest # lit d'abord les sources activées (comme michel source update)
 ```
 
-**Période couverte.** Un digest couvre tout ce qui s'est passé depuis la fin du dernier digest envoyé avec `--send`, que ses canaux aient réussi ou non. La première fois, il couvre les 24 dernières heures. La période n'est pas plafonnée : après trois semaines d'absence, le digest dit « Tout ce qui a changé depuis le <date> » et liste tout. `--since AAAA-MM-JJ` impose le début, par exemple pour renvoyer après l'échec d'un canal.
+**Période couverte.** Un résumé couvre tout ce qui s'est passé depuis la fin du dernier résumé envoyé avec `--send`, que ses canaux aient réussi ou non (`serve` et `scan --digest` font exception : voir plus bas). La première fois, il couvre les 24 dernières heures. La période n'est pas plafonnée : après trois semaines d'absence, le résumé dit « Tout ce qui a changé depuis le <date> » et liste tout. `--since AAAA-MM-JJ` impose le début, par exemple pour renvoyer après l'échec d'un canal.
 
 **Failles que des pirates utilisent déjà** passe en premier, avant les projets, dès que la source `enrich.kev` est activée : toutes les failles de la liste KEV de la CISA (l'agence américaine de cybersécurité), ainsi que les paquets malveillants, tant qu'elles sont ouvertes ou que tu as décidé de les corriger, quelles que soient leur date et leur gravité. Celles que tu as reportées ou ignorées avec une raison ne sont comptées que sur une ligne. **À lire** vient après les projets : au plus 10 avis d'éditeurs non lus, publiés pendant la période et qui parlent des technologies que tu utilises. Les deux sont expliqués dans [sources.fr.md](../sources.fr.md).
 
 **Rubriques**, pour chaque projet actif :
 
-- une ligne de compteurs : failles ouvertes par gravité, tes décisions par action, nombre de jours sans nouvelle faille critique (quand il n'y en a aucune d'ouverte, le digest affiche « 0 faille critique ouverte » comme un bon état à conserver) ;
+- une ligne de compteurs : failles ouvertes par gravité, tes décisions par action, nombre de jours sans nouvelle faille critique (quand il n'y en a aucune d'ouverte, le résumé affiche « 0 faille critique ouverte » comme un bon état à conserver) ;
 - **Nouvelles failles** : vues pour la première fois pendant la période ;
 - **Plus vues au dernier scan** : une faille qui disparaît du fichier qui fixe les versions des dépendances (lockfile) n'est pas pour autant prouvée corrigée ;
 - **Décisions à revoir** : les décisions que Michel a mises de côté, avec la raison (gravité changée, version corrigée changée, date atteinte, faille revenue différente) ;
 - **Reports qui arrivent à échéance** : les reports dont la date tombe dans les 3 prochains jours, marqués « date dépassée » une fois passée.
 
-Les failles sont regroupées par paquet : une ligne par paquet avec la gravité la plus haute, la version installée, la version à viser et les identifiants des avis. En haut du digest, un bandeau t'avertit quand la base de vulnérabilités hors ligne date de plus de 7 jours, ou quand le dernier scan d'un projet a échoué ou s'est arrêté avant la fin. Après `michel source update` (ou `scan --update`), une ligne **catalogue** dit combien de sources sont à jour et nomme celles que Michel n'a pas pu lire, celles qui attendent ton accord et celles qui ont une nouvelle version (« Catalogue : 6 sources à jour, feed.nginx injoignable. ») ; elle ne dit rien quand tout est à jour. Quand il n'y a rien de nouveau et aucune échéance, Michel le dit en une phrase. La dernière ligne donne le lien vers la page « Aujourd'hui » (`notify.page_url`, jamais avec le jeton d'accès).
+Les failles sont regroupées par paquet : une ligne par paquet avec la gravité la plus haute, la version installée, la version à viser et les identifiants des avis. En haut du résumé, un bandeau t'avertit quand la base de vulnérabilités hors ligne date de plus de 7 jours, ou quand le dernier scan d'un projet a échoué ou s'est arrêté avant la fin. Après `michel source update` (ou `scan --update`), une ligne **catalogue** dit combien de sources sont à jour et nomme celles que Michel n'a pas pu lire, celles qui attendent ton accord et celles qui ont une nouvelle version (« Catalogue : 6 sources à jour, feed.nginx injoignable. ») ; elle ne dit rien quand tout est à jour. Quand il n'y a rien de nouveau et aucune échéance, Michel le dit en une phrase. La dernière ligne donne le lien vers la page « Aujourd'hui » (`notify.page_url`, jamais avec le jeton d'accès).
 
-**`--send`** commence par mettre fin aux reports dont la date est atteinte (ils deviennent des décisions à revoir), envoie le digest sur chaque canal activé, puis enregistre l'envoi (événement d'audit `digest.run`, plus un `notify.send` par canal). Un canal en échec n'empêche pas les autres ; la commande se termine alors avec le code 1. L'envoi est enregistré même sans aucun canal configuré : c'est le repère « depuis la dernière fois ».
+**`--send`** commence par mettre fin aux reports dont la date est atteinte (ils deviennent des décisions à revoir), envoie le résumé sur chaque canal activé, puis enregistre l'envoi (événement d'audit `digest.run`, plus un `notify.send` par canal). Un canal en échec n'empêche pas les autres ; la commande se termine alors avec le code 1. Avec `michel digest --send`, l'envoi est enregistré même sans aucun canal configuré : c'est le repère « depuis la dernière fois ». `scan --digest` et `serve` ne l'enregistrent que si un canal a reçu le résumé (voir plus bas).
 
-Un digest ne contient jamais de code, de chemin complet de fichier, de commande de test ou d'installation du projet (`test_cmd`, `install_cmd`), ni de secret : seulement des noms de projets, des compteurs, des paquets, des versions, des identifiants d'avis, des dates d'échéance et le lien de la page.
+**Envoi par `michel serve`.** Tant que `michel serve` tourne, il envoie le résumé une fois par jour, à l'heure `notify.digest_at` (heure locale, `08:00` par défaut ; `off` l'arrête). Si l'ordinateur était éteint à cette heure, le résumé part dès que `serve` démarre, après le premier passage de lecture des journaux (2 minutes au plus), pour qu'il contienne ce qui a été écrit pendant ce temps et les périodes non lues. La tâche planifiée ci-dessus peut rester : les deux partagent le même enregistrement du dernier résumé, et un résumé déjà envoyé dans la même journée locale n'est pas renvoyé, quel que soit celui des deux qui l'a envoyé (`michel scan --all --digest` le dit alors et n'envoie rien). `michel digest --send`, lancé à la main, envoie toujours. `serve` et `scan --digest` ne comptent un résumé comme envoyé que si au moins un canal l'a reçu. Sans canal, ou si tous les canaux échouent, rien n'est enregistré : le prochain résumé repart de la même date et contient les mêmes éléments, rien n'est perdu (`serve` réessaie 15 minutes plus tard, et seulement sur les canaux qui ne l'ont pas encore reçu ce jour-là). Sans aucun canal configuré, personne ne reçoit le résumé : seul `michel scan --all --digest` l'écrit dans le terminal (sur la sortie d'erreur), alors que `serve` n'affiche rien et n'envoie rien.
+
+**Journaux des serveurs.** Quand les journaux d'un serveur sont lus (voir [servers.fr.md](../servers.fr.md)), le résumé a une rubrique **Journaux des serveurs**, un bloc par serveur : les erreurs nouvelles ou revenues pendant la période, puis les plus fréquentes de la période, même lues peu de fois (5 par serveur au plus, les nouvelles et les revenues d'abord, puis les plus fréquentes), avec le nombre de fois où chacune a été lue. Une erreur déjà annoncée par une alerte reste listée. Une période où Michel n'a pas pu lire les journaux est indiquée avec ses dates, « entre le ... et le ... » : Michel n'envoie aucune alerte quand il ne peut plus lire un serveur qui n'est pas de production, cette ligne est donc le moyen de l'apprendre. Cela comprend un serveur dont Michel ne peut plus ouvrir les fichiers de journaux, par exemple après avoir perdu les droits dessus. Un journal qui a trop grossi pour que Michel le lise en une fois a aussi sa ligne : la quantité non lue pendant la période, pour tous les journaux du serveur ensemble. Cette ligne n'apparaît pas si les erreurs de niveau `error` ne partent nulle part sur ce serveur. Le texte des erreurs n'y figure que si les réglages de journaux du serveur l'envoient dans les alertes (texte nettoyé, jamais une ligne de journal, une adresse IP, une adresse e-mail ni une adresse web avec paramètres) ; par défaut il n'y en a pas. Une fois par semaine, la rubrique rappelle aussi les réglages de journaux d'un serveur qui s'écartent de ceux que Michel recommande. Un canal de notification réservé à certains projets ne reçoit pas cette rubrique. Les journaux ne sont lus que quand ton ordinateur est allumé et `michel serve` lancé. L'heure du résumé ne change rien à cette lecture, et une erreur qui demande une alerte immédiate est envoyée tout de suite, sans attendre le résumé. Ce qui est lu et ce qui sort du serveur : [servers.fr.md](../servers.fr.md), section 13.
+
+Un résumé ne contient jamais de code, de chemin complet de fichier, de commande de test ou d'installation du projet (`test_cmd`, `install_cmd`), ni de secret : seulement des noms de projets, des compteurs, des paquets, des versions, des identifiants d'avis, des dates d'échéance et le lien de la page.
 
 ## Canaux
 
@@ -109,7 +113,7 @@ Michel n'envoie jamais d'e-mail en clair : le port 587 exige STARTTLS (la connex
 
 ### Webhook signé
 
-Un webhook est une adresse web qui reçoit le digest, par exemple un outil d'automatisation ou une messagerie d'équipe.
+Un webhook est une adresse web qui reçoit le résumé, par exemple un outil d'automatisation ou une messagerie d'équipe.
 
 ```yaml
 sovereignty:
@@ -125,7 +129,7 @@ notify:
       secret: hook-key             # nom de la clé de signature (HMAC)
 ```
 
-Michel envoie les données au format JSON (requête POST). `generic` envoie le JSON du digest (`{"michel_digest": 1, ...}`), `slack` envoie `{"text": "..."}`, `discord` envoie `{"content": "..."}` coupé à 1 900 caractères. L'URL doit commencer par `https://` (`http://` sans chiffrement n'est accepté que vers cette machine : 127.0.0.1, ::1, localhost). Les redirections ne sont pas suivies. Une réponse du serveur dont le code commence par 2 (200, 204...) veut dire « envoyé ».
+Michel envoie les données au format JSON (requête POST). `generic` envoie le JSON du résumé (`{"michel_digest": 1, ...}`), `slack` envoie `{"text": "..."}`, `discord` envoie `{"content": "..."}` coupé à 1 900 caractères. L'URL doit commencer par `https://` (`http://` sans chiffrement n'est accepté que vers cette machine : 127.0.0.1, ::1, localhost). Les redirections ne sont pas suivies. Une réponse du serveur dont le code commence par 2 (200, 204...) veut dire « envoyé ».
 
 En-têtes :
 
@@ -180,7 +184,7 @@ michel serve --listen 127.0.0.1:8080
 
 `michel serve` lance une page web et ses données **sur cet ordinateur seulement** : il accepte 127.0.0.1, [::1] ou localhost et refuse toute autre adresse, pour que personne d'autre sur le réseau ne puisse l'atteindre. Il n'ouvre aucune connexion vers l'extérieur. Ctrl+C l'arrête.
 
-- **Lien avec jeton.** Au premier lancement, Michel crée un jeton d'accès (une sorte de mot de passe, gardé dans le coffre à secrets sous le nom `api-token`). `serve` affiche le lien qui le contient : `http://127.0.0.1:7331/?token=...`. Ouvre-le : la page garde le jeton dans le navigateur et l'enlève de la barre d'adresse. Garde ce lien pour toi. Le lien des digests (`page_url`) ne contient jamais le jeton : si la page le demande, colle le lien affiché par `serve`.
+- **Lien avec jeton.** Au premier lancement, Michel crée un jeton d'accès (une sorte de mot de passe, gardé dans le coffre à secrets sous le nom `api-token`). `serve` affiche le lien qui le contient : `http://127.0.0.1:7331/?token=...`. Ouvre-le : la page garde le jeton dans le navigateur et l'enlève de la barre d'adresse. Garde ce lien pour toi. Le lien des résumés (`page_url`) ne contient jamais le jeton : si la page le demande, colle le lien affiché par `serve`.
 - **Ce qu'elle montre.** Pour chaque projet : ce qui demande ton attention, les compteurs, et pour chaque faille une fiche (les trois phrases, les faits, un glossaire). Tu peux décider `fix`, `defer` ou `ignore` depuis la fiche : mêmes règles que `michel decide`, avec `web` comme auteur dans le journal d'audit. La page existe en français et en anglais et suit le thème clair ou sombre du système (les deux se changent dans les réglages).
 - **Installer la page.** Dans Chrome ou Edge, l'icône d'installation dans la barre d'adresse (ou menu > Installer la page en tant qu'application) ajoute Michel comme une application. La fenêtre s'ouvre alors même quand `michel serve` est arrêté, mais elle affiche que Michel ne répond pas.
 - **Reconstruire la page.** La page est intégrée au programme. Pour la reconstruire depuis les sources : `make web` (nécessite Node et npm, deux outils de développement), puis `go build`. Sans npm, le programme se compile quand même et `serve` affiche une courte page de texte.
@@ -193,7 +197,7 @@ michel serve --listen 127.0.0.1:8080
 michel scan --all --update --digest
 ```
 
-Elle lit d'abord chaque source activée (les bases de failles OSV, les listes KEV et EPSS qui disent quelles failles sont attaquées ou probablement attaquées, et les autres informations complémentaires ; une source qui attend encore ton accord n'est pas contactée), puis scanne tous les projets actifs, puis envoie le digest. Une source illisible n'arrête pas le scan : Michel se sert des données précédentes, le digest le dit et la commande se termine avec le code 1. Lance-la **avec ton propre compte utilisateur** : les secrets sont chiffrés pour ce compte (Windows) ou lisibles par lui seul, et la notification sur le bureau a besoin de ta session ouverte. Si l'ordinateur est éteint à cette heure-là, rien n'est perdu : le digest suivant couvre tout depuis le précédent.
+Elle lit d'abord chaque source activée (les bases de failles OSV, les listes KEV et EPSS qui disent quelles failles sont attaquées ou probablement attaquées, et les autres informations complémentaires ; une source qui attend encore ton accord n'est pas contactée), puis scanne tous les projets actifs, puis envoie le résumé. Une source illisible n'arrête pas le scan : Michel se sert des données précédentes, le résumé le dit et la commande se termine avec le code 1. Lance-la **avec ton propre compte utilisateur** : les secrets sont chiffrés pour ce compte (Windows) ou lisibles par lui seul, et la notification sur le bureau a besoin de ta session ouverte. Si l'ordinateur est éteint à cette heure-là, rien n'est perdu : le résumé suivant couvre tout depuis le précédent.
 
 ### Windows (Planificateur de tâches)
 

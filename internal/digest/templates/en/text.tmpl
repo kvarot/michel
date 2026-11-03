@@ -46,6 +46,15 @@ open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "hi
 {{serversTitle}}:
 {{range .Servers}}  {{serverLine .}}
 {{end}}{{end}}
+{{- if .ServerLogs}}
+{{serverLogsTitle}}:
+{{range .ServerLogs}}  {{serverLogHead .}}
+{{range .Top}}    - {{serverLogItem .}}
+{{if .Text}}      {{.Text}}
+{{end}}{{end}}{{range .Gaps}}    {{serverLogGap .}}
+{{end}}{{if .Skipped}}    {{serverLogSkipped .Skipped}}
+{{end}}{{if .Deviations}}    {{serverLogDeviations .}}
+{{end}}{{end}}{{end}}
 {{- if .Reading}}
 To read:
 {{range .Reading}}  {{.Source}}: {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}

@@ -49,6 +49,9 @@ func RunOf(d Digest, now time.Time) Run {
 		Summary: map[string]int{"new_total": d.NewTotal, "attention_total": d.AttentionTotal, "failed_scans": d.FailedScans,
 			"empty_projects": d.EmptyProjects, "show_empty": boolInt(d.ShowEmpty),
 			"catalog_failed": len(d.Catalog.Failed) + len(d.Catalog.Unreachable)}}
+	if carriesDeviation(d) {
+		r.Summary[deviationKey] = 1
+	}
 	for _, p := range d.Projects {
 		news := 0
 		for _, pkg := range p.New {
@@ -130,16 +133,29 @@ func (r *Repo) query(ctx context.Context, q string, args ...any) ([]Run, error) 
 	return out, rows.Err()
 }
 
-// Last returns the last saved run, whatever happened on its channels.
+// Last returns the last digest sent (a pending claim is not one), whatever
+// happened on its channels.
 func (r *Repo) Last(ctx context.Context) (Run, bool, error) {
-	list, err := r.query(ctx, `ORDER BY created_at DESC, id DESC LIMIT 1`)
+	list, err := r.List(ctx, 1)
 	if err != nil || len(list) == 0 {
 		return Run{}, false, err
 	}
 	return list[0], true, nil
 }
 
-// List returns the last runs, newest first.
+// List returns the last digests sent, newest first. A pending claim is left
+// out: its send is not over, and it may yet be released.
 func (r *Repo) List(ctx context.Context, last int) ([]Run, error) {
-	return r.query(ctx, `ORDER BY created_at DESC, id DESC LIMIT ?`, last)
+	// A few more rows are read than asked for, to step over claims.
+	rows, err := r.query(ctx, `ORDER BY created_at DESC, id DESC LIMIT ?`, last+pendingRoom)
+	if err != nil {
+		return nil, err
+	}
+	out := rows[:0]
+	for _, run := range rows {
+		if !run.Pending() && len(out) < last {
+			out = append(out, run)
+		}
+	}
+	return out, nil
 }

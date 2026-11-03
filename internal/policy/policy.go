@@ -235,6 +235,34 @@ type NotifyConfig struct {
 	// SMSPerDay caps the SMS sent in a day, all channels together; 0 means
 	// DefaultSMSPerDay.
 	SMSPerDay int `yaml:"sms_per_day"`
+	// DigestAt is the local time (HH:MM) at which michel serve sends the daily
+	// digest, 08:00 by default; "off" stops serve from sending it. Empty means
+	// the default.
+	DigestAt string `yaml:"digest_at"`
+}
+
+// DefaultDigestAt is the hour of the daily digest sent by michel serve.
+const DefaultDigestAt = "08:00"
+
+// DigestOff stops michel serve from sending the digest.
+const DigestOff = "off"
+
+// DigestHour reads digest_at: the hour and minute of the digest, and false
+// when serve must not send it ("off"). An invalid value reads as the default;
+// Validate refuses it before.
+func (n NotifyConfig) DigestHour() (hour, minute int, enabled bool) {
+	at := n.DigestAt
+	if at == "" {
+		at = DefaultDigestAt
+	}
+	if at == DigestOff {
+		return 0, 0, false
+	}
+	if h, m, ok := parseHourMinute(at); ok {
+		return h, m, true
+	}
+	h, m, _ := parseHourMinute(DefaultDigestAt)
+	return h, m, true
 }
 
 // EffectiveSMSPerDay is the daily SMS cap, with the default applied.
