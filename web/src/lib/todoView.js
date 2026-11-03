@@ -397,18 +397,29 @@ function seenNot(d, servers, attempts, active, details, now, t) {
  * resolvedLines makes the lines of the Resolved page, the newest on top. An
  * attempt is listed only when the proof ran (state proven_fixed); it is
  * verified only under ruling R2 (isVerified): a project's fix with no clean
- * new scan of the copy is listed apart, as fixed and not confirmed. The date is
- * the attempt's updated_at, which the proof sets last. exposures are the
+ * new scan of the copy is listed apart, as fixed and not confirmed, and a flaw
+ * that is no longer gone is listed as back (back), never as verified. The date
+ * is the local day of the attempt's updated_at, which the proof sets last. exposures are the
  * exposed services that a full reading no longer sees: {id, server: {id, name},
  * rule, at}.
  * @param {object[]|null} attempts GET /fixes?state=proven_fixed
  * @param {{id: string, server: {id: string, name: string}, rule: string, at: string}[]|null} exposures
  * @param {string} lang
- * @returns {{at: string, title: string, where: string, verified: boolean, href: string, deploy: boolean, kind: string, sort: number}[]}
+ * @returns {{at: string, title: string, where: string, verified: boolean, back: boolean, href: string, deploy: boolean, kind: string, sort: number}[]}
  */
 export function resolvedLines(attempts, exposures, lang) {
   const t = (key, params) => translate(lang, key, params)
   const out = []
+  // localDay is the calendar day on the user's clock, as GET /fixes sends UTC.
+  const localDay = (iso) => {
+    if (!/^\d{4}-\d{2}-\d{2}T/.test(String(iso || ''))) return formatDate(iso, lang)
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return ''
+    const y = String(d.getFullYear()).padStart(4, '0')
+    const mo = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return lang === 'fr' ? `${day}/${mo}/${y}` : `${y}-${mo}-${day}`
+  }
   const stamp = (iso) => {
     const ms = Date.parse(iso)
     return Number.isNaN(ms) ? 0 : ms
@@ -417,9 +428,12 @@ export function resolvedLines(attempts, exposures, lang) {
     if (!a || a.state !== 'proven_fixed') continue
     const s = a.server
     const pkg = a.finding?.package || a.finding?.osv_id || ''
+    // back: the flaw is seen again although the proof once ran.
+    const back = !!a.finding?.status && a.finding.status !== 'gone'
     out.push({
-      at: formatDate(a.updated_at, lang),
-      title: t('resolved.line', { package: pkg }),
+      at: localDay(a.updated_at),
+      title: t(back ? 'resolved.line_back' : 'resolved.line', { package: pkg }),
+      back,
       where: s ? t('todo.where.server', { name: s.target?.name || a.project }) : t('todo.where.project', { name: a.project }),
       verified: isVerified(a),
       href: s ? serversHash(s.target?.id, a.finding?.id) : fixHash({ attempt: a.id }),
@@ -431,7 +445,8 @@ export function resolvedLines(attempts, exposures, lang) {
   for (const e of exposures || []) {
     if (!e) continue
     out.push({
-      at: formatDate(e.at, lang),
+      at: localDay(e.at),
+      back: false,
       title: t(e.rule === 'exposed_cache' ? 'resolved.exposure_cache' : 'resolved.exposure'),
       where: t('todo.where.server', { name: e.server?.name || '' }),
       verified: true,

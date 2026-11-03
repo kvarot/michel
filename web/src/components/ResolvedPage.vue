@@ -24,10 +24,11 @@
       <section v-for="g in groups" :key="g.key" class="m-resolved__group" :aria-labelledby="`resolved-${g.key}`">
         <h2 :id="`resolved-${g.key}`" class="m-resolved__group-title">{{ $t(`resolved.${g.key}.title`) }}</h2>
         <p class="m-muted m-small m-resolved__group-hint">{{ $t(`resolved.${g.key}.hint`) }}</p>
+        <p v-if="g.deploy" class="m-small m-resolved__deploy">{{ $t('resolved.deploy') }}</p>
         <ul class="m-panel m-resolved__list">
           <li v-for="(line, i) in g.lines" :key="`${line.href}-${i}`" class="m-resolved__row">
             <span class="m-small m-resolved__word" :class="line.verified ? 'm-tag--done' : 'm-tag--look'">
-              {{ $t(line.verified ? 'resolved.word.verified' : 'resolved.word.unconfirmed') }}
+              {{ $t(line.back ? 'resolved.word.back' : line.verified ? 'resolved.word.verified' : 'resolved.word.unconfirmed') }}
             </span>
             <div class="m-resolved__text">
               <p class="m-resolved__title">{{ line.title }}</p>
@@ -35,7 +36,6 @@
                 {{ line.where }}
                 <span v-if="line.at">{{ $t('resolved.date', { date: line.at }) }}</span>
               </p>
-              <p v-if="line.deploy" class="m-small m-resolved__deploy">{{ $t('resolved.deploy') }}</p>
             </div>
             <v-btn class="m-resolved__action" variant="outlined" color="primary" :href="line.href">{{ $t('resolved.open') }}</v-btn>
           </li>
@@ -69,9 +69,13 @@ export default {
       return resolvedLines(this.attempts, this.exposures, this.$ui.lang)
     },
     groups() {
+      // The deploy sentence is said once, under the verified group only: it
+      // speaks of a fix Michel confirmed, so it never sits under the others.
+      const verified = this.lines.filter((l) => l.verified)
       return [
-        { key: 'verified', lines: this.lines.filter((l) => l.verified) },
-        { key: 'unconfirmed', lines: this.lines.filter((l) => !l.verified) },
+        { key: 'verified', lines: verified, deploy: verified.some((l) => l.deploy) },
+        { key: 'unconfirmed', lines: this.lines.filter((l) => !l.verified && !l.back), deploy: false },
+        { key: 'back', lines: this.lines.filter((l) => l.back), deploy: false },
       ].filter((g) => g.lines.length)
     },
   },
@@ -114,7 +118,7 @@ export default {
 .m-resolved__title { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .m-resolved__where { margin-top: 0.15rem; overflow-wrap: anywhere; }
 .m-resolved__where span::before { content: ' · '; }
-.m-resolved__deploy { margin-top: 0.25rem; }
+.m-resolved__deploy { margin: -0.3rem 0 0.6rem; }
 .m-resolved__action { flex: none; }
 @media (max-width: 599px) {
   .m-resolved__row { flex-wrap: wrap; }

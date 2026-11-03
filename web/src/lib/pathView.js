@@ -7,12 +7,15 @@
  * the copy (proposal.rescan_clean): rescan_clean alone is known from the
  * proposal on, before any agreement, so it never lights the step by itself.
  * A server's fix needs the proof only: Michel sets it after a full reading that
- * no longer sees the flaw. inconclusive is never verified.
+ * no longer sees the flaw. inconclusive is never verified. In both cases the
+ * flaw must still be gone (finding.status): a proven_fixed attempt never leaves
+ * its final state, so a flaw that came back would otherwise stay « Vérifiée ».
  * @param {object|null|undefined} attempt an element of GET /fixes
  * @returns {boolean}
  */
 export function isVerified(attempt) {
   if (!attempt || attempt.state !== 'proven_fixed') return false
+  if (attempt.finding?.status !== 'gone') return false
   if (attempt.server) return true
   return attempt.proposal?.rescan_clean === true
 }

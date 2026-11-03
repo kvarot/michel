@@ -691,6 +691,27 @@ describe('resolvedLines', () => {
     expect(isVerified(proven('c', { state: 'proven_fixed', proposal: null }))).toBe(false)
   })
 
+  test('a flaw that came back is not verified, it is listed as back', () => {
+    const lines = resolvedLines([
+      proven('a'),
+      proven('b', { finding: { ...proven('b').finding, status: 'open' } }),
+      proven('c', { ...onServer(), finding: { ...proven('c').finding, status: 'open' } }),
+    ], [], 'fr')
+    const byId = Object.fromEntries(lines.map((l) => [l.href, l]))
+    expect(byId['#/fix/a']).toMatchObject({ verified: true, back: false })
+    expect(byId['#/fix/b']).toMatchObject({ verified: false, back: true, title: 'La faille de lib est revenue' })
+    expect(byId['#/servers/srv1?finding=f-c']).toMatchObject({ verified: false, back: true })
+    expect(isVerified(proven('b', { finding: { status: 'open' } }))).toBe(false)
+    expect(isVerified(proven('c', { ...onServer(), finding: { status: 'open' } }))).toBe(false)
+    expect(resolvedLines([proven('b', { finding: { ...proven('b').finding, status: 'open' } })], [], 'en')[0].title).toBe('The flaw in lib is back')
+  })
+
+  test('the date is the local day', () => {
+    const d = new Date(2026, 10, 2, 0, 30)
+    const lines = resolvedLines([proven('a', { updated_at: d.toISOString() })], [], 'fr')
+    expect(lines[0].at).toBe('02/11/2026')
+  })
+
   test('date from updated_at, newest first', () => {
     const lines = resolvedLines([
       proven('a', { updated_at: '2026-10-01T10:00:00Z' }),
@@ -723,6 +744,6 @@ describe('resolvedLines', () => {
     expect(resolvedLines(null, null, 'fr')).toEqual([])
     expect(fr['empty.resolved']).toMatch(/confirmé sa correction/)
     expect(en['empty.resolved']).toBeTruthy()
-    expect(fr['resolved.deploy']).toMatch(/déployer/)
+    expect(fr['resolved.deploy']).toMatch(/en ligne/)
   })
 })
