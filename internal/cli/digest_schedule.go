@@ -26,6 +26,11 @@ var digestLoop = runDigestLoop
 // off, and the holes in the reading, are then in the digest. A variable for tests.
 var digestLogWait = 2 * time.Minute
 
+// digestLagWait is how long the look waits once the first round has ended: the
+// period of a digest stops digest.LogReadLag before now, and that round must be
+// in it. A variable for tests.
+var digestLagWait = digest.LogReadLag + time.Second
+
 // Test hooks of the loop: tick is called at the start of each look, waiting
 // when the loop starts to wait for the logs.
 var (
@@ -157,6 +162,12 @@ func runDigestLoop(ctx context.Context, cmd *cobra.Command, deps *Deps, every ti
 		wait := time.NewTimer(digestLogWait)
 		select {
 		case <-deps.LogsReady:
+			lag := time.NewTimer(digestLagWait)
+			select {
+			case <-lag.C:
+			case <-ctx.Done():
+			}
+			lag.Stop()
 		case <-wait.C:
 		case <-ctx.Done():
 		}

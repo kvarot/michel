@@ -694,3 +694,39 @@ func TestServeWithoutChannelKeepsTheFirstWindow(t *testing.T) {
 		t.Errorf("sends %d, body %s", h.count(), h.bodies)
 	}
 }
+
+// Real run: the digest sent as soon as the first log round ended left that round
+// out (its period stops digest.LogReadLag before now), so the errors written
+// while the computer was off waited for the next day. The look waits for the lag.
+func TestDigestAfterTheFirstLogRoundWaitsForItToBeInThePeriod(t *testing.T) {
+	if digestLagWait <= digest.LogReadLag {
+		t.Errorf("the wait (%v) does not pass the lag of the period (%v)", digestLagWait, digest.LogReadLag)
+	}
+	dir, _ := scannedDemo(t, false)
+	writeFailingCfg(t, dir)
+	oldLag := digestLagWait
+	digestLagWait = 400 * time.Millisecond
+	ticked := make(chan time.Time, 100)
+	oldT := digestTickHook
+	digestTickHook = func() { ticked <- time.Now() }
+	t.Cleanup(func() { digestTickHook, loopReady, digestLagWait = oldT, nil, oldLag })
+	ready := make(chan struct{})
+	close(ready)
+	loopReady = ready
+	start := time.Now()
+	var first time.Time
+	loopRun(t, dir, time.Now(), func() bool {
+		select {
+		case first = <-ticked:
+			return true
+		default:
+			return false
+		}
+	})
+	if first.IsZero() {
+		t.Fatal("no look after the first log round")
+	}
+	if d := first.Sub(start); d < digestLagWait {
+		t.Errorf("the look came %v after the round, before the lag of %v", d, digestLagWait)
+	}
+}
