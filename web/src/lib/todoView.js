@@ -80,9 +80,21 @@ export function findingName(f) {
 }
 
 /**
+ * flawTitle is the sentence of a line of the list. A tool's finding touches no
+ * package: the tool found it, the flaw does not touch the tool.
+ * @param {string} name findingName or the digest's name of the line
+ * @param {string} kind the kind of the finding
+ * @param {string} lang
+ * @returns {string}
+ */
+function flawTitle(name, kind, lang) {
+  return kind && kind !== 'dependency' ? translate(lang, 'todo.flaw_tool', { tool: name }) : translate(lang, 'todo.flaw', { package: name })
+}
+
+/**
  * guideTitle is the heading of a flaw's page. An attempt's finding has neither
- * the kind nor the tool: until the sheet comes, a flaw without a package gets a
- * plain sentence rather than a technical id.
+ * the kind nor the tool: a flaw without a package keeps one plain sentence, so
+ * the heading does not change when the sheet comes.
  * @param {object} finding the list's or the attempt's finding
  * @param {object|null} sheet GET /findings/{id}
  * @param {string} lang
@@ -90,7 +102,7 @@ export function findingName(f) {
  */
 export function guideTitle(finding, sheet, lang) {
   const f = sheet || finding || {}
-  const name = f.package || f.kind ? findingName(f) : ''
+  const name = f.package || f.kind === 'dependency' ? findingName(f) : ''
   return name ? translate(lang, 'todo.flaw', { package: name }) : translate(lang, 'path.title_any')
 }
 
@@ -188,7 +200,7 @@ export function buildTodo({ digest, attempts, servers, details, findings, lang, 
         const kev = seen.length ? seen.some((f) => f.kev) : item.kev
         const how = hot ? exploitedRank : bySeverity[seen.length ? worstOf(seen) : severityOf(item.severity)]
         // The explanation names a version and a file: for the advanced mode.
-        const title = advanced && item.text ? item.text : t('todo.flaw', { package: item.package })
+        const title = advanced && item.text ? item.text : flawTitle(item.package, item.findingKind, lang)
         add(`new:${p.name}:${item.package}:${ids[0] || ''}`, how, title, kev && hot ? attacked(where) : where, how.action, fixHash({ finding: ids[0] || '' }), scope, ids)
       } else if (item.kind === 'superseded') {
         const id = item.findingIds[0] || ''
@@ -220,7 +232,7 @@ export function buildTodo({ digest, attempts, servers, details, findings, lang, 
         const hot = row.some(isHot)
         const how = hot ? exploitedRank : bySeverity[severityOf(row[0].severity)]
         const said = row.some((f) => f.kev) ? attacked(where) : where
-        add(`open:${p.name}:${row[0].id}`, how, t('todo.flaw', { package: findingName(row[0]) }), said, how.action, fixHash({ finding: row[0].id }), scope, row.map((f) => f.id))
+        add(`open:${p.name}:${row[0].id}`, how, flawTitle(findingName(row[0]), row[0].kind, lang), said, how.action, fixHash({ finding: row[0].id }), scope, row.map((f) => f.id))
       }
     } else if (openCount(p) > 0) {
       // The count may name what a line already says: too high rather than too low.

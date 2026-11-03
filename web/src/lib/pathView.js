@@ -9,15 +9,16 @@ import { plainSentence } from './modeView.js'
 const stepKeys = ['found', 'solution', 'accord', 'fixed', 'verified']
 
 /**
- * noCopyCheck says no rescan of the copy can run on this flaw: a project's flaw
- * outside a lockfile (code, web...) has no ecosystem, and rescan
+ * noCopyCheck says no rescan of the copy can run on this flaw: a flaw found by
+ * an external tool (Semgrep, Trivy…) has no ecosystem, and rescan
  * (internal/fix/service.go) then fails, so rescan_clean is false whatever the
- * agent did. It says nothing about the flaw.
+ * agent did. It says nothing about the flaw. A finding with no status is not
+ * one of these: the store no longer has it, so nothing is known of it.
  * @param {object|null|undefined} attempt
  * @returns {boolean}
  */
 function noCopyCheck(attempt) {
-  return !!attempt && !attempt.server && attempt.finding?.ecosystem === ''
+  return !!attempt && !attempt.server && !!attempt.finding?.status && attempt.finding.ecosystem === ''
 }
 
 /**

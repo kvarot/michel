@@ -136,14 +136,17 @@ export function proposalFacts(attempt, sheet) {
  * proposalSentence says the proposal in Michel's voice, e.g. « Je passe
  * guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; 12 endroits l'utilisent, les tests
  * passent. » Without a target it says the package is updated; without
- * analysis (sites null) the call sites are left out.
+ * analysis (sites null) the call sites are left out. A flaw with no package
+ * (found in the code by an external tool) has no version to speak of.
  * @param {{package: string, from: string, to: string, sites: number|null, tests: string}|null} facts
  * @param {string} lang
  */
 export function proposalSentence(facts, lang) {
   if (!facts) return ''
   const t = (key, params) => translate(lang, key, params)
-  const head = facts.to
+  const head = !facts.package
+    ? t('fix.proposal.code')
+    : facts.to
     ? t('fix.proposal.move', { package: facts.package, from: facts.from || '?', to: facts.to })
     : t('fix.proposal.update', { package: facts.package, from: facts.from || '?' })
   const parts = []

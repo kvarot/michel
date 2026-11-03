@@ -85,6 +85,14 @@ describe('proposalSentence', () => {
     expect(proposalSentence(null, 'fr')).toBe('')
   })
 
+  test('a change of code names no package and no version', () => {
+    const code = { package: '', from: '', to: '', sites: null, tests: 'not_run' }
+    expect(proposalSentence(code, 'fr')).toBe("Je propose une modification de ton code ; les tests n'ont pas pu être lancés.")
+    expect(proposalSentence({ ...code, tests: 'passed' }, 'en')).toBe('I propose a change to your code; the tests pass.')
+    const fromAttempt = proposalFacts({ finding: { package: '', ecosystem: '' }, proposal: { tests_status: 'passed' } }, null)
+    expect(proposalSentence(fromAttempt, 'fr')).not.toContain('?')
+  })
+
   test('proposalFacts reads the attempt and the finding sheet', () => {
     const a = attempt('a1', 'proposed', 'f1', { proposal: { tests_status: 'passed', hash: 'h' } })
     const sheet = { analysis: { upgrade: { target: '1.0.3' }, calls: { count: 4 } } }
@@ -253,9 +261,9 @@ describe('stateLine after the attempt', () => {
   })
   test('running and unknown are named', () => {
     expect(line({ state: 'running' })).toBe('Michel applique la correction.')
-    expect(line({ state: 'unknown' })).toBe('Michel ne sait pas si la correction a abouti. Regarde si ton site marche normalement, puis demande à Michel de contrôler à nouveau avant de recommencer.')
+    expect(line({ state: 'unknown' })).toBe('Michel ne sait pas si la correction a abouti. Regarde si ton site marche normalement, puis clique sur « J\'ai vérifié le serveur ».')
     expect(line({ state: 'running' }, 'en')).toBe('Michel is applying the fix.')
-    expect(line({ state: 'unknown' }, 'en')).toBe('Michel does not know whether the fix went through. Check that your site works normally, then ask Michel to check again before trying again.')
+    expect(line({ state: 'unknown' }, 'en')).toBe('Michel does not know whether the fix went through. Check that your site works normally, then click "I checked the server".')
   })
   test('a proven fix of a flaw that came back does not say it has gone', () => {
     expect(line({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe('Corrigée : la faille a disparu.')

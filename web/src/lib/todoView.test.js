@@ -364,7 +364,12 @@ describe('flaws open from before the window', () => {
   test('the finding of a tool is named after the tool, as the digest does', () => {
     const d = digest({ projects: [project('demo', open({ high: 1 }))] })
     const r = build({ digest: d, findings: { demo: [view('t', { kind: 'code', package: '', severity: 'high', source_key: 'plugin.semgrep', rule_id: 'R1' })] } })
-    expect(r.lines[0].title).toBe('Une faille touche semgrep')
+    expect(r.lines[0].title).toBe('Une faille dans ton projet, trouvée par semgrep')
+  })
+  test('a new finding of a tool: the digest names the tool, which the flaw does not touch', () => {
+    const d = digest({ projects: [project('demo', { ...open({ high: 1 }), new: [{ name: 'semgrep', kind: 'code', worst_severity: 'high', finding_ids: ['t'] }] })] })
+    const r = build({ digest: d, findings: { demo: [view('t', { kind: 'code', package: '', severity: 'high', source_key: 'plugin.semgrep', rule_id: 'R1' })] } })
+    expect(r.lines[0].title).toBe('Une faille dans ton projet, trouvée par semgrep')
   })
   test('a running fix keeps the line of its flaw and opens the fix', () => {
     const d = digest({ projects: [project('demo', open({ high: 1 }))] })
@@ -764,10 +769,13 @@ describe('guideTitle', () => {
   test('a dependency is named by its package', () => {
     expect(guideTitle({ package: 'acme/lib', kind: 'dependency' }, null, 'fr')).toBe('Une faille touche acme/lib')
   })
-  test('a tool\'s finding is named by its tool, from the sheet', () => {
+  test('a tool\'s finding keeps the same sentence when the sheet comes', () => {
     const list = { id: 'f', package: '', severity: 'high', osv_id: 'rule.x' }
-    expect(guideTitle(list, { package: '', kind: 'code', source_key: 'plugin.semgrep', rule_id: 'rule.x' }, 'fr')).toBe('Une faille touche semgrep')
-    expect(guideTitle(list, { package: '', kind: 'web', source_key: '', rule_id: 'rule.x' }, 'fr')).toBe('Une faille touche rule.x')
+    const before = guideTitle(list, null, 'fr')
+    expect(before).toBe('Une faille à corriger')
+    expect(guideTitle(list, { package: '', kind: 'code', source_key: 'plugin.semgrep', rule_id: 'rule.x' }, 'fr')).toBe(before)
+    expect(guideTitle(list, { package: '', kind: 'web', source_key: '', rule_id: 'rule.x' }, 'fr')).toBe(before)
+    expect(guideTitle({ ...list, kind: 'code', source_key: 'plugin.semgrep' }, null, 'en')).toBe('A flaw to fix')
   })
   test('before the sheet comes, a sentence and no technical id', () => {
     const fromAttempt = { id: 'f', package: '', osv_id: 'rule.x', ecosystem: '' }
