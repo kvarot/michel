@@ -121,7 +121,8 @@ import FieldHelp from './FieldHelp.vue'
 import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
 import { canApprove, proposalFacts, proposalSentence } from '../lib/fixView.js'
-import { stripTechnicalIds } from '../lib/modeView.js'
+import { plainSentence } from '../lib/modeView.js'
+import { cameBack } from '../lib/pathView.js'
 
 // FixProposal is the right of the Fix page: the flaw in plain words (the
 // three sentences of its sheet), then the proposal in plain words with
@@ -188,6 +189,7 @@ export default {
         case 'applied':
           return this.$t('fix.chat.applied', { branch: a.branch })
         case 'proven_fixed':
+          if (cameBack(a)) return this.$t('fix.done.came_back')
           return `${this.$t('fix.chat.applied', { branch: a.branch })} ${this.$t('fix.done.proven')}`
         case 'inconclusive':
           return this.$t('fix.done.inconclusive', { branch: a.branch })
@@ -209,9 +211,9 @@ export default {
     },
   },
   methods: {
-    // strip removes identifiers from a sentence shown in the simple mode.
+    // strip removes identifiers and file names from a sentence shown in the simple mode.
     strip(text) {
-      return stripTechnicalIds(text)
+      return plainSentence(text, this.sheet)
     },
     refuse() {
       this.refuseOpen = false

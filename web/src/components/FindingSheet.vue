@@ -158,7 +158,7 @@ import DecisionPanel from './DecisionPanel.vue'
 import { api } from '../api.js'
 import { formatDate, formatPercent, severityOf } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
-import { stripTechnicalIds } from '../lib/modeView.js'
+import { plainSentence } from '../lib/modeView.js'
 
 const kinds = ['dependency', 'code', 'misconfig', 'web', 'vulnerability']
 
@@ -245,9 +245,9 @@ export default {
         this.loading = false
       }
     },
-    // strip removes identifiers from a sentence shown in the simple mode.
+    // strip removes identifiers and file names from a sentence shown in the simple mode.
     strip(text) {
-      return stripTechnicalIds(text)
+      return plainSentence(text, this.f)
     },
     onDecided(view) {
       this.f = view

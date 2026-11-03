@@ -1,6 +1,7 @@
 <template>
   <div class="m-fix">
-    <header class="m-fix__head">
+    <a v-if="noList" href="#/" class="m-fix__back">{{ $t('path.back') }}</a>
+    <header v-else class="m-fix__head">
       <h1 class="m-fix__title">{{ $t('fix.title') }}</h1>
       <p class="m-muted m-fix__intro">{{ serverOnly ? $t('fix.intro_server') : $t('fix.intro') }}</p>
     </header>
@@ -26,8 +27,8 @@
 
     <p v-else-if="isEmpty" class="m-fix__state m-voice m-fix__empty">{{ $t('fix.empty') }}</p>
 
-    <div v-else class="m-fix__grid">
-      <nav class="m-fix__list" :aria-label="$t('fix.list_label')">
+    <div v-else class="m-fix__grid" :class="{ 'm-fix__grid--guided': noList }">
+      <nav v-if="!noList" class="m-fix__list" :aria-label="$t('fix.list_label')">
         <section v-for="g in groups" :key="g.key" class="m-fix__group" :aria-labelledby="`fix-group-${g.key}`">
           <h2 :id="`fix-group-${g.key}`" class="m-fix__group-title">
             {{ $t(`fix.group.${g.key}`) }}
@@ -84,18 +85,48 @@
               </ul>
             </template>
           </div>
-          <FixChat
-            v-else
-            :attempt="current"
-            :messages="messages"
-            :activity="activity"
-            :can-start="canStart"
-            :starting="startingFor !== '' && startingFor === selectedFinding.id"
-            :sending="sending"
-            :reconnecting="reconnecting"
-            @start="start"
-            @send="send"
-          />
+          <template v-else>
+            <FailureGuide
+              v-if="guided"
+              class="m-fix__guide"
+              :attempt="current"
+              :finding="selectedFinding"
+              :sheet="sheetOfSelected"
+              :project-view="projectOfSelected"
+              :can-start="canStart"
+              :starting="starting"
+              @start="start"
+              @to-proposal="toProposal"
+            />
+            <DecisionPanel v-if="toDecide" :key="toDecide.id" :finding="toDecide" @decided="onDecided" />
+            <details v-if="noList && current" class="m-fix__chat" :open="hasConversation || undefined">
+              <summary>{{ $t('path.chat') }}</summary>
+              <FixChat
+                :attempt="current"
+                :messages="messages"
+                :activity="activity"
+                :can-start="canStart"
+                :starting="starting"
+                :sending="sending"
+                :reconnecting="reconnecting"
+                no-start
+                @send="send"
+              />
+            </details>
+            <FixChat
+              v-else-if="!noList"
+              :attempt="current"
+              :messages="messages"
+              :activity="activity"
+              :can-start="canStart"
+              :starting="starting"
+              :sending="sending"
+              :reconnecting="reconnecting"
+              :no-start="guided"
+              @start="start"
+              @send="send"
+            />
+          </template>
         </template>
         <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
           <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
@@ -136,7 +167,6 @@
           @approve="approve"
           @refuse="refuse"
         />
-        <DecisionPanel v-if="toDecide" :key="toDecide.id" :finding="toDecide" @decided="onDecided" />
       </div>
     </div>
 
@@ -157,6 +187,7 @@
 <script>
 import AiConsentDialog from './AiConsentDialog.vue'
 import DecisionPanel from './DecisionPanel.vue'
+import FailureGuide from './FailureGuide.vue'
 import FixChat from './FixChat.vue'
 import FixProposal from './FixProposal.vue'
 import ServerProposal from './ServerProposal.vue'
@@ -170,12 +201,13 @@ import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../
 // attempt started alone (level 2) or proposed through michel mcp shows up.
 const listEvery = 15000
 
-// FixPage is the "Corriger" page: the list by state on the left, the
-// conversation with the agent in the middle, the flaw and the proposal on
-// the right. route is {attempt, finding} from the address.
+// FixPage is the "Corriger" page: the list by state on the left, the path of
+// the flaw and the conversation with the agent in the middle, the flaw and the
+// proposal on the right. In the simple mode, a project's flaw has no list and
+// its conversation is folded. route is {attempt, finding} from the address.
 export default {
   name: 'FixPage',
-  components: { AiConsentDialog, DecisionPanel, FixChat, FixProposal, ServerProposal },
+  components: { AiConsentDialog, DecisionPanel, FailureGuide, FixChat, FixProposal, ServerProposal },
   props: {
     route: { type: Object, default: () => ({ attempt: '', finding: '' }) },
   },
@@ -186,6 +218,8 @@ export default {
       failure: null,
       attempts: [],
       findings: [],
+      // projects is GET /projects: FailureGuide says what will happen from it.
+      projects: [],
       agent: null,
       agentError: null,
       agentLoading: false,
@@ -239,6 +273,28 @@ export default {
       if (f) return f
       if (this.sheet && this.sheet.id === this.route.finding) return this.sheet
       return { id: this.route.finding, package: '', severity: '' }
+    },
+    // guided: a project's flaw, under its path. A server's flaw has its own view.
+    guided() {
+      return !!this.selectedFinding && !this.current?.server
+    },
+    // noList: the simple mode leaves a chosen project's flaw alone on the page.
+    noList() {
+      return !this.$ui.advanced && !!(this.route.attempt || this.route.finding) && !this.current?.server
+    },
+    starting() {
+      return this.startingFor !== '' && this.startingFor === this.selectedFinding?.id
+    },
+    sheetOfSelected() {
+      return this.sheet && this.sheet.id === this.selectedFinding?.id ? this.sheet : null
+    },
+    projectOfSelected() {
+      const name = this.current?.project || this.sheetOfSelected?.project || this.selectedFinding?.project
+      return (name && this.projects.find((p) => p.name === name)) || null
+    },
+    // hasConversation opens the folded conversation: the agent works or has spoken.
+    hasConversation() {
+      return !!this.messages.length || this.current?.state === 'preparing'
     },
     // toDecide is the flaw's sheet when the page offers its decision.
     toDecide() {
@@ -358,6 +414,7 @@ export default {
       try {
         const [attempts, projects] = await Promise.all([api.get(this.q('/fixes')), findings ? api.get('/projects') : null])
         if (findings) {
+          this.projects = projects || []
           const lists = await Promise.all((projects || []).map((p) =>
             api.get(this.q(`/projects/${encodeURIComponent(p.name)}/findings`)).catch(() => [])))
           this.findings = lists.flat().filter(isOpen)
@@ -391,6 +448,15 @@ export default {
       } finally {
         if (this.sheetFor === id) this.sheetLoading = false
       }
+    },
+
+    /** toProposal brings the proposal and its Valider into view, on a phone far below the path. */
+    toProposal() {
+      const el = document.getElementById('fix-proposal-title')
+      if (!el) return
+      el.setAttribute('tabindex', '-1')
+      el.focus({ preventScroll: true })
+      el.scrollIntoView({ block: 'start' })
     },
 
     /**
@@ -721,6 +787,7 @@ export default {
 <style scoped>
 .m-fix { display: grid; gap: 1.25rem; }
 .m-fix__head { display: grid; gap: 0.4rem; }
+.m-fix__back { justify-self: start; color: rgb(var(--v-theme-primary)); font-weight: 600; font-size: 0.9rem; }
 .m-fix__title { font-family: var(--m-voice); font-size: 2rem; font-weight: 600; margin: 0; }
 .m-fix__intro { margin: 0; max-width: 70ch; line-height: 1.5; }
 .m-fix__agent p { margin: 0; }
@@ -771,6 +838,11 @@ export default {
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
 }
+.m-fix__grid--guided { grid-template-columns: minmax(0, 1fr) minmax(17rem, 24rem); }
+.m-fix__grid--guided .m-fix__center { padding: 0; border: 0; background: none; }
+.m-fix__grid--guided .m-fix__guide { order: -2; }
+.m-fix__grid--guided .m-fix__error { order: -1; }
+.m-fix__chat > summary { cursor: pointer; font-weight: 600; color: rgb(var(--v-theme-primary)); padding: 0.25rem 0; }
 .m-fix__pick { font-size: 1.1rem; margin: 0; }
 .m-fix__server { display: grid; gap: 0.6rem; }
 .m-fix__server p { margin: 0; }
@@ -786,6 +858,14 @@ export default {
 @media (max-width: 1100px) {
   .m-fix__grid { grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr); }
   .m-fix__right { grid-column: 2; }
+}
+@media (max-width: 1100px) {
+  .m-fix__grid--guided { grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem); }
+  .m-fix__grid--guided .m-fix__right { grid-column: 2; }
+}
+@media (max-width: 900px) {
+  .m-fix__grid--guided { grid-template-columns: minmax(0, 1fr); }
+  .m-fix__grid--guided .m-fix__right { grid-column: auto; }
 }
 @media (max-width: 760px) {
   .m-fix__grid { grid-template-columns: 1fr; }

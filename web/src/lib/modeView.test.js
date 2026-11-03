@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { readAdvanced, stripTechnicalIds } from './modeView.js'
+import { plainSentence, readAdvanced, stripTechnicalIds } from './modeView.js'
 import { keys } from './storage.js'
 
 describe('readAdvanced', () => {
@@ -53,5 +53,32 @@ describe('stripTechnicalIds grammar', () => {
     expect(stripTechnicalIds('Corrigées : CVE-2024-1111 et CVE-2024-2222')).toBe('Corrigées')
     expect(stripTechnicalIds('Failles CVE-2024-1111, CVE-2024-2222.')).toBe('Failles.')
     expect(stripTechnicalIds('Fixed: CVE-2024-1111 and CVE-2024-2222')).toBe('Fixed')
+  })
+})
+
+describe('plainSentence', () => {
+  test('the simple mode drops the file of a call site', () => {
+    const f = { analysis: { calls: { sites: [{ file: 'src/Foo.php', line: 12 }] } } }
+    expect(plainSentence("acme/lib 1.0 est utilisé à 3 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « a »", f))
+      .toBe("acme/lib 1.0 est utilisé à 3 endroits de ton code. L'avis dit : « a »")
+    expect(plainSentence('acme/lib 1.0 is used in 3 places in your code, for example src/Foo.php:12.', f))
+      .toBe('acme/lib 1.0 is used in 3 places in your code.')
+  })
+  test('holds without the analysis, and for a file name with a space, given the site', () => {
+    expect(plainSentence('Utilisé, par exemple src/Foo.php:12.', null)).toBe('Utilisé.')
+    const f = { analysis: { calls: { sites: [{ file: 'my src/Foo.php', line: 3 }] } } }
+    expect(plainSentence('Utilisé, par exemple my src/Foo.php:3.', f)).toBe('Utilisé.')
+  })
+  test('drops the rule and the place of a plugin finding', () => {
+    const f = { rule_id: 'php.lang.security.exec-use', location: 'src/a.php:12' }
+    expect(plainSentence('semgrep signale le problème php.lang.security.exec-use dans src/a.php:12.', f)).toBe('semgrep signale le problème.')
+    expect(plainSentence('semgrep flags the problem php.lang.security.exec-use in src/a.php:12.', f)).toBe('semgrep flags the problem.')
+  })
+  test('drops the advisory id of the flaw and ids of CVE shape', () => {
+    expect(plainSentence('La faille ACME-2026-0001 (CVE-2024-12345) est grave.', { osv_id: 'ACME-2026-0001' })).toBe('La faille est grave.')
+  })
+  test('leaves a plain sentence alone', () => {
+    expect(plainSentence('Une phrase : sans rien, par exemple ceci.', {})).toBe('Une phrase : sans rien, par exemple ceci.')
+    expect(plainSentence('', {})).toBe('')
   })
 })

@@ -42,3 +42,32 @@ export function stripTechnicalIds(text) {
   }
   return out
 }
+
+/** escaped makes a text literal in a regular expression. */
+function escaped(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const exampleClause = /,\s*(?:par exemple|for example)\s+\S+:\d+(?=[.\s]|$)/gi
+
+/**
+ * plainSentence is a sentence of Michel for the simple mode: no file of the
+ * person's code ("par exemple src/Foo.php:12"), no rule or advisory name, no
+ * CVE or GHSA id. The advanced mode shows the sentence as it is.
+ * @param {string | undefined} text
+ * @param {object | null} [facts] the finding: analysis, location, rule_id, osv_id
+ * @returns {string}
+ */
+export function plainSentence(text, facts) {
+  let s = String(text || '')
+  if (!s) return ''
+  const site = facts?.analysis?.calls?.sites?.[0]
+  for (const place of [site && `${site.file}:${site.line}`, facts?.location]) {
+    if (place) s = s.replace(new RegExp(`(?:,\\s*(?:par exemple|for example)|\\s(?:dans|in))\\s+${escaped(place)}`, 'gi'), '')
+  }
+  s = s.replace(exampleClause, '')
+  for (const id of [facts?.rule_id, facts?.osv_id]) {
+    if (id) s = s.replace(new RegExp(`\\s*\\(?(?<![\\w.-])${escaped(id)}(?![\\w-])\\)?`, 'g'), '')
+  }
+  return stripTechnicalIds(s).trim()
+}

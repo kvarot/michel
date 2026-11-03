@@ -241,3 +241,32 @@ describe('what can still be decided', () => {
     expect(canDecide({ state: 'failed', server: { target: { id: 'a' } } })).toBe(false)
   })
 })
+
+describe('stateLine after the attempt', () => {
+  const line = (a, lang = 'fr') => stateLine({ kind: 'attempt', attempt: a }, lang)
+  test('inconclusive is a result, with its cause', () => {
+    expect(line({ state: 'inconclusive', cause: 'la branche est fusionnée, mais la faille apparaît encore au scan' }))
+      .toBe("Michel n'a pas pu confirmer la correction. La branche est fusionnée, mais la faille apparaît encore au scan.")
+    expect(line({ state: 'inconclusive', cause: '' })).toBe("Michel n'a pas pu confirmer la correction.")
+    expect(line({ state: 'inconclusive', cause: 'the branch is merged.' }, 'en')).toBe('Michel could not confirm the fix. The branch is merged.')
+    expect(line({ state: 'inconclusive', cause: 'x' })).not.toContain('prochain scan')
+  })
+  test('running and unknown are named', () => {
+    expect(line({ state: 'running' })).toBe('Michel applique la correction.')
+    expect(line({ state: 'unknown' })).toBe('Michel ne sait pas si la correction a abouti. Vérifie avant de recommencer.')
+    expect(line({ state: 'running' }, 'en')).toBe('Michel is applying the fix.')
+    expect(line({ state: 'unknown' }, 'en')).toBe('Michel does not know whether the fix went through. Check before trying again.')
+  })
+  test('a proven fix of a flaw that came back does not say it has gone', () => {
+    expect(line({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe('Corrigée : la faille a disparu.')
+    expect(line({ state: 'proven_fixed', finding: { status: 'new' } })).toBe('Cette faille est revenue depuis la correction.')
+  })
+})
+
+describe('canDecide after the flaw came back', () => {
+  test('a proven fix whose flaw is seen again leaves the decision open', () => {
+    expect(canDecide({ state: 'proven_fixed', finding: { status: 'new' } })).toBe(true)
+    expect(canDecide({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe(false)
+    expect(canDecide({ state: 'proven_fixed', finding: { status: 'new' }, server: { target: { id: 'a' } } })).toBe(false)
+  })
+})

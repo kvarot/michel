@@ -22,6 +22,7 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/workcopy"
 )
 
 // decisionAuthor is the author and the audit actor of decisions taken on the page.
@@ -146,8 +147,8 @@ func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 // projectView counts p's findings the way the digest does.
 func (s *server) projectView(ctx context.Context, p project.Project) (ProjectView, error) {
 	v := ProjectView{Name: scan.SanitizeText(p.Name), Classification: string(p.Classification), FixLevel: p.FixLevel,
-		AutoFixMinor: p.AutoFixMinor,
-		Open:         map[string]int{}, Decided: map[string]int{}, LastScanStatus: "never"}
+		AutoFixMinor: p.AutoFixMinor, HasTestCmd: strings.TrimSpace(p.TestCmd) != "", GitRepo: workcopy.IsGitRepo(p.Path),
+		Open: map[string]int{}, Decided: map[string]int{}, LastScanStatus: "never"}
 	for _, sev := range severities {
 		v.Open[sev] = 0
 	}

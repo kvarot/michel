@@ -78,6 +78,8 @@ export default {
     starting: { type: Boolean, default: false },
     sending: { type: Boolean, default: false },
     reconnecting: { type: Boolean, default: false },
+    // noStart: the page's guide holds the button (a project's flaw).
+    noStart: { type: Boolean, default: false },
   },
   emits: ['start', 'send'],
   data() {
@@ -89,7 +91,7 @@ export default {
     },
     // showStart: nothing started, or the last attempt ended without a fix.
     showStart() {
-      return !this.attempt || ['failed', 'refused', 'superseded'].includes(this.state)
+      return !this.noStart && (!this.attempt || ['failed', 'refused', 'superseded'].includes(this.state))
     },
     // open: the agent may still read a message.
     open() {

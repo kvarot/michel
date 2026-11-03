@@ -1,6 +1,7 @@
 // Pure functions behind the Fix page: no DOM, no fetch, no storage.
 // Vitest covers them (fixView.test.js).
 import { translate } from '../i18n/index.js'
+import { cameBack } from './pathView.js'
 
 /** The four groups of the page's list, in the order they show. */
 export const fixGroups = ['todo', 'running', 'review', 'done']
@@ -23,14 +24,15 @@ export function isOpen(f) {
 }
 
 /**
- * canDecide tells whether the flaw view offers its decision: no fix yet, or a
- * project's fix that went nowhere. A fix under way or waiting has its own
- * buttons; a server's flaw is decided on its server's sheet.
+ * canDecide tells whether the flaw view offers its decision: no fix yet, a
+ * project's fix that went nowhere, or one whose flaw came back. A fix under
+ * way or waiting has its own buttons; a server's flaw is decided on its server's sheet.
  * @param {object|null} attempt AttemptView, null for a flaw without a fix
  */
 export function canDecide(attempt) {
   if (!attempt) return true
-  return !attempt.server && ['refused', 'failed', 'inconclusive', 'superseded', 'applied'].includes(attempt.state)
+  if (attempt.server) return false
+  return ['refused', 'failed', 'inconclusive', 'superseded', 'applied'].includes(attempt.state) || (!!attempt.finding && cameBack(attempt))
 }
 
 /**
@@ -249,14 +251,30 @@ export function splitMasked(text) {
 }
 
 /**
- * stateLine says, under a line of the list, where it stands.
+ * causeSentence makes a sentence of an attempt's cause: Michel's causes may
+ * start in lower case and have no final period, to fit after a colon.
+ * @param {string|undefined} cause
+ * @returns {string}
+ */
+export function causeSentence(cause) {
+  const c = String(cause || '').trim()
+  if (!c) return ''
+  const up = c.charAt(0).toLocaleUpperCase() + c.slice(1)
+  return /[.!?…»]$/.test(up) ? up : `${up}.`
+}
+
+/**
+ * stateLine says, under a line of the list, where it stands. inconclusive is a
+ * result (fix.Prove), so it says why, and Michel does not check it again.
  * @param {{kind: string, attempt?: object}} item a line of groupAttempts
  * @param {string} lang
  */
 export function stateLine(item, lang) {
   if (!item || item.kind !== 'attempt') return translate(lang, 'fix.line.none')
   const a = item.attempt || {}
-  const known = ['preparing', 'proposed', 'approved', 'refused', 'applied', 'proven_fixed', 'inconclusive', 'failed', 'superseded']
+  if (a.state === 'inconclusive') return [translate(lang, 'fix.line.inconclusive'), causeSentence(a.cause)].filter(Boolean).join(' ')
+  if (a.finding && cameBack(a)) return translate(lang, 'fix.line.came_back')
+  const known = ['preparing', 'proposed', 'approved', 'running', 'refused', 'applied', 'proven_fixed', 'failed', 'superseded', 'unknown']
   return translate(lang, `fix.line.${known.includes(a.state) ? a.state : 'failed'}`, { branch: a.branch || '' })
 }
 

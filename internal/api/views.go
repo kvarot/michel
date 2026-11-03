@@ -22,13 +22,17 @@ import (
 // them: Open by severity (new, pending, decided fix or defer), Decided by
 // action of the decisions in force, Total = open + ignored.
 type ProjectView struct {
-	Name           string         `json:"name"`
-	Classification string         `json:"classification"`
-	FixLevel       int            `json:"fix_level"`
-	AutoFixMinor   bool           `json:"auto_fix_minor"`
-	Open           map[string]int `json:"open"`
-	Decided        map[string]int `json:"decided"`
-	Total          int            `json:"total"`
+	Name           string `json:"name"`
+	Classification string `json:"classification"`
+	FixLevel       int    `json:"fix_level"`
+	AutoFixMinor   bool   `json:"auto_fix_minor"`
+	// HasTestCmd says a test command is declared, never which one. GitRepo says
+	// the folder holds a Git repository (read on disk, git does not run).
+	HasTestCmd bool           `json:"has_test_cmd"`
+	GitRepo    bool           `json:"git_repo"`
+	Open       map[string]int `json:"open"`
+	Decided    map[string]int `json:"decided"`
+	Total      int            `json:"total"`
 	// LastScanAt is the start of the newest scan, RFC 3339, "" when never
 	// scanned; LastScanStatus is its status, or "never".
 	LastScanAt     string `json:"last_scan_at"`
