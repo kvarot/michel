@@ -111,6 +111,16 @@ func readByCollect(inv target.Inventory, p string) bool {
 	return false
 }
 
+// collectedHash is the hash of p as the collection read it, "" if unknown.
+func collectedHash(inv target.Inventory, p string) string {
+	for _, f := range inv.Files {
+		if f.Path == p {
+			return f.SHA256
+		}
+	}
+	return ""
+}
+
 // allowedFile checks a file a plan writes or backs up.
 func allowedFile(t target.Target, inv target.Inventory, p string) error {
 	if err := pathRefusal(t, p); err != nil {
@@ -461,7 +471,7 @@ func Validate(p Plan, t target.Target, inv target.Inventory) (Plan, error) {
 				}
 			}
 			writes = append(writes, Action{Op: OpSetDirective, Path: loc.path, Directive: a.Directive, Value: value,
-				SAPI: a.SAPI, Key: loc.key, Line: loc.line, Append: loc.append})
+				SAPI: a.SAPI, Key: loc.key, Line: loc.line, Append: loc.append, SHA256: collectedHash(inv, loc.path)})
 			if !contains(files, loc.path) {
 				files = append(files, loc.path)
 			}

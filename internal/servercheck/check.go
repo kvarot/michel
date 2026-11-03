@@ -92,9 +92,12 @@ func (d CheckDeps) rules() (serverrules.Set, error) {
 // not be decided; SkippedAdvisories counts unreadable advisory files. Zero
 // findings is clean only when Clean says so.
 type CheckResult struct {
-	New, Still, Gone  int
-	Unseen            int
-	SourceToEnable    string
+	New, Still, Gone int
+	Unseen           int
+	SourceToEnable   string
+	// DatabaseMissing tells that SourceToEnable is on but its database was
+	// never downloaded: what is left to do is an update.
+	DatabaseMissing   bool
 	Touched           bool
 	Unjudged          int
 	ReleaseKnown      bool
@@ -328,7 +331,7 @@ func matchPackages(ctx context.Context, d CheckDeps, inv target.Inventory, res *
 	var off vulnmatch.ErrSourceDisabled
 	switch {
 	case errors.As(err, &off):
-		res.SourceToEnable = off.Key
+		res.SourceToEnable, res.DatabaseMissing = off.Key, true
 		return vulnmatch.Result{}, keep, nil
 	case err != nil:
 		return vulnmatch.Result{}, nil, err
