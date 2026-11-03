@@ -56,7 +56,7 @@ CREATE TABLE log_signature (
   last_at TEXT NOT NULL,
   last_alert_at TEXT NOT NULL DEFAULT '',
   total INTEGER NOT NULL DEFAULT 0,
-  text_enc BLOB
+  text_enc BYTEA
 );
 CREATE INDEX log_signature_target ON log_signature (target_id);
 CREATE INDEX log_signature_source ON log_signature (source_id);

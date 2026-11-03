@@ -329,3 +329,20 @@ func TestMigration0011DropsServerFixLevel(t *testing.T) {
 		t.Errorf("fix_proposal.scripts: %v", err)
 	}
 }
+
+// BLOB is not a PostgreSQL type; BYTEA holds bytes in both databases.
+func TestMigrationsAvoidBlobType(t *testing.T) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		body, err := migrationFS.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), " BLOB") {
+			t.Errorf("%s uses BLOB", e.Name())
+		}
+	}
+}
