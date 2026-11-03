@@ -5,13 +5,6 @@
 import { translate } from '../i18n/index.js'
 import { localDay, validateDecision } from './digestView.js'
 
-/**
- * The lines GET /targets/{id}/exposure always ends with, as the Go catalogs
- * write them: the page has its own two rows for these. A test reads the Go
- * catalogs, so a wording that drifts fails there, not on the page.
- */
-const alwaysLines = new Set(["Le pare-feu de l'hébergeur", 'The firewall of the host', 'Les services en UDP', 'Services in UDP'])
-
 const namedServices = ['web', 'admin', 'database', 'cache']
 
 const isReserved = (scope) => scope === 'server' || scope === 'private'
@@ -26,7 +19,11 @@ function sentence(text) {
 }
 
 /**
- * @typedef {{name: string, note: string, tag: 'close'|'normal'|'check'|null, findingId: string, detail: string, decided: boolean}} Row
+ * name, note and detail are always on screen, so in simple mode they hold no
+ * number: port and the lines of advice are for « Que faire ? » and the dialog,
+ * which explain it in their own sentence. advice is empty when there is nothing
+ * to do; undo says how to change your mind on a decided row.
+ * @typedef {{name: string, note: string, tag: 'close'|'normal'|'check'|null, findingId: string, port: number, detail: string, decided: boolean, advice: string[], undo: string}} Row
  */
 
 /**
@@ -41,14 +38,25 @@ function sentence(text) {
  * @param {object|null} target the TargetView, whose kind is the fresher one after a change
  * @param {string} lang
  * @param {boolean} advanced numbers and addresses are for the advanced mode
- * @returns {{read: boolean, title: string, sub: string, shared: string, checked: string, open: Row[], reserved: Row[], unverified: Row[], empty: {open: string, reserved: string}, closed: {name: string, text: string, when: string, detail: string}[]}}
+ * @param {boolean} [failed] the page could not get the view: Michel may well have read it
+ * @returns {{read: boolean, failed: boolean, title: string, sub: string, shared: string, checked: string, open: Row[], reserved: Row[], unverified: Row[], empty: {open: string, reserved: string}, closed: {name: string, text: string, when: string, detail: string}[]}}
  */
-export function exposureColumns(view, target, lang, advanced) {
+export function exposureColumns(view, target, lang, advanced, failed = false) {
   const t = (key, params) => translate(lang, key, params)
   const services = Array.isArray(view?.services) ? view.services.filter(Boolean) : []
   const read = !!view?.read && services.length > 0
   const shared = (target?.kind || view?.kind) === 'shared'
   const server = target?.name || ''
+
+  // adviceOf: a flaw has the whole advice, a service to close too even before
+  // its flaw exists; a service only to check has one line.
+  const adviceOf = (out) => {
+    if (out.findingId || out.tag === 'close') {
+      const lines = [t('plan.exposure'), t('expo.how'), t('expo.ask', { number: out.port })]
+      return out.findingId ? lines : [...lines, t('expo.how_no_finding')]
+    }
+    return out.tag === 'check' ? [t('expo.check_how', { number: out.port })] : []
+  }
 
   const row = (s) => {
     const key = serviceKey(s.service)
@@ -58,8 +66,11 @@ export function exposureColumns(view, target, lang, advanced) {
       note: '',
       tag: null,
       findingId: s.finding_id || '',
+      port: s.port,
       detail: advanced ? `${s.port} · ${(s.addresses || []).join(', ')}` : '',
       decided: false,
+      advice: [],
+      undo: '',
     }
     if (isReserved(s.scope)) {
       out.note = t(`expo.reserved.${s.scope}`)
@@ -68,6 +79,7 @@ export function exposureColumns(view, target, lang, advanced) {
     if (s.decided_why) {
       out.note = t('expo.decided', { why: sentence(s.decided_why) })
       out.decided = true
+      if (found) out.undo = t('expo.decided_undo', { id: s.finding_id })
       return out
     }
     const close = s.verdict === 'close'
@@ -81,6 +93,10 @@ export function exposureColumns(view, target, lang, advanced) {
     } else if (close) {
       out.tag = 'check'
       out.note = t('expo.shared_note')
+    } else if (s.verdict === 'normal' && key === 'admin' && target?.port && s.port !== target.port) {
+      // The usual administration number, and not the one Michel comes in by.
+      out.tag = 'check'
+      out.note = t('expo.service.admin_other_note')
     } else if (s.verdict === 'normal') {
       out.tag = 'normal'
       out.note = t(`expo.service.${key}_note`)
@@ -88,28 +104,29 @@ export function exposureColumns(view, target, lang, advanced) {
       out.tag = 'check'
       out.note = t('expo.service.other_note')
     }
+    out.advice = adviceOf(out)
     return out
   }
 
   const shown = read ? services : []
   const open = shown.filter((s) => !isReserved(s.scope)).map(row)
   const reserved = shown.filter((s) => isReserved(s.scope)).map(row)
+  const plain = (name, note) => ({ name, note, tag: null, findingId: '', port: 0, detail: '', decided: false, advice: [], undo: '' })
   const unverified = [
-    { name: t('expo.firewall.name'), note: t('expo.firewall.note'), tag: null, findingId: '', detail: '', decided: false },
-    { name: t('expo.udp.name'), note: t('expo.udp.note'), tag: null, findingId: '', detail: '', decided: false },
-    ...(view?.unseen || [])
-      .filter((u) => u && !alwaysLines.has(u.what))
-      .map((u) => ({ name: u.what, note: u.reason, tag: null, findingId: '', detail: '', decided: false })),
+    plain(t('expo.firewall.name'), t('expo.firewall.note')),
+    plain(t('expo.udp.name'), t('expo.udp.note')),
+    // A line with a key is one of the two above, which the page words itself.
+    ...(view?.unseen || []).filter((u) => u && !u.key).map((u) => plain(u.what, u.reason)),
   ]
 
-  let title = t('expo.title.not_read', { server })
+  let title = t(failed ? 'expo.title.load_failed' : 'expo.title.not_read', { server })
   if (read && !open.length) title = t('expo.title.none', { server })
   if (read && open.length) {
     const toClose = open.filter((r) => r.tag === 'close').length
     title = t('expo.title', { server, n: open.length }) + (toClose ? t('expo.title.of_close', { n: toClose }) : '')
   }
 
-  const none = t(read ? 'expo.col.none' : 'expo.col.not_read')
+  const none = failed ? '' : t(read ? 'expo.col.none' : 'expo.col.not_read')
   const closed = (view?.closed || []).filter(Boolean).map((c) => {
     const name = t(`expo.service.${serviceKey(c.service)}`)
     const day = localDay(c.last_seen_open, lang)
@@ -125,6 +142,7 @@ export function exposureColumns(view, target, lang, advanced) {
   const day = read ? localDay(view.checked_at, lang) : ''
   return {
     read,
+    failed,
     title,
     sub: t('expo.sub'),
     shared: shared ? t('expo.shared') : '',
@@ -158,6 +176,21 @@ export function exposureFindingIds(view) {
  */
 export function exposureDecisionCheck(why, now) {
   return validateDecision({ action: 'ignore', why, until: '' }, now)
+}
+
+/**
+ * exposureDecisionTarget is what the dialog needs to decide a flaw from its card
+ * in the list of flaws, when the columns have no row for it because the list was
+ * not read. The route takes it: without this, a server that no longer reads would
+ * leave it in the To-do list for ever. Null when there is nothing to decide.
+ * @param {object} finding
+ * @param {string} name what the card calls it
+ * @returns {{findingId: string, name: string, port: number}|null}
+ */
+export function exposureDecisionTarget(finding, name) {
+  if (finding?.kind !== 'server_exposure' || finding.status === 'decided') return null
+  const port = Number(finding.package)
+  return { findingId: finding.id, name, port: Number.isInteger(port) && port > 0 ? port : 0 }
 }
 
 /**

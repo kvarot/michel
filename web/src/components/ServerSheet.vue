@@ -60,6 +60,7 @@
       </header>
 
       <ServerExposure
+        ref="exposure"
         class="m-sheet__block"
         :exposure="exposure"
         :failure="exposureFailure"
@@ -101,6 +102,8 @@
               :starting="startingFor === c.finding.id"
               @start="fix(c.finding)"
             />
+            <v-btn v-if="decisionTarget(c)" size="small" variant="outlined" color="primary" class="m-sheet__decide" @click="$refs.exposure.openDecision(decisionTarget(c))">{{ $t('expo.decision.open') }}</v-btn>
+            <p v-if="c.finding.kind === 'server_exposure' && c.finding.status === 'decided'" class="m-small m-muted m-sheet__undo">{{ $t('expo.decided_undo', { id: c.finding.id }) }}</p>
             <div v-if="lastAttempt(c)" class="m-sheet__flaw-actions">
               <v-btn size="small" variant="tonal" color="primary" :href="fixHref(lastAttempt(c).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
               <span v-if="cardText(c)" class="m-small m-voice">{{ cardText(c) }}</span>
@@ -331,7 +334,7 @@ import ServerExposure from './ServerExposure.vue'
 import ServerLogs from './ServerLogs.vue'
 import { api } from '../api.js'
 import { formatDate, severityOf } from '../lib/digestView.js'
-import { exposureFindingIds } from '../lib/exposureView.js'
+import { exposureDecisionTarget, exposureFindingIds } from '../lib/exposureView.js'
 import { fixHash } from '../lib/fixView.js'
 import { plainRisk, showsPlan } from '../lib/pathView.js'
 import { logBadges } from '../lib/serverLogsView.js'
@@ -549,6 +552,9 @@ export default {
     },
     title(f) {
       return findingTitle(f, this.lang)
+    },
+    decisionTarget(c) {
+      return exposureDecisionTarget(c.finding, this.title(c.finding))
     },
     formatDate(iso) {
       return formatDate(iso, this.lang) || '?'
@@ -919,6 +925,9 @@ export default {
 .m-sheet__flaw { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; padding-top: 0.75rem; border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); scroll-margin-top: 1rem; }
 .m-sheet__flaw:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 4px; border-radius: 4px; }
 .m-sheet__guide { margin-top: 0.4rem; }
+.m-sheet__decide { margin-top: 0.5rem; max-width: 100%; height: auto !important; min-height: 2rem; white-space: normal; }
+.m-sheet__decide :deep(.v-btn__content) { white-space: normal; padding: 0.3rem 0; line-height: 1.25; }
+.m-sheet__undo { margin-top: 0.4rem; overflow-wrap: anywhere; }
 .m-sheet__flaw:first-child { border-top: 0; padding-top: 0; }
 .m-sheet__flaw-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.75rem; }
 .m-sheet__flaw-title { font-size: 1.05rem; }

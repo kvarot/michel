@@ -25,7 +25,7 @@ const icons = {
   stopped: 'M18.3 7.1 16.9 5.7 12 10.6 7.1 5.7 5.7 7.1l4.9 4.9-4.9 4.9 1.4 1.4 4.9-4.9 4.9 4.9 1.4-1.4-4.9-4.9z',
 }
 
-// FailurePath is the five steps of a flaw, the signature of the guided
+// FailurePath is the steps of a flaw, the signature of the guided
 // interface: chevrons on a wide screen, a list on a phone. The state is said in
 // words for a screen reader, in color and by an icon for the eye.
 export default {
@@ -98,7 +98,7 @@ export default {
   .m-path__step:last-child { border-radius: 0; }
 }
 /* The Fix page's column can be narrow on a wide screen (advanced mode, with the
-   list): five chevrons would not hold their words there. */
+   list): the chevrons would not hold their words there. */
 @media (min-width: 640px) {
   @container (max-width: 459px) {
     .m-path__step, .m-path__step:first-child {

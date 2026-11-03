@@ -161,8 +161,8 @@ func (s *server) exposureView(ctx context.Context, t target.Target, lang i18n.La
 	}
 	// What Michel never reads, whatever the check saw.
 	v.Unseen = append(v.Unseen,
-		TargetUnseenView{What: i18n.T(lang, "api.exposure.firewall.what"), Reason: i18n.T(lang, "api.exposure.firewall.reason")},
-		TargetUnseenView{What: i18n.T(lang, "api.exposure.udp.what"), Reason: i18n.T(lang, "api.exposure.udp.reason")})
+		TargetUnseenView{Key: "firewall", What: i18n.T(lang, "api.exposure.firewall.what"), Reason: i18n.T(lang, "api.exposure.firewall.reason")},
+		TargetUnseenView{Key: "udp", What: i18n.T(lang, "api.exposure.udp.what"), Reason: i18n.T(lang, "api.exposure.udp.reason")})
 	return v, nil
 }
 

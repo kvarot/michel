@@ -777,7 +777,7 @@ describe('resolvedLines', () => {
     ])
     for (const l of lines) {
       expect(l).toMatchObject({ verified: false, back: false, kind: 'exposure', word: 'no_longer_open', tone: 'info', deploy: false, href: '#/servers/srv1', at: '01/11/2026' })
-      expect(fr[l.dateKey].replace('{date}', l.at)).toBe('vu ouvert pour la dernière fois le 01/11/2026')
+      expect(fr[l.dateKey].replace('{date}', l.at)).toBe('dernière fois où Michel a vu ce service ouvert : le 01/11/2026')
       expect(JSON.stringify(l)).not.toMatch(/fermé|corrig|vérifi/i)
     }
     for (const k of ['title', 'hint']) {

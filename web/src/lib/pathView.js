@@ -146,19 +146,19 @@ function causeNote(attempt, key) {
  * exposurePath is the path of a service open to all, which has no fix: Michel
  * cannot close it, and from inside the server he only sees whether it is still
  * open. So it has neither « Corrigée » nor « Vérifiée »: the service may have
- * moved or stopped, and the last step says only what he sees (R47). Gone leaves
- * the person's step unlit: nothing says who did what.
+ * moved or stopped, and the last step says only what he sees (R47). Gone and
+ * decided are over: they drop the steps that will not come. Gone also drops the
+ * person's step, since nothing says who did what.
  * @param {{gone?: boolean, decided?: boolean}} [args]
  * @returns {{steps: {key: string, state: 'done'|'now'|'todo'}[], verified: false, open: boolean, note: null}}
  */
 export function exposurePath({ gone = false, decided = false } = {}) {
-  const middle = gone ? 'todo' : decided ? 'done' : 'now'
+  const found = { key: 'found', state: 'done' }
+  let steps = [found, { key: 'expo_yours', state: 'now' }, { key: 'expo_gone', state: 'todo' }]
+  if (decided) steps = [found, { key: 'expo_decided', state: 'done' }]
+  if (gone) steps = [found, { key: 'expo_gone', state: 'done' }]
   return {
-    steps: [
-      { key: 'found', state: 'done' },
-      { key: decided ? 'expo_decided' : 'expo_yours', state: middle },
-      { key: 'expo_gone', state: gone ? 'done' : 'todo' },
-    ],
+    steps,
     verified: false,
     open: !gone,
     note: null,
@@ -367,7 +367,7 @@ export function serverPlan({ finding, target, attempt = null, tried = false, pre
   const none = (lines, why) => ({ title, lines: lines.map((l) => (typeof l === 'string' ? { key: l } : l)), action: null, why, warn: null })
   if (!target) return none([], '')
   const f = finding || {}
-  if (f.kind === 'server_exposure') return none(['plan.exposure', 'expo.how'], 'exposure')
+  if (f.kind === 'server_exposure') return none(f.status === 'decided' ? [] : ['plan.exposure', 'expo.how'], 'exposure')
   if (target.fix_level === 0) return none(['plan.server.report_only'], 'report_only')
   const health = target.kind === 'hds' || target.classification === 'health'
   const noAgent = health ? { key: 'plan.server.hds' } : { key: 'plan.server.hds_preprod', params: { name: target.preprod?.name || '' } }

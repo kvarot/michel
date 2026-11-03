@@ -191,8 +191,10 @@ describe('the exposure advice', () => {
   test('a firewall block is not confirmed from the server, in plain words; the other way is', () => {
     expect(fr['expo.how']).not.toContain('regarde depuis')
     expect(fr['expo.how']).toContain("de l'intérieur du serveur")
-    expect(fr['expo.how']).toMatch(/Dans ce cas, choisis plutôt de réserver le service au serveur\.$/)
-    expect(en['expo.how']).toMatch(/In that case, choose to keep the service to the server instead\.$/)
+    expect(fr['expo.how']).toMatch(/Dans ce cas, clique sur « Je sais, c'est bloqué ou voulu »\.$/)
+    expect(en['expo.how']).toMatch(/In that case, click "I know, it is blocked or wanted"\.$/)
+    expect(fr['expo.how']).not.toMatch(/confirmé/)
+    expect(en['expo.how']).not.toMatch(/confirms/)
     expect(en['expo.how']).not.toContain('he looks from')
   })
 })

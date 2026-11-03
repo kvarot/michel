@@ -163,6 +163,26 @@ func TestExposureFirewallIsNeverVerified(t *testing.T) {
 	if !fw || !udp {
 		t.Errorf("unseen = %+v", got.Unseen)
 	}
+	n := len(got.Unseen)
+	if n < 2 || got.Unseen[n-2].Key != "firewall" || got.Unseen[n-1].Key != "udp" {
+		t.Errorf("the two lines have no stable key: %+v", got.Unseen)
+	}
+}
+
+func TestExposureOnlyTheTwoLinesHaveAKey(t *testing.T) {
+	tf := newTargetFixture(t)
+	v := tf.addNamed("srv-demo", "192.0.2.60")
+	tf.storeListeners(v.ID, false)
+	got, _ := tf.exposure(v.ID)
+	var keys []string
+	for _, u := range got.Unseen {
+		if u.Key != "" {
+			keys = append(keys, u.Key)
+		}
+	}
+	if len(got.Unseen) != 3 || strings.Join(keys, ",") != "firewall,udp" {
+		t.Errorf("unseen = %+v", got.Unseen)
+	}
 }
 
 func TestExposureClosedCarriesTheLastDateSeenOpen(t *testing.T) {

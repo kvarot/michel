@@ -112,8 +112,11 @@ type TargetFindingView struct {
 	LastSeen  string `json:"last_seen_at"`
 }
 
-// TargetUnseenView is something the last check could not read, and why.
+// TargetUnseenView is something the last check could not read, and why. Key
+// names the lines the exposure page words itself (firewall, udp): it does not
+// have to recognize them by their text.
 type TargetUnseenView struct {
+	Key    string `json:"key,omitempty"`
 	What   string `json:"what"`
 	Reason string `json:"reason"`
 }

@@ -68,7 +68,7 @@ describe('failurePath', () => {
   })
   test('an exposure that is gone is finished, and never verified', () => {
     const p = failurePath({ attempt: null, gone: true })
-    expect(states(p)).toEqual(['done', 'todo', 'done'])
+    expect(states(p)).toEqual(['done', 'done'])
     expect(p.verified).toBe(false)
     expect(p.open).toBe(false)
   })
@@ -593,6 +593,8 @@ describe('server plan tells the truth for each case', () => {
     expect(e.lines.map((l) => l.key)).toEqual(['plan.exposure', 'expo.how'])
     expect(e.action).toBe(null)
     expect(e.why).toBe('exposure')
+    // Decided: the advice is over, and its button has gone.
+    expect(serverPlan({ finding: expo({ status: 'decided' }), target: target() }).lines).toEqual([])
     // Both apply: the exposure first, alone.
     expect(serverPlan({ finding: expo(), target: target({ fix_level: 0 }) }).lines.map((l) => l.key)).toEqual(['plan.exposure', 'expo.how'])
   })

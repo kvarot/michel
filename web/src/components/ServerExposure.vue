@@ -11,7 +11,7 @@
       <v-btn size="small" variant="text" color="primary" class="m-expo__retry" @click="$emit('retry')">{{ $t('app.retry') }}</v-btn>
     </v-alert>
 
-    <div v-if="!cols.read" class="m-expo__check">
+    <div v-if="!cols.read && !cols.failed" class="m-expo__check">
       <v-btn
         color="primary"
         variant="tonal"
@@ -42,18 +42,16 @@
             <p class="m-small m-expo__note"><MaskedText :text="r.note" /></p>
             <p v-if="r.detail" class="m-small m-muted m-code m-expo__detail">{{ r.detail }}</p>
 
-            <div v-if="r.findingId" class="m-expo__flaw">
-              <FailurePath :steps="pathOf(r)" />
-              <template v-if="!r.decided">
-                <details class="m-expo__how" :open="finding === r.findingId">
-                  <summary class="m-small">{{ $t('expo.what_to_do') }}</summary>
-                  <ul class="m-expo__lines m-small">
-                    <li>{{ $t('plan.exposure') }}</li>
-                    <li>{{ $t('expo.how') }}</li>
-                  </ul>
-                </details>
-                <v-btn size="small" variant="outlined" color="primary" class="m-expo__decide" @click="openDecision(r)">{{ $t('expo.decision.open') }}</v-btn>
-              </template>
+            <div v-if="r.findingId || r.advice.length" class="m-expo__flaw">
+              <FailurePath v-if="r.findingId" :steps="pathOf(r)" />
+              <details v-if="r.advice.length" class="m-expo__how" :open="!!r.findingId && finding === r.findingId">
+                <summary class="m-small">{{ $t('expo.what_to_do') }}</summary>
+                <ul class="m-expo__lines m-small">
+                  <li v-for="(line, n) in r.advice" :key="n">{{ line }}</li>
+                </ul>
+              </details>
+              <v-btn v-if="r.findingId && !r.decided" size="small" variant="outlined" color="primary" class="m-expo__decide" @click="openDecision(r)">{{ $t('expo.decision.open') }}</v-btn>
+              <p v-if="r.undo" class="m-small m-muted m-expo__note">{{ r.undo }}</p>
             </div>
           </li>
         </ul>
@@ -88,6 +86,7 @@
         <v-card-text>
           <form class="m-expo__form" @submit.prevent="submit">
             <p>{{ $t('expo.decision.body') }}</p>
+            <p v-if="deciding && deciding.port">{{ $t('expo.decision.which', { number: deciding.port }) }}</p>
             <v-textarea
               v-model="why"
               :label="$t('decision.why')"
@@ -156,13 +155,16 @@ export default {
   },
   computed: {
     cols() {
-      return exposureColumns(this.exposure, this.target, this.$ui.lang, this.$ui.advanced)
+      return exposureColumns(this.exposure, this.target, this.$ui.lang, this.$ui.advanced, !!this.failure)
     },
     columns() {
+      const third = { key: 'unverified', title: this.$t('expo.col.unverified'), rows: this.cols.unverified, empty: '' }
+      // The page did not get the view: the first two would say « not read », which it does not know.
+      if (this.cols.failed) return [third]
       return [
         { key: 'open', title: this.$t('expo.col.open'), rows: this.cols.open, empty: this.cols.empty.open },
         { key: 'reserved', title: this.$t('expo.col.reserved'), rows: this.cols.reserved, empty: this.cols.empty.reserved },
-        { key: 'unverified', title: this.$t('expo.col.unverified'), rows: this.cols.unverified, empty: '' },
+        third,
       ]
     },
     closedSteps() {
@@ -182,11 +184,19 @@ export default {
     why() {
       this.touchedWhy = true
     },
+    // Opened by code, the dialog has no activator to give the keyboard back to:
+    // it goes to the row, or to the card of a list not read, on any way out.
+    decisionOpen(open) {
+      if (open || !this.deciding) return
+      const id = this.deciding.findingId
+      this.$nextTick(() => document.getElementById(`srv-flaw-${id}`)?.focus({ preventScroll: true }))
+    },
   },
   methods: {
     pathOf(r) {
       return exposurePath({ decided: r.decided }).steps
     },
+    /** openDecision opens the dialog for a row, or for a card of the sheet ({findingId, name, port}). */
     openDecision(r) {
       this.deciding = r
       this.why = ''
@@ -209,8 +219,6 @@ export default {
         this.done = { eventId: view?.audit_event_id || '' }
         this.decisionOpen = false
         this.$emit('decided', view)
-        // The button is gone: the keyboard goes back to its row.
-        this.$nextTick(() => document.getElementById(`srv-flaw-${id}`)?.focus())
       } catch (err) {
         if (err?.status === 401) return
         this.serverError = err
