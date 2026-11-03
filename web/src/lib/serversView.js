@@ -168,6 +168,26 @@ export function mergeFindings(list, inv) {
 }
 
 /**
+ * cardOfFinding is the card of a chosen flaw (#/servers/<id>?finding=<fid>),
+ * also when the flaw was merged into a card of several runtimes.
+ * @param {{ids: string[]}[]} cards mergeFindings()
+ * @param {string} id
+ */
+export function cardOfFinding(cards, id) {
+  return (id && (cards || []).find((c) => c.ids.includes(id))) || null
+}
+
+/**
+ * lastAttemptOf is the newest fix of a card's flaws, whatever its state: the
+ * card's path starts from it.
+ * @param {object[]} fixes GET /fixes?target=, newest first
+ * @param {{ids: string[]}} card
+ */
+export function lastAttemptOf(fixes, card) {
+  return (fixes || []).find((a) => card.ids.includes(a.finding?.id)) || null
+}
+
+/**
  * serverPollDelay is how often the Fix page reads a server fix again: 3 s
  * while Michel works on it (preparing, running, approved for Michel, applied
  * while he checks), 30 s while it waits for the user (proposed, approved for

@@ -154,6 +154,7 @@
 <script>
 import FieldHelp from './FieldHelp.vue'
 import { formatDate, severityOf } from '../lib/digestView.js'
+import { canPrepareServer, isGone } from '../lib/pathView.js'
 import { backupLine, canApproveServer, envLabel, findingTitle, needsSnapshot, restoreNeeded, serversHash } from '../lib/serversView.js'
 
 // ServerProposal is the right of the Fix page for a fix of a server: the
@@ -247,8 +248,9 @@ export default {
       if (s === 'failed' && !this.attempt.cause) return this.$t('srvfix.done.failed')
       return ''
     },
+    // canAgain: once the server's sheet is there, the guide above holds this button with its plan.
     canAgain() {
-      return ['failed', 'refused', 'inconclusive'].includes(this.attempt.state)
+      return !this.target && ['failed', 'refused', 'inconclusive'].includes(this.attempt.state) && canPrepareServer(this.attempt, isGone(this.attempt.finding, null))
     },
   },
   watch: {

@@ -85,6 +85,18 @@ export function canRestart(attempt, gone = false) {
 }
 
 /**
+ * canPrepareServer says a new fix of a server's flaw can be prepared: as
+ * canRestart, and after an inconclusive fix too, since a server has no merge to
+ * wait for and StartServer takes it (only a flaw gone or a server busy refuses).
+ * @param {object|null|undefined} attempt
+ * @param {boolean} [gone] isGone()
+ * @returns {boolean}
+ */
+export function canPrepareServer(attempt, gone = false) {
+  return canRestart(attempt, gone) || (!gone && attempt?.state === 'inconclusive')
+}
+
+/**
  * showsPlan says the plan is still ahead: it speaks of what will happen, so it
  * goes once the proposal is there (the proposal says what happened).
  * @param {object|null|undefined} attempt
@@ -92,6 +104,7 @@ export function canRestart(attempt, gone = false) {
  * @returns {boolean}
  */
 export function showsPlan(attempt, gone = false) {
+  if (attempt?.server && canPrepareServer(attempt, gone)) return true
   return canRestart(attempt, gone) || attempt?.state === 'preparing'
 }
 
@@ -109,44 +122,48 @@ function causeNote(attempt, key) {
  * failurePath is where a flaw stands on its five steps.
  * note is {key, params} (under path.note.) or {cause} (Michel's own sentence),
  * null when the steps say it all.
- * @param {{attempt?: object|null, gone?: boolean, vanished?: boolean}} args
+ * @param {{attempt?: object|null, gone?: boolean, vanished?: boolean, target?: object|null}} args
  *   gone: an exposure without attempt that a full reading no longer sees (R2).
- *   vanished: a project's flaw gone without any fix of Michel's: nothing he did.
+ *   vanished: a flaw gone without any fix of Michel's: nothing he did.
+ *   target: the server's TargetView (the attempt's has neither site_url nor
+ *   settings): a proof with no site address says the site was not looked at.
  *   A step may carry label, the word to show instead of its own (path.step.).
  * @returns {{steps: {key: string, state: 'done'|'now'|'todo'|'stopped', label?: string}[], verified: boolean, open: boolean, note: object|null}}
  */
-export function failurePath({ attempt = null, gone = false, vanished = false } = {}) {
-  const path = attemptPath(attempt, gone, vanished)
+export function failurePath({ attempt = null, gone = false, vanished = false, target = null } = {}) {
+  const path = attemptPath(attempt, gone, vanished, target)
   if (!attempt || !vanished || !canRestart(attempt)) return path
   // The attempt went nowhere and the flaw left on its own: its path stays, with
-  // nothing in progress, and nothing is left to start.
+  // nothing in progress, and nothing is left to start. A failed server fix may
+  // have changed something: Michel only says he does not know.
   return {
     ...path,
     steps: path.steps.map((s) => (s.state === 'now' ? { ...s, state: 'todo' } : s)),
     open: false,
-    note: { key: 'vanished_after' },
+    note: { key: attempt.server ? 'vanished_after_server' : 'vanished_after' },
   }
 }
 
 /** attemptPath is the table of the path, one line per state. */
-function attemptPath(attempt, gone, vanished) {
+function attemptPath(attempt, gone, vanished, target) {
   const out = (index, state, open, note = null, verified = false) => ({ steps: steps(index, state), verified, open, note })
   if (!attempt) {
     if (gone) return { steps: stepKeys.map((key) => ({ key, state: 'done' })), verified: true, open: false, note: null }
-    if (vanished) return out(1, 'todo', false, { key: 'vanished' })
+    if (vanished) return out(1, 'todo', false, { key: target ? 'vanished_server' : 'vanished' })
     return out(1, 'now', true)
   }
   const server = !!attempt.server
   switch (attempt.state) {
     case 'preparing':
-      return out(1, 'now', true, { key: 'preparing' })
+      return out(1, 'now', true, { key: server ? 'preparing_server' : 'preparing' })
     case 'superseded':
       return out(1, 'now', true, { key: 'superseded' })
     case 'proposed':
       return out(2, 'now', true, noCopyCheck(attempt) ? { key: 'not_checked' } : null)
     case 'approved':
     case 'running':
-      return out(3, 'now', true, attempt.approved_by === 'auto' ? { key: 'by_rule' } : null)
+      if (attempt.approved_by === 'auto') return out(3, 'now', true, { key: server ? 'by_rule_server' : 'by_rule' })
+      return out(3, 'now', true, attempt.state === 'approved' && attempt.server?.executor === 'user' ? { key: 'run_yours' } : null)
     case 'applied': {
       if (server) return out(4, 'now', true, { key: 'checking' })
       // On a project the fix waits on its branch: Corrigée is only done once it
@@ -157,10 +174,12 @@ function attemptPath(attempt, gone, vanished) {
     }
     case 'proven_fixed':
       if (isVerified(attempt)) {
-        const note = server ? null : { key: noCopyCheck(attempt) ? 'deploy_unchecked' : 'deploy' }
+        // prove (server_exec.go) has no site to check without an address.
+        const serverNote = target && !target.site_url ? { key: 'no_site' } : null
+        const note = server ? serverNote : { key: noCopyCheck(attempt) ? 'deploy_unchecked' : 'deploy' }
         return { steps: stepKeys.map((key) => ({ key, state: 'done' })), verified: true, open: false, note }
       }
-      if (cameBack(attempt)) return out(4, 'stopped', true, { key: 'came_back' })
+      if (cameBack(attempt)) return out(4, 'stopped', true, { key: server ? 'came_back_server' : 'came_back' })
       return out(4, 'stopped', false, { key: 'copy_not_confirmed' })
     case 'inconclusive':
       // Not proven in the code either: gone but not merged, or merged but seen.
@@ -168,13 +187,16 @@ function attemptPath(attempt, gone, vanished) {
     case 'refused':
       return out(2, 'stopped', true, { key: 'refused' })
     case 'unknown':
-      return out(3, 'stopped', true, { key: 'unknown' })
-    case 'failed':
-      if (attempt.approved_by) return out(3, 'stopped', true, causeNote(attempt, 'failed'))
-      if (attempt.proposal) return out(2, 'stopped', true, causeNote(attempt, 'failed'))
-      return out(1, 'stopped', true, causeNote(attempt, 'failed'))
+      return out(3, 'stopped', true, { key: server ? 'unknown_server' : 'unknown' })
+    case 'failed': {
+      // « rien n'a été appliqué » is not known of a server: a script can fail after its change.
+      const failed = server ? 'failed_server' : 'failed'
+      if (attempt.approved_by) return out(3, 'stopped', true, causeNote(attempt, failed))
+      if (attempt.proposal) return out(2, 'stopped', true, causeNote(attempt, failed))
+      return out(1, 'stopped', true, causeNote(attempt, failed))
+    }
     default:
-      return out(1, 'stopped', true, causeNote(attempt, 'failed'))
+      return out(1, 'stopped', true, causeNote(attempt, server ? 'failed_server' : 'failed'))
   }
 }
 
@@ -264,6 +286,60 @@ export function projectPlan({ finding, project, level, attempt = null }) {
 }
 
 /**
+ * rootScript says the fix of a server's flaw runs as root: a package, or any
+ * file but a .user.ini (Bundle.RunAsRoot, internal/serverfix).
+ */
+function rootScript(f) {
+  return f.kind === 'server_package' || baseName(String(f.location || '').replace(/:\d+$/, '')) !== '.user.ini'
+}
+
+/**
+ * serverPlan is the true text of what will happen on a server. Each line was
+ * checked against internal/fix (server.go, server_auto.go, server_exec.go) and
+ * internal/serverfix/validate.go. A plan with action null is terminal: it holds
+ * only its own lines, since « always » is only true of a script that will exist.
+ * @param {{finding: object, target: object|null, attempt?: object|null}} args
+ *   finding is the TargetFindingView, target the TargetView.
+ * @returns {{title: string, lines: {key: string, params?: object}[], action: 'prepare'|null, why: string, warn: string|null}}
+ */
+export function serverPlan({ finding, target, attempt = null }) {
+  const title = 'plan.server.title'
+  const none = (lines, why) => ({ title, lines: lines.map((key) => ({ key })), action: null, why, warn: null })
+  if (!target) return none([], '')
+  const f = finding || {}
+  if (f.kind === 'server_exposure') return none(['plan.exposure', 'expo.how'], 'exposure')
+  if (target.fix_level === 0) return none(['plan.server.report_only'], 'report_only')
+  const health = target.kind === 'hds' || target.classification === 'health'
+  const pkg = f.kind === 'server_package'
+  // planFor (server.go) has no plan for a package without a fixed version.
+  const ready = !pkg || (f.fixed_versions || []).length > 0
+  if (!ready && health) return none(['plan.server.no_ready', 'plan.server.hds'], 'no_ready')
+
+  const lines = [{ key: ready ? 'plan.server.who' : 'plan.server.no_ready' }]
+  lines.push(target.preprod ? { key: 'plan.server.preprod', params: { name: target.preprod.name } } : { key: 'plan.server.no_copy' })
+  const site = !!target.site_url
+  if (!pkg) lines.push({ key: site ? 'plan.server.checks' : 'plan.server.no_site' })
+  else if (ready) {
+    lines.push({ key: 'plan.server.package' })
+    if (!site) lines.push({ key: 'plan.server.package_no_site' })
+  }
+  lines.push({ key: 'plan.server.no_tests' })
+
+  // executorFor (server.go): a root script is Michel's only with sudo without a password.
+  const root = rootScript(f)
+  const michel = target.executor === 'michel' && (!root || target.sudo === 'nopasswd')
+  // AutoApplicableServer (server_auto.go): only a tested configuration, so a root file.
+  const auto = michel && !pkg && root && target.fix_level === 3 && target.auto_config && site
+  lines.push({ key: `plan.server.approval_${auto ? 'auto' : michel ? 'michel' : 'user'}` })
+
+  // EligibleServer and serverTried (server_auto.go): once, on an active server;
+  // a decision may be to defer or ignore, and this view does not say which.
+  if (target.fix_level >= 2 && ready && target.active !== false && !attempt && f.status !== 'decided') lines.push({ key: 'plan.server.self_prepare' })
+  lines.push({ key: health ? 'plan.server.hds' : 'plan.server.agent' })
+  return { title, lines, action: 'prepare', why: '', warn: target.fix_level === 3 ? 'servers.level.3.warn' : null }
+}
+
+/**
  * chatNoStart says the advanced conversation offers no start, as the guide
  * holds the button. At level 0 the guide has none, and the advanced mode keeps
  * this way in (R14). A project no fix can run on, or a flaw already gone, offers
@@ -287,9 +363,24 @@ export function chatNoStart({ guided, project, gone = false }) {
  * @returns {string}
  */
 export function plainRisk(finding, sheet, lang, advanced) {
+  const flaw = sheet || finding
+  if (String(flaw?.kind || '').startsWith('server_')) return serverRisk(flaw, lang, advanced)
   const text = sheet?.explanation?.impact || sheet?.summary || finding?.summary
   if (!text) return translate(lang, 'path.means_none')
   return advanced ? text : plainSentence(text, sheet || finding)
+}
+
+/**
+ * serverRisk is « Ce que ça veut dire » for a server's flaw (TargetFindingView).
+ * The update is said to fix it only when a fixed version exists and it is more
+ * than a mitigation.
+ */
+function serverRisk(f, lang, advanced) {
+  if (f.rule === 'PHP-VERSION-UNKNOWN') return translate(lang, 'servers.finding.php_version_unknown_hint')
+  if (f.kind === 'server_package' && !advanced) {
+    return translate(lang, (f.fixed_versions || []).length && !f.mitigation ? 'plain.server_package' : 'plain.server_unfixed')
+  }
+  return f.explain || f.title || f.summary || translate(lang, 'path.means_none')
 }
 
 /**

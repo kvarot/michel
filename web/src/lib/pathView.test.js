@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { canRestart, cameBack, chatNoStart, failurePath, isGone, isVerified, mergeStep, pathSteps, plainRisk, projectPlan, rescanKey, showsPlan } from './pathView.js'
+import { canPrepareServer, canRestart, cameBack, chatNoStart, failurePath, isGone, isVerified, mergeStep, pathSteps, plainRisk, projectPlan, rescanKey, serverPlan, showsPlan } from './pathView.js'
 import fr from '../i18n/fr.json'
 import en from '../i18n/en.json'
 
@@ -38,7 +38,7 @@ describe('failurePath', () => {
     ['proven, server', attempt('proven_fixed', { finding: gone, server: srv }), ['done', 'done', 'done', 'done', 'done'], false, null],
     ['proven, copy not clean', attempt('proven_fixed', { proposal: { rescan_clean: false }, finding: gone }), ['done', 'done', 'done', 'done', 'stopped'], false, 'copy_not_confirmed'],
     ['proven, came back', attempt('proven_fixed', { proposal: clean }), ['done', 'done', 'done', 'done', 'stopped'], true, 'came_back'],
-    ['proven, server, came back', attempt('proven_fixed', { server: srv }), ['done', 'done', 'done', 'done', 'stopped'], true, 'came_back'],
+    ['proven, server, came back', attempt('proven_fixed', { server: srv }), ['done', 'done', 'done', 'done', 'stopped'], true, 'came_back_server'],
     ['refused', attempt('refused'), ['done', 'done', 'stopped', 'todo', 'todo'], true, 'refused'],
     ['unknown', attempt('unknown'), ['done', 'done', 'done', 'stopped', 'todo'], true, 'unknown'],
     ['superseded', attempt('superseded'), ['done', 'now', 'todo', 'todo', 'todo'], true, 'superseded'],
@@ -473,5 +473,228 @@ describe('pathSteps', () => {
     const terminal = projectPlan({ finding: finding(), project: project({ fix_level: 0 }) })
     expect(pathSteps(failurePath({ attempt: a }), terminal, a).map((s) => s.state)).toEqual(['done', 'done', 'now', 'todo', 'todo'])
     expect(pathSteps(failurePath({ attempt: null }), null, null).map((s) => s.state)).toEqual(['done', 'now', 'todo', 'todo', 'todo'])
+  })
+})
+
+describe('server plan tells the truth for each case', () => {
+  const target = (extra = {}) => ({ id: 't1', name: 'srv-demo', kind: 'vps', classification: 'sensitive', env: 'prod', fix_level: 1, executor: 'user', sudo: 'none', auto_config: false, site_url: 'https://example.test', preprod: null, active: true, ...extra })
+  const cfg = (extra = {}) => ({ id: 'sf1', kind: 'server_config', rule: 'PHP-INI-1', package: 'expose_php', fixed_versions: [], location: '/etc/php/php.ini:12', status: 'new', explain: 'PHP says its version.', ...extra })
+  const pkg = (extra = {}) => ({ id: 'sf2', kind: 'server_package', rule: 'USN-1', package: 'openssl', fixed_versions: ['3.0.13'], status: 'new', ...extra })
+  const expo = (extra = {}) => ({ id: 'sf3', kind: 'server_exposure', rule: 'EXPO-1', package: 'redis', fixed_versions: [], status: 'new', ...extra })
+  const keys = (f, t, a = null) => serverPlan({ finding: f, target: t, attempt: a }).lines.map((l) => l.key.replace('plan.server.', ''))
+  const serverTexts = Object.entries(fr).filter(([k]) => k.startsWith('plan.server.'))
+
+  test('a setting on a server without preprod', () => {
+    const p = serverPlan({ finding: cfg(), target: target() })
+    expect(p.title).toBe('plan.server.title')
+    expect(p.action).toBe('prepare')
+    expect(p.why).toBe('')
+    expect(p.warn).toBe(null)
+    expect(p.lines.map((l) => l.key)).toEqual(['plan.server.who', 'plan.server.no_copy', 'plan.server.checks', 'plan.server.no_tests', 'plan.server.approval_user', 'plan.server.agent'])
+  })
+  test('without a site address it says so, for a setting and for an update', () => {
+    expect(keys(cfg(), target({ site_url: '' }))).toContain('no_site')
+    expect(keys(cfg(), target({ site_url: '' }))).not.toContain('checks')
+    expect(keys(pkg(), target({ site_url: '' }))).toContain('package_no_site')
+    expect(keys(pkg(), target())).not.toContain('package_no_site')
+    expect(fr['plan.server.no_site']).toContain('ne le voit pas')
+  })
+  test('an update says it cannot be undone, and the snapshot', () => {
+    const k = keys(pkg(), target())
+    expect(k).toContain('package')
+    expect(k).not.toContain('checks')
+    expect(fr['plan.server.package']).toContain('Aucun script ne peut l')
+    expect(fr['plan.server.package']).toContain('snapshot (')
+  })
+  test('preparing is not said to run nothing: an update is simulated on the server', () => {
+    expect(fr['plan.server.who']).not.toContain("rien n'est lancé")
+    expect(fr['plan.server.who']).toContain('ne change rien')
+  })
+  test('a preprod replaces no_copy and is named; the preprod has its own settings', () => {
+    const p = serverPlan({ finding: cfg(), target: target({ preprod: { id: 'p', name: 'srv-pre' } }) })
+    expect(p.lines.map((l) => l.key)).not.toContain('plan.server.no_copy')
+    expect(p.lines.find((l) => l.key === 'plan.server.preprod').params).toEqual({ name: 'srv-pre' })
+    expect(fr['plan.server.approval_user']).toContain('sur ce serveur')
+    expect(fr['plan.server.approval_michel']).toContain('sur ce serveur')
+  })
+  test('who runs it follows executorFor: a root script needs sudo without a password', () => {
+    const michel = { executor: 'michel', sudo: 'nopasswd' }
+    expect(keys(cfg(), target(michel))).toContain('approval_michel')
+    expect(keys(pkg(), target(michel))).toContain('approval_michel')
+    expect(keys(cfg(), target({ executor: 'michel', sudo: 'none' }))).toContain('approval_user')
+    expect(keys(pkg(), target({ executor: 'michel', sudo: 'none' }))).toContain('approval_user')
+    // A .user.ini runs as the connection's own user: no sudo needed.
+    expect(keys(cfg({ location: '/srv/www/.user.ini:3' }), target({ executor: 'michel', sudo: 'none' }))).toContain('approval_michel')
+  })
+  test('level 2 or more tries alone once, on an active server, for a flaw not decided', () => {
+    expect(keys(cfg(), target({ fix_level: 1 }))).not.toContain('self_prepare')
+    expect(keys(cfg(), target({ fix_level: 2 }))).toContain('self_prepare')
+    expect(keys(cfg(), target({ fix_level: 3 }))).toContain('self_prepare')
+    expect(keys(cfg(), target({ fix_level: 2, active: false }))).not.toContain('self_prepare')
+    expect(keys(cfg({ status: 'decided' }), target({ fix_level: 2 }))).not.toContain('self_prepare')
+    expect(keys(cfg(), target({ fix_level: 2 }), attempt('failed'))).not.toContain('self_prepare')
+  })
+  test('no copy is ever promised', () => {
+    const bad = serverTexts.filter(([k, v]) => k !== 'plan.server.no_copy' && v.includes('copie à part'))
+    expect(bad).toEqual([])
+    expect(fr['plan.server.no_copy']).toContain('copie à part')
+  })
+  test('the word IA is used only for the agent', () => {
+    const withIA = serverTexts.filter(([, v]) => /\bIA\b/.test(v)).map(([k]) => k).sort()
+    expect(withIA).toEqual(['plan.server.agent', 'plan.server.hds', 'plan.server.who'])
+    expect(serverTexts.filter(([, v]) => v.includes("l'IA"))).toEqual([])
+  })
+  test('the agent is not said to wait for a click: at level 2 it can start alone', () => {
+    expect(fr['plan.server.agent']).not.toContain('proposera')
+    expect(fr['plan.server.agent']).toContain('inventaire masqué')
+  })
+  test('terminal plans stand alone', () => {
+    const r = serverPlan({ finding: cfg(), target: target({ fix_level: 0 }) })
+    expect(r.lines.map((l) => l.key)).toEqual(['plan.server.report_only'])
+    expect(r.action).toBe(null)
+    expect(r.why).toBe('report_only')
+    const e = serverPlan({ finding: expo(), target: target() })
+    expect(e.lines.map((l) => l.key)).toEqual(['plan.exposure', 'expo.how'])
+    expect(e.action).toBe(null)
+    expect(e.why).toBe('exposure')
+    // Both apply: the exposure first, alone.
+    expect(serverPlan({ finding: expo(), target: target({ fix_level: 0 }) }).lines.map((l) => l.key)).toEqual(['plan.exposure', 'expo.how'])
+  })
+  test('a health server hears only hds', () => {
+    for (const t of [target({ kind: 'hds' }), target({ classification: 'health' })]) {
+      const k = keys(cfg(), t)
+      expect(k).toContain('hds')
+      expect(k).not.toContain('agent')
+    }
+  })
+  test('no ready-made fix: no script is promised', () => {
+    const none = pkg({ fixed_versions: [] })
+    const k = keys(none, target({ fix_level: 2 }))
+    expect(k[0]).toBe('no_ready')
+    expect(k).not.toContain('who')
+    expect(k).not.toContain('package')
+    expect(k).not.toContain('self_prepare')
+    expect(k).toContain('agent')
+    expect(serverPlan({ finding: none, target: target() }).action).toBe('prepare')
+    const health = serverPlan({ finding: none, target: target({ kind: 'hds' }) })
+    expect(health.action).toBe(null)
+    expect(health.lines.map((l) => l.key)).toEqual(['plan.server.no_ready', 'plan.server.hds'])
+  })
+  test('rule level 3 keeps packages waiting', () => {
+    const rule = { fix_level: 3, auto_config: true, executor: 'michel', sudo: 'nopasswd' }
+    expect(keys(cfg(), target(rule))).toContain('approval_auto')
+    expect(keys(cfg(), target(rule))).not.toContain('approval_michel')
+    expect(keys(pkg(), target(rule))).toContain('approval_michel')
+    expect(keys(pkg(), target(rule))).not.toContain('approval_auto')
+    expect(fr['plan.server.approval_auto']).toContain('attend toujours ton accord')
+    expect(fr['plan.server.approval_auto']).toContain('administrateur')
+  })
+  test('the rule needs every condition AutoApplicableServer needs', () => {
+    const rule = { fix_level: 3, auto_config: true, executor: 'michel', sudo: 'nopasswd' }
+    expect(keys(cfg(), target({ ...rule, auto_config: false }))).toContain('approval_michel')
+    expect(keys(cfg(), target({ ...rule, fix_level: 2 }))).toContain('approval_michel')
+    expect(keys(cfg(), target({ ...rule, site_url: '' }))).toContain('approval_michel')
+    expect(keys(cfg(), target({ ...rule, executor: 'user' }))).toContain('approval_user')
+    expect(keys(cfg(), target({ ...rule, sudo: 'none' }))).toContain('approval_user')
+    // A .user.ini has no configuration test: the rule never takes it.
+    expect(keys(cfg({ location: '/srv/www/.user.ini:3' }), target(rule))).toContain('approval_michel')
+  })
+  test('level 3 warning kept', () => {
+    for (const n of [0, 1, 2]) expect(serverPlan({ finding: cfg(), target: target({ fix_level: n }) }).warn).toBe(null)
+    expect(serverPlan({ finding: cfg(), target: target({ fix_level: 3 }) }).warn).toBe('servers.level.3.warn')
+    expect(serverPlan({ finding: pkg(), target: target({ fix_level: 3 }) }).warn).toBe('servers.level.3.warn')
+    expect(fr['servers.level.3.warn']).toBeTruthy()
+    // An exposure has no fix that could leave alone.
+    expect(serverPlan({ finding: expo(), target: target({ fix_level: 3 }) }).warn).toBe(null)
+  })
+  test('without the server yet nothing is promised', () => {
+    const p = serverPlan({ finding: cfg(), target: null })
+    expect(p.lines).toEqual([])
+    expect(p.action).toBe(null)
+    expect(p.warn).toBe(null)
+  })
+  test('every key exists in both languages', () => {
+    for (const k of Object.keys(fr).filter((x) => x.startsWith('plan.server.') || x.startsWith('path.note.') || x === 'plan.exposure' || x === 'expo.how')) expect(en[k], k).toBeTruthy()
+    for (const k of ['plan.server.title', 'plan.server.prepare', 'plan.exposure', 'expo.how', 'plain.server_package', 'path.note.no_site']) expect(fr[k], k).toBeTruthy()
+  })
+})
+
+describe('the path of a flaw on a server', () => {
+  const srv = { target: { id: 't', name: 'srv-demo' }, executor: 'michel' }
+  const gone = finding({ status: 'gone' })
+  const noteOf = (a, extra = {}) => failurePath({ attempt: a, ...extra }).note
+
+  test('server verified needs proven_fixed', () => {
+    // site_unchecked (server_exec.go): the recollection says proven, the site was not checked.
+    const a = attempt('inconclusive', { server: { ...srv, steps: [{ op: 'recollect', ok: true, detail: 'the check no longer sees the problem' }] }, cause: 'site', finding: gone })
+    expect(isVerified(a)).toBe(false)
+    const p = failurePath({ attempt: a, vanished: true })
+    expect(p.verified).toBe(false)
+    expect(states(p)).toEqual(['done', 'done', 'done', 'done', 'stopped'])
+    expect(p.note).toEqual({ cause: 'site' })
+    expect(isVerified(attempt('proven_fixed', { server: srv, finding: gone }))).toBe(true)
+    // A flaw that came back does not stay verified.
+    expect(isVerified(attempt('proven_fixed', { server: srv }))).toBe(false)
+  })
+  test('verified without a site says so', () => {
+    const a = attempt('proven_fixed', { server: srv, finding: gone })
+    expect(noteOf(a, { target: { site_url: '' } })).toEqual({ key: 'no_site' })
+    expect(noteOf(a, { target: { site_url: 'https://example.test' } })).toBe(null)
+    // Without the sheet of the server, nothing is said.
+    expect(noteOf(a)).toBe(null)
+    expect(states(failurePath({ attempt: a, target: { site_url: '' } }))).toEqual(['done', 'done', 'done', 'done', 'done'])
+    expect(fr['path.note.no_site']).toContain("n'a pas vérifié")
+  })
+  test('a server has its own sentences: no project, no branch, no copy', () => {
+    expect(noteOf(attempt('approved', { approved_by: 'auto', server: srv })).key).toBe('by_rule_server')
+    expect(noteOf(attempt('preparing', { server: srv })).key).toBe('preparing_server')
+    expect(noteOf(attempt('proven_fixed', { server: srv })).key).toBe('came_back_server')
+    expect(noteOf(attempt('unknown', { server: srv })).key).toBe('unknown_server')
+    expect(noteOf(attempt('failed', { server: srv })).key).toBe('failed_server')
+    expect(noteOf(attempt('approved', { approved_by: 'kevin', server: { ...srv, executor: 'user' } })).key).toBe('run_yours')
+    expect(noteOf(attempt('approved', { approved_by: 'kevin', server: srv }))).toBe(null)
+    for (const k of ['by_rule_server', 'preparing_server', 'came_back_server', 'unknown_server', 'failed_server', 'run_yours', 'vanished_server', 'vanished_after_server', 'no_site']) {
+      expect(fr[`path.note.${k}`], k).not.toMatch(/projet|branche|ton code/)
+    }
+    // A failed server fix may have changed something: « rien n'a été appliqué » is never said.
+    expect(fr['path.note.failed_server']).not.toContain('rien')
+  })
+  test('a flaw gone from a server offers no start, and says it of the server', () => {
+    expect(noteOf(attempt('failed', { server: srv, finding: gone }), { vanished: true }).key).toBe('vanished_after_server')
+    expect(noteOf(null, { vanished: true, target: { site_url: '' } }).key).toBe('vanished_server')
+    expect(canPrepareServer(attempt('failed', { server: srv, finding: gone }), true)).toBe(false)
+    expect(canPrepareServer(null, true)).toBe(false)
+    expect(canPrepareServer(attempt('inconclusive', { server: srv, finding: gone }), true)).toBe(false)
+  })
+  test('what can be prepared again', () => {
+    expect(canPrepareServer(null)).toBe(true)
+    for (const s of ['failed', 'refused', 'superseded', 'inconclusive']) expect(canPrepareServer(attempt(s, { server: srv })), s).toBe(true)
+    for (const s of ['preparing', 'proposed', 'approved', 'running', 'applied', 'unknown']) expect(canPrepareServer(attempt(s, { server: srv })), s).toBe(false)
+    expect(canPrepareServer(attempt('proven_fixed', { server: srv, finding: gone }))).toBe(false)
+    // It came back.
+    expect(canPrepareServer(attempt('proven_fixed', { server: srv }))).toBe(true)
+  })
+  test('nothing in progress where nothing can start', () => {
+    const plan = { why: 'report_only' }
+    expect(pathSteps(failurePath({ attempt: null }), plan, null).map((s) => s.state)).toEqual(['done', 'todo', 'todo', 'todo', 'todo'])
+  })
+})
+
+describe('plainRisk on a server', () => {
+  const upd = { kind: 'server_package', rule: 'USN-1', package: 'openssl', fixed_versions: ['3.0.13'], explain: 'CVE-2024-1 in openssl' }
+  test('simple: an update in plain words, else the API', () => {
+    expect(plainRisk(upd, null, 'fr', false)).toBe(fr['plain.server_package'])
+    expect(plainRisk({ kind: 'server_config', explain: 'PHP dit sa version.' }, null, 'fr', false)).toBe('PHP dit sa version.')
+  })
+  test('advanced keeps the API sentence', () => {
+    expect(plainRisk(upd, null, 'fr', true)).toBe('CVE-2024-1 in openssl')
+  })
+  test('the update is said to fix it only when it does', () => {
+    expect(plainRisk({ ...upd, fixed_versions: [] }, null, 'fr', false)).toBe(fr['plain.server_unfixed'])
+    expect(plainRisk({ ...upd, mitigation: true }, null, 'fr', false)).toBe(fr['plain.server_unfixed'])
+    expect(plainRisk({ kind: 'server_package', rule: 'PHP-VERSION-UNKNOWN', fixed_versions: [] }, null, 'fr', false)).toBe(fr['servers.finding.php_version_unknown_hint'])
+  })
+  test('the sheet of the server speaks over the attempt', () => {
+    expect(plainRisk({ summary: 'raw' }, { kind: 'server_config', explain: 'Mieux.' }, 'fr', false)).toBe('Mieux.')
   })
 })

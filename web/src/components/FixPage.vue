@@ -1,6 +1,9 @@
 <template>
   <div class="m-fix">
-    <a v-if="noList" href="#/" class="m-fix__back">{{ $t('path.back') }}</a>
+    <template v-if="noList">
+      <a href="#/" class="m-fix__back">{{ $t('path.back') }}</a>
+      <p v-if="isServer" class="m-muted m-fix__intro">{{ $t('fix.intro_server') }}</p>
+    </template>
     <header v-else class="m-fix__head">
       <h1 class="m-fix__title">{{ $t('fix.title') }}</h1>
       <p class="m-muted m-fix__intro">{{ serverOnly ? $t('fix.intro_server') : $t('fix.intro') }}</p>
@@ -65,7 +68,30 @@
           <v-progress-circular indeterminate size="18" width="2" color="primary" />
           {{ $t('fix.loading') }}
         </div>
-        <div v-else-if="serverOnly" class="m-fix__server">
+        <FailureGuide
+          v-else-if="guided"
+          class="m-fix__guide"
+          :attempt="current"
+          :finding="selectedFinding"
+          :sheet="isServer ? serverFlaw : sheetOfSelected"
+          :project-view="projectOfSelected"
+          :server="isServer"
+          :target="isServer ? target : null"
+          :can-start="isServer || canStart"
+          :starting="isServer ? acting === 'again' : starting"
+          @start="isServer ? again() : start()"
+          @to-proposal="toProposal"
+        />
+        <!-- Here in the template as on the screen: it is read and tabbed to before what follows. -->
+        <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
+          <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
+          <p v-if="actionError.hint" class="m-small">{{ actionError.hint }}</p>
+          <details v-if="actionError.data && actionError.data.detail" class="m-fix__detail">
+            <summary class="m-small">{{ $t('fix.proposal.detail') }}</summary>
+            <p class="m-code m-small">{{ actionError.data.detail }}</p>
+          </details>
+        </v-alert>
+        <div v-if="serverOnly && !waiting && !viewLoading" class="m-fix__server">
           <h2 class="m-fix__server-title">{{ $t('srvfix.center_title', { name: current.server.target.name }) }}</h2>
           <p class="m-muted m-small">{{ $t('srvfix.no_agent_chat') }}</p>
           <template v-if="current.proposal && (current.proposal.steps_server || []).length">
@@ -84,27 +110,6 @@
             </ul>
           </template>
         </div>
-        <FailureGuide
-          v-else-if="guided"
-          class="m-fix__guide"
-          :attempt="current"
-          :finding="selectedFinding"
-          :sheet="sheetOfSelected"
-          :project-view="projectOfSelected"
-          :can-start="canStart"
-          :starting="starting"
-          @start="start"
-          @to-proposal="toProposal"
-        />
-        <!-- Here in the template as on the screen: it is read and tabbed to before what follows. -->
-        <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
-          <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
-          <p v-if="actionError.hint" class="m-small">{{ actionError.hint }}</p>
-          <details v-if="actionError.data && actionError.data.detail" class="m-fix__detail">
-            <summary class="m-small">{{ $t('fix.proposal.detail') }}</summary>
-            <p class="m-code m-small">{{ actionError.data.detail }}</p>
-          </details>
-        </v-alert>
         <template v-if="showsWork">
           <DecisionPanel v-if="toDecide" :key="toDecide.id" :finding="toDecide" @decided="onDecided" />
           <details v-if="noList && current" class="m-fix__chat" :open="hasConversation || undefined">
@@ -203,7 +208,7 @@ const listEvery = 15000
 
 // FixPage is the "Corriger" page: the list by state on the left, the path of
 // the flaw and the conversation with the agent in the middle, the flaw and the
-// proposal on the right. In the simple mode, a project's flaw has no list and
+// proposal on the right. In the simple mode, a chosen flaw has no list and
 // its conversation is folded. route is {attempt, finding} from the address.
 export default {
   name: 'FixPage',
@@ -277,13 +282,16 @@ export default {
       if (this.sheet && this.sheet.id === this.route.finding) return this.sheet
       return { id: this.route.finding, package: '', severity: '' }
     },
-    // guided: a project's flaw, under its path. A server's flaw has its own view.
+    // guided: a flaw under its path, of a project or of a server.
     guided() {
-      return !!this.selectedFinding && !this.current?.server
+      return !!this.selectedFinding
     },
-    // noList: the simple mode leaves a chosen project's flaw alone on the page.
+    isServer() {
+      return !!this.current?.server
+    },
+    // noList: the simple mode leaves a chosen flaw alone on the page, of a project or of a server.
     noList() {
-      return !this.$ui.advanced && !!(this.route.attempt || this.route.finding) && !this.current?.server
+      return !this.$ui.advanced && !!(this.route.attempt || this.route.finding)
     },
     starting() {
       return this.startingFor !== '' && this.startingFor === this.selectedFinding?.id
@@ -349,6 +357,18 @@ export default {
         this.select()
       },
       deep: true,
+    },
+    // A state that changes takes buttons away, also when no click asked for it
+    // (a poll, a rule): the keyboard never falls to nothing with them.
+    'current.state': {
+      flush: 'pre',
+      handler() {
+        const el = document.activeElement
+        if (!el || el === document.body) return
+        this.$nextTick(() => {
+          if (!el.isConnected) this.guardFocus()
+        })
+      },
     },
     lang() {
       // Michel's sentences (the flaw, the refusals) come in the page's language.
@@ -466,7 +486,7 @@ export default {
 
     /** toProposal brings the proposal and its Valider into view, on a phone far below the path. */
     toProposal() {
-      const el = document.getElementById('fix-proposal-title')
+      const el = document.getElementById('fix-proposal-title') || document.getElementById('sfix-proposal-title')
       if (!el) return
       el.setAttribute('tabindex', '-1')
       el.focus({ preventScroll: true })
@@ -577,6 +597,7 @@ export default {
       const id = this.current.id
       this.acting = what
       this.actionError = null
+      this.focusGuide = true
       try {
         const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/${path}`))
         if (!this.alive || this.current?.id !== id) return
@@ -592,6 +613,7 @@ export default {
         }
       } finally {
         this.acting = ''
+        this.guardFocus()
       }
     },
     /** again prepares a new fix of the same server finding (after a failure or a refusal). */
@@ -600,6 +622,7 @@ export default {
       if (!a?.server || this.acting) return
       this.acting = 'again'
       this.actionError = null
+      this.focusGuide = true
       try {
         const r = await api.post(this.q(`/targets/${encodeURIComponent(a.server.target.id)}/fix/${encodeURIComponent(a.finding.id)}`))
         if (!this.alive) return
@@ -610,9 +633,18 @@ export default {
         }
       } catch (err) {
         if (err?.status !== 401) this.actionError = err
+        this.focusGuide = false
       } finally {
         this.acting = ''
+        this.guardFocus()
       }
+    },
+    /** guardFocus: when the button in focus went away with what it did, the keyboard goes to the flaw's heading. */
+    guardFocus() {
+      this.$nextTick(() => {
+        const el = document.activeElement
+        if (this.alive && (!el || el === document.body)) document.getElementById('fix-guide-title')?.focus()
+      })
     },
     /** show puts an AttemptView (in full) on screen. */
     show(v) {
@@ -627,10 +659,7 @@ export default {
       else this.loadSheet(v.finding?.id)
       if (this.focusGuide) {
         this.focusGuide = false
-        this.$nextTick(() => {
-          const el = document.activeElement
-          if (!el || el === document.body) document.getElementById('fix-guide-title')?.focus()
-        })
+        this.guardFocus()
       }
     },
     /** patchList updates the attempt's line in the list. */
@@ -765,6 +794,7 @@ export default {
       const id = this.current.id
       this.approving = true
       this.actionError = null
+      this.focusGuide = true
       try {
         const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/approve`), { hash: this.shownHash })
         if (!this.alive || this.current?.id !== id) return
@@ -785,6 +815,7 @@ export default {
         }
       } finally {
         this.approving = false
+        this.guardFocus()
       }
     },
     async refuse(reason) {
@@ -792,6 +823,7 @@ export default {
       const id = this.current.id
       this.refusing = true
       this.actionError = null
+      this.focusGuide = true
       try {
         const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/refuse`), reason ? { reason } : {})
         if (!this.alive || this.current?.id !== id) return
@@ -802,6 +834,7 @@ export default {
         if (err?.status !== 401) this.actionError = err
       } finally {
         this.refusing = false
+        this.guardFocus()
       }
     },
   },

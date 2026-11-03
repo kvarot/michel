@@ -60,10 +60,10 @@
       </header>
 
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-flaws`">
-        <h3 :id="`srv-${id}-flaws`" class="m-sheet__title">{{ $t('servers.sheet.flaws') }}</h3>
+        <h3 :id="`srv-${id}-flaws`" class="m-sheet__title" tabindex="-1">{{ $t('servers.sheet.flaws') }}</h3>
         <p v-if="!cards.length" class="m-muted">{{ view.last_check_at ? $t('servers.sheet.no_flaws') : $t('servers.sheet.no_flaws_unchecked') }}</p>
         <ul v-else class="m-sheet__flaws">
-          <li v-for="c in cards" :key="c.key" class="m-sheet__flaw">
+          <li v-for="c in cards" :id="`srv-flaw-${c.finding.id}`" :key="c.key" class="m-sheet__flaw" tabindex="-1">
             <div class="m-sheet__flaw-top">
               <span class="m-sev" :class="`m-sev--${sev(c.finding.severity)}`">{{ $t(`severity.${sev(c.finding.severity)}`) }}</span>
               <span v-if="c.finding.kev" class="m-tag m-tag--hot m-small">{{ $t('servers.sheet.kev') }}</span>
@@ -71,24 +71,24 @@
               <span v-if="c.finding.kind === 'server_config'" class="m-code m-small m-muted">{{ c.finding.package }}</span>
             </div>
             <p class="m-voice m-sheet__flaw-title">{{ title(c.finding) }}</p>
-            <p v-if="c.finding.explain" class="m-small">{{ c.finding.explain }}</p>
-            <p v-else-if="c.finding.rule === 'PHP-VERSION-UNKNOWN'" class="m-small">{{ $t('servers.finding.php_version_unknown_hint') }}</p>
+            <p v-if="risk(c.finding)" class="m-small">{{ risk(c.finding) }}</p>
             <p v-if="c.runtimes.length" class="m-muted m-small">{{ runtimesText(c) }}</p>
             <p v-if="c.finding.location" class="m-muted m-small">{{ $t('servers.sheet.where', { where: c.finding.location }) }}</p>
-            <div class="m-sheet__flaw-actions">
-              <v-btn v-if="attemptOf(c)" size="small" variant="tonal" color="primary" :href="fixHref(attemptOf(c).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
-              <v-btn
-                v-else-if="view.fix_level > 0"
-                size="small"
-                variant="flat"
-                color="primary"
-                :loading="startingFor === c.finding.id"
-                :disabled="!!startingFor"
-                @click="fix(c.finding)"
-              >
-                {{ $t('servers.sheet.fix') }}
-              </v-btn>
-              <span v-if="attemptOf(c)" class="m-small m-voice">{{ attemptLine(attemptOf(c)) }}</span>
+            <FailureGuide
+              class="m-sheet__guide"
+              card
+              server
+              :attempt="lastAttempt(c)"
+              :finding="c.finding"
+              :sheet="c.finding"
+              :target="view"
+              :can-start="!startingFor"
+              :starting="startingFor === c.finding.id"
+              @start="fix(c.finding)"
+            />
+            <div v-if="lastAttempt(c)" class="m-sheet__flaw-actions">
+              <v-btn size="small" variant="tonal" color="primary" :href="fixHref(lastAttempt(c).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
+              <span class="m-small m-voice">{{ attemptLine(lastAttempt(c)) }}</span>
             </div>
             <!-- The answer of "Corriger" stays next to the card it was asked for. -->
             <v-alert v-if="actionError && errorFor === c.finding.id" type="error" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert" closable @click:close="clearError">
@@ -104,7 +104,7 @@
           </li>
         </ul>
         <p v-if="cards.length && view.fix_level === 0" class="m-muted m-small">{{ $t('servers.sheet.fix_report_only') }}</p>
-        <p v-if="cards.length && view.fix_level === 3" class="m-muted m-small">{{ level3Warn }}</p>
+        <p v-if="cards.length && view.fix_level === 3 && !cards.some(planOnCard)" class="m-muted m-small">{{ level3Warn }}</p>
       </section>
 
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-logs`">
@@ -309,14 +309,16 @@
 <script>
 import FieldHelp from './FieldHelp.vue'
 import AiConsentDialog from './AiConsentDialog.vue'
+import FailureGuide from './FailureGuide.vue'
 import HostKeyDialog from './HostKeyDialog.vue'
 import ServerLogs from './ServerLogs.vue'
 import { api } from '../api.js'
 import { formatDate, severityOf } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
+import { plainRisk, showsPlan } from '../lib/pathView.js'
 import { logBadges } from '../lib/serverLogsView.js'
 import {
-  envLabel, envs, findingTitle, intervalLabel, intervals, isServerFinal, kindLabel, kinds, levelLabel, mergeFindings, serverAttemptLine,
+  cardOfFinding, envLabel, envs, findingTitle, intervalLabel, intervals, kindLabel, kinds, lastAttemptOf, levelLabel, mergeFindings, serverAttemptLine,
   serverLevels, sortFindings, stateSentence,
 } from '../lib/serversView.js'
 
@@ -324,15 +326,17 @@ import {
 const checkEvery = 3000
 
 // ServerSheet is a server's sheet: where it stands in one sentence, its
-// flaws with "Corriger", what Michel saw and could not see, the history of
+// flaws, each on its path, what Michel saw and could not see, the history of
 // checks and fixes, the settings in sentences, the AI consent (of the
 // preprod when one is linked: its inventory is what leaves) and "Retirer de
 // Michel".
 export default {
   name: 'ServerSheet',
-  components: { AiConsentDialog, FieldHelp, HostKeyDialog, ServerLogs },
+  components: { AiConsentDialog, FailureGuide, FieldHelp, HostKeyDialog, ServerLogs },
   props: {
     id: { type: String, required: true },
+    // finding is the flaw the address names: its card comes into view with the focus.
+    finding: { type: String, default: '' },
   },
   emits: ['changed', 'removed'],
   data() {
@@ -368,6 +372,8 @@ export default {
       removing: false,
       removeError: null,
       alive: true,
+      // focusedFor: the address already served, so that a reload leaves the keyboard alone.
+      focusedFor: '',
     }
   },
   computed: {
@@ -472,6 +478,9 @@ export default {
     lang() {
       this.load()
     },
+    finding() {
+      this.focusFinding()
+    },
   },
   created() {
     this.load()
@@ -502,10 +511,50 @@ export default {
     attemptLine(a) {
       return serverAttemptLine(a, this.lang)
     },
-    /** attemptOf is the newest fix of a card's findings still under way (GET /fixes is newest first). */
-    attemptOf(c) {
-      const a = this.fixes.find((x) => c.ids.includes(x.finding?.id))
-      return a && !isServerFinal(a.state) ? a : null
+    /** lastAttempt is the newest fix of a card's flaws, whatever its state: the path starts from it. */
+    lastAttempt(c) {
+      return lastAttemptOf(this.fixes, c)
+    },
+    /** risk says what a card's flaw means, and nothing when it would only repeat the title. */
+    risk(f) {
+      const text = plainRisk(f, null, this.lang, this.$ui.advanced)
+      return text === this.title(f) ? '' : text
+    },
+    /** planOnCard: the card shows the plan, so the level 3 warning is next to it. */
+    planOnCard(c) {
+      return showsPlan(this.lastAttempt(c), false)
+    },
+    /** focusFinding takes the keyboard and the view to the flaw the address names, once. */
+    focusFinding() {
+      const want = `${this.id}|${this.finding}`
+      if (!this.finding || this.focusedFor === want || !this.view) return
+      const c = cardOfFinding(this.cards, this.finding)
+      if (!c) return
+      this.focusedFor = want
+      this.$nextTick(() => {
+        const el = document.getElementById(`srv-flaw-${c.finding.id}`)
+        if (!el) return
+        el.focus({ preventScroll: true })
+        el.scrollIntoView({ block: 'start' })
+      })
+    },
+    /**
+     * keepFocus: the card about to change holds the keyboard. If what is read
+     * takes its button or the card away, the keyboard goes to the flaws' title.
+     */
+    keepFocus() {
+      const el = document.activeElement
+      if (!el?.closest?.('.m-sheet__flaws')) return
+      this.$nextTick(() => {
+        if (!el.isConnected) document.getElementById(`srv-${this.id}-flaws`)?.focus()
+      })
+    },
+    /** focusCard brings back to its card a keyboard lost while a button was disabled. */
+    focusCard(id) {
+      this.$nextTick(() => {
+        const el = document.activeElement
+        if (!el || el === document.body) document.getElementById(`srv-flaw-${id}`)?.focus()
+      })
     },
     runtimesText(c) {
       const list = c.runtimes.map((r) => (r.binary ? this.$t('servers.sheet.runtime', r) : this.$t('servers.sheet.runtime_nobin', r)))
@@ -530,6 +579,7 @@ export default {
         if (err?.status !== 401) this.failure = err
       } finally {
         this.loading = false
+        this.$nextTick(this.focusFinding)
       }
     },
     /** refreshView reads the server again: the log badges follow what the Journaux block changed. A failure is shown, not swallowed. */
@@ -555,7 +605,9 @@ export default {
     },
     async loadFixes() {
       try {
-        this.fixes = (await api.get(this.q(`/fixes?target=${this.enc(this.id)}`))) || []
+        const list = (await api.get(this.q(`/fixes?target=${this.enc(this.id)}`))) || []
+        this.keepFocus()
+        this.fixes = list
       } catch {
         this.fixes = []
       }
@@ -587,6 +639,7 @@ export default {
         try {
           const v = await api.get(this.q(`/targets/${this.enc(this.id)}`))
           if (!this.alive) return
+          this.keepFocus()
           this.view = v
           if (v.checking) {
             this.follow()
@@ -653,6 +706,7 @@ export default {
         if (err?.status === 401) return
         this.actionError = err
         this.errorFor = f.id
+        this.focusCard(f.id)
         // No ready-made fix: the agent may study it (never on an HDS server).
         if (err?.data?.code === 'fix.server.needs_agent' && this.view.kind !== 'hds') this.agentOffer = f
       } finally {
@@ -661,6 +715,8 @@ export default {
     },
     async startAgent(f) {
       this.startingFor = f.id
+      // The button is in the answer being cleared.
+      this.keepFocus()
       this.clearError()
       try {
         const r = await api.post(this.q(`/targets/${this.enc(this.id)}/agent-fix/${this.enc(f.id)}`))
@@ -678,6 +734,7 @@ export default {
         }
         this.actionError = err
         this.errorFor = f.id
+        this.focusCard(f.id)
       } finally {
         this.startingFor = ''
       }
@@ -780,7 +837,9 @@ export default {
 .m-sheet__badges { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .m-sheet__sub { font-size: 0.95rem; font-weight: 650; margin: 0.6rem 0 0; }
 .m-sheet__flaws { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
-.m-sheet__flaw { display: grid; gap: 0.3rem; padding-top: 0.75rem; border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); }
+.m-sheet__flaw { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; padding-top: 0.75rem; border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); scroll-margin-top: 1rem; }
+.m-sheet__flaw:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 4px; border-radius: 4px; }
+.m-sheet__guide { margin-top: 0.4rem; }
 .m-sheet__flaw:first-child { border-top: 0; padding-top: 0; }
 .m-sheet__flaw-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.75rem; }
 .m-sheet__flaw-title { font-size: 1.05rem; }

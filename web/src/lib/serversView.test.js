@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, restoreNeeded,
-  serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers,
+  cardOfFinding, lastAttemptOf, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers,
 } from './serversView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -261,5 +261,20 @@ describe('restoreNeeded', () => {
   test('no attempt, or a project fix, does not', () => {
     expect(restoreNeeded(null)).toBe(false)
     expect(restoreNeeded({ state: 'failed' })).toBe(false)
+  })
+})
+
+describe('the cards of a sheet', () => {
+  const cards = [{ key: 'a', finding: { id: 'f1' }, ids: ['f1', 'f2'] }, { key: 'b', finding: { id: 'f3' }, ids: ['f3'] }]
+  test('a chosen flaw finds its card, also through a merged runtime', () => {
+    expect(cardOfFinding(cards, 'f2').key).toBe('a')
+    expect(cardOfFinding(cards, 'f3').key).toBe('b')
+    expect(cardOfFinding(cards, 'nope')).toBe(null)
+    expect(cardOfFinding(cards, '')).toBe(null)
+  })
+  test('the last attempt is the newest, whatever its state (GET /fixes is newest first)', () => {
+    const fixes = [{ id: 'x', finding: { id: 'other' } }, { id: 'n', state: 'failed', finding: { id: 'f2' } }, { id: 'o', state: 'proven_fixed', finding: { id: 'f1' } }]
+    expect(lastAttemptOf(fixes, cards[0]).id).toBe('n')
+    expect(lastAttemptOf(fixes, cards[1])).toBe(null)
   })
 })
