@@ -94,7 +94,7 @@
       <h5 :id="`${uid}-manual`" class="m-logs__minor">{{ $t('logs.add.manual') }}</h5>
       <form class="m-logs__form" :aria-labelledby="`${uid}-manual`" @submit.prevent="tryDraft('manual', manualDraft)">
         <v-text-field v-model.trim="draft.path" :label="$t('logs.add.path')" :hint="$t('logs.add.path_hint')" persistent-hint autocomplete="off" spellcheck="false" density="compact" />
-        <v-select v-model="draft.format" :items="formatItems" :label="$t('logs.add.format')" density="compact" variant="outlined" hide-details class="m-logs__select" />
+        <v-select v-model="draft.format" :items="formatItems" :label="$t('logs.add.format')" :hint="$t('logs.add.format_hint')" persistent-hint density="compact" variant="outlined" class="m-logs__select" />
         <template v-if="draft.format === 'json'">
           <v-text-field v-model.trim="draft.level_field" :label="$t('logs.add.level_field')" :hint="$t('logs.add.level_field_hint')" persistent-hint autocomplete="off" spellcheck="false" density="compact" />
           <v-text-field v-model.trim="draft.channel_field" :label="$t('logs.add.channel_field')" autocomplete="off" spellcheck="false" hide-details density="compact" />
@@ -533,9 +533,25 @@ export default {
       try {
         await navigator.clipboard.writeText(text)
         this.copyNote = this.$t('logs.copied')
+        return
       } catch {
-        this.copyNote = this.$t('logs.copy_failed')
+        // Some browsers refuse the clipboard API here: the old way still works.
       }
+      const box = document.createElement('textarea')
+      box.value = text
+      box.setAttribute('readonly', '')
+      box.style.position = 'fixed'
+      box.style.opacity = '0'
+      document.body.appendChild(box)
+      box.select()
+      let ok = false
+      try {
+        ok = document.execCommand('copy')
+      } catch {
+        ok = false
+      }
+      document.body.removeChild(box)
+      this.copyNote = ok ? this.$t('logs.copied') : this.$t('logs.copy_failed')
     },
     /**
      * change sends one or several settings. A step away from the recommended
@@ -589,18 +605,21 @@ export default {
 </script>
 
 <style scoped>
-.m-logs { display: grid; gap: 0.7rem; }
+.m-logs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.7rem; min-width: 0; }
+.m-logs > * { min-width: 0; }
+.m-logs__item { min-width: 0; }
+.m-logs .m-code { overflow-wrap: anywhere; }
 .m-logs p { margin: 0; line-height: 1.55; }
 .m-sheet__sub { font-size: 0.95rem; font-weight: 650; margin: 0.8rem 0 0; }
 .m-sheet__list { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.25rem; }
 .m-logs__minor { font-size: 0.9rem; font-weight: 650; margin: 0.4rem 0 0; }
-.m-logs__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
+.m-logs__list { grid-template-columns: minmax(0, 1fr); list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
 .m-logs__item { display: grid; gap: 0.3rem; padding-top: 0.75rem; border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); }
 .m-logs__item:first-child { border-top: 0; padding-top: 0; }
 .m-logs__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .m-logs__form { display: grid; gap: 0.9rem; }
 .m-logs__select { max-width: 22rem; }
-.m-logs__routes { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 0.6rem; }
+.m-logs__routes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(19rem, 100%), 1fr)); gap: 0.6rem; }
 .m-logs__setting { display: grid; gap: 0.2rem; }
 .m-logs__q { font-weight: 600; }
 .m-logs__group { display: grid; gap: 0.5rem; }

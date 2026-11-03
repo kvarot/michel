@@ -736,7 +736,7 @@ export default {
 </script>
 
 <style scoped>
-.m-sheet { display: grid; gap: 1.5rem; }
+.m-sheet { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
 .m-sheet p { margin: 0; line-height: 1.55; }
 .m-sheet__failure { display: grid; gap: 0.4rem; justify-items: start; }
 .m-sheet__head { display: grid; gap: 0.5rem; }
@@ -749,6 +749,7 @@ export default {
 .m-sheet__notice { color: rgb(var(--v-theme-success)); }
 .m-sheet__block {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.6rem;
   padding: 1.1rem 1.25rem;
   border-radius: 12px;

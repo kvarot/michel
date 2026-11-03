@@ -114,7 +114,7 @@ describe('readState', () => {
   test('last read and unseen wording', () => {
     const r = readState({ active: true, last_read_at: '2026-11-01T11:30:00Z', unseen: [{ what: '/var/log/app.log', reason: 'Michel n’a pas le droit de le lire.' }] }, now, 'fr')
     expect(r.line).toBe('Dernière lecture réussie il y a 30 min.')
-    expect(r.unseen).toEqual([{ what: '/var/log/app.log', reason: 'Michel n’a pas le droit de le lire.', text: 'Non vu : /var/log/app.log — Michel n’a pas le droit de le lire.' }])
+    expect(r.unseen).toEqual([{ what: '/var/log/app.log', reason: 'Michel n’a pas le droit de le lire.', text: "Michel n'a pas pu lire : /var/log/app.log — Michel n’a pas le droit de le lire." }])
     expect(readState({ active: true, last_read_at: '2026-11-01T11:30:00Z' }, now, 'en').line).toBe('Last successful read 30 min ago.')
   })
 
