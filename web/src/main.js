@@ -7,6 +7,7 @@ import App from './App.vue'
 import { takeTokenFromURL } from './api.js'
 import { translate, normalizeLang } from './i18n/index.js'
 import { keys, load } from './lib/storage.js'
+import { readAdvanced } from './lib/modeView.js'
 import { themes } from './lib/theme.js'
 
 // The token arrives once in the link printed by michel serve.
@@ -40,7 +41,7 @@ const vuetify = createVuetify({
 })
 
 // ui holds the interface language; $t reads it so every text follows a change.
-const ui = reactive({ lang: normalizeLang(load(keys.lang) || navigator.language?.slice(0, 2)), langChosen: !!load(keys.lang) })
+const ui = reactive({ lang: normalizeLang(load(keys.lang) || navigator.language?.slice(0, 2)), langChosen: !!load(keys.lang), advanced: readAdvanced(load) })
 
 const app = createApp(App)
 app.config.globalProperties.$ui = ui

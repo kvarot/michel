@@ -12,3 +12,12 @@ describe('safety texts', () => {
     expect(fr['servers.hostkey.keep']).toBe("Garder l'ancienne empreinte")
   })
 })
+
+describe('catalogs', () => {
+  test('i18n catalogs have the same keys', () => {
+    const f = Object.keys(fr)
+    const e = Object.keys(en)
+    expect(f.filter((k) => !(k in en))).toEqual([])
+    expect(e.filter((k) => !(k in fr))).toEqual([])
+  })
+})

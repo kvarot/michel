@@ -35,7 +35,7 @@
       </ul>
     </section>
 
-    <ExploitedBanner :exploited="digest.exploited || []" :decided="digest.exploited_decided || 0" @decided="$emit('decided')" />
+    <ExploitedBanner v-if="$ui.advanced" :exploited="digest.exploited || []" :decided="digest.exploited_decided || 0" @decided="$emit('decided')" />
 
     <OsvBanner :fetched-at="osvFetchedAt" :stale="digest.osv_stale" />
 
@@ -43,9 +43,9 @@
       {{ $t('today.failed_scans', { n: digest.failed_scans }) }}
     </v-alert>
 
-    <ReadingList :items="digest.reading || []" />
+    <ReadingList v-if="$ui.advanced" :items="digest.reading || []" />
 
-    <details v-if="catalog.line" class="m-catalog">
+    <details v-if="$ui.advanced && catalog.line" class="m-catalog">
       <summary class="m-small">{{ catalog.line }}</summary>
       <ul class="m-catalog__list m-small">
         <li v-if="(catalog.failed || []).length">{{ $t('catalog.failed', { keys: catalog.failed.join(', ') }) }}</li>

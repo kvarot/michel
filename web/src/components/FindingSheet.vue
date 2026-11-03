@@ -13,7 +13,7 @@
 
     <template v-else-if="f">
       <div class="m-sheet__head">
-        <span class="m-code m-sheet__id">{{ f.osv_id }}</span>
+        <span v-if="$ui.advanced" class="m-code m-sheet__id">{{ f.osv_id }}</span>
         <span class="m-sheet__chips">
           <span v-if="f.malicious" class="m-flag m-small">{{ $t('chip.malicious') }}</span>
           <span v-else-if="f.kev" class="m-flag m-small">{{ $t('chip.kev') }}</span>
@@ -25,12 +25,12 @@
       <div class="m-sheet__sentences">
         <section v-for="s in sentences" :key="s.key" class="m-sentence">
           <h4 class="m-sentence__label">{{ $t(s.label) }}</h4>
-          <p class="m-sentence__text m-voice">{{ s.text }}</p>
+          <p class="m-sentence__text m-voice">{{ $ui.advanced ? s.text : strip(s.text) }}</p>
         </section>
       </div>
 
-      <h4 class="m-sheet__sub">{{ $t('sheet.facts') }}</h4>
-      <dl class="m-facts">
+      <h4 v-if="$ui.advanced" class="m-sheet__sub">{{ $t('sheet.facts') }}</h4>
+      <dl v-if="$ui.advanced" class="m-facts">
         <div v-if="f.kev"><dt>{{ $t('fact.kev') }}</dt><dd>{{ $t('fact.kev_value', { date: kevDate }) }}</dd></div>
         <div v-if="f.epss > 0"><dt>{{ $t('fact.epss') }}</dt><dd>{{ $t('fact.epss_value', epss) }}</dd></div>
         <div v-if="f.rule_id"><dt>{{ $t('fact.rule') }}</dt><dd class="m-code">{{ f.rule_id }}</dd></div>
@@ -95,9 +95,9 @@
           </div>
         </template>
       </dl>
-      <p v-if="!a" class="m-muted m-small">{{ $t('sheet.no_analysis', { name: f.project }) }}</p>
+      <p v-if="$ui.advanced && !a" class="m-muted m-small">{{ $t('sheet.no_analysis', { name: f.project }) }}</p>
 
-      <details class="m-tech">
+      <details v-if="$ui.advanced" class="m-tech">
         <summary>{{ $t('sheet.technical') }}</summary>
         <dl class="m-facts">
           <div>
@@ -134,7 +134,7 @@
         </dl>
       </details>
 
-      <section v-if="glossaryList.length" class="m-glossary">
+      <section v-if="$ui.advanced && glossaryList.length" class="m-glossary">
         <h4 class="m-sheet__sub">{{ $t('sheet.glossary') }}</h4>
         <dl>
           <div v-for="g in glossaryList" :key="g.term">
@@ -158,6 +158,7 @@ import DecisionPanel from './DecisionPanel.vue'
 import { api } from '../api.js'
 import { formatDate, formatPercent, severityOf } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
+import { stripTechnicalIds } from '../lib/modeView.js'
 
 const kinds = ['dependency', 'code', 'misconfig', 'web', 'vulnerability']
 
@@ -243,6 +244,10 @@ export default {
       } finally {
         this.loading = false
       }
+    },
+    // strip removes identifiers from a sentence shown in the simple mode.
+    strip(text) {
+      return stripTechnicalIds(text)
     },
     onDecided(view) {
       this.f = view

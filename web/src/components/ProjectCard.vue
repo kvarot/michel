@@ -15,7 +15,7 @@
       <p v-if="project.critical_open === 0" class="m-card__keep m-muted m-small">{{ $t('project.zero_critical_hint') }}</p>
       <p class="m-card__counts m-small">
         <span>{{ $t('project.open', { n: openTotal }) }}</span>
-        <span v-for="d in decided" :key="d.action" class="m-muted">{{ $t(`project.decided.${d.action}`, { n: d.n }) }}</span>
+        <template v-if="$ui.advanced"><span v-for="d in decided" :key="d.action" class="m-muted">{{ $t(`project.decided.${d.action}`, { n: d.n }) }}</span></template>
       </p>
       <v-alert
         v-if="scanProblem"

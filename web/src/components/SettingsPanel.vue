@@ -36,6 +36,20 @@
         </div>
       </section>
 
+      <section class="m-settings__group" aria-labelledby="settings-advanced">
+        <h3 id="settings-advanced" class="m-settings__label">{{ $t('settings.advanced') }}</h3>
+        <v-switch
+          :model-value="$ui.advanced"
+          color="primary"
+          :label="$ui.advanced ? $t('settings.advanced_on') : $t('settings.advanced_off')"
+          :aria-describedby="'settings-advanced-hint'"
+          hide-details
+          inset
+          @update:model-value="setAdvanced"
+        />
+        <p id="settings-advanced-hint" class="m-muted m-small">{{ $t('settings.advanced_hint') }}</p>
+      </section>
+
       <section class="m-settings__group" aria-labelledby="settings-token">
         <h3 id="settings-token" class="m-settings__label">{{ $t('settings.token') }}</h3>
         <p class="m-small">{{ hasToken ? $t('settings.token_saved') : $t('settings.token_missing') }}</p>
@@ -66,6 +80,7 @@
 <script>
 import { api } from '../api.js'
 import { languages } from '../i18n/index.js'
+import { keys, save } from '../lib/storage.js'
 
 export default {
   name: 'SettingsPanel',
@@ -88,6 +103,11 @@ export default {
     },
   },
   methods: {
+    // setAdvanced turns the advanced mode on or off and remembers the choice here.
+    setAdvanced(on) {
+      this.$ui.advanced = !!on
+      save(keys.advanced, on ? '1' : '')
+    },
     useToken() {
       api.setToken(this.pasted)
       this.pasted = ''

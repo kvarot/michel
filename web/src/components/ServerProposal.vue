@@ -5,7 +5,7 @@
       <p class="m-sprop__id">
         <span class="m-sev" :class="`m-sev--${severity}`">{{ $t(`severity.${severity}`) }}</span>
         <span v-if="flawView.kev" class="m-tag m-tag--hot m-small">{{ $t('servers.sheet.kev') }}</span>
-        <span v-if="flawView.kind === 'server_config'" class="m-code m-muted m-small">{{ flawView.package }}</span>
+        <span v-if="$ui.advanced && flawView.kind === 'server_config'" class="m-code m-muted m-small">{{ flawView.package }}</span>
       </p>
       <p class="m-muted m-small">
         <a :href="serverHref">{{ $t('srvfix.flaw_on', { name: server.target.name }) }}</a>
@@ -99,7 +99,10 @@
           <p class="m-small">{{ $t(needsSnap ? 'srvfix.rollback.package' : 'srvfix.rollback.config') }}</p>
         </section>
 
-        <details v-if="scripts" class="m-sprop__detail">
+        <v-btn v-if="scripts && !$ui.advanced && !showScripts" variant="text" size="small" class="m-sprop__see" @click="showScripts = true">
+          {{ $t('srvfix.see_script') }}
+        </v-btn>
+        <details v-if="scripts && ($ui.advanced || showScripts)" class="m-sprop__detail" :open="showScripts || undefined">
           <summary>{{ $t('srvfix.scripts') }}</summary>
           <div v-for="s in scriptList" :key="s.key" class="m-sprop__script">
             <div class="m-sprop__script-head">
@@ -108,7 +111,7 @@
             </div>
             <pre class="m-code m-sprop__pre">{{ s.text }}</pre>
           </div>
-          <p class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
+          <p v-if="$ui.advanced" class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
         </details>
         <p v-if="server.scripts_unreadable" class="m-sprop__warn m-small" role="alert">{{ $t('srvfix.scripts_unreadable') }}</p>
         <p v-if="copied" class="m-small m-sprop__ok" role="status">{{ copied }}</p>
@@ -172,7 +175,8 @@ export default {
   },
   emits: ['approve', 'refuse', 'snapshot', 'applied', 'resolve', 'again'],
   data() {
-    return { refuseOpen: false, reason: '', copied: '' }
+    // showScripts opens the scripts in the simple mode.
+    return { refuseOpen: false, reason: '', copied: '', showScripts: false }
   },
   computed: {
     lang() {
@@ -309,6 +313,7 @@ export default {
 }
 .m-sprop__list { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.2rem; }
 .m-sprop__again { justify-self: start; }
+.m-sprop__see { justify-self: start; margin-left: -0.6rem; }
 .m-sprop__dialog-title { white-space: normal; font-family: var(--m-voice); font-weight: 600; }
 .m-sprop__dialog-body { margin: 0 0 0.75rem; }
 .m-sprop__dialog-actions { justify-content: flex-end; }

@@ -6,14 +6,14 @@
       <template v-else>
         <p class="m-prop__id">
           <span class="m-code">{{ finding.package }}</span>
-          <span v-if="finding.osv_id" class="m-code m-muted">{{ finding.osv_id }}</span>
+          <span v-if="$ui.advanced && finding.osv_id" class="m-code m-muted">{{ finding.osv_id }}</span>
           <span class="m-sev" :class="`m-sev--${severity}`">{{ $t(`severity.${severity}`) }}</span>
         </p>
         <p v-if="project" class="m-muted m-small m-prop__project">{{ $t('fix.in_project', { project }) }}</p>
         <div v-if="sentences.length" class="m-prop__sentences">
           <section v-for="s in sentences" :key="s.key">
             <h3 class="m-prop__label">{{ $t(s.label) }}</h3>
-            <p class="m-voice m-prop__sentence">{{ s.text }}</p>
+            <p class="m-voice m-prop__sentence">{{ $ui.advanced ? s.text : strip(s.text) }}</p>
           </section>
         </div>
         <p v-else-if="finding.summary" class="m-small">{{ finding.summary }}</p>
@@ -51,7 +51,10 @@
           <p v-else class="m-muted m-small">{{ $t('fix.proposal.approve_hint') }}</p>
         </template>
 
-        <details class="m-prop__detail">
+        <v-btn v-if="!$ui.advanced && !showChange" variant="text" size="small" class="m-prop__see" @click="showChange = true">
+          {{ $t('fix.proposal.see_change') }}
+        </v-btn>
+        <details v-if="$ui.advanced || showChange" class="m-prop__detail" :open="showChange || undefined">
           <summary>{{ $t('fix.proposal.detail') }}</summary>
           <h3 class="m-prop__label">{{ $t('fix.proposal.files') }}</h3>
           <ul class="m-prop__files">
@@ -65,7 +68,7 @@
           <p class="m-small">{{ $t(`fix.proposal.tests_${testsKey}`) }}</p>
           <pre v-if="p.tests_output" class="m-code m-prop__pre"><MaskedText :text="p.tests_output" /></pre>
           <p v-else-if="p.tests_status !== 'not_run'" class="m-muted m-small">{{ $t('fix.proposal.tests_output_none') }}</p>
-          <template v-if="commands.length">
+          <template v-if="$ui.advanced && commands.length">
             <h3 class="m-prop__label">{{ $t('fix.proposal.commands') }}</h3>
             <ul class="m-prop__files">
               <li v-for="(c, i) in commands" :key="`${c.what}-${i}`" class="m-small">
@@ -76,7 +79,7 @@
           </template>
           <h3 class="m-prop__label">{{ $t('fix.proposal.rescan') }}</h3>
           <p class="m-small">{{ $t(p.rescan_clean ? 'fix.proposal.rescan_clean' : 'fix.proposal.rescan_dirty') }}</p>
-          <p class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
+          <p v-if="$ui.advanced" class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
         </details>
       </template>
       <p v-else class="m-muted">{{ $t(attempt.state === 'preparing' ? 'fix.proposal.none' : 'fix.proposal.none_idle') }}</p>
@@ -115,6 +118,7 @@
 import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
 import { canApprove, proposalFacts, proposalSentence } from '../lib/fixView.js'
+import { stripTechnicalIds } from '../lib/modeView.js'
 
 // FixProposal is the right of the Fix page: the flaw in plain words (the
 // three sentences of its sheet), then the proposal in plain words with
@@ -136,7 +140,8 @@ export default {
   },
   emits: ['approve', 'refuse'],
   data() {
-    return { refuseOpen: false, reason: '' }
+    // showChange opens the diff and the test output in the simple mode.
+    return { refuseOpen: false, reason: '', showChange: false }
   },
   computed: {
     p() {
@@ -201,6 +206,10 @@ export default {
     },
   },
   methods: {
+    // strip removes identifiers from a sentence shown in the simple mode.
+    strip(text) {
+      return stripTechnicalIds(text)
+    },
     refuse() {
       this.refuseOpen = false
       this.$emit('refuse', this.reason.trim())
@@ -238,6 +247,7 @@ export default {
   font-size: 0.78rem;
   background: rgba(var(--v-theme-on-surface), 0.05);
 }
+.m-prop__see { justify-self: start; margin-left: -0.6rem; }
 .m-prop__stop { justify-self: start; margin-left: -0.6rem; }
 .m-prop__done { font-size: 1.05rem; line-height: 1.5; }
 .m-prop__dialog-title { white-space: normal; font-family: var(--m-voice); font-weight: 600; }

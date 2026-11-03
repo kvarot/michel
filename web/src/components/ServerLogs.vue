@@ -26,7 +26,7 @@
         <li v-for="s in sourceRows" :key="s.id" class="m-logs__item">
           <p>
             <span :id="`${uid}-src-${s.id}`" class="m-code">{{ s.path }}</span>
-            <span class="m-muted m-small"> — {{ formatText(s.format) }}</span>
+            <span v-if="$ui.advanced" class="m-muted m-small"> — {{ formatText(s.format) }}</span>
           </p>
           <v-switch
             :model-value="s.active"
@@ -70,7 +70,7 @@
         <li v-for="c in candidates" :key="candKey(c)" class="m-logs__item">
           <p>
             <span :id="`${uid}-cand-${candKey(c)}`" class="m-code">{{ c.path }}</span>
-            <span class="m-muted m-small"> — {{ formatText(c.format) }}</span>
+            <span v-if="$ui.advanced" class="m-muted m-small"> — {{ formatText(c.format) }}</span>
           </p>
           <p class="m-small">{{ c.text }}</p>
           <p v-if="c.note && !tries[candKey(c)]" class="m-muted m-small">{{ c.note }}</p>
@@ -91,8 +91,8 @@
       </ul>
 
       <p v-if="trying" class="m-muted m-small" role="status">{{ $t('logs.add.trying') }}</p>
-      <h5 :id="`${uid}-manual`" class="m-logs__minor">{{ $t('logs.add.manual') }}</h5>
-      <form class="m-logs__form" :aria-labelledby="`${uid}-manual`" @submit.prevent="tryDraft('manual', manualDraft)">
+      <h5 v-if="$ui.advanced" :id="`${uid}-manual`" class="m-logs__minor">{{ $t('logs.add.manual') }}</h5>
+      <form v-if="$ui.advanced" class="m-logs__form" :aria-labelledby="`${uid}-manual`" @submit.prevent="tryDraft('manual', manualDraft)">
         <v-text-field v-model.trim="draft.path" :label="$t('logs.add.path')" :hint="$t('logs.add.path_hint')" persistent-hint autocomplete="off" spellcheck="false" density="compact" />
         <v-select v-model="draft.format" :items="formatItems" :label="$t('logs.add.format')" :hint="$t('logs.add.format_hint')" persistent-hint density="compact" variant="outlined" class="m-logs__select" />
         <template v-if="draft.format === 'json'">
@@ -106,7 +106,7 @@
         </div>
         <p class="m-muted m-small">{{ $t('logs.add.try_hint') }} {{ $t('logs.add.start_hint') }}</p>
       </form>
-      <TryResult v-if="tries.manual" :result="tries.manual" :lang="lang" @close="delete tries.manual" />
+      <TryResult v-if="$ui.advanced && tries.manual" :result="tries.manual" :lang="lang" @close="delete tries.manual" />
 
       <!-- The errors -->
       <h4 :id="`${uid}-errors`" class="m-sheet__sub">{{ $t('logs.errors.title') }}</h4>
@@ -129,7 +129,7 @@
             <p class="m-muted m-small">{{ $t('logs.errors.when', { first: when(e.first_at), last: when(e.last_at) }) }}</p>
             <p v-if="e.text" class="m-small">{{ e.text }}</p>
             <div class="m-logs__actions">
-              <v-btn v-if="e.detail" size="small" variant="text" color="primary" :aria-expanded="open === e.id ? 'true' : 'false'" :aria-describedby="`${uid}-err-${e.id}`" @click="toggleDetail(e)">
+              <v-btn v-if="$ui.advanced && e.detail" size="small" variant="text" color="primary" :aria-expanded="open === e.id ? 'true' : 'false'" :aria-describedby="`${uid}-err-${e.id}`" @click="toggleDetail(e)">
                 {{ open === e.id ? $t('logs.errors.detail_hide') : $t('logs.errors.detail') }}
               </v-btn>
               <v-btn v-if="e.status !== 'seen' && e.status !== 'ignored'" size="small" variant="text" color="primary" :disabled="busy" :aria-describedby="`${uid}-err-${e.id}`" @click="mark(e, 'seen')">
@@ -142,7 +142,7 @@
                 {{ $t('logs.errors.unignore') }}
               </v-btn>
             </div>
-            <div v-if="open === e.id && e.detail" class="m-logs__detail">
+            <div v-if="$ui.advanced && open === e.id && e.detail" class="m-logs__detail">
               <p class="m-small">{{ $t('logs.errors.detail_help') }}</p>
               <pre class="m-logs__cmd m-code" tabindex="0">{{ e.detail }}</pre>
               <v-btn size="small" variant="tonal" color="primary" @click="copy(e.detail)">{{ $t('logs.copy') }}</v-btn>

@@ -17,7 +17,7 @@
         <p class="m-sheet__meta m-small">
           <span>{{ kindText }}</span>
           <span>{{ envText }}</span>
-          <span class="m-code">{{ view.user }}@{{ view.host }}:{{ view.port }}</span>
+          <span v-if="$ui.advanced" class="m-code">{{ view.user }}@{{ view.host }}:{{ view.port }}</span>
         </p>
         <p class="m-voice m-sheet__state">{{ sentence }}</p>
         <div class="m-sheet__actions">
@@ -114,10 +114,10 @@
         <ServerLogs :id="id" :kind="view.kind" :env="view.env" @changed="refreshView" />
       </section>
 
-      <section class="m-sheet__block" :aria-labelledby="`srv-${id}-seen`">
-        <h3 :id="`srv-${id}-seen`" class="m-sheet__title">{{ $t('servers.sheet.seen') }}</h3>
-        <p v-if="!inv" class="m-muted">{{ $t('servers.sheet.seen_none') }}</p>
-        <ul v-else class="m-sheet__list m-small">
+      <section class="m-sheet__block" :aria-labelledby="$ui.advanced ? `srv-${id}-seen` : undefined">
+        <h3 v-if="$ui.advanced" :id="`srv-${id}-seen`" class="m-sheet__title">{{ $t('servers.sheet.seen') }}</h3>
+        <p v-if="$ui.advanced && !inv" class="m-muted">{{ $t('servers.sheet.seen_none') }}</p>
+        <ul v-else-if="$ui.advanced" class="m-sheet__list m-small">
           <li v-if="inv.os.pretty || inv.os.id">
             {{ $t('servers.sheet.os', { os: inv.os.pretty || `${inv.os.id} ${inv.os.version_id}` }) }}<span v-if="inv.os.kernel">, {{ $t('servers.sheet.kernel', { kernel: inv.os.kernel }) }}</span>
           </li>
@@ -128,7 +128,7 @@
           <li v-for="w in inv.web_servers" :key="w.name">{{ $t('servers.sheet.web', { name: w.name, version: w.version }) }}</li>
           <li v-if="inv.packages.length">{{ $t('servers.sheet.packages', { n: inv.packages.length }) }}</li>
         </ul>
-        <details v-if="inv && inv.directives.length" class="m-sheet__details">
+        <details v-if="$ui.advanced && inv && inv.directives.length" class="m-sheet__details">
           <summary class="m-small">{{ $t('servers.sheet.directives') }}</summary>
           <ul class="m-sheet__list m-small">
             <li v-for="(d, i) in inv.directives" :key="`${d.sapi}|${d.name}|${i}`">
@@ -137,7 +137,7 @@
             </li>
           </ul>
         </details>
-        <h4 class="m-sheet__sub">{{ $t('servers.sheet.projects') }}</h4>
+        <component :is="$ui.advanced ? 'h4' : 'h3'" :class="$ui.advanced ? 'm-sheet__sub' : 'm-sheet__title'">{{ $t('servers.sheet.projects') }}</component>
         <p v-if="!(view.projects || []).length" class="m-muted m-small">{{ $t('servers.sheet.no_projects') }}</p>
         <ul v-else class="m-sheet__list m-small">
           <li v-for="p in view.projects" :key="p.project">{{ $t('servers.sheet.project_dir', { project: p.project, dir: p.remote_dir }) }}</li>
@@ -155,7 +155,7 @@
         </template>
       </section>
 
-      <section class="m-sheet__block" :aria-labelledby="`srv-${id}-history`">
+      <section v-if="$ui.advanced" class="m-sheet__block" :aria-labelledby="`srv-${id}-history`">
         <h3 :id="`srv-${id}-history`" class="m-sheet__title">{{ $t('servers.sheet.history') }}</h3>
         <p v-if="!history.length" class="m-muted m-small">{{ $t('servers.sheet.history_none') }}</p>
         <ul v-else class="m-sheet__list m-small">
