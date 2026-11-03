@@ -1058,3 +1058,20 @@ func (r *Repo) Text(ctx context.Context, id string) (string, bool, error) {
 	txt, ok := readBackText(txt)
 	return txt, ok, nil
 }
+
+// LastLineHour returns the latest hour an error was written in, read from the
+// dates of its lines (ok is false when no count is left).
+func (r *Repo) LastLineHour(ctx context.Context, signatureID string) (hour time.Time, ok bool, err error) {
+	var s sql.NullString
+	if err := r.s.DB().QueryRowContext(ctx, `SELECT MAX(hour) FROM log_bucket WHERE signature_id = ?`, signatureID).Scan(&s); err != nil {
+		return time.Time{}, false, fmt.Errorf("cannot read the log counts: %w", err)
+	}
+	if !s.Valid {
+		return time.Time{}, false, nil
+	}
+	hour, err = parseTime(s.String)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("cannot read the log counts: %w", err)
+	}
+	return hour, true, nil
+}

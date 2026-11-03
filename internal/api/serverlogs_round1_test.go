@@ -511,3 +511,25 @@ func TestSettingsSpikeBoundsAndRetentionStep(t *testing.T) {
 		t.Errorf("retention = %d", st.RetentionDays)
 	}
 }
+
+// An error written before Michel read it (a computer off overnight, a late read):
+// the command looks for the date of the line, not the date of the read, or it
+// would find nothing.
+func TestDetailCommandLooksForTheDateOfTheLine(t *testing.T) {
+	lf := newLogFixture(t, "")
+	lf.addSource("")
+	rec := pdoRecord
+	rec.Hour = now.Add(-72 * time.Hour)
+	lf.apply(rec)
+	errs := lf.errorsList()
+	if len(errs) != 1 {
+		t.Fatalf("errors: %+v", errs)
+	}
+	lineDay := rec.Hour.UTC().Format("02-Jan-2006")
+	if !strings.Contains(errs[0].Detail, lineDay) {
+		t.Errorf("the command does not look for the day of the line (%s): %s", lineDay, errs[0].Detail)
+	}
+	if readDay := now.UTC().Format("02-Jan-2006"); strings.Contains(errs[0].Detail, readDay) {
+		t.Errorf("the command looks for the day of the read (%s): %s", readDay, errs[0].Detail)
+	}
+}

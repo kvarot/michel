@@ -918,7 +918,17 @@ func (s *server) errorView(ctx context.Context, t target.Target, st serverlog.Se
 		Channel: s.logText(t.User, g.Channel), Status: string(g.Status), FirstAt: stamp(g.FirstAt), LastAt: stamp(g.LastAt), Total: g.Total}
 	// An error last seen before its source changed file came from another file.
 	if src, ok := srcs[g.SourceID]; ok && !g.LastAt.Before(src.PathAt) {
-		v.Detail = detailCommand(t, src, g)
+		// The command looks for the day of the line: LastAt is when Michel read it,
+		// which can be days later (a computer off, a late read).
+		line := g
+		hour, known, err := s.serverLogs().LastLineHour(ctx, g.ID)
+		if err != nil {
+			return LogErrorView{}, err
+		}
+		if known {
+			line.LastAt = hour
+		}
+		v.Detail = detailCommand(t, src, line)
 	}
 	if st.StoreText {
 		txt, ok, err := s.serverLogs().Text(ctx, g.ID)
