@@ -90,3 +90,10 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 8 fix: 9a947c6, 1dd13bd. Accepted: `inconclusive` stops at Corrigée. For Task 14 or a later fix: stored `rescan_ran` so a dependency flaw whose rescan failed does not say "toujours là"; CLI "toujours là" on a code flaw; `fix.chat.applied`. Plan R2 and its Task 8 table are superseded by R43, R44.
 - Waiting on Kévin: hold the agent when a key is found in the code? Recommended yes. Not built until he answers.
 - Task 9: dispatched, BASE 1dd13bd.
+- Task 8 re-review not approved: 4 important 8 minor, written in W/task-8-rereview.md by the controller from the reviewer's message. N1: a code flaw almost never reaches `proven_fixed`, `Prove` runs before `runPlugins`. Fix round 2 after Task 9 commits.
+- Task 9: 7b346f9, review 5 high 4 medium 3 low 7 French. Fix round after Task 8 fix 2.
+- Ruling R45: `expo.how` drops the promise of a confirmation after a firewall block; `ss` from inside still sees it open — the plan's "inchangé" yields to truth — costs nothing.
+- Ruling R46: the view gains `ecosystem` on `TargetFindingView` and the running attempt of a preprod on the production card; `Demander à l'agent` hidden when the API would refuse; "Préparer quand même" removed or made real, whichever the API supports — true page over frozen brief lines — costs small API fields.
+- Task 8 fix 2: f7c7c6a, 5cdab86, a172aaa. `fix.Prove` takes `Pass{Scanned, Sources}`, an attempt waits when its tool did not look. Task 14's control must pass a real Pass. Parked: `SkippedKnown` in plugin/run.go can close a plugin vulnerability OSV starts reporting and so prove a fix; a code flaw whose tool does not run in `michel scan` stays `applied`, documented. Task 8: complete; final review covers fix 2.
+- Task 9 fix: 3441242, d3e2169. Parked: a fix first started on the preprod's own card has no production link; refused page repeats a sentence. Task 9: complete, scoped re-review running.
+- Task 10: dispatched, BASE d3e2169.
