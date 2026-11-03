@@ -253,9 +253,9 @@ describe('stateLine after the attempt', () => {
   })
   test('running and unknown are named', () => {
     expect(line({ state: 'running' })).toBe('Michel applique la correction.')
-    expect(line({ state: 'unknown' })).toBe('Michel ne sait pas si la correction a abouti. Vérifie avant de recommencer.')
+    expect(line({ state: 'unknown' })).toBe('Michel ne sait pas si la correction a abouti. Regarde si ton site marche normalement, puis demande à Michel de contrôler à nouveau avant de recommencer.')
     expect(line({ state: 'running' }, 'en')).toBe('Michel is applying the fix.')
-    expect(line({ state: 'unknown' }, 'en')).toBe('Michel does not know whether the fix went through. Check before trying again.')
+    expect(line({ state: 'unknown' }, 'en')).toBe('Michel does not know whether the fix went through. Check that your site works normally, then ask Michel to check again before trying again.')
   })
   test('a proven fix of a flaw that came back does not say it has gone', () => {
     expect(line({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe('Corrigée : la faille a disparu.')

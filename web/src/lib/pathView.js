@@ -9,22 +9,56 @@ import { plainSentence } from './modeView.js'
 const stepKeys = ['found', 'solution', 'accord', 'fixed', 'verified']
 
 /**
- * isVerified says whether a fix attempt counts as « Vérifiée » (ruling R2).
- * A project's fix needs the proof (state proven_fixed) and a clean new scan of
- * the copy (proposal.rescan_clean): rescan_clean alone is known from the
- * proposal on, before any agreement, so it never lights the step by itself.
- * A server's fix needs the proof only: Michel sets it after a full reading that
- * no longer sees the flaw. inconclusive is never verified. In both cases the
- * flaw must still be gone (finding.status): a proven_fixed attempt never leaves
+ * noCopyCheck says no rescan of the copy can run on this flaw: a project's flaw
+ * outside a lockfile (code, web...) has no ecosystem, and rescan
+ * (internal/fix/service.go) then fails, so rescan_clean is false whatever the
+ * agent did. It says nothing about the flaw.
+ * @param {object|null|undefined} attempt
+ * @returns {boolean}
+ */
+function noCopyCheck(attempt) {
+  return !!attempt && !attempt.server && attempt.finding?.ecosystem === ''
+}
+
+/**
+ * isVerified says whether a fix attempt counts as « Vérifiée » (ruling R2, and
+ * the owner's decision on code flaws). It needs the proof (state proven_fixed)
+ * and a flaw still gone (finding.status): a proven_fixed attempt never leaves
  * its final state, so a flaw that came back would otherwise stay « Vérifiée ».
+ * A project's fix also needs a clean new scan of the copy
+ * (proposal.rescan_clean) where such a scan could run: rescan_clean alone is
+ * known from the proposal on, before any agreement, so it never lights the step
+ * by itself. A server's fix needs nothing more: Michel sets the proof after a
+ * full reading that no longer sees the flaw. inconclusive is never verified.
  * @param {object|null|undefined} attempt an element of GET /fixes
  * @returns {boolean}
  */
 export function isVerified(attempt) {
   if (!attempt || attempt.state !== 'proven_fixed') return false
   if (attempt.finding?.status !== 'gone') return false
-  if (attempt.server) return true
+  if (attempt.server || noCopyCheck(attempt)) return true
   return attempt.proposal?.rescan_clean === true
+}
+
+/**
+ * rescanKey is the sentence for the new scan of the copy. A flaw no scan can
+ * look at is never said to be still there.
+ * @param {object|null|undefined} attempt
+ * @returns {string}
+ */
+export function rescanKey(attempt) {
+  if (attempt?.proposal?.rescan_clean) return 'fix.proposal.rescan_clean'
+  return noCopyCheck(attempt) ? 'fix.proposal.rescan_unknown' : 'fix.proposal.rescan_dirty'
+}
+
+/**
+ * isGone says the flaw is no longer seen. The sheet is the fresher reading.
+ * @param {object|null|undefined} finding
+ * @param {object|null|undefined} sheet
+ * @returns {boolean}
+ */
+export function isGone(finding, sheet) {
+  return (sheet?.status || finding?.status) === 'gone'
 }
 
 /**
@@ -39,11 +73,14 @@ export function cameBack(attempt) {
 
 /**
  * canRestart says a new fix can start: none yet, the last one ended without a
- * fix, or its flaw came back.
+ * fix, or its flaw came back. Never on a flaw already gone: it would send the
+ * code to Anthropic for nothing, and Start does not read the status.
  * @param {object|null|undefined} attempt
+ * @param {boolean} [gone] isGone()
  * @returns {boolean}
  */
-export function canRestart(attempt) {
+export function canRestart(attempt, gone = false) {
+  if (gone) return false
   return !attempt || ['failed', 'refused', 'superseded'].includes(attempt.state) || cameBack(attempt)
 }
 
@@ -51,10 +88,11 @@ export function canRestart(attempt) {
  * showsPlan says the plan is still ahead: it speaks of what will happen, so it
  * goes once the proposal is there (the proposal says what happened).
  * @param {object|null|undefined} attempt
+ * @param {boolean} [gone] isGone()
  * @returns {boolean}
  */
-export function showsPlan(attempt) {
-  return canRestart(attempt) || attempt?.state === 'preparing'
+export function showsPlan(attempt, gone = false) {
+  return canRestart(attempt, gone) || attempt?.state === 'preparing'
 }
 
 /** steps lights the path: all before the index done, the index in that state, the rest to come. */
@@ -74,9 +112,24 @@ function causeNote(attempt, key) {
  * @param {{attempt?: object|null, gone?: boolean, vanished?: boolean}} args
  *   gone: an exposure without attempt that a full reading no longer sees (R2).
  *   vanished: a project's flaw gone without any fix of Michel's: nothing he did.
- * @returns {{steps: {key: string, state: 'done'|'now'|'todo'|'stopped'}[], verified: boolean, open: boolean, note: object|null}}
+ *   A step may carry label, the word to show instead of its own (path.step.).
+ * @returns {{steps: {key: string, state: 'done'|'now'|'todo'|'stopped', label?: string}[], verified: boolean, open: boolean, note: object|null}}
  */
 export function failurePath({ attempt = null, gone = false, vanished = false } = {}) {
+  const path = attemptPath(attempt, gone, vanished)
+  if (!attempt || !vanished || !canRestart(attempt)) return path
+  // The attempt went nowhere and the flaw left on its own: its path stays, with
+  // nothing in progress, and nothing is left to start.
+  return {
+    ...path,
+    steps: path.steps.map((s) => (s.state === 'now' ? { ...s, state: 'todo' } : s)),
+    open: false,
+    note: { key: 'vanished_after' },
+  }
+}
+
+/** attemptPath is the table of the path, one line per state. */
+function attemptPath(attempt, gone, vanished) {
   const out = (index, state, open, note = null, verified = false) => ({ steps: steps(index, state), verified, open, note })
   if (!attempt) {
     if (gone) return { steps: stepKeys.map((key) => ({ key, state: 'done' })), verified: true, open: false, note: null }
@@ -90,20 +143,28 @@ export function failurePath({ attempt = null, gone = false, vanished = false } =
     case 'superseded':
       return out(1, 'now', true, { key: 'superseded' })
     case 'proposed':
-      return out(2, 'now', true)
+      return out(2, 'now', true, noCopyCheck(attempt) ? { key: 'not_checked' } : null)
     case 'approved':
     case 'running':
       return out(3, 'now', true, attempt.approved_by === 'auto' ? { key: 'by_rule' } : null)
-    case 'applied':
-      return out(4, 'now', true, server ? { key: 'checking' } : { key: 'merge', params: { branch: attempt.branch || '' } })
+    case 'applied': {
+      if (server) return out(4, 'now', true, { key: 'checking' })
+      // On a project the fix waits on its branch: Corrigée is only done once it
+      // is proven in the code, and what is left is the person's to do.
+      const p = out(3, 'now', true, { key: 'merge', params: { branch: attempt.branch || '' } })
+      p.steps[3] = { ...p.steps[3], label: 'fixed_ready' }
+      return p
+    }
     case 'proven_fixed':
       if (isVerified(attempt)) {
-        return { steps: stepKeys.map((key) => ({ key, state: 'done' })), verified: true, open: false, note: server ? null : { key: 'deploy' } }
+        const note = server ? null : { key: noCopyCheck(attempt) ? 'deploy_unchecked' : 'deploy' }
+        return { steps: stepKeys.map((key) => ({ key, state: 'done' })), verified: true, open: false, note }
       }
       if (cameBack(attempt)) return out(4, 'stopped', true, { key: 'came_back' })
       return out(4, 'stopped', false, { key: 'copy_not_confirmed' })
     case 'inconclusive':
-      return out(4, 'stopped', true, causeNote(attempt, 'inconclusive'))
+      // Not proven in the code either: gone but not merged, or merged but seen.
+      return out(server ? 4 : 3, 'stopped', true, causeNote(attempt, 'inconclusive'))
     case 'refused':
       return out(2, 'stopped', true, { key: 'refused' })
     case 'unknown':
@@ -118,16 +179,16 @@ export function failurePath({ attempt = null, gone = false, vanished = false } =
 }
 
 /**
- * pathSteps is what the screen lights. With nothing started on a project where
- * nothing can start (a terminal plan), no step is in progress: Michel prepares
- * nothing, and « en cours » would say he does.
+ * pathSteps is what the screen lights. With nothing started (or an attempt
+ * replaced) on a project where nothing can start (a terminal plan), no step is
+ * in progress: Michel prepares nothing, and « en cours » would say he does.
  * @param {{steps: object[]}} path failurePath()
  * @param {{why: string}|null} plan projectPlan()
  * @param {object|null} attempt
  * @returns {{key: string, state: string}[]}
  */
 export function pathSteps(path, plan, attempt) {
-  if (attempt || !plan?.why) return path.steps
+  if ((attempt && attempt.state !== 'superseded') || !plan?.why) return path.steps
   return path.steps.map((s) => (s.state === 'now' ? { ...s, state: 'todo' } : s))
 }
 
@@ -147,11 +208,15 @@ function updateLine(f) {
   const target = f.analysis?.upgrade?.target || ''
   const fixed = f.fixed_versions || []
   const base = baseName(f.manifest_rel_path)
-  const runs = (f.ecosystem === 'Packagist' && base === 'composer.lock') || (f.ecosystem === 'npm' && base === 'package-lock.json')
-  if (!runs || (!target && !fixed.length)) return { key: 'plan.project.search' }
+  const composer = f.ecosystem === 'Packagist' && base === 'composer.lock'
+  const runs = composer || (f.ecosystem === 'npm' && base === 'package-lock.json')
+  if (!target && !fixed.length) return { key: 'plan.project.search' }
+  // A version is known, but Michel has no command for this file (yarn, pnpm).
+  if (!runs) return { key: 'plan.project.update_agent' }
   const to = target || (fixed.length === 1 ? fixed[0] : '')
   if (!to || f.analysis?.path?.directness === 'transitive') return { key: 'plan.project.update_any', params: { package: f.package } }
-  return { key: 'plan.project.update', params: { package: f.package, to } }
+  // composer takes pkg:^to, which usually resolves higher; npm pins it exactly.
+  return { key: composer ? 'plan.project.update_near' : 'plan.project.update', params: { package: f.package, to } }
 }
 
 /** testLines says what runs after the agent, as Propose does (internal/fix/service.go). */
@@ -188,11 +253,28 @@ export function projectPlan({ finding, project, level, attempt = null }) {
   const terminal = !project.git_repo ? 'no_git' : project.classification === 'health' ? 'health' : lvl === 0 ? 'report_only' : ''
   if (terminal) return { title: 'plan.project.title_michel', lines: [{ key: `plan.project.${terminal}` }], action: null, why: terminal }
   const f = finding || {}
-  const lines = [{ key: 'plan.project.copy' }, updateLine(f), ...testLines(f, project)]
-  lines.push({ key: lvl === 3 && project.auto_fix_minor ? 'plan.project.approval_auto' : 'plan.project.approval' })
+  const tests = testLines(f, project)
+  const lines = [{ key: 'plan.project.copy' }, updateLine(f), ...tests]
+  // The rule needs tests that passed: without tests it can never apply.
+  const auto = lvl === 3 && project.auto_fix_minor && tests.some((l) => l.key === 'plan.project.tests')
+  lines.push({ key: auto ? 'plan.project.approval_auto' : 'plan.project.approval' })
   if (lvl >= 2 && selfStarts(f, attempt)) lines.push({ key: 'plan.project.self_start' })
   lines.push({ key: 'plan.project.data' })
   return { title: 'plan.project.title', lines, action: 'start', why: '' }
+}
+
+/**
+ * chatNoStart says the advanced conversation offers no start, as the guide
+ * holds the button. At level 0 the guide has none, and the advanced mode keeps
+ * this way in (R14). A project no fix can run on, or a flaw already gone, offers
+ * none anywhere.
+ * @param {{guided: boolean, project: object|null, gone?: boolean}} args
+ * @returns {boolean}
+ */
+export function chatNoStart({ guided, project, gone = false }) {
+  if (!guided) return false
+  if (gone) return true
+  return !project || projectPlan({ finding: null, project }).why !== 'report_only'
 }
 
 /**

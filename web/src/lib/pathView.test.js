@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import { canRestart, cameBack, failurePath, isVerified, mergeStep, pathSteps, plainRisk, projectPlan, showsPlan } from './pathView.js'
+import { canRestart, cameBack, chatNoStart, failurePath, isGone, isVerified, mergeStep, pathSteps, plainRisk, projectPlan, rescanKey, showsPlan } from './pathView.js'
+import fr from '../i18n/fr.json'
+import en from '../i18n/en.json'
 
 /** states gives the five states of a path, in order. */
 const states = (p) => p.steps.map((s) => s.state)
@@ -30,7 +32,7 @@ describe('failurePath', () => {
     ['approved', attempt('approved', { approved_by: 'kevin' }), ['done', 'done', 'done', 'now', 'todo'], true, null],
     ['approved by rule', attempt('approved', { approved_by: 'auto' }), ['done', 'done', 'done', 'now', 'todo'], true, 'by_rule'],
     ['running', attempt('running'), ['done', 'done', 'done', 'now', 'todo'], true, null],
-    ['applied, project', attempt('applied', { branch: 'michel/fix-1' }), ['done', 'done', 'done', 'done', 'now'], true, 'merge'],
+    ['applied, project', attempt('applied', { branch: 'michel/fix-1' }), ['done', 'done', 'done', 'now', 'todo'], true, 'merge'],
     ['applied, server', attempt('applied', { server: srv }), ['done', 'done', 'done', 'done', 'now'], true, 'checking'],
     ['proven, project', attempt('proven_fixed', { proposal: clean, finding: gone }), ['done', 'done', 'done', 'done', 'done'], false, 'deploy'],
     ['proven, server', attempt('proven_fixed', { finding: gone, server: srv }), ['done', 'done', 'done', 'done', 'done'], false, null],
@@ -58,7 +60,7 @@ describe('failurePath', () => {
     expect(f.note).toEqual({ cause: 'la tentative a dépassé son temps limite' })
     expect(f.open).toBe(true)
     const i = failurePath({ attempt: attempt('inconclusive', { cause: 'la branche est fusionnée' }) })
-    expect(states(i)).toEqual(['done', 'done', 'done', 'done', 'stopped'])
+    expect(states(i)).toEqual(['done', 'done', 'done', 'stopped', 'todo'])
     expect(i.note).toEqual({ cause: 'la branche est fusionnée' })
     expect(i.open).toBe(true)
     expect(failurePath({ attempt: attempt('failed') }).note.key).toBe('failed')
@@ -104,6 +106,161 @@ describe('verified table', () => {
   })
 })
 
+// A code flaw has no ecosystem (plugin/run.go): a rescan of the copy cannot run
+// on it (service.go rescan returns an error), so rescan_clean is always false.
+describe('a flaw that cannot be rechecked on the copy', () => {
+  const codeF = (extra = {}) => finding({ kind: undefined, ecosystem: '', package: '', manifest_rel_path: '', fixed_versions: [], ...extra })
+  const notClean = { rescan_clean: false }
+  test('proven and still gone: verified, no red step, the path says the copy was not checked', () => {
+    const a = attempt('proven_fixed', { proposal: notClean, finding: codeF({ status: 'gone' }) })
+    expect(isVerified(a)).toBe(true)
+    const p = failurePath({ attempt: a })
+    expect(states(p)).toEqual(['done', 'done', 'done', 'done', 'done'])
+    expect(p.verified).toBe(true)
+    expect(p.note.key).toBe('deploy_unchecked')
+  })
+  test('proven and seen again: not verified', () => {
+    const a = attempt('proven_fixed', { proposal: notClean, finding: codeF({ status: 'new' }) })
+    expect(isVerified(a)).toBe(false)
+    expect(failurePath({ attempt: a }).note.key).toBe('came_back')
+  })
+  test('proposed: the path says Michel could not check it', () => {
+    const p = failurePath({ attempt: attempt('proposed', { proposal: notClean, finding: codeF() }) })
+    expect(states(p)).toEqual(['done', 'done', 'now', 'todo', 'todo'])
+    expect(p.note.key).toBe('not_checked')
+  })
+  test('nothing before the proof verifies it', () => {
+    for (const s of ['preparing', 'proposed', 'approved', 'running', 'applied', 'inconclusive', 'refused', 'failed', 'unknown', 'superseded']) {
+      expect(isVerified(attempt(s, { proposal: notClean, finding: codeF({ status: 'gone' }) })), s).toBe(false)
+    }
+  })
+  test('where a rescan could run, a dirty copy still stops at Vérifiée', () => {
+    const a = attempt('proven_fixed', { proposal: notClean, finding: finding({ status: 'gone' }) })
+    expect(isVerified(a)).toBe(false)
+    expect(states(failurePath({ attempt: a }))).toEqual(['done', 'done', 'done', 'done', 'stopped'])
+    expect(failurePath({ attempt: attempt('proposed', { proposal: notClean }) }).note).toBe(null)
+  })
+  test('a finding the attempt view could not load is not taken for a code flaw', () => {
+    // AttemptView of a finding that is gone from the store (internal/api/fix.go).
+    const lost = { id: 'x', manifest_rel_path: '', ecosystem: '', package: '', osv_id: '', severity: '', installed_version: '', fixed_versions: [], summary: '', status: '' }
+    expect(isVerified(attempt('proven_fixed', { proposal: notClean, finding: lost }))).toBe(false)
+  })
+  test('the proposal says it, never that the flaw is still there', () => {
+    expect(rescanKey(attempt('proposed', { proposal: notClean, finding: codeF() }))).toBe('fix.proposal.rescan_unknown')
+    expect(rescanKey(attempt('proposed', { proposal: notClean }))).toBe('fix.proposal.rescan_dirty')
+    expect(rescanKey(attempt('proposed', { proposal: { rescan_clean: true } }))).toBe('fix.proposal.rescan_clean')
+    expect(fr['fix.proposal.rescan_unknown']).not.toContain('toujours là')
+    expect(en['fix.proposal.rescan_unknown']).not.toContain('still there')
+    expect(fr['path.note.not_checked']).not.toContain('toujours là')
+    expect(en['path.note.not_checked']).not.toContain('still there')
+  })
+})
+
+describe('applied, on a project', () => {
+  test('Corrigée is not done: the step reads ready, not yet in the code', () => {
+    const p = failurePath({ attempt: attempt('applied', { branch: 'michel/fix-1' }) })
+    const fixed = p.steps.find((s) => s.key === 'fixed')
+    expect(fixed).toEqual({ key: 'fixed', state: 'now', label: 'fixed_ready' })
+    expect(p.steps.find((s) => s.key === 'verified').state).toBe('todo')
+    expect(fr['path.step.fixed_ready']).toBe('Prête, pas encore dans ton code')
+    expect(en['path.step.fixed_ready']).toBe('Ready, not yet in your code')
+  })
+  test('the step is Corrigée, done, once proven', () => {
+    const p = failurePath({ attempt: attempt('proven_fixed', { proposal: { rescan_clean: true }, finding: finding({ status: 'gone' }) }) })
+    expect(p.steps.find((s) => s.key === 'fixed')).toEqual({ key: 'fixed', state: 'done' })
+  })
+  test('a server has no code to wait for: its step stays as it was', () => {
+    const p = failurePath({ attempt: attempt('applied', { server: { target: { id: 't' } } }) })
+    expect(p.steps.find((s) => s.key === 'fixed')).toEqual({ key: 'fixed', state: 'done' })
+    expect(p.steps.find((s) => s.key === 'verified').state).toBe('now')
+  })
+})
+
+describe('a flaw already gone offers nothing to start', () => {
+  const goneF = finding({ status: 'gone' })
+  test('isGone reads the sheet first', () => {
+    expect(isGone(goneF, null)).toBe(true)
+    expect(isGone(finding(), { status: 'gone' })).toBe(true)
+    expect(isGone(goneF, { status: 'new' })).toBe(false)
+    expect(isGone(finding(), null)).toBe(false)
+    expect(isGone(null, null)).toBe(false)
+  })
+  test('no restart and no plan, with or without an attempt', () => {
+    for (const a of [null, attempt('failed', { finding: goneF }), attempt('refused', { finding: goneF }), attempt('superseded', { finding: goneF })]) {
+      expect(canRestart(a, true), a?.state).toBe(false)
+      expect(showsPlan(a, true), a?.state).toBe(false)
+    }
+  })
+  test('without gone, nothing changes', () => {
+    for (const a of [null, attempt('failed'), attempt('refused'), attempt('superseded')]) {
+      expect(canRestart(a, false), a?.state).toBe(true)
+      expect(showsPlan(a, false), a?.state).toBe(true)
+    }
+  })
+  test.each([
+    ['failed', attempt('failed', { cause: 'x' }), ['done', 'stopped', 'todo', 'todo', 'todo']],
+    ['failed after the proposal', attempt('failed', { proposal: { rescan_clean: true } }), ['done', 'done', 'stopped', 'todo', 'todo']],
+    ['refused', attempt('refused'), ['done', 'done', 'stopped', 'todo', 'todo']],
+    ['superseded', attempt('superseded'), ['done', 'todo', 'todo', 'todo', 'todo']],
+  ])('the attempt keeps its own path, %s', (_n, a, want) => {
+    const p = failurePath({ attempt: a, vanished: true })
+    expect(states(p)).toEqual(want)
+    expect(p.note).toEqual({ key: 'vanished_after' })
+    expect(p.open).toBe(false)
+    expect(p.verified).toBe(false)
+  })
+  test('an attempt under way or proven is not touched', () => {
+    expect(failurePath({ attempt: attempt('preparing'), vanished: true }).note.key).toBe('preparing')
+    expect(failurePath({ attempt: attempt('applied', { branch: 'b' }), vanished: true }).note.key).toBe('merge')
+    const proven = attempt('proven_fixed', { proposal: { rescan_clean: true }, finding: goneF })
+    expect(failurePath({ attempt: proven, vanished: true }).note.key).toBe('deploy')
+  })
+})
+
+describe('the start of the advanced conversation (R14)', () => {
+  test('at level 0 advanced mode keeps it: the guide has no button', () => {
+    expect(chatNoStart({ guided: true, project: project({ fix_level: 0 }) })).toBe(false)
+  })
+  test('elsewhere the guide holds the button', () => {
+    expect(chatNoStart({ guided: true, project: project() })).toBe(true)
+    expect(chatNoStart({ guided: true, project: null })).toBe(true)
+  })
+  test('a project no fix can run on keeps no start, even at level 0', () => {
+    expect(chatNoStart({ guided: true, project: project({ fix_level: 0, classification: 'health' }) })).toBe(true)
+    expect(chatNoStart({ guided: true, project: project({ fix_level: 0, git_repo: false }) })).toBe(true)
+  })
+  test('a flaw already gone keeps no start, even at level 0', () => {
+    expect(chatNoStart({ guided: true, project: project({ fix_level: 0 }), gone: true })).toBe(true)
+  })
+  test('without a guide, the conversation keeps its start', () => {
+    expect(chatNoStart({ guided: false, project: project() })).toBe(false)
+  })
+})
+
+describe('the words of the plan (F1, F6, F7, F9, FR)', () => {
+  test('key files stay out, a key written in the code does not', () => {
+    expect(fr['plan.project.copy']).toContain('sans tes fichiers .env ni tes fichiers de clés')
+    expect(fr['plan.project.copy']).toContain('reste dans la copie')
+    expect(fr['plan.project.copy']).not.toContain('ni tes clés')
+    expect(en['plan.project.copy']).toContain('stays in the copy')
+    expect(en['plan.project.copy']).not.toContain('or your keys')
+    expect(fr['plan.project.data']).toContain('y compris une clé écrite dans ton code')
+    expect(en['plan.project.data']).toContain('including a key written in your code')
+  })
+  test('self_start names the consent', () => {
+    expect(fr['plan.project.self_start']).toContain('une fois ton accord donné pour ce projet')
+    expect(en['plan.project.self_start']).toContain('once you have agreed for this project')
+  })
+  test('tests are something Michel tries', () => {
+    expect(fr['plan.project.tests']).toContain('essaie')
+    expect(en['plan.project.tests']).toContain('tries')
+  })
+  test('approval_auto does not read as a closed list', () => {
+    expect(fr['plan.project.approval_auto']).toContain('toutes les conditions, dont :')
+    expect(en['plan.project.approval_auto']).toContain('all the conditions, including:')
+  })
+})
+
 describe('what can start again', () => {
   const goneF = finding({ status: 'gone' })
   test('cameBack: proven, and seen again', () => {
@@ -132,7 +289,7 @@ describe('project plan tells the truth for each case', () => {
     const plan = planOf(finding(), project())
     expect(plan.title).toBe('plan.project.title')
     expect(plan.action).toBe('start')
-    expect(keysOf(plan)).toEqual(['copy', 'update', 'tests', 'approval', 'data'])
+    expect(keysOf(plan)).toEqual(['copy', 'update_near', 'tests', 'approval', 'data'])
     expect(plan.lines[1].params).toEqual({ package: 'acme/lib', to: '1.0.5' })
     expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'sub/package-lock.json' }), project()))).toContain('update')
   })
@@ -148,7 +305,32 @@ describe('project plan tells the truth for each case', () => {
   })
   test('no known version, or no update Michel knows how to run: the agent searches', () => {
     expect(keysOf(planOf(finding({ fixed_versions: [] }), project()))).toEqual(['copy', 'search', 'tests', 'approval', 'data'])
-    expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'yarn.lock' }), project()))[1]).toBe('search')
+    expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'yarn.lock', fixed_versions: [] }), project()))[1]).toBe('search')
+  })
+  test('a version is known but Michel does not run the update: the agent does it', () => {
+    for (const file of ['yarn.lock', 'pnpm-lock.yaml']) {
+      expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: file }), project()))[1], file).toBe('update_agent')
+    }
+  })
+  test('Composer may resolve higher than the version named, npm pins it', () => {
+    const composer = planOf(finding(), project())
+    expect(keysOf(composer)[1]).toBe('update_near')
+    expect(composer.lines[1].params).toEqual({ package: 'acme/lib', to: '1.0.5' })
+    expect(fr['plan.project.update_near']).toContain('ou une version proche plus récente')
+    const npm = planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'package-lock.json' }), project())
+    expect(keysOf(npm)[1]).toBe('update')
+  })
+  test('approval_auto only where the rule could apply: without tests, approval', () => {
+    const rule = project({ fix_level: 3, auto_fix_minor: true })
+    expect(keysOf(planOf(finding(), rule))).toContain('approval_auto')
+    const noTests = keysOf(planOf(finding(), project({ fix_level: 3, auto_fix_minor: true, has_test_cmd: false })))
+    expect(noTests).toContain('approval')
+    expect(noTests).not.toContain('approval_auto')
+    const yarn = keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'yarn.lock' }), rule))
+    expect(yarn).toContain('approval')
+    const code = keysOf(planOf(finding({ kind: 'code', ecosystem: '', manifest_rel_path: '', fixed_versions: [] }), rule))
+    expect(code).toContain('approval')
+    expect(code).not.toContain('approval_auto')
   })
   test('no_tests, without tests', () => {
     const keys = keysOf(planOf(finding(), project({ has_test_cmd: false })))
@@ -276,6 +458,13 @@ describe('pathSteps', () => {
     const terminal = projectPlan({ finding: finding(), project: project({ fix_level: 0 }) })
     const shown = pathSteps(failurePath({ attempt: null }), terminal, null).map((s) => s.state)
     expect(shown).toEqual(['done', 'todo', 'todo', 'todo', 'todo'])
+  })
+  test('a superseded attempt on a terminal plan has no step in progress either', () => {
+    const a = attempt('superseded')
+    const terminal = projectPlan({ finding: finding(), project: project({ fix_level: 0 }) })
+    expect(pathSteps(failurePath({ attempt: a }), terminal, a).map((s) => s.state)).toEqual(['done', 'todo', 'todo', 'todo', 'todo'])
+    const running = projectPlan({ finding: finding(), project: project() })
+    expect(pathSteps(failurePath({ attempt: a }), running, a).map((s) => s.state)).toEqual(['done', 'now', 'todo', 'todo', 'todo'])
   })
   test('anything else stays as the path says', () => {
     const running = projectPlan({ finding: finding(), project: project() })

@@ -30,7 +30,7 @@
           <h3 class="m-prop__label">{{ $t('fix.proposal.agent_says') }}</h3>
           <p class="m-prop__summary"><MaskedText :text="p.summary" /></p>
         </div>
-        <p class="m-small">{{ $t(p.rescan_clean ? 'fix.proposal.rescan_clean' : 'fix.proposal.rescan_dirty') }}</p>
+        <p class="m-small">{{ $t(rescanText) }}</p>
         <p v-if="p.tests_status === 'not_run'" class="m-prop__warn m-small">{{ $t('fix.proposal.tests_not_run_hint') }}</p>
         <p v-else-if="p.tests_status === 'failed'" class="m-prop__warn m-small">{{ $t('fix.proposal.tests_failed_hint') }}</p>
         <p v-if="p.risk > 0" class="m-muted m-small">{{ $t('fix.proposal.risk', { risk: p.risk }) }}</p>
@@ -80,7 +80,7 @@
             </ul>
           </template>
           <h3 class="m-prop__label">{{ $t('fix.proposal.rescan') }}</h3>
-          <p class="m-small">{{ $t(p.rescan_clean ? 'fix.proposal.rescan_clean' : 'fix.proposal.rescan_dirty') }}</p>
+          <p class="m-small">{{ $t(rescanText) }}</p>
           <p v-if="$ui.advanced" class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
         </details>
       </template>
@@ -122,7 +122,7 @@ import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
 import { canApprove, proposalFacts, proposalSentence } from '../lib/fixView.js'
 import { plainSentence } from '../lib/modeView.js'
-import { cameBack } from '../lib/pathView.js'
+import { cameBack, rescanKey } from '../lib/pathView.js'
 
 // FixProposal is the right of the Fix page: the flaw in plain words (the
 // three sentences of its sheet), then the proposal in plain words with
@@ -167,6 +167,9 @@ export default {
     },
     sentence() {
       return proposalSentence(proposalFacts(this.attempt, this.sheet), this.$ui.lang)
+    },
+    rescanText() {
+      return rescanKey(this.attempt)
     },
     approvable() {
       return canApprove(this.attempt)

@@ -1,5 +1,5 @@
 <template>
-  <ol class="m-path" :aria-label="$t('path.label')">
+  <ol class="m-path" role="list" :aria-label="$t('path.label')">
     <li
       v-for="s in steps"
       :key="s.key"
@@ -10,7 +10,7 @@
       <svg v-if="icons[s.state]" class="m-path__icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
         <path :d="icons[s.state]" fill="currentColor" />
       </svg>
-      <span class="m-path__label">{{ $t(`path.step.${s.key}`) }}</span>
+      <span class="m-path__label">{{ $t(`path.step.${s.label || s.key}`) }}</span>
       <span class="m-path__hidden">{{ $t(`path.state.${s.state}`) }}</span>
     </li>
   </ol>

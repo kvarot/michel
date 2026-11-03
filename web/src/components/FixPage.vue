@@ -61,73 +61,42 @@
           {{ $t('fix.loading') }}
         </div>
         <p v-else-if="!selectedFinding" class="m-voice m-fix__pick">{{ $t('fix.pick') }}</p>
-        <template v-else>
-          <div v-if="viewLoading" class="m-fix__state m-muted" role="status">
-            <v-progress-circular indeterminate size="18" width="2" color="primary" />
-            {{ $t('fix.loading') }}
-          </div>
-          <div v-else-if="serverOnly" class="m-fix__server">
-            <h2 class="m-fix__server-title">{{ $t('srvfix.center_title', { name: current.server.target.name }) }}</h2>
-            <p class="m-muted m-small">{{ $t('srvfix.no_agent_chat') }}</p>
-            <template v-if="current.proposal && (current.proposal.steps_server || []).length">
-              <h3 class="m-fix__server-sub">{{ $t('srvfix.what') }}</h3>
-              <ol class="m-fix__server-list">
-                <li v-for="(line, i) in current.proposal.steps_server" :key="i" class="m-voice">{{ line }}</li>
-              </ol>
-            </template>
-            <template v-if="(current.server.steps || []).length">
-              <h3 class="m-fix__server-sub">{{ $t('srvfix.steps') }}</h3>
-              <ul class="m-fix__steps" aria-live="polite">
-                <li v-for="(st, i) in current.server.steps" :key="i" :class="st.ok ? 'm-fix__step--ok' : 'm-fix__step--bad'">
-                  <span aria-hidden="true">{{ st.ok ? '✓' : '✗' }}</span>
-                  {{ stepText(st) }}
-                </li>
-              </ul>
-            </template>
-          </div>
-          <template v-else>
-            <FailureGuide
-              v-if="guided"
-              class="m-fix__guide"
-              :attempt="current"
-              :finding="selectedFinding"
-              :sheet="sheetOfSelected"
-              :project-view="projectOfSelected"
-              :can-start="canStart"
-              :starting="starting"
-              @start="start"
-              @to-proposal="toProposal"
-            />
-            <DecisionPanel v-if="toDecide" :key="toDecide.id" :finding="toDecide" @decided="onDecided" />
-            <details v-if="noList && current" class="m-fix__chat" :open="hasConversation || undefined">
-              <summary>{{ $t('path.chat') }}</summary>
-              <FixChat
-                :attempt="current"
-                :messages="messages"
-                :activity="activity"
-                :can-start="canStart"
-                :starting="starting"
-                :sending="sending"
-                :reconnecting="reconnecting"
-                no-start
-                @send="send"
-              />
-            </details>
-            <FixChat
-              v-else-if="!noList"
-              :attempt="current"
-              :messages="messages"
-              :activity="activity"
-              :can-start="canStart"
-              :starting="starting"
-              :sending="sending"
-              :reconnecting="reconnecting"
-              :no-start="guided"
-              @start="start"
-              @send="send"
-            />
+        <div v-else-if="viewLoading" class="m-fix__state m-muted" role="status">
+          <v-progress-circular indeterminate size="18" width="2" color="primary" />
+          {{ $t('fix.loading') }}
+        </div>
+        <div v-else-if="serverOnly" class="m-fix__server">
+          <h2 class="m-fix__server-title">{{ $t('srvfix.center_title', { name: current.server.target.name }) }}</h2>
+          <p class="m-muted m-small">{{ $t('srvfix.no_agent_chat') }}</p>
+          <template v-if="current.proposal && (current.proposal.steps_server || []).length">
+            <h3 class="m-fix__server-sub">{{ $t('srvfix.what') }}</h3>
+            <ol class="m-fix__server-list">
+              <li v-for="(line, i) in current.proposal.steps_server" :key="i" class="m-voice">{{ line }}</li>
+            </ol>
           </template>
-        </template>
+          <template v-if="(current.server.steps || []).length">
+            <h3 class="m-fix__server-sub">{{ $t('srvfix.steps') }}</h3>
+            <ul class="m-fix__steps" aria-live="polite">
+              <li v-for="(st, i) in current.server.steps" :key="i" :class="st.ok ? 'm-fix__step--ok' : 'm-fix__step--bad'">
+                <span aria-hidden="true">{{ st.ok ? '✓' : '✗' }}</span>
+                {{ stepText(st) }}
+              </li>
+            </ul>
+          </template>
+        </div>
+        <FailureGuide
+          v-else-if="guided"
+          class="m-fix__guide"
+          :attempt="current"
+          :finding="selectedFinding"
+          :sheet="sheetOfSelected"
+          :project-view="projectOfSelected"
+          :can-start="canStart"
+          :starting="starting"
+          @start="start"
+          @to-proposal="toProposal"
+        />
+        <!-- Here in the template as on the screen: it is read and tabbed to before what follows. -->
         <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
           <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
           <p v-if="actionError.hint" class="m-small">{{ actionError.hint }}</p>
@@ -136,6 +105,36 @@
             <p class="m-code m-small">{{ actionError.data.detail }}</p>
           </details>
         </v-alert>
+        <template v-if="showsWork">
+          <DecisionPanel v-if="toDecide" :key="toDecide.id" :finding="toDecide" @decided="onDecided" />
+          <details v-if="noList && current" class="m-fix__chat" :open="hasConversation || undefined">
+            <summary>{{ $t('path.chat') }}</summary>
+            <FixChat
+              :attempt="current"
+              :messages="messages"
+              :activity="activity"
+              :can-start="canStart"
+              :starting="starting"
+              :sending="sending"
+              :reconnecting="reconnecting"
+              no-start
+              @send="send"
+            />
+          </details>
+          <FixChat
+            v-else-if="!noList"
+            :attempt="current"
+            :messages="messages"
+            :activity="activity"
+            :can-start="canStart"
+            :starting="starting"
+            :sending="sending"
+            :reconnecting="reconnecting"
+            :no-start="chatHidesStart"
+            @start="start"
+            @send="send"
+          />
+        </template>
       </div>
 
       <ServerProposal
@@ -194,6 +193,7 @@ import ServerProposal from './ServerProposal.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
 import { acceptResult, activityLine, canDecide, decidingAttempt, fixHash, groupAttempts, isFinal, isOpen, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
+import { chatNoStart, isGone } from '../lib/pathView.js'
 import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../lib/serversView.js'
 
 
@@ -237,6 +237,9 @@ export default {
       sheetLoading: false,
       // startingFor is the finding whose start is running ('' for none).
       startingFor: '',
+      // focusGuide: the start's button is gone with the start: the next attempt
+      // shown takes the keyboard to its heading.
+      focusGuide: false,
       approving: false,
       refusing: false,
       // acting is the server fix action running: snapshot, applied, resolve, again.
@@ -291,6 +294,17 @@ export default {
     projectOfSelected() {
       const name = this.current?.project || this.sheetOfSelected?.project || this.selectedFinding?.project
       return (name && this.projects.find((p) => p.name === name)) || null
+    },
+    // showsWork: the middle is on the flaw itself, not on a wait or a server's own view.
+    showsWork() {
+      return !this.waiting && !!this.selectedFinding && !this.viewLoading && !this.serverOnly
+    },
+    chatHidesStart() {
+      return chatNoStart({
+        guided: this.guided,
+        project: this.projectOfSelected,
+        gone: isGone(this.selectedFinding, this.sheetOfSelected),
+      })
     },
     // hasConversation opens the folded conversation: the agent works or has spoken.
     hasConversation() {
@@ -611,6 +625,13 @@ export default {
       this.patchList(v)
       if (v.server) this.loadTarget(v.server.target?.id)
       else this.loadSheet(v.finding?.id)
+      if (this.focusGuide) {
+        this.focusGuide = false
+        this.$nextTick(() => {
+          const el = document.activeElement
+          if (!el || el === document.body) document.getElementById('fix-guide-title')?.focus()
+        })
+      }
     },
     /** patchList updates the attempt's line in the list. */
     patchList(v) {
@@ -676,7 +697,10 @@ export default {
           this.attempts.unshift({ ...a, messages: null })
           this.$emit('changed')
           // Only while the user still looks at that finding.
-          if (this.selectedFinding?.id === f.id) window.location.hash = fixHash({ attempt: a.id })
+          if (this.selectedFinding?.id === f.id) {
+            this.focusGuide = true
+            window.location.hash = fixHash({ attempt: a.id })
+          }
         }
       } catch (err) {
         if (!this.alive || err?.status === 401) return
@@ -840,8 +864,6 @@ export default {
 }
 .m-fix__grid--guided { grid-template-columns: minmax(0, 1fr) minmax(17rem, 24rem); }
 .m-fix__grid--guided .m-fix__center { padding: 0; border: 0; background: none; }
-.m-fix__grid--guided .m-fix__guide { order: -2; }
-.m-fix__grid--guided .m-fix__error { order: -1; }
 .m-fix__chat > summary { cursor: pointer; font-weight: 600; color: rgb(var(--v-theme-primary)); padding: 0.25rem 0; }
 .m-fix__pick { font-size: 1.1rem; margin: 0; }
 .m-fix__server { display: grid; gap: 0.6rem; }

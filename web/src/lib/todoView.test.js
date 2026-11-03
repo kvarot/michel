@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
 import { isVerified } from './pathView.js'
+import { guideTitle } from './todoView.js'
 import { buildTodo, projectsToRead, resolvedLines, serversToRead, toneOf, todoWords, unseenBelow } from './todoView.js'
 
 const now = new Date('2026-11-03T12:00:00Z')
@@ -691,6 +692,17 @@ describe('resolvedLines', () => {
     expect(isVerified(proven('c', { state: 'proven_fixed', proposal: null }))).toBe(false)
   })
 
+  test('a code flaw, which no rescan of the copy can check, is verified once proven and gone', () => {
+    const code = { ...proven('a').finding, ecosystem: '', package: '', manifest_rel_path: '', fixed_versions: [] }
+    const lines = resolvedLines([
+      proven('a', { finding: code, proposal: { rescan_clean: false } }),
+      proven('b', { finding: { ...code, status: 'open' }, proposal: { rescan_clean: false } }),
+    ], [], 'fr')
+    const byId = Object.fromEntries(lines.map((l) => [l.href, l]))
+    expect(byId['#/fix/a']).toMatchObject({ verified: true, back: false })
+    expect(byId['#/fix/b']).toMatchObject({ verified: false, back: true })
+  })
+
   test('a flaw that came back is not verified, it is listed as back', () => {
     const lines = resolvedLines([
       proven('a'),
@@ -745,5 +757,22 @@ describe('resolvedLines', () => {
     expect(fr['empty.resolved']).toMatch(/confirmé sa correction/)
     expect(en['empty.resolved']).toBeTruthy()
     expect(fr['resolved.deploy']).toMatch(/en ligne/)
+  })
+})
+
+describe('guideTitle', () => {
+  test('a dependency is named by its package', () => {
+    expect(guideTitle({ package: 'acme/lib', kind: 'dependency' }, null, 'fr')).toBe('Une faille touche acme/lib')
+  })
+  test('a tool\'s finding is named by its tool, from the sheet', () => {
+    const list = { id: 'f', package: '', severity: 'high', osv_id: 'rule.x' }
+    expect(guideTitle(list, { package: '', kind: 'code', source_key: 'plugin.semgrep', rule_id: 'rule.x' }, 'fr')).toBe('Une faille touche semgrep')
+    expect(guideTitle(list, { package: '', kind: 'web', source_key: '', rule_id: 'rule.x' }, 'fr')).toBe('Une faille touche rule.x')
+  })
+  test('before the sheet comes, a sentence and no technical id', () => {
+    const fromAttempt = { id: 'f', package: '', osv_id: 'rule.x', ecosystem: '' }
+    expect(guideTitle(fromAttempt, null, 'fr')).toBe('Une faille à corriger')
+    expect(guideTitle(fromAttempt, null, 'en')).toBe('A flaw to fix')
+    expect(guideTitle({ id: 'f', package: '', severity: '' }, null, 'fr')).toBe('Une faille à corriger')
   })
 })

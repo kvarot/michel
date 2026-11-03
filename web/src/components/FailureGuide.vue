@@ -1,6 +1,6 @@
 <template>
   <section class="m-guide" aria-labelledby="fix-guide-title">
-    <component :is="$ui.advanced ? 'h2' : 'h1'" id="fix-guide-title" class="m-guide__title">
+    <component :is="$ui.advanced ? 'h2' : 'h1'" id="fix-guide-title" class="m-guide__title" tabindex="-1">
       {{ title }}
     </component>
     <p class="m-small m-muted m-guide__where">
@@ -31,11 +31,11 @@
 
     <div class="m-guide__two">
       <section class="m-guide__block m-panel" aria-labelledby="fix-means-title">
-        <h3 id="fix-means-title" class="m-guide__sub">{{ $t('path.means') }}</h3>
+        <component :is="subHeading" id="fix-means-title" class="m-guide__sub">{{ $t('path.means') }}</component>
         <p class="m-guide__text">{{ risk }}</p>
       </section>
       <section v-if="plan && plan.lines.length" class="m-guide__block m-panel" aria-labelledby="fix-plan-title">
-        <h3 id="fix-plan-title" class="m-guide__sub">{{ $t(plan.title) }}</h3>
+        <component :is="subHeading" id="fix-plan-title" class="m-guide__sub">{{ $t(plan.title) }}</component>
         <ul class="m-guide__lines">
           <li v-for="l in plan.lines" :key="l.key">{{ $t(l.key, l.params || {}) }}</li>
         </ul>
@@ -55,7 +55,8 @@ import FailurePath from './FailurePath.vue'
 import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
 import { causeSentence } from '../lib/fixView.js'
-import { canRestart, failurePath, mergeStep, pathSteps, plainRisk, projectPlan, showsPlan } from '../lib/pathView.js'
+import { canRestart, failurePath, isGone, mergeStep, pathSteps, plainRisk, projectPlan, showsPlan } from '../lib/pathView.js'
+import { guideTitle } from '../lib/todoView.js'
 
 // FailureGuide is the head of a project's flaw: where it stands, what it means,
 // what will truly happen, and the one button. FixPage owns the requests: the
@@ -80,12 +81,16 @@ export default {
     return { copied: false, copyFailed: false }
   },
   computed: {
-    // A flaw gone without a fix of Michel's has nothing left to start.
-    vanished() {
-      return !this.attempt && (this.sheet?.status || this.finding.status) === 'gone'
+    // A flaw gone has nothing left to start, whether an attempt went nowhere or none ran.
+    gone() {
+      return isGone(this.finding, this.sheet)
     },
     path() {
-      return failurePath({ attempt: this.attempt, vanished: this.vanished })
+      return failurePath({ attempt: this.attempt, vanished: this.gone })
+    },
+    // subHeading follows the title: an h1 in the simple mode, an h2 under the page's h1 otherwise.
+    subHeading() {
+      return this.$ui.advanced ? 'h3' : 'h2'
     },
     stopped() {
       return this.path.steps.some((s) => s.state === 'stopped')
@@ -100,20 +105,20 @@ export default {
       return severityOf(this.sheet?.severity || this.finding.severity)
     },
     title() {
-      return this.$t('todo.flaw', { package: this.finding.package || this.sheet?.package || '' })
+      return guideTitle(this.finding, this.sheet, this.$ui.lang)
     },
     risk() {
       return plainRisk(this.finding, this.sheet, this.$ui.lang, this.$ui.advanced)
     },
     plan() {
-      if (!showsPlan(this.attempt) || this.vanished) return null
+      if (!showsPlan(this.attempt, this.gone)) return null
       return projectPlan({ finding: this.sheet || this.finding, project: this.projectView, attempt: this.attempt })
     },
     steps() {
       return pathSteps(this.path, this.plan, this.attempt)
     },
     showStart() {
-      return this.plan?.action === 'start' && canRestart(this.attempt)
+      return this.plan?.action === 'start' && canRestart(this.attempt, this.gone)
     },
     merge() {
       return mergeStep({ attempt: this.attempt, project: this.projectView })
@@ -146,7 +151,7 @@ export default {
 <style scoped>
 .m-guide { display: grid; gap: 0.85rem; min-width: 0; }
 .m-guide p { margin: 0; }
-.m-guide__title { font-family: var(--m-voice); font-size: 1.5rem; font-weight: 600; line-height: 1.25; margin: 0; overflow-wrap: anywhere; }
+.m-guide__title { font-family: var(--m-voice); font-size: 1.5rem; font-weight: 600; line-height: 1.25; margin: 0; overflow-wrap: anywhere; outline: none; }
 .m-guide__where { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; margin-top: -0.5rem !important; }
 .m-guide__note { line-height: 1.5; padding: 0.5rem 0.75rem; border-radius: 8px; background: rgb(var(--v-theme-tag-info)); overflow-wrap: anywhere; }
 .m-guide__note--stop { background: rgb(var(--v-theme-tag-look)); }

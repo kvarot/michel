@@ -74,9 +74,24 @@ export function projectsToRead(digest, attempts) {
 }
 
 /** findingName is what a finding's line calls it: its package, or the tool for a tool's finding (scan.Ref). */
-function findingName(f) {
+export function findingName(f) {
   if (f.kind && f.kind !== 'dependency') return String(f.source_key || '').replace(/^plugin\./, '') || f.rule_id || f.package
   return f.package || f.osv_id
+}
+
+/**
+ * guideTitle is the heading of a flaw's page. An attempt's finding has neither
+ * the kind nor the tool: until the sheet comes, a flaw without a package gets a
+ * plain sentence rather than a technical id.
+ * @param {object} finding the list's or the attempt's finding
+ * @param {object|null} sheet GET /findings/{id}
+ * @param {string} lang
+ * @returns {string}
+ */
+export function guideTitle(finding, sheet, lang) {
+  const f = sheet || finding || {}
+  const name = f.package || f.kind ? findingName(f) : ''
+  return name ? translate(lang, 'todo.flaw', { package: name }) : translate(lang, 'path.title_any')
 }
 
 const isHot = (f) => !!(f.kev || f.malicious)
