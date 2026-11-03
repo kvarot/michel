@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -353,6 +354,9 @@ func TestDefaultScriptCannotEmitText(t *testing.T) {
 	}
 }
 
+// writerWord names commands that write or move a file, whole words only.
+var writerWord = regexp.MustCompile(`\b(tee|dd|mv|cp)\b`)
+
 func TestScriptGrammar(t *testing.T) {
 	banned := []string{"system", "getline", ">", "rm", "mktemp", "sudo", "ssh", "curl", "wget", "cat ", "ENVIRON", "/dev/"}
 	for _, src := range allSources() {
@@ -366,6 +370,22 @@ func TestScriptGrammar(t *testing.T) {
 					if strings.Contains(script, b) {
 						t.Errorf("%s text=%v: the script holds %q", src.Format, text, b)
 					}
+				}
+				if w := writerWord.FindString(script); w != "" {
+					t.Errorf("%s text=%v: the script holds the command %q", src.Format, text, w)
+				}
+				evals := 0
+				for _, l := range strings.Split(script, "\n") {
+					if strings.Contains(l, "eval") {
+						evals++
+						// The one form: a position number, nothing a file name can reach.
+						if strings.TrimSpace(l) != `eval "f=\${$i}"` {
+							t.Errorf("%s text=%v: another eval: %s", src.Format, text, l)
+						}
+					}
+				}
+				if evals != 2 {
+					t.Errorf("%s text=%v: %d eval, want the 2 of the loops", src.Format, text, evals)
 				}
 				for _, l := range strings.Split(script, "\n") {
 					if strings.Contains(l, "print") && strings.Contains(l, "|") {

@@ -400,10 +400,14 @@ read_one() {
 		return
 	fi
 	budget=$((budget - win))
+	lead=0
+	if [ "$start" -gt 0 ]; then
+		lead=1
+	fi
 	res=$({
-		tail -c +$((start + 1)) "$f" | head -c "$win" | tr '\000\015' '  '
+		tail -c +$((start + 1 - lead)) "$f" | head -c "$((win + lead))" | tr '\000\015' '  '
 		printf '\n'
-	} | awk -v f="$f" -v id="$id" -v base="$start" -v skip="$skip" -v rot="$rot" -v win="$win" -v full=@CAP@ -v gcap="$gpf" "$prog")
+	} | awk -v f="$f" -v id="$id" -v base="$((start - lead))" -v lead="$lead" -v skip="$skip" -v rot="$rot" -v win="$((win + lead))" -v full=@CAP@ -v gcap="$gpf" "$prog")
 	if [ "$?" -ne 0 ]; then
 		printf 'U\t%s\n' "$f"
 	else
@@ -473,10 +477,19 @@ exit 0
 // added newline, so the last record is what follows the last newline of the
 // read (often nothing): it is held back and not consumed, and a line cut at the
 // end of the read waits for the next one. Everything is written at the end, so
-// a crash of awk writes nothing and the shell reports the file unseen. Fewer
+// a crash of awk writes nothing: the shell holds the answer until awk exits
+// with 0, and reports the file unseen otherwise. Fewer
 // bytes than asked for means a tool failed or the file shrank under the read:
 // that is unseen too, never a quiet "no error". The groups are capped, so that
 // forged lines cannot fill the output: past the cap, a line counts by level.
+//
+// A position is only an offset, so a read can resume in the middle of a line
+// (after a jump over a line longer than the cap, over what the budget left, or
+// when the activation found a line half written). A read that starts after the
+// first byte of the file therefore starts one byte earlier (lead) and throws the
+// first record away: that record is empty when the byte was a newline, and the
+// end of a line whose beginning is unknown otherwise. A fragment is never taken
+// for the start of a line. The extra byte is not part of the cap.
 //
 // NUL and carriage return arrive as spaces, byte for byte: awk implementations
 // differ on both, and the position counts bytes.
@@ -565,7 +578,7 @@ function scan(l,   k) {
 {
 	if (held) {
 		used += length(prev) + 1
-		if (skip + 0 == 0 || NR != 2) scan(prev)
+		if (lead + 0 == 0 || NR != 2) scan(prev)
 	}
 	prev = $0
 	held = 1
@@ -576,9 +589,10 @@ END {
 		exit 0
 	}
 	pos = base + used
+	if (lead + 0 && pos < base + 1) pos = base + 1
 	lost = skip + 0
-	if (used == 0 && length(prev) == full + 0) {
-		pos = base + full
+	if (used == 0 && length(prev) - lead == full + 0) {
+		pos = base + length(prev)
 		lost = lost + full
 	}
 	for (k in c) {

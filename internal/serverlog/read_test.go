@@ -902,8 +902,8 @@ func TestWorstCaseAnswerIsUnderTheClientLimit(t *testing.T) {
 	}
 	// The longest record: level, a 128 byte type, a 200 byte place with its line
 	// number, a 64 byte channel, an hour with an offset, a 20 digit count, 200
-	// bytes of text, 6 tabs and the newline.
-	longest := len("critical") + 128 + (200 + 1 + 6) + 64 + len("2026-11-02T12+01:00") + 20 + 200 + len("R") + 6 + 1
+	// bytes of text, 7 tabs (8 fields) and the newline.
+	longest := len("critical") + 128 + (200 + 1 + 6) + 64 + len("2026-11-02T12+01:00") + 20 + 200 + len("R") + 7 + 1
 	if longest > maxRecordLine {
 		t.Errorf("a record line can reach %d bytes, the bound says %d", longest, maxRecordLine)
 	}
@@ -943,5 +943,136 @@ func TestRealRenameAndTruncationOnDisk(t *testing.T) {
 	out, _ = readSrc(t, h, src, saved, FilterOptions{})
 	if fs := fileState(t, out); !fs.Rotated || total(out) != 1 {
 		t.Fatalf("truncated: %+v", out)
+	}
+}
+
+// A position is an offset, so a read can resume inside a line. What it finds
+// there is the end of a line, never a line: a forged fragment that would be
+// anchored well must give no record (the parser refuses the whole line).
+const forgedTail = "PHP Warning:  forged in /var/www/demo/z.php on line 9"
+
+func TestAFragmentIsNeverTakenForALine(t *testing.T) {
+	// 1. What the budget left of an older file lands in the middle of its last,
+	// unfinished line, right on the forged tail.
+	t.Run("window smaller than the cap", func(t *testing.T) {
+		h := plainHost(t)
+		dir := t.TempDir()
+		older, newer := filepath.Join(dir, "app-1.log"), filepath.Join(dir, "app-2.log")
+		appendTo(t, older, "")
+		appendTo(t, newer, "")
+		src := Source{ID: "S1", Path: shPath(dir) + "/app-*.log", Format: FormatPHP}
+		saved := map[string]Cursor{}
+		readSrc(t, h, src, saved, FilterOptions{})
+		appendTo(t, newer, readLine)
+		appendTo(t, older, "GET /search?q="+forgedTail) // no newline yet
+		o := FilterOptions{ReadCap: int64(len(readLine) + len(forgedTail))}
+		out, _ := readSrc(t, h, src, saved, o)
+		if total(out) != 1 {
+			t.Fatalf("the newest file only: %+v", out)
+		}
+		if s := saved[shPath(older)].Offset; s != int64(len("GET /search?q=")) {
+			t.Fatalf("the test expects the position to land on the tail, got %d", s)
+		}
+		appendTo(t, older, "\n")
+		out, _ = readSrc(t, h, src, saved, FilterOptions{})
+		if len(out.Records) != 0 || out.Rejected != 0 {
+			t.Fatalf("a fragment became a record: %+v", out)
+		}
+		appendTo(t, older, readLine)
+		if out, _ = readSrc(t, h, src, saved, FilterOptions{}); total(out) != 1 {
+			t.Fatalf("the next whole line is read: %+v", out)
+		}
+	})
+	// 2. A line longer than the cap: the read jumps over it, then finds its end.
+	t.Run("line longer than the cap", func(t *testing.T) {
+		h := plainHost(t)
+		p := filepath.Join(t.TempDir(), "app.log")
+		appendTo(t, p, "")
+		src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
+		saved := map[string]Cursor{}
+		readSrc(t, h, src, saved, FilterOptions{})
+		o := FilterOptions{ReadCap: 90}
+		// The byte before the jump is a bracket: with the rest it would read as a
+		// date prefix, if the fragment were taken for a line.
+		appendTo(t, p, strings.Repeat("A", 89)+"[")
+		out, _ := readSrc(t, h, src, saved, o)
+		if fs := fileState(t, out); fs.Skipped != 90 || fs.Offset != 90 {
+			t.Fatalf("the jump: %+v", out)
+		}
+		appendTo(t, p, "2026-11-02T12:00:00+01:00] "+forgedTail+"\n")
+		out, _ = readSrc(t, h, src, saved, o)
+		if len(out.Records) != 0 || out.Rejected != 0 {
+			t.Fatalf("a fragment became a record: %+v", out)
+		}
+		appendTo(t, p, readLine)
+		if out, _ = readSrc(t, h, src, saved, o); total(out) != 1 {
+			t.Fatalf("the next whole line is read: %+v", out)
+		}
+	})
+	// 3. The activation finds a line half written.
+	t.Run("activation inside a line", func(t *testing.T) {
+		h := plainHost(t)
+		p := filepath.Join(t.TempDir(), "app.log")
+		appendTo(t, p, readLine+"GET /search?q=")
+		src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
+		saved := map[string]Cursor{}
+		readSrc(t, h, src, saved, FilterOptions{})
+		appendTo(t, p, forgedTail+"\n"+readLine)
+		out, _ := readSrc(t, h, src, saved, FilterOptions{})
+		if total(out) != 1 || out.Rejected != 0 {
+			t.Fatalf("only the whole line after the fragment: %+v", out)
+		}
+	})
+}
+
+// A file that shows up unreadable after the activation is unseen, then read
+// from its start once it can be read (spec 5.2: a later file).
+func TestFileAppearingUnreadableAfterActivationIsReadFromItsStart(t *testing.T) {
+	h := plainHost(t)
+	dir := t.TempDir()
+	appendTo(t, filepath.Join(dir, "app-1.log"), readLine)
+	src := Source{ID: "S1", Path: shPath(dir) + "/app-*.log", Format: FormatPHP}
+	saved := map[string]Cursor{}
+	readSrc(t, h, src, saved, FilterOptions{})
+	late := filepath.Join(dir, "app-2.log")
+	appendTo(t, late, readLine+readLine)
+	allow := denyRead(t, late)
+	out, next := readSrc(t, h, src, saved, FilterOptions{})
+	if len(out.Unseen) != 1 || len(out.Files) != 1 || len(next) != 1 || total(out) != 0 {
+		t.Fatalf("unreadable: %+v", out)
+	}
+	if _, ok := saved[shPath(late)]; ok {
+		t.Fatalf("a position was saved for a file nobody read: %+v", saved)
+	}
+	allow()
+	out, _ = readSrc(t, h, src, saved, FilterOptions{})
+	if total(out) != 2 || len(out.Unseen) != 0 {
+		t.Fatalf("readable now: want its two lines, got %+v", out)
+	}
+}
+
+// A folder that can be searched but not listed (mode -wx): a glob finds nothing
+// there whatever the folder holds, so the filter cannot say the source is empty.
+func TestUnlistableFolderLeavesNoPlaceholderForAWildcard(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a folder that can be searched but not listed is a Unix mode")
+	}
+	h := plainHost(t)
+	dir := filepath.Join(t.TempDir(), "closed")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, filepath.Join(dir, "app-1.log"), readLine)
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Skipf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("this user can list the folder anyway (root?)")
+	}
+	src := Source{ID: "S1", Path: shPath(dir) + "/app-*.log", Format: FormatPHP}
+	out, next, err := Read(context.Background(), h.client, src, nil, FilterOptions{}, 30*time.Second, readNow)
+	if err != nil || out.None || len(next) != 0 || len(out.Unseen) != 1 {
+		t.Fatalf("unlistable folder: out=%+v cursors=%+v err=%v", out, next, err)
 	}
 }
