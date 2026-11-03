@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  channelNotes, deviationWarning, errorGroups, intervalChoices, intervalNote, logBadges, privacyChoices, readState, routeChoices,
+  channelNotes, deviationWarning, domId, errorGroups, intervalChoices, intervalNote, logBadges, privacyChoices, readState, routeChoices, settingsSaveOutcome,
 } from './serverLogsView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -13,7 +13,7 @@ function settings(extra = {}) {
 describe('privacyChoices', () => {
   test('recommended option comes first and is marked, whatever the current choice', () => {
     for (const st of [settings(), settings({ store_text: true, alert_text: true, retention_days: 365 })]) {
-      const groups = privacyChoices(st, 'vps', 'fr')
+      const groups = privacyChoices(st, 'fr')
       expect(groups.map((g) => g.key)).toEqual(['store_text', 'alert_text', 'retention'])
       for (const g of groups) {
         expect(g.choices[0].recommended).toBe(true)
@@ -22,12 +22,12 @@ describe('privacyChoices', () => {
         expect(g.choices.slice(1).every((c) => !c.label.includes('recommandé'))).toBe(true)
       }
     }
-    const en = privacyChoices(settings(), 'vps', 'en')
+    const en = privacyChoices(settings(), 'en')
     expect(en[0].choices[0].label).toContain('recommended')
   })
 
   test('the current choice is the one selected, a retention outside the list is kept', () => {
-    const groups = privacyChoices(settings({ store_text: true, retention_days: 100 }), 'vps', 'fr')
+    const groups = privacyChoices(settings({ store_text: true, retention_days: 100 }), 'fr')
     expect(groups[0].choices.find((c) => c.current).value).toBe(true)
     const retention = groups[2].choices
     expect(retention.map((c) => c.value)).toContain(100)
@@ -36,20 +36,11 @@ describe('privacyChoices', () => {
   })
 
   test('the text of alerts cannot be chosen while no text is kept', () => {
-    const off = privacyChoices(settings(), 'vps', 'fr')[1].choices
+    const off = privacyChoices(settings(), 'fr')[1].choices
     expect(off.find((c) => c.value === true).disabled).toBe(true)
     expect(off.find((c) => c.value === false).disabled).toBe(false)
-    const on = privacyChoices(settings({ store_text: true }), 'vps', 'fr')[1].choices
+    const on = privacyChoices(settings({ store_text: true }), 'fr')[1].choices
     expect(on.find((c) => c.value === true).disabled).toBe(false)
-  })
-
-  test('on a health server every other choice is flagged strong', () => {
-    const groups = privacyChoices(settings(), 'hds', 'fr')
-    for (const g of groups) {
-      expect(g.choices[0].strong).toBe(false)
-      expect(g.choices.slice(1).every((c) => c.strong)).toBe(true)
-    }
-    expect(privacyChoices(settings(), 'vps', 'fr')[0].choices.every((c) => !c.strong)).toBe(true)
   })
 })
 
@@ -79,23 +70,66 @@ describe('deviationWarning', () => {
 })
 
 describe('intervalNote', () => {
-  test('interval above 10 minutes warns', () => {
-    expect(intervalNote('5m', 'fr')).toBe('')
-    expect(intervalNote('10m', 'fr')).toBe('')
-    expect(intervalNote('15m', 'fr')).toMatch(/10 minutes/)
-    expect(intervalNote('2h', 'fr')).toMatch(/10 minutes/)
-    expect(intervalNote('1h30m0s', 'fr')).toMatch(/10 minutes/)
-    expect(intervalNote('24h', 'en')).toMatch(/10 minutes/)
+  const note = (interval, lang = 'fr', advanced = false, extra = {}) => intervalNote({ interval, ...extra }, advanced, lang)
+
+  test('interval above 10 minutes warns (local fallback without an API note)', () => {
+    expect(note('5m')).toBe('')
+    expect(note('10m')).toBe('')
+    expect(note('15m')).toMatch(/10 minutes/)
+    expect(note('2h')).toMatch(/10 minutes/)
+    expect(note('1h30m0s')).toMatch(/10 minutes/)
+    expect(note('24h', 'en')).toMatch(/10 minutes/)
   })
 
-  test('by hand says nobody is warned in between', () => {
-    expect(intervalNote('manual', 'fr')).toMatch(/quand tu le demandes/)
-    expect(intervalNote('manual', 'fr')).toMatch(/Personne/)
+  test('by hand says nobody is warned in between, and names no button', () => {
+    expect(note('manual', 'fr', false)).toMatch(/en ligne de commande/)
+    expect(note('manual', 'fr', false)).toMatch(/Personne/)
+    expect(note('manual', 'fr', true)).toMatch(/michel target logs read/)
+    expect(note('manual', 'en', false)).toMatch(/command line/)
+  })
+
+  test('api interval note wins over the local one', () => {
+    expect(note('15m', 'fr', false, { interval_note: 'Note de l API' })).toBe('Note de l API')
+  })
+
+  test('manual follows the mode, whatever the api says', () => {
+    const api = { interval_note: 'Quand tu le demandes' }
+    expect(note('manual', 'fr', false, api)).not.toBe('Quand tu le demandes')
+    expect(note('manual', 'fr', false, api)).toMatch(/en ligne de commande/)
+    expect(note('manual', 'fr', true, api)).toMatch(/michel target logs read/)
+    expect(note('manual', 'fr', true, api)).not.toBe(note('manual', 'fr', false, api))
   })
 
   test('an unreadable value says nothing', () => {
-    expect(intervalNote('', 'fr')).toBe('')
-    expect(intervalNote('soon', 'fr')).toBe('')
+    expect(note('')).toBe('')
+    expect(note('soon')).toBe('')
+    expect(intervalNote(null, false, 'fr')).toBe('')
+  })
+})
+
+describe('domId', () => {
+  test('has no space and differs for different paths', () => {
+    const a = domId('php|/var/log/my app/error.log')
+    const b = domId('php|/var/log/my_app/error.log')
+    expect(a).not.toMatch(/\s/)
+    expect(a).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(a).not.toBe(b)
+    expect(domId('php|/var/log/my app/error.log')).toBe(a)
+  })
+})
+
+describe('settingsSaveOutcome', () => {
+  test('reads the 409 logs.confirm_needed', () => {
+    const err = { status: 409, data: { code: 'logs.confirm_needed', deviations: [{ code: 'store_text' }], health: 'Santé' } }
+    expect(settingsSaveOutcome(err)).toEqual({ kind: 'confirm', deviations: [{ code: 'store_text' }], health: 'Santé' })
+    expect(settingsSaveOutcome({ status: 409, data: { code: 'logs.confirm_needed' } })).toEqual({ kind: 'confirm', deviations: [], health: '' })
+  })
+
+  test('another failure is an error, none is ok', () => {
+    const e = { status: 409, data: { code: 'other' } }
+    expect(settingsSaveOutcome(e)).toEqual({ kind: 'error', error: e })
+    expect(settingsSaveOutcome({ status: 500 }).kind).toBe('error')
+    expect(settingsSaveOutcome(null)).toEqual({ kind: 'ok' })
   })
 })
 

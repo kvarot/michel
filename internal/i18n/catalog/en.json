@@ -59,7 +59,7 @@
   "api.logs.duplicate_source": "This log is already a source of this server.",
   "api.logs.duplicate_source_hint": "Change the existing source instead of adding it twice.",
   "api.logs.error_not_found": "No error of this server has this id.",
-  "api.logs.interval.manual": "Michel reads the logs of this server only when you ask. Nobody is warned in between.",
+  "api.logs.interval.manual": "Michel reads the logs of this server only when you ask for it on the command line. Nobody is warned in between.",
   "api.logs.interval.slow": "With this interval, an error can wait more than 10 minutes before you hear of it.",
   "api.logs.no_channel": "Michel will read this log, but nothing is set up to warn you (email, webhook or desktop notification): nobody will be told. Set up a channel; until then a badge stays on this server.",
   "api.logs.note.gap": "Michel could not read this log from %[1]s to %[2]s.",

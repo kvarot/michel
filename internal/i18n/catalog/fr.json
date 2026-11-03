@@ -59,7 +59,7 @@
   "api.logs.duplicate_source": "Ce journal est déjà une source de ce serveur.",
   "api.logs.duplicate_source_hint": "Modifie la source existante au lieu de l'ajouter deux fois.",
   "api.logs.error_not_found": "Aucune erreur de ce serveur ne porte cet identifiant.",
-  "api.logs.interval.manual": "Michel ne lit les journaux de ce serveur que quand tu le demandes. Personne n'est prévenu entre-temps.",
+  "api.logs.interval.manual": "Michel ne lit les journaux de ce serveur que quand tu le demandes en ligne de commande. Personne n'est prévenu entre-temps.",
   "api.logs.interval.slow": "Avec cette fréquence, une erreur peut attendre plus de 10 minutes avant que tu l'apprennes.",
   "api.logs.no_channel": "Michel va lire ce journal, mais rien n'est prévu pour te prévenir (e-mail, webhook ou notification sur l'ordinateur) : personne ne sera prévenu. Configure un canal d'alerte ; en attendant, un badge reste sur ce serveur.",
   "api.logs.note.gap": "Michel n'a pas pu lire ce journal de %[1]s à %[2]s.",

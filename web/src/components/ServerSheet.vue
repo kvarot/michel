@@ -532,13 +532,16 @@ export default {
         this.loading = false
       }
     },
-    /** refreshView reads the server again, quietly: the log badges follow what the Journaux block changed. */
+    /** refreshView reads the server again: the log badges follow what the Journaux block changed. A failure is shown, not swallowed. */
     async refreshView() {
       try {
         const v = await api.get(this.q(`/targets/${this.enc(this.id)}`))
         if (this.alive) this.view = v
-      } catch {
-        // The badge stays as it was; the next load tells.
+      } catch (err) {
+        if (this.alive && err?.status !== 401) {
+          this.errorFor = ''
+          this.actionError = err
+        }
       }
       this.$emit('changed')
     },

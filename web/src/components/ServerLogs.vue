@@ -69,7 +69,7 @@
       <ul v-if="candidates && candidates.length" class="m-logs__list" :aria-labelledby="`${uid}-add`">
         <li v-for="c in candidates" :key="candKey(c)" class="m-logs__item">
           <p>
-            <span :id="`${uid}-cand-${candKey(c)}`" class="m-code">{{ c.path }}</span>
+            <span :id="`${uid}-cand-${domId(candKey(c))}`" class="m-code">{{ c.path }}</span>
             <span v-if="$ui.advanced" class="m-muted m-small"> — {{ formatText(c.format) }}</span>
           </p>
           <p class="m-small">{{ c.text }}</p>
@@ -77,10 +77,10 @@
           <p v-if="c.known" class="m-tag m-small m-logs__tag">{{ $t('logs.add.known') }}</p>
           <template v-else>
             <div class="m-logs__actions">
-              <v-btn size="small" variant="tonal" color="primary" :loading="trying === candKey(c)" :disabled="!!trying || busy" :aria-describedby="`${uid}-cand-${candKey(c)}`" @click="tryDraft(candKey(c), candDraft(c))">
+              <v-btn size="small" variant="tonal" color="primary" :loading="trying === candKey(c)" :disabled="!!trying || busy" :aria-describedby="`${uid}-cand-${domId(candKey(c))}`" @click="tryDraft(candKey(c), candDraft(c))">
                 {{ $t('logs.add.try') }}
               </v-btn>
-              <v-btn size="small" variant="flat" color="primary" :disabled="!!trying || busy" :aria-describedby="`${uid}-cand-${candKey(c)}`" @click="start(candDraft(c))">
+              <v-btn size="small" variant="flat" color="primary" :disabled="!!trying || busy" :aria-describedby="`${uid}-cand-${domId(candKey(c))}`" @click="start(candDraft(c))">
                 {{ $t('logs.add.start') }}
               </v-btn>
             </div>
@@ -282,7 +282,7 @@ import TryResult from './LogTryResult.vue'
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
 import {
-  channelNotes, deviationWarning, errorGroups, formatLabel, formats, intervalChoices, intervalNote, levelLabel, levelOrder, levelSeverity,
+  channelNotes, deviationWarning, domId, errorGroups, formatLabel, formats, intervalChoices, intervalNote, levelLabel, levelOrder, levelSeverity, settingsSaveOutcome,
   privacyChoices, readState, routeChoices, statusLabel,
 } from '../lib/serverLogsView.js'
 
@@ -333,6 +333,8 @@ export default {
       // confirm is a change waiting for the user's yes: {patch, deviations, health, titles}.
       confirm: null,
       now: new Date(),
+      loadSeq: 0,
+      clock: null,
       levels: levelOrder,
       settingField,
     }
@@ -357,10 +359,10 @@ export default {
       return intervalChoices(this.settings?.interval, this.lang)
     },
     intervalWarn() {
-      return intervalNote(this.settings?.interval, this.lang)
+      return intervalNote(this.settings, this.$ui.advanced, this.lang)
     },
     privacy() {
-      return privacyChoices(this.settings, this.kind, this.lang)
+      return privacyChoices(this.settings, this.lang)
     },
     settingNotes() {
       return channelNotes({ sms: !!this.settings?.sms }, this.lang)
@@ -378,8 +380,15 @@ export default {
   created() {
     this.load()
   },
+  mounted() {
+    // "il y a X min" must not go stale on a sheet left open.
+    this.clock = setInterval(() => {
+      this.now = new Date()
+    }, 60000)
+  },
   beforeUnmount() {
     this.alive = false
+    clearInterval(this.clock)
   },
   methods: {
     q(path) {
@@ -392,6 +401,7 @@ export default {
       return levelLabel(l, this.lang)
     },
     levelSeverity,
+    domId,
     formatText(f) {
       return formatLabel(f, this.lang)
     },
@@ -419,6 +429,8 @@ export default {
       this.actionError = err
     },
     async load() {
+      // Only the newest call counts: a slower, older answer is dropped.
+      const seq = ++this.loadSeq
       this.loading = !this.settings
       this.failure = null
       try {
@@ -427,7 +439,7 @@ export default {
           api.get(this.q('/errors')),
           api.get(this.q('/settings')),
         ])
-        if (!this.alive) return
+        if (!this.alive || seq !== this.loadSeq) return
         this.sources = sources || []
         this.errors = errors?.errors || []
         this.total = errors?.total || 0
@@ -435,9 +447,9 @@ export default {
         this.settings = settings
         this.now = new Date()
       } catch (err) {
-        if (err?.status !== 401) this.failure = err
+        if (this.alive && seq === this.loadSeq && err?.status !== 401) this.failure = err
       } finally {
-        this.loading = false
+        if (seq === this.loadSeq) this.loading = false
       }
     },
     /** done reloads the block after a change and tells the sheet (its badge). */
@@ -576,17 +588,17 @@ export default {
         this.confirm = null
         await this.done(this.$t('logs.sources.saved'))
       } catch (err) {
-        if (err?.status === 409 && err.data?.code === 'logs.confirm_needed') {
-          const devs = err.data.deviations || []
-          const local = devs.map((d) => deviationWarning(d.code, this.kind, this.lang))
+        const out = settingsSaveOutcome(err)
+        if (out.kind === 'confirm') {
+          const local = out.deviations.map((d) => deviationWarning(d.code, this.kind, this.lang))
           this.confirm = {
             patch,
-            deviations: devs,
+            deviations: out.deviations,
             titles: local.map((w) => w.title),
-            health: err.data.health || local.find((w) => w.health)?.health || '',
+            health: out.health || local.find((w) => w.health)?.health || '',
           }
         } else {
-          this.fail(err)
+          this.fail(out.error)
         }
         // The page shows what is saved, not what was tried.
         await this.load()
