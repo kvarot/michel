@@ -25,12 +25,21 @@ type targetEnv struct {
 	dir, home string
 	ssh       *sshtest.Server
 	pipes     []string
+	// shell, when set, runs the `sh -s` scripts sent to the server (the log
+	// filter); nil leaves `sh -s` unsupported.
+	shell sshtest.ShellFunc
 }
 
 func newTargetEnv(t *testing.T) *targetEnv {
 	t.Helper()
 	e := &targetEnv{dir: t.TempDir(), home: t.TempDir()}
-	e.ssh = sshtest.New(t, sshtest.Options{Commands: map[string]sshtest.Handler{
+	e.ssh = sshtest.New(t, sshtest.Options{Shell: func(s *sshtest.Server, script string, out, errw io.Writer) int {
+		if e.shell == nil {
+			io.WriteString(errw, "sh: not supported\n")
+			return 127
+		}
+		return e.shell(s, script, out, errw)
+	}, Commands: map[string]sshtest.Handler{
 		"cat": func(x sshtest.Exec) int {
 			if len(x.Args) == 2 && x.Args[1] == "/etc/os-release" {
 				io.WriteString(x.Stdout, "PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nVERSION_ID=\"12\"\nID=debian\n")

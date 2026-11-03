@@ -67,6 +67,7 @@ func (s *server) targetRoutes() {
 	m.HandleFunc("GET /api/v1/targets/{id}/ai-consent", s.targetConsent)
 	m.HandleFunc("POST /api/v1/targets/{id}/ai-consent", s.targetConsentGive)
 	m.HandleFunc("DELETE /api/v1/targets/{id}/ai-consent", s.targetConsentRevoke)
+	s.logRoutes()
 }
 
 // ---- views -----------------------------------------------------------------
@@ -173,6 +174,13 @@ type TargetView struct {
 	UrgentOpen   int              `json:"urgent_open"`
 	Checking     bool             `json:"checking"`
 	LastCheck    *TargetLastCheck `json:"last_check"`
+	// LogNew counts the errors of the logs not seen yet (new or back);
+	// LogDeviations names the log privacy settings away from the recommended
+	// choice (the badge); LogNoChannel says that a log is read but no
+	// channel can tell anyone.
+	LogNew        int      `json:"log_new"`
+	LogDeviations []string `json:"log_deviations"`
+	LogNoChannel  bool     `json:"log_no_channel"`
 
 	// The detail only.
 	Findings    []TargetFindingView `json:"findings,omitempty"`
@@ -669,6 +677,10 @@ func (s *server) targetView(ctx context.Context, t target.Target, lang i18n.Lang
 			continue
 		}
 		v.Projects = append(v.Projects, TargetLinkView{Project: p.Name, RemoteDir: srvText(t.User, l.RemoteDir)})
+	}
+	// The log fields, in the list too: the badges and the count of new errors.
+	if err := s.logSummary(ctx, t, &v); err != nil {
+		return TargetView{}, err
 	}
 	if !detail {
 		return v, nil

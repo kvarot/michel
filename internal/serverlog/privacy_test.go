@@ -370,3 +370,38 @@ func TestPurgeAuditedSkipsARunThatRemovesNothing(t *testing.T) {
 		t.Fatalf("an empty run after it was audited: %d events", n)
 	}
 }
+
+func TestEraseTargetAuditedWipesEverythingAndSaysSo(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx, log := context.Background(), auditor(e)
+	kept := rec(2, t0)
+	ign := rec(1, t0)
+	ign.Type = "IgnoredException"
+	if _, _, _, err := e.r.Apply(ctx, e.src, []Record{kept, ign}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.r.SetStatus(ctx, SignatureID(e.src.ID, ign.Level, ign.Type, ign.Location, ign.Channel), StatusIgnored); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.r.SaveCursors(ctx, []Cursor{{SourceID: e.src.ID, File: "/var/log/demo/app.log", FileID: "1:2", Offset: 10, ReadAt: t0}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.r.AddNote(ctx, Note{TargetID: e.tgt.ID, SourceID: e.src.ID, Kind: NoteGap, From: t0, To: t0.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := EraseTargetAudited(ctx, e.r, log, "web", e.tgt.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`SELECT COUNT(*) FROM log_signature`, `SELECT COUNT(*) FROM log_bucket`, `SELECT COUNT(*) FROM log_cursor`, `SELECT COUNT(*) FROM log_note`} {
+		if n := count(t, e, q); n != 0 {
+			t.Errorf("%s = %d after the erasure", q, n)
+		}
+	}
+	if n := count(t, e, `SELECT COUNT(*) FROM log_source`); n != 1 {
+		t.Errorf("the sources stay: %d", n)
+	}
+	ev := auditEvidence(t, e, "log.purge")
+	if len(ev) != 1 || !strings.Contains(ev[0], `"scope":"all"`) || strings.Contains(ev[0], "DemoException") || strings.Contains(ev[0], "app.log") {
+		t.Errorf("log.purge = %v", ev)
+	}
+}

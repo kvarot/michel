@@ -38,7 +38,7 @@ func newTargetCmd(deps *Deps) *cobra.Command {
 			"server by these commands.",
 	}
 	c.AddCommand(newTargetListCmd(deps), newTargetDiscoverCmd(deps), newTargetAddCmd(deps), newTargetTrustCmd(deps),
-		newTargetCheckCmd(deps), newTargetSetCmd(deps), newTargetRemoveCmd(deps))
+		newTargetCheckCmd(deps), newTargetSetCmd(deps), newTargetRemoveCmd(deps), newTargetLogsCmd(deps))
 	return c
 }
 

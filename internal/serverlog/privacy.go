@@ -210,3 +210,13 @@ func cleanedText(text string) (string, bool) {
 	}
 	return masked, true
 }
+
+// EraseTargetAudited removes all log data of a server held by Michel (errors,
+// ignored ones included, counts, positions and notes: Repo.EraseTarget) and
+// audits it. The audit event names the scope, never what was erased.
+func EraseTargetAudited(ctx context.Context, repo *Repo, log *audit.Logger, actor, targetID string) error {
+	if err := repo.EraseTarget(ctx, targetID); err != nil {
+		return err
+	}
+	return auditPurge(ctx, log, actor, targetID, map[string]any{"scope": "all"})
+}

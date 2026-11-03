@@ -35,6 +35,9 @@ type targetFixture struct {
 	// agentErr, when set, is what the SSH agent answers (a socket path of
 	// this computer inside it, as a real one would put).
 	agentErr error
+	// shell, when set, runs the `sh -s` scripts sent to the simulated server
+	// (the log filter); nil leaves `sh -s` unsupported.
+	shell sshtest.ShellFunc
 }
 
 const osReleaseDemo = "PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nVERSION_ID=\"12\"\nID=debian\n"
@@ -77,7 +80,13 @@ func demoCommands() map[string]sshtest.Handler {
 func newTargetFixture(t *testing.T, opts ...func(tf *targetFixture)) *targetFixture {
 	t.Helper()
 	tf := &targetFixture{home: t.TempDir()}
-	tf.ssh = sshtest.New(t, sshtest.Options{Commands: demoCommands()})
+	tf.ssh = sshtest.New(t, sshtest.Options{Commands: demoCommands(), Shell: func(s *sshtest.Server, script string, out, errw io.Writer) int {
+		if tf.shell == nil {
+			io.WriteString(errw, "sh: not supported\n")
+			return 127
+		}
+		return tf.shell(s, script, out, errw)
+	}})
 	ag := tf.ssh.NewAgent(t)
 	var agentFn func() (agent.ExtendedAgent, io.Closer, error)
 	agentFn = func() (agent.ExtendedAgent, io.Closer, error) {
