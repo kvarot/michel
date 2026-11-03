@@ -65,6 +65,8 @@ func (s *server) targetRoutes() {
 	m.HandleFunc("GET /api/v1/targets/{id}/inventory", s.targetInventory)
 	m.HandleFunc("POST /api/v1/targets/{id}/fix/{finding}", s.targetFix)
 	m.HandleFunc("POST /api/v1/targets/{id}/agent-fix/{finding}", s.targetAgentFix)
+	m.HandleFunc("GET /api/v1/targets/{id}/exposure", s.targetExposure)
+	m.HandleFunc("POST /api/v1/targets/{id}/exposure/{finding}/decision", s.targetExposureDecision)
 	m.HandleFunc("GET /api/v1/targets/{id}/ai-consent", s.targetConsent)
 	m.HandleFunc("POST /api/v1/targets/{id}/ai-consent", s.targetConsentGive)
 	m.HandleFunc("DELETE /api/v1/targets/{id}/ai-consent", s.targetConsentRevoke)

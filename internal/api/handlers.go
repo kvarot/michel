@@ -458,17 +458,7 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 		}
 		d.DueAt = t
 	}
-	if err := decide.Validate(&d, now); err != nil {
-		switch {
-		case errors.Is(err, decide.ErrJustificationRequired):
-			refuse("api.decision.why_required")
-		case errors.Is(err, decide.ErrJustificationTooLong):
-			refuse("api.decision.why_too_long", decide.MaxJustification)
-		case errors.Is(err, decide.ErrDueInPast):
-			refuse("api.decision.due_in_past")
-		default:
-			refuse("api.decision.unknown_action")
-		}
+	if !validateDecision(refuse, &d, now) {
 		return
 	}
 	f, p, found, err := s.lookup(ctx, r.PathValue("id"))
@@ -480,21 +470,8 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.finding_not_found"), "")
 		return
 	}
-	d.FindingID = f.ID
-	_, _, evID, err := decide.Apply(ctx, decide.NewRepo(s.deps.Store), s.deps.Audit, decisionAuthor, d, f.Package, f.OSVID, now)
-	var auditErr *decide.AuditError
-	switch {
-	case errors.Is(err, decide.ErrFindingGone):
-		s.fail(w, http.StatusConflict, i18n.T(s.answerLang(r), "api.decision.gone"), i18n.T(s.answerLang(r), "api.decision.gone_hint"))
-		return
-	case errors.Is(err, decide.ErrFindingNotFound):
-		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.finding_not_found"), "")
-		return
-	case errors.As(err, &auditErr):
-		s.fail(w, http.StatusInternalServerError, i18n.T(s.answerLang(r), "api.decision.audit_failed"), i18n.T(s.answerLang(r), "api.internal_hint"))
-		return
-	case err != nil:
-		s.internal(w, r)
+	evID, ok := s.applyDecision(w, r, d, f, now)
+	if !ok {
 		return
 	}
 	// Read the finding again: its status changed.
@@ -510,6 +487,48 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 	}
 	v.AuditEventID = evID
 	writeJSON(w, http.StatusOK, v)
+}
+
+// validateDecision runs decide.Validate on d and, when it refuses, gives the
+// reason to refuse (a 400 "the decision was not saved"); false then. The
+// decision routes share it.
+func validateDecision(refuse func(key string, args ...any), d *decide.Decision, now time.Time) bool {
+	err := decide.Validate(d, now)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, decide.ErrJustificationRequired):
+		refuse("api.decision.why_required")
+	case errors.Is(err, decide.ErrJustificationTooLong):
+		refuse("api.decision.why_too_long", decide.MaxJustification)
+	case errors.Is(err, decide.ErrDueInPast):
+		refuse("api.decision.due_in_past")
+	default:
+		refuse("api.decision.unknown_action")
+	}
+	return false
+}
+
+// applyDecision stores the validated decision d on finding f, with its audit
+// event, and answers the failure itself; ok is false then. evID is the audit
+// event. The decision routes share it.
+func (s *server) applyDecision(w http.ResponseWriter, r *http.Request, d decide.Decision, f scan.Finding, now time.Time) (evID string, ok bool) {
+	d.FindingID = f.ID
+	_, _, evID, err := decide.Apply(r.Context(), decide.NewRepo(s.deps.Store), s.deps.Audit, decisionAuthor, d, f.Package, f.OSVID, now)
+	var auditErr *decide.AuditError
+	switch {
+	case errors.Is(err, decide.ErrFindingGone):
+		s.fail(w, http.StatusConflict, i18n.T(s.answerLang(r), "api.decision.gone"), i18n.T(s.answerLang(r), "api.decision.gone_hint"))
+	case errors.Is(err, decide.ErrFindingNotFound):
+		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.finding_not_found"), "")
+	case errors.As(err, &auditErr):
+		s.fail(w, http.StatusInternalServerError, i18n.T(s.answerLang(r), "api.decision.audit_failed"), i18n.T(s.answerLang(r), "api.internal_hint"))
+	case err != nil:
+		s.internal(w, r)
+	default:
+		return evID, true
+	}
+	return "", false
 }
 
 func (s *server) digests(w http.ResponseWriter, r *http.Request) {

@@ -71,6 +71,7 @@ Michel lance une **liste fermée de commandes de lecture**, construites par lui,
 - PHP : `php -v`, `php -m`, `php --ini`, et les réglages de PHP, pour la ligne de commande et pour chaque `php-fpm` trouvé ;
 - serveur web : `nginx -v`, `apache2 -v` / `httpd -v` ;
 - paquets : `dpkg-query`, `rpm -qa`, `apk info` selon le système ;
+- services qui écoutent : `ss -tln`, puis `/usr/sbin/ss -tln` seulement si la première répond que la commande est introuvable (c'est le même programme, rangé ailleurs sur certains systèmes). Seuls l'adresse et le port sont gardés, jamais le nom d'un processus (il demanderait des droits que Michel ne demande pas). TCP seulement. Cette lecture se fait sur tout type de serveur, `hds` compris, puisqu'elle ne lit ni fichier ni contenu ([Ce qui est exposé](#ce-qui-est-exposé)) ;
 - fichiers de configuration : seulement ceux que PHP et le serveur web désignent, les `.user.ini` des dossiers de déploiement liés, et ceux que tu ajoutes (taille plafonnée).
 
 Ce que cette vérification ne lit **jamais** : les dossiers de données, les bases de données, les dossiers personnels des autres utilisateurs, les journaux, les clés privées, et tout ce qui n'est pas un fichier de configuration. Sur un serveur de type `hds`, tu ne peux ajouter aucun chemin à cette vérification. Les fichiers de journaux sont un chemin à part : seulement ceux que tu déclares, avec leur propre filtre, sur tout type de serveur ([section 13](#13-les-journaux-des-serveurs--être-prévenu-sans-les-copier)).
@@ -84,6 +85,25 @@ Ce que cette vérification ne lit **jamais** : les dossiers de données, les bas
 ### Le PHP de la ligne de commande n'est pas toujours celui du site
 
 Le `php` d'un terminal peut être une autre version que celle qui sert le site (PHP-FPM, autre `php.ini`, réglages par site). Michel lit **les deux** quand il les trouve, et dit quand il n'a vu que la ligne de commande. Si tu donnes l'adresse du site (`--site-url`), Michel lit aussi les en-têtes `Server` et `X-Powered-By` par une simple requête GET, comme un navigateur. Il ne détecte pas tous les cas : voir [les limites](#12-les-limites-à-connaître).
+
+### Ce qui est exposé
+
+La partie **Exposition** de la fiche d'un serveur liste les services qui attendent une connexion, tels que le serveur les voit lui-même. Trois colonnes :
+
+- **Ouvert à tous** : le service écoute sur toutes les adresses du serveur (ou sur une adresse qui n'est pas privée). Quiconque peut joindre le serveur pourrait s'y connecter, **si** rien ne lui barre la route.
+- **Réservé** : le service écoute seulement pour le serveur lui-même (adresse locale), ou seulement pour un réseau privé. Il n'est pas fait pour être joint de l'extérieur.
+- **Non vérifié** : ce que Michel n'a pas vérifié ou n'a pas pu vérifier. Deux lignes y sont toujours : **le pare-feu de l'hébergeur** (le filtre qui décide qui peut se connecter) et **les services en UDP** (seul le TCP est lu).
+
+Comment le lire :
+
+- **Cette liste est lue depuis l'intérieur du serveur. Elle ne prouve pas qu'on peut joindre le service depuis l'extérieur** : Michel ne vérifie pas le pare-feu de l'hébergeur, et le dit dans la troisième colonne. Un service « ouvert à tous » n'est joignable que si aucun pare-feu ne se met devant lui.
+- Michel juge un service **par son numéro d'accès seulement** (le port) ; il ne s'y connecte jamais. Un numéro connu de base de données ou de cache, ouvert à tous, crée une faille de gravité moyenne, « à fermer », dans la liste À faire, et jamais une alerte. Tout autre numéro ouvert est montré comme « service non reconnu, à vérifier », sans faille. Le numéro par lequel Michel se connecte au serveur compte comme la connexion d'administration.
+- Sur un serveur de type `shared` (mutualisé), les services peuvent être ceux de l'hébergeur ou d'un autre client : ils sont montrés, avec une phrase qui le dit, et ne créent aucune faille. Sur un serveur en conteneur ou sur une infrastructure partagée, la liste peut aussi montrer des services qui ne sont pas les tiens.
+- **« Je sais, c'est bloqué ou voulu »** (sur la faille) garde ta raison, qui est obligatoire, et le journal d'audit la conserve. Le service reste dans sa colonne, avec « Tu as indiqué : … Michel ne l'a pas vérifié ». Pour revenir en arrière, utilise `michel decide`.
+- **Quand un service n'est plus vu ouvert**, Michel dit exactement cela : il **ne le voit plus ouvert à tous**, et la date est la dernière fois où il l'a vu ouvert. Ce n'est ni une correction ni une vérification : le service a pu changer de numéro ou s'arrêter, et Michel ne sait pas s'il a été fermé. Une faille de ce genre n'est jamais comptée « corrigée ». Michel ne lance pas non plus de correction pour elle : fermer un service, c'est ton travail.
+- Un service qui reste ouvert à tous garde sa faille, même sur un serveur où Michel n'en ouvrirait pas aujourd'hui (un mutualisé, ou un numéro devenu celui de la connexion), jusqu'à ce que tu décides.
+- **Non lu ne veut pas dire « rien n'est ouvert ».** Si `ss` manque sur le serveur, échoue, donne une réponse que Michel ne sait pas lire, ou ne liste aucun service (ce qui ne se peut pas : Michel vient d'entrer par l'un d'eux), la liste est **non lue**. La fiche dit « non lu » et garde une note, qui reste tant que c'est le cas. Un serveur sans `ss` n'est donc jamais « sans rien à signaler » : la note est permanente. Rien n'est ouvert ni fermé à partir d'une liste non lue. « Aucun service vu » et « non lu » sont deux réponses différentes.
+- **L'agent IA ne reçoit jamais cette liste** (ni les adresses, ni les numéros) : l'inventaire envoyé à un agent ne contient aucun service qui écoute, et une faille d'exposition ne lance aucun agent.
 
 ### Quand Michel vérifie
 
@@ -240,6 +260,7 @@ Michel affiche ces messages dans ta langue ; voici quoi faire.
 - Un script que tu lances toi-même échappe au contrôle de Michel : il se protège, mais c'est toi qui décides quand et avec quel utilisateur le lancer.
 - nginx et Apache sont signalés et expliqués, jamais modifiés.
 - Les systèmes BSD ne sont pas pris en charge.
+- La liste des services qui écoutent est lue depuis l'intérieur, en TCP seulement, avec `ss` : le pare-feu de l'hébergeur et les services en UDP ne sont pas vérifiés, et un serveur sans `ss` reste « non lu » ([Ce qui est exposé](#ce-qui-est-exposé)).
 - Un agent Pageant n'est pas testé.
 - Les fiches Debian marquées `unimportant` (sans effet sur la sécurité dans Debian, d'après son équipe de sécurité) ne sont pas signalées. Celles que Debian n'a pas encore jugées le sont.
 - Les auteurs ont fait un essai complet sur un conteneur Debian 13 jetable, avec systemd, sshd, PHP-FPM et nginx. Pas encore essayés : les réglages d'un vrai hébergeur, le mutualisé, un vrai réseau et l'agent OpenSSH de Windows (cet essai passait par un agent de test, avec `ssh.agent_pipe`). Essaie d'abord sur un serveur de test.
