@@ -590,6 +590,7 @@ func TestNoBodyInAudit(t *testing.T) {
 	}
 	// A toast reports "local" as its host and contacts no network.
 	tn, _ := New(policy.ChannelConfig{Name: "bureau", Type: "toast"}, Deps{Runner: &captureRunner{}, Lang: i18n.EN})
+	tn.(*toast).command = darwinCommand
 	if dl := Deliver(context.Background(), []Notifier{tn}, d); dl[0].Host != "local" || dl[0].Result != "ok" {
 		t.Errorf("toast = %+v", dl[0])
 	}

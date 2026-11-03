@@ -729,7 +729,7 @@ func TestApplyCreatesBranchAndRemovesCopy(t *testing.T) {
 	if err := Apply(context.Background(), f.d, a.ID); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	branch := "michel/fix-" + strings.ToLower(a.ID[:8])
+	branch := Branch(a.ID)
 	sha := gitT(t, f.env, f.proj.Path, "rev-parse", "refs/heads/"+branch)
 	if sha != p.CommitSHA {
 		t.Errorf("branch %s = %s, want the fix commit %s", branch, sha, p.CommitSHA)
@@ -909,7 +909,7 @@ func TestProveNeedsMerge(t *testing.T) {
 	if err := Apply(context.Background(), f.d, b.ID); err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, f.env, f.proj.Path, "merge", "-q", "--no-edit", "michel/fix-"+strings.ToLower(b.ID[:8]))
+	gitT(t, f.env, f.proj.Path, "merge", "-q", "--no-edit", Branch(b.ID))
 	f.setFindingStatus(f.finding.ID, scan.StatusGone)
 	if n, err := Prove(context.Background(), f.d, f.proj.ID); err != nil || n != 1 {
 		t.Fatalf("Prove after the merge: %d, %v", n, err)
