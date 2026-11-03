@@ -114,3 +114,14 @@ Interrupteur dans Réglages, retenu par navigateur (`lib/storage.js`), éteint p
 ## Laissé au constructeur
 
 Découpage des composants, détail de la navigation sur téléphone, forme de l'API d'exposition, routes.
+
+## Rattacher un projet à GitHub, Bitbucket ou GitLab
+
+Kévin : « Il faut demander à l'utilisateur s'il a Git, Bitbucket, pour le rattacher s'il souhaite. » La raison : sans cela, le dernier pas du parcours projet (fusionner la correction) demande de savoir se servir de Git. Le reste de cette section est **mon choix**.
+
+- **La question :** dans le guide du premier lancement et dans les réglages de chaque projet : « Ton projet est-il sur GitHub, Bitbucket, GitLab ou un service semblable ? » Réponses : oui, non, je ne sais pas. Michel propose la réponse en lisant le dépôt distant du projet, sans réseau, et n'affiche jamais un mot de passe ou un jeton présent dans l'adresse. Rien n'est rattaché sans un oui. La réponse se change à tout moment.
+- **Sans rattachement :** tout marche comme aujourd'hui, et la page dit clairement ce qu'il restera à faire à la main.
+- **Rattaché :** après l'accord sur une correction, un bouton « Envoyer la correction sur Bitbucket » envoie **seulement** la branche `michel/fix-…`, sans jamais forcer ni toucher une autre branche. La page ouvre ensuite le lien pour demander la fusion sur le site, en un clic pour la personne. Chaque envoi demande son propre clic. Pour un service non reconnu, la page donne le nom de la branche.
+- **Pas de jeton en première version :** Michel utilise les accès Git déjà en place sur l'ordinateur et n'en enregistre aucun. Si l'envoi échoue, la page dit quoi faire, sans répéter la sortie brute. Créer la demande de fusion par l'API viendra plus tard.
+- **Après la fusion sur le site :** le dossier local doit recevoir la correction pour que le contrôle la prouve. Un bouton « Mettre à jour mon dossier » fait une mise à jour sans fusion (`--ff-only`), seulement sur la branche principale et un dossier sans modification en cours ; sinon la page explique pourquoi et ne touche à rien.
+- **Michel ne fusionne toujours jamais.** Ces deux boutons sont les seules écritures vers le dépôt distant et le dossier du projet. Ils lèvent, pour un projet rattaché et sur clic, la règle du plan 5 « Michel ne pousse pas et ne lance rien dans ton dossier » : `docs/fix*.md` et l'inventaire `docs/security/network-egress*.md` le disent. Chaque action est inscrite au journal d'audit.
