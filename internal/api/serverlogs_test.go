@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -909,37 +911,81 @@ func TestLogRoutesNeedToken(t *testing.T) {
 	}
 }
 
-// No log data reaches an AI agent (spec § 3): the packages that talk to an
-// agent or expose tools to one do not import the log packages.
+// No log data reaches an AI agent (spec § 3): the packages that talk to an agent
+// or expose tools to one do not depend on the log packages, directly or through
+// another package. In the command line package, which also runs the log reads,
+// the check is by file: what its agent side files import.
 func TestNoLogDataReachesAnAgent(t *testing.T) {
-	root := filepath.Join("..")
-	var checked int
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	const module = "github.com/kvarot/michel"
+	// cli/fix.go tells by a notification that a fix waits. The notify package also
+	// formats the log alerts, so it depends on the log packages, but nothing flows
+	// from them to the agent: internal/fix does not import notify (checked below),
+	// and these are the only functions of notify that file may call.
+	notifyAllowed := map[string]bool{"Build": true, "SendFixWaiting": true}
+	roots := map[string]string{} // package to check -> the file that needs it
+	err := filepath.WalkDir(filepath.Join(".."), func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
 			return err
 		}
 		rel := filepath.ToSlash(p)
-		agentSide := strings.Contains(rel, "/mcp/") || strings.Contains(rel, "/fix/") || strings.Contains(rel, "/agent") || strings.Contains(rel, "/cli/mcp.go") ||
-			strings.Contains(rel, "/cli/fix.go")
-		if !agentSide {
+		cliFile := strings.HasSuffix(rel, "/cli/mcp.go") || strings.HasSuffix(rel, "/cli/fix.go")
+		if !cliFile && !strings.Contains(rel, "/mcp/") && !strings.Contains(rel, "/fix/") && !strings.Contains(rel, "/agent") {
 			return nil
 		}
-		f, err := parser.ParseFile(token.NewFileSet(), p, nil, parser.ImportsOnly)
+		if !cliFile {
+			roots[module+"/internal/"+strings.TrimPrefix(path.Dir(rel), "../")] = rel
+			return nil
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), p, nil, 0)
 		if err != nil {
 			return err
 		}
-		checked++
 		for _, imp := range f.Imports {
-			if path := strings.Trim(imp.Path.Value, `"`); strings.HasSuffix(path, "/internal/serverlog") {
-				t.Errorf("%s imports the server log package", rel)
+			pkg := strings.Trim(imp.Path.Value, `"`)
+			if !strings.HasPrefix(pkg, module+"/") {
+				continue
 			}
+			if pkg == module+"/internal/notify" && strings.HasSuffix(rel, "/cli/fix.go") {
+				ast.Inspect(f, func(n ast.Node) bool {
+					if s, ok := n.(*ast.SelectorExpr); ok {
+						if x, ok := s.X.(*ast.Ident); ok && x.Name == "notify" && !notifyAllowed[s.Sel.Name] {
+							t.Errorf("%s calls notify.%s: check that no log data comes with it", rel, s.Sel.Name)
+						}
+					}
+					return true
+				})
+				continue
+			}
+			roots[pkg] = rel
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checked == 0 {
-		t.Fatal("no agent side file found: the check is broken")
+	for _, must := range []string{"internal/mcp", "internal/fix", "internal/agent"} {
+		if roots[module+"/"+must] == "" {
+			t.Fatalf("%s is not among the agent side packages: the check is broken", must)
+		}
+	}
+	args := []string{"list", "-f", `{{.ImportPath}} {{join .Deps " "}}`}
+	for pkg := range roots {
+		args = append(args, pkg)
+	}
+	out, err := exec.Command("go", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list: %v\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != len(roots) {
+		t.Fatalf("go list answered for %d packages out of %d:\n%s", len(lines), len(roots), out)
+	}
+	for _, line := range lines {
+		deps := strings.Fields(line)
+		for _, dep := range deps {
+			if strings.HasSuffix(dep, "/internal/serverlog") || strings.HasSuffix(dep, "/internal/digest") {
+				t.Errorf("%s (for %s) reaches %s", deps[0], roots[deps[0]], dep)
+			}
+		}
 	}
 }
