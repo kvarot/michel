@@ -36,6 +36,9 @@ type ServerAttemptView struct {
 	BackupList     []string   `json:"backup_list"`
 	// ForProduction names the production server a preprod fix is tried for.
 	ForProduction *TargetRef `json:"for_production,omitempty"`
+	// ProdFindingID is the production flaw it is tried for: its card finds the
+	// attempt by this id.
+	ProdFindingID string `json:"prod_finding_id,omitempty"`
 	// Scripts are the two scripts the user validates, exactly as they run
 	// (the full view only): to read, and to copy when the user runs them.
 	Scripts *ScriptsView `json:"scripts,omitempty"`
@@ -96,6 +99,7 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 			ref.Name = srvText("", pt.Name)
 		}
 		sv.ForProduction = ref
+		sv.ProdFindingID = w.ProdFindingID
 	}
 	if at, _, ok, err := fix.NewRepo(s.deps.Store).SnapshotAck(ctx, a.ID); err != nil {
 		return err
@@ -229,10 +233,33 @@ func (s *server) runServerFix(w http.ResponseWriter, r *http.Request, lang i18n.
 			s.answerStarted(w, r, a)
 			return
 		}
+		if errors.Is(err, fix.ErrBusy) {
+			s.serverBusyRefused(ctx, w, r, lang, d, findingID, err)
+			return
+		}
 		s.fixRefused(w, r, lang, err, nil)
 		return
 	}
 	s.answerStarted(w, r, a)
+}
+
+// serverBusyRefused says where the fix waits or runs. A server with a preprod
+// starts there first, so only its preprod can be the busy one.
+func (s *server) serverBusyRefused(ctx context.Context, w http.ResponseWriter, r *http.Request, lang i18n.Lang, d fix.Deps, findingID string, busy error) {
+	t, err := fix.ServerOfFinding(ctx, d, findingID)
+	if err != nil {
+		s.fixRefused(w, r, lang, busy, nil)
+		return
+	}
+	key, text := "fix.server.busy", i18n.T(lang, "fix.server.busy")
+	if t.PreprodID != "" {
+		name := t.PreprodID
+		if pt, err := s.targets().Get(ctx, t.PreprodID); err == nil {
+			name = srvText("", pt.Name)
+		}
+		key, text = "fix.server.busy_preprod", i18n.T(lang, "fix.server.busy_preprod", name)
+	}
+	writeJSON(w, http.StatusConflict, FixErrorBody{Error: text, Code: key})
 }
 
 // ---- the server's AI consent -----------------------------------------------------

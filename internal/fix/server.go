@@ -319,7 +319,11 @@ func StartServer(ctx context.Context, d Deps, findingID string) (Attempt, error)
 		return Attempt{}, ErrFindingGone
 	}
 	if t.PreprodID == "" {
-		return d.proposeServer(ctx, t, f, ServerWork{TargetID: t.ID})
+		w, err := d.workOn(ctx, t, f)
+		if err != nil {
+			return Attempt{}, err
+		}
+		return d.proposeServer(ctx, t, f, w)
 	}
 	pt, err := d.Targets.Get(ctx, t.PreprodID)
 	if err != nil {
@@ -336,6 +340,45 @@ func StartServer(ctx context.Context, d Deps, findingID string) (Attempt, error)
 		return Attempt{}, ErrPreprodMissing
 	}
 	return d.proposeServer(ctx, pt, pf, ServerWork{TargetID: pt.ID, ProdTargetID: t.ID, ProdFindingID: f.ID})
+}
+
+// workOn is the work of a new fix asked on server t itself. Started again from
+// a preprod's attempt, it keeps the production that attempt was tried for, so
+// the production's fix is still built once this one is proven; the production
+// must still name t as its preprod.
+func (d Deps) workOn(ctx context.Context, t target.Target, f scan.Finding) (ServerWork, error) {
+	w := ServerWork{TargetID: t.ID}
+	list, err := d.repo().ListAttempts(ctx, t.ID, "")
+	if err != nil {
+		return w, err
+	}
+	for _, a := range list {
+		if a.FindingID != f.ID || a.Work.Server == nil {
+			continue
+		}
+		last := a.Work.Server
+		if last.ProdTargetID == "" {
+			return w, nil
+		}
+		prod, err := d.Targets.Get(ctx, last.ProdTargetID)
+		if errors.Is(err, target.ErrNotFound) {
+			return w, nil
+		}
+		if err != nil {
+			return w, err
+		}
+		if prod.PreprodID == t.ID {
+			w.ProdTargetID, w.ProdFindingID = last.ProdTargetID, last.ProdFindingID
+		}
+		return w, nil
+	}
+	return w, nil
+}
+
+// ServerOfFinding is the server a finding belongs to.
+func ServerOfFinding(ctx context.Context, d Deps, findingID string) (target.Target, error) {
+	_, t, err := d.serverFinding(ctx, findingID)
+	return t, err
 }
 
 // sameOn finds on server t the open finding that is f's (same advisory or

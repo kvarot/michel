@@ -97,6 +97,7 @@ type TargetFindingView struct {
 	Fixed      []string `json:"fixed_versions"`
 	SAPI       string   `json:"sapi,omitempty"`
 	Location   string   `json:"location,omitempty"`
+	Ecosystem  string   `json:"ecosystem"`
 	Severity   string   `json:"severity"`
 	Title      string   `json:"title"`
 	Explain    string   `json:"explain,omitempty"`
@@ -584,7 +585,7 @@ var ruleKeys = sync.OnceValue(func() map[string]string {
 
 func targetFindingView(lang i18n.Lang, user string, f scan.Finding) TargetFindingView {
 	sev, _ := scan.EffectiveSeverity(f)
-	v := TargetFindingView{ID: f.ID, Kind: f.Kind, Rule: srvText(user, f.OSVID), Package: srvText(user, f.Package),
+	v := TargetFindingView{ID: f.ID, Kind: f.Kind, Ecosystem: f.Ecosystem, Rule: srvText(user, f.OSVID), Package: srvText(user, f.Package),
 		Installed: srvText(user, f.InstalledVersion), Fixed: srvTexts(user, f.FixedVersions), SAPI: srvText(user, f.SAPI),
 		Location: srvText(user, f.Location), Severity: severityOf(sev), Title: srvText(user, f.Summary), Status: f.Status,
 		Mitigation: f.Mitigation, KEV: f.KEV, FirstSeen: f.FirstSeenAt, LastSeen: f.LastSeenAt}
