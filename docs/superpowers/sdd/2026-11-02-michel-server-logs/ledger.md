@@ -75,3 +75,5 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Scope change 2026-11-02 evening: Kévin, asked whether to start Task 3 before the plan 6 real run, answered "et continuer le plan", after "agit en autonomie". Tasks 3-10 run here, no push. Plan 6 real run and Task 10 Step 3 remain to do on the PC with Docker; branch not finished before that (R5).
 - Ruling R12: "et continuer le plan" read as lifting the stop before Task 3 — it answered the question put to him, and work stays local — costs rework if the real run changes the server code or if he meant the home session only.
 - Task 3: dispatched, BASE f0e8e5d.
+- Task 3: stopped by Kévin before finishing, on a work PC. Work not reviewed.
+- Task 3: unfinished work kept on branch wip/plan7-task3 (compiles, go vet clean, tests not run, no report, no review). Task 3 still to finish from it or restart from feat/server-logs.
