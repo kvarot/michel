@@ -143,6 +143,9 @@ func TestParseListenersRefusesForged(t *testing.T) {
 		"queue word":    "LISTEN a 128 0.0.0.0:22 0.0.0.0:*",
 		"send word":     "LISTEN 0 b 0.0.0.0:22 0.0.0.0:*",
 		"peer set":      "LISTEN 0 128 0.0.0.0:22 198.51.100.1:5555",
+		"peer shell":    "LISTEN 0 128 0.0.0.0:22 $(id):*",
+		"peer name":     "LISTEN 0 128 0.0.0.0:22 evil.example.test:*",
+		"peer empty":    "LISTEN 0 128 0.0.0.0:22 :*",
 		"long line":     "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*" + strings.Repeat(" ", 600),
 		"second header": strings.TrimSpace(ssHeader),
 		"banner":        "Welcome to srv-demo!",
@@ -408,13 +411,11 @@ func TestSsConnectionLostStops(t *testing.T) {
 	}
 }
 
-// A list that holds nothing is an answer, and differs from a failed read.
-func TestNothingListeningIsRead(t *testing.T) {
+// A header alone is not a read: Michel got in through sshd, so a server with
+// nothing listening is not credible. ss may have looked elsewhere.
+func TestHeaderAloneIsNotRead(t *testing.T) {
 	e := ssEnv(t, func(h *host) { h.ss = ssHeader })
-	inv := run(t, e, demoLinks)
-	if !inv.ListenersRead || len(inv.Listeners) != 0 || hasUnseen(inv, "listeners", collect.ReasonListeners) {
-		t.Fatalf("read %v, %+v, unseen %+v", inv.ListenersRead, inv.Listeners, inv.Unseen)
-	}
+	assertUnseen(t, "header alone", run(t, e, demoLinks))
 	// A warning next to good lines (ss falling back to /proc) changes nothing.
 	e = ssServed(t, func(_ *host, cmds map[string]sshtest.Handler) {
 		cmds["ss"] = func(e sshtest.Exec) int {

@@ -213,6 +213,16 @@ func (h *host) commands() map[string]sshtest.Handler {
 		return 1
 	}
 	out["uname"] = func(e sshtest.Exec) int { io.WriteString(e.Stdout, "6.1.0-28-amd64\n"); return 0 }
+	// ss -tln: 22 and 80 are open, 9000 and 5432 stay on the server.
+	out["ss"] = func(e sshtest.Exec) int {
+		io.WriteString(e.Stdout, "State  Recv-Q Send-Q Local Address:Port Peer Address:Port\n"+
+			"LISTEN 0      128          0.0.0.0:22        0.0.0.0:*\n"+
+			"LISTEN 0      511          0.0.0.0:80        0.0.0.0:*\n"+
+			"LISTEN 0      128        127.0.0.1:9000      0.0.0.0:*\n"+
+			"LISTEN 0      244        127.0.0.1:5432      0.0.0.0:*\n"+
+			"LISTEN 0      128             [::]:22           [::]:*\n")
+		return 0
+	}
 	out["command"] = func(e sshtest.Exec) int {
 		code := 0
 		for _, a := range e.Args[2:] {

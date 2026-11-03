@@ -73,6 +73,9 @@ func ParseListeners(out string) (ls []target.Listener, rejected int, sawHeader b
 	return ls, rejected, sawHeader
 }
 
+// wildcardPeer holds the only peer columns ss prints for a listening socket.
+var wildcardPeer = map[string]bool{"*:*": true, "0.0.0.0:*": true, "[::]:*": true, ":::*": true}
+
 // parseListenerLine reads one line: LISTEN, the two queues, the local address
 // and a peer that is a wildcard, nothing else. No process name can pass.
 func parseListenerLine(line string) (target.Listener, bool) {
@@ -86,7 +89,7 @@ func parseListenerLine(line string) (target.Listener, bool) {
 	}
 	f := strings.Fields(line)
 	if !strings.HasPrefix(line, "LISTEN ") || len(f) != 5 || !queueRe.MatchString(f[1]) || !queueRe.MatchString(f[2]) ||
-		!strings.HasSuffix(f[4], ":*") {
+		!wildcardPeer[f[4]] {
 		return target.Listener{}, false
 	}
 	addr, port, ok := parseListenAddress(f[3])
@@ -131,7 +134,7 @@ func parseListenAddress(s string) (string, int, bool) {
 // listeners reads what listens over TCP (ss, R7). /usr/sbin/ss is the same
 // program, placed elsewhere: it is asked only when the first answer is 127,
 // command not found. Everything but a complete answer is an Unseen line, with
-// no list and no other means: "nothing listens" is said only when ss said so.
+// no list and no other means. An empty list counts as not seen too.
 func (c *collector) listeners() {
 	res, _, broken := c.probe(cmdSS)
 	if !broken && res.Exit == 127 {
@@ -142,11 +145,10 @@ func (c *collector) listeners() {
 	}
 	if !broken && res.Exit == 0 && !res.Truncated {
 		ls, rejected, sawHeader := ParseListeners(string(res.Stdout))
-		// ss prints its header, then exits 0 even when it could open neither
-		// netlink nor /proc/net/tcp. Its error is then all that tells it apart
-		// from a server where nothing listens.
-		blind := len(ls) == 0 && len(res.Stderr) > 0
-		if sawHeader && rejected == 0 && !blind {
+		// An empty list is never a read: Michel has just come in through sshd,
+		// so no listener at all means ss looked elsewhere or could not look,
+		// and it can do so with a header, exit 0 and no error.
+		if sawHeader && rejected == 0 && len(ls) > 0 {
 			c.inv.Listeners, c.inv.ListenersRead = ls, true
 			return
 		}
