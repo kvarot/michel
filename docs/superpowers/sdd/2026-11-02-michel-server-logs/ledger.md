@@ -131,4 +131,11 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Ruling R23: volume and cap "once an hour" and not-reading counts stay in memory, a restart can repeat one message or restart a count — persisting needs a schema change for a rare case — costs one extra message after a restart.
 - Task 5: minor (deferred): a manual server has no gap, an old hour read by hand can alert as a spike; a cause change restarts the failure count at 1; `AlertItem.SourceID` is an id, Task 6 turns it into a label.
 - Task 5: complete (commits e36bc48..bf3db04, review clean)
-- Task 6: dispatched, BASE to fill after ledger commit.
+- Task 6: dispatched, BASE 222a384.
+- Task 6: implementer DONE_WITH_CONCERNS, commit 9c33927. RED was a compile failure only, implementation written first. SourceID left out of messages; at most 5 errors listed then "and N more"; SMS needs the per-server `Settings.SMS` and the channel's urgent flag, under the daily cap; Task 8 only has to expose `Settings.SMS`.
+- Ruling R24: errors stay marked as told even when no channel delivered the alert, no retry — the digest carries them anyway and a retry needs unmarked state re-read each pass — costs a critical on prod seen only in the digest if every channel is down at that moment; to show to Kévin.
+- Task 6: French reader review done, wording applied, commit 4863ab6. Digest word kept as in the catalogue; host key text says confirm the fingerprint, the page has no accept action; "the rest waits" was false, now "was not read".
+- Task 6: reviewer: spec compliant, no Critical or Important, no explicit verdict line. Cannot-verify item checked by the controller: cleaned text passes `validText` upstream.
+- Task 6: minor (deferred to Task 8): a ticked log SMS shares the daily counter with flaws, say so where the box is ticked (spec § 8.3).
+- Task 6: minor (deferred): text cap test does not pin the exact length; per-channel audit uses `ctx`, a stop during send can lose lines; plural of not_reading follows the count of names.
+- Task 6: complete (commits 222a384..4863ab6, review clean)
