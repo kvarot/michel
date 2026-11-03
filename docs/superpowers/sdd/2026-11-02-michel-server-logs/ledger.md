@@ -179,3 +179,11 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 8: complete (commits 66f4be6..ca97290, review clean)
 - Kévin 2026-11-03: wants a clean, professional interface for Michel, guided step by step for someone who knows nothing of computing, possibly an advanced mode, every field and action understandable. Separate design under discussion, session card could not be shown (message came from a remote client).
 - Ruling R33: Task 9 goes ahead in the current visual style, every field and action explained in plain words, the redesign restyles it later — plan 7 should not wait on an open design — costs a restyle of one block.
+- Task 9: dispatched, BASE d625b9a.
+- Task 9: implementer DONE_WITH_CONCERNS, commit 999418f. Browser check in light and dark on demo data; not checked: Copier click, purge and remove dialogs, hds wording, EN, mobile, successful Essayer with records. No "read now" in the API while the manual sentence says "quand tu le demandes". 137 new `logs.*` keys.
+- Task 9: French reader review done, sent to the implementer with the remaining browser checks. Reviewer's "noms" corrected: the filter does not remove names.
+- Task 9: wording and remaining browser checks done, commit a2e505e. Fixed: Copier fallback, overflow at 375 px. Not checked after this commit: dark theme, actual clipboard content.
+- Task 9: reviewer approved, no Critical or Important. Resolve delay, read cap, spike threshold, max alerts stay API only, § 10 does not list them for the page.
+- Task 9: minor (deferred to Task 10): manual interval promises "when you ask" with no button on the page, only `michel target logs read`; say so in the docs.
+- Task 9: minor (deferred): candKey in ids breaks aria-describedby on a path with a space; `now` set only at load, "il y a X min" goes stale on an open sheet; `load()` has no sequencing; `refreshView` swallows its error; interval warning recomputed locally, API's `interval_note` unused; `c.strong` computed and unread; no component test of the 409 flow; dark theme not rechecked after the last commit. Redesign to pick these up.
+- Task 9: complete (commits d625b9a..a2e505e, review clean)
