@@ -57,7 +57,7 @@ func parseTime(s string) (time.Time, error) {
 
 // busyStates are the states of an attempt that is still being worked on or
 // waits for the user: the project has no other attempt meanwhile.
-const busyStates = `('preparing','proposed','approved','running')`
+const busyStates = `('preparing','held','proposed','approved','running')`
 
 // serverBusyStates are busyStates for a server, plus applied (the steps
 // after the script: site check, undo, recollection) and unknown (what the

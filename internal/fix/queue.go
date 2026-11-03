@@ -100,7 +100,7 @@ func (d Deps) alreadyTried(ctx context.Context, f scan.Finding) (bool, error) {
 	}
 	for _, a := range attempts {
 		switch a.State {
-		case StatePreparing, StateProposed, StateApproved, StateApplied:
+		case StatePreparing, StateHeld, StateProposed, StateApproved, StateApplied:
 			return true, nil
 		case StateRefused:
 			if a.Work.Plan.Target == target {

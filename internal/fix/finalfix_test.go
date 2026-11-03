@@ -320,7 +320,7 @@ func TestSecretHitsNameTheFolder(t *testing.T) {
 		t.Errorf("message = %q", text)
 	}
 	text = secretHitsMessage(i18n.FR, []mask.Hit{{File: "app.php", Line: 1}})
-	if strings.Contains(text, "exclus") || !strings.Contains(text, "sors-le du code") {
+	if strings.Contains(text, "exclus") || !strings.Contains(text, "sors-la du code") || !strings.Contains(text, "n'a pas démarré") {
 		t.Errorf("a root file has no folder to exclude: %q", text)
 	}
 	if secretHitsMessage(i18n.EN, nil) != "" {

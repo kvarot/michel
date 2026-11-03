@@ -48,7 +48,7 @@ Otherwise the proposal waits for you. "Apply" means "create the branch", never m
 
 Claude Code sends what it reads to Anthropic: it is an external AI provider in the sense of the [sovereignty policy](security/sovereignty-policy.md). So the first **Fix** on a project shows a consent screen, one per project. It says:
 
-- what leaves: the files of the copy the agent reads, the flaw's sheet (secrets masked) and your messages; a key saved in these files goes with them; the excluded files do not leave;
+- what leaves: the files of the copy the agent reads, the flaw's sheet (secrets masked) and your messages; when Michel recognises a possible key in these files, the agent does not start until you answer (see "The work copy"); a key Michel does not recognise, or one you choose to leave, goes with them; the excluded files do not leave;
 - what runs: "Michel runs composer/npm and your tests on a copy, with your Windows rights; the code written by the agent runs." (see "Residual risks");
 - that the project is classified sensitive, when it is (the default): secrets are masked in the flaw's sheet and in what Michel shows, not in the files the agent reads, and the excluded files are not copied;
 - each host that has no allow rule yet:
@@ -79,7 +79,12 @@ The agent never works in your folder. For each attempt Michel makes, in its data
 
 The copy holds only the files of your last commit. So left out are: whatever git ignores or does not track, `.env*`, `*.pem`, `*.key`, `id_*` files (in every folder, ignoring case), the folders you excluded (`michel project set <name> --exclude <folder>`), symbolic links and special files. A copy is capped at 30,000 files, 256 MiB per file and 4 GiB in all; a larger project is refused (see "Troubleshooting"). During the preparation Michel writes nothing in your project (checked by a test).
 
-Before the agent starts, Michel runs its secret detectors on the files of the copy. Michel does not hold the agent for what they find: the agent starts and can read those files. A secret written in your code is reported in the conversation as it starts ("2 secrets seem written in your code (…): the agent can read them") with the relative files, so that you can keep them out: take the secret out of the code (into an environment variable or a `.env` file, which is never copied), or exclude the folder or folders that hold it (the message names them; `--exclude` takes folder names, not files).
+Before anything leaves your computer, Michel runs its secret detectors on the files of the copy. When they find a possible key, the attempt stops in the state `held`, at every level and for every start, automatic ones included: no agent, no update, nothing leaves. The page, `michel fix prepare` and `michel fix status` say how many possible keys, in which files and on which lines, never the value. You then choose:
+
+- **I will remove them first** (`michel fix withdraw <attempt>`): the attempt ends in the state `withdrawn`, its copy is removed and no agent starts. Take the key out of the code (into an environment variable or a `.env` file, which is never copied), commit, and start the fix again: the copy holds your last commit, so a key removed without a commit is still there. Excluding the folder that holds it works too (Michel's message names it; `--exclude` takes folder names, not files). A new start without any key found starts directly.
+- **Continue anyway** (`michel fix continue <attempt>`): the agent starts, can read those files, and what it reads reaches Anthropic.
+
+The yes holds for that attempt only and is never stored: the next attempt searches and asks again. The audit log keeps counts only (`fix.hold`, `fix.hold.continue`, `fix.hold.withdraw`). The yes is refused, and the attempt ends `failed`, if the copy changed, if the search finds other hits, if your project has a new commit or another excluded folder, or if the flaw has left: start the fix again, Michel searches again. Only a person answers: no level 3 rule, worker or `michel mcp` session can. While an attempt waits, the project takes no other fix, and its line stays in To do, ranked "Yours".
 
 ## What the agent can and cannot do
 
@@ -138,7 +143,7 @@ The page then says: "The branch michel/fix-… is ready. Merge it, then deploy w
 - If that tool did not look during this scan (off, not set to run during the scan, failed; for a dependency, a folder with no dependency file), Michel concludes nothing: the attempt stays `applied` until a scan where it looks. Running the tool alone (`michel source run`, or an imported report) concludes nothing either.
 - Michel does not rerun the tests after the merge, because it never runs anything in your folder: the tests ran on the copy, before the merge. A local scan sees the merge, not the deployment: Michel says "fixed in your code" and reminds you to deploy; it does not claim the server is up to date.
 
-The states you will see on the page: `preparing` → `proposed` → `approved` or `refused` → `applied` → `proven_fixed` or `inconclusive`; `failed` from `preparing`, `proposed` or `approved` (with its cause: the agent stopped, Michel refused the change or could not create the branch); `superseded` when a newer proposal replaces one.
+The states you will see on the page: `held` (possible keys in the code: Michel waits for your answer) → `withdrawn` or `preparing`; `preparing` → `proposed` → `approved` or `refused` → `applied` → `proven_fixed` or `inconclusive`; `failed` from `preparing`, `proposed` or `approved` (with its cause: the agent stopped, Michel refused the change or could not create the branch); `superseded` when a newer proposal replaces one.
 
 ## Masking, and its limit
 
@@ -147,7 +152,7 @@ Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks
 - The page and the API never unmask: a secret shows as a token there.
 - Michel **never** unmasks into a commit: a change that holds a token is refused (the agent may have copied it from the brief). At the proposal, the agent is told and can propose again; should one reach the branch step, Michel creates no branch and the attempt is `failed` with that cause (it is Michel's refusal, not yours). If a fix really needs a secret value in code, you add it by hand.
 - The diff shown on the page is masked, but the branch holds the change as written: a password-like line of your own code is not a reason to refuse the change.
-- **The limit**: the files of the copy are **not** masked. The copy holds your real code, and Claude Code reads it, so it goes to Anthropic. What protects your secrets is that the excluded files are not copied; a secret written in a committed file is read by the agent. That is why Michel reports those in the conversation; the report comes once the agent has started, so take a secret out of the code before you start a fix. Secret detection is never perfect: some forms (XML `<password>`, YAML block values, a password with an unencoded `@` in a URL…) can slip through.
+- **The limit**: the files of the copy are **not** masked. The copy holds your real code, and Claude Code reads it, so it goes to Anthropic. What protects your secrets is that the excluded files are not copied, and that the agent waits for your answer when Michel recognises a key in the others; a secret written in a committed file is read by the agent if Michel does not recognise it or if you choose to go on. Secret detection is never perfect: some forms (XML `<password>`, YAML block values, a password with an unencoded `@` in a URL…) can slip through.
 
 ## Server fixes (plan 6)
 

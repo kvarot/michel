@@ -9,8 +9,10 @@ import (
 
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/mask"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/store"
+	"github.com/kvarot/michel/internal/workcopy"
 )
 
 // withStore opens the store of the data folder dir for f, then closes it
@@ -99,6 +101,65 @@ func TestFixApproveRefusesChangedProposal(t *testing.T) {
 	if _, _, _, err := run(t, dir, "fix", "status", "zz"); err == nil {
 		t.Error("status of an unknown attempt succeeded")
 	}
+}
+
+func TestFixHeldAttemptIsAnsweredByItsCommands(t *testing.T) {
+	dir, list := scannedDemo(t, false)
+	ctx := context.Background()
+	key := "AKIA" + "ABCDEFGHIJKLMNOP"
+	var id string
+	withStore(t, dir, func(st *store.Store) {
+		p, err := project.NewRepo(st).Get(ctx, "demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := fix.NewRepo(st)
+		a, err := repo.CreateAttempt(ctx, fix.Attempt{FindingID: list[0].ID, ProjectID: p.ID, Origin: fix.OriginAgent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id = a.ID
+		w := fix.Work{HoldSum: "sum", Copy: workcopy.Copy{SecretHits: []mask.Hit{{File: "src/config.php", Line: 2, Kind: mask.KindAWSKey}}}}
+		if err := repo.SetWork(ctx, id, w); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SetState(ctx, id, []fix.State{fix.StatePreparing}, fix.StateHeld, ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Nothing shown yet: continue asks for status first.
+	if _, _, _, err := run(t, dir, "fix", "continue", id); err == nil || !strings.Contains(err.Error(), "michel fix status") {
+		t.Fatalf("continue before status: %v", err)
+	}
+	_, out, _, err := run(t, dir, "fix", "status", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"src/config.php", "michel fix continue " + id, "michel fix withdraw " + id} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, key) {
+		t.Errorf("status shows the value:\n%s", out)
+	}
+	// The project has no consent: the yes is refused and the attempt waits.
+	if _, _, _, err := run(t, dir, "fix", "continue", id); err == nil {
+		t.Error("continue without consent succeeded")
+	}
+	withStore(t, dir, func(st *store.Store) {
+		if a, err := fix.NewRepo(st).GetAttempt(ctx, id); err != nil || a.State != fix.StateHeld {
+			t.Errorf("attempt = %+v %v", a, err)
+		}
+	})
+	if _, out, _, err = run(t, dir, "fix", "withdraw", id); err != nil || !strings.Contains(out, id) {
+		t.Errorf("withdraw: %v\n%s", err, out)
+	}
+	withStore(t, dir, func(st *store.Store) {
+		if a, err := fix.NewRepo(st).GetAttempt(ctx, id); err != nil || a.State != fix.StateWithdrawn {
+			t.Errorf("attempt = %+v %v", a, err)
+		}
+	})
 }
 
 func TestFixConsentYes(t *testing.T) {

@@ -44,6 +44,11 @@ var (
 	// (outside the copy, excluded file, binary text, too large): the
 	// attempt failed.
 	ErrChangeRefused = errors.New("Michel refused the change")
+	// ErrHoldStale: the answer to a held attempt is not about what the agent
+	// would read now. No agent started.
+	ErrHoldStale = errors.New("the code changed since Michel searched it for keys")
+	// ErrHoldPerson: only a person answers a held attempt.
+	ErrHoldPerson = errors.New("only a person can answer a held fix attempt")
 )
 
 // AgentUnavailableError says why Claude Code cannot be used. It matches
@@ -86,6 +91,10 @@ func ErrorKey(err error) string {
 		return "fix.err.agent_gone"
 	case errors.Is(err, ErrChangeRefused):
 		return "fix.err.change_refused"
+	case errors.Is(err, ErrHoldStale):
+		return "fix.err.hold_stale"
+	case errors.Is(err, ErrHoldPerson):
+		return "fix.err.hold_person"
 	case errors.Is(err, ErrBadTransition):
 		return "fix.err.bad_state"
 	case errors.Is(err, ErrNotFound):
@@ -134,6 +143,10 @@ func Explain(lang i18n.Lang, err error) string {
 		text = i18n.T(lang, "fix.err.agent_gone")
 	case "fix.err.change_refused":
 		text = i18n.T(lang, "fix.err.change_refused")
+	case "fix.err.hold_stale":
+		text = i18n.T(lang, "fix.err.hold_stale")
+	case "fix.err.hold_person":
+		text = i18n.T(lang, "fix.err.hold_person")
 	case "fix.err.bad_state":
 		text = i18n.T(lang, "fix.err.bad_state")
 	case "fix.err.not_found":

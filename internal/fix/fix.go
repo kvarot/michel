@@ -31,6 +31,12 @@ const (
 	// StateUnknown: a server fix's script ran past its bound or its
 	// connection dropped: Michel cannot tell what it changed.
 	StateUnknown State = "unknown"
+	// StateHeld: the search found a possible key in the copy. No agent runs and
+	// nothing has left the computer until a person answers (ContinueHeld,
+	// WithdrawHeld). Nothing answers for them.
+	StateHeld State = "held"
+	// StateWithdrawn: the person chose to remove the keys first: no agent ran.
+	StateWithdrawn State = "withdrawn"
 )
 
 // Origin says who started an attempt.
@@ -102,6 +108,9 @@ type Work struct {
 	// the agent touched anything: a proposal applied without a click must
 	// commit that very tree (controller ruling 36).
 	Tree0 string `json:"tree0"`
+	// HoldSum is the content of the copy when the attempt was held
+	// (workcopy.Reread): a yes needs that very content.
+	HoldSum string `json:"hold_sum,omitempty"`
 	// Server is set for a fix of a server finding (the attempt's ProjectID
 	// is then the server's id).
 	Server *ServerWork `json:"server,omitempty"`
