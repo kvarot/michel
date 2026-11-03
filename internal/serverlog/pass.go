@@ -121,7 +121,9 @@ func (d Deps) now() time.Time {
 // Reason is the key of the failure, when the pass failed.
 type PassResult struct {
 	Records, Rejected, Alerts int
-	Reason                    string
+	// Unseen counts the files that could not be opened (the page says which and why).
+	Unseen int
+	Reason string
 }
 
 // Errors of a pass.
@@ -332,8 +334,12 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 	if err := p.notes(ctx, src, out, cursors, lastRead); err != nil {
 		return err
 	}
+	if err := p.d.Repo.SetUnseen(ctx, src.ID, out.UnseenCause, p.now); err != nil {
+		return err
+	}
 	res.Records += len(out.Records)
 	res.Rejected += out.Rejected
+	res.Unseen += len(out.Unseen)
 	p.audit(ctx, "ok", map[string]any{
 		"source": src.ID, "from": ts(lastRead), "to": ts(p.now),
 		"volume": bytesRead(out, cursors), "skipped": skippedBytes(out), "records": len(out.Records),

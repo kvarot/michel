@@ -21,6 +21,7 @@ import (
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/servererr"
+	"github.com/kvarot/michel/internal/serverlog"
 	"github.com/kvarot/michel/internal/serverrules"
 	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/sshx"
@@ -1121,6 +1122,13 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
+	// Nor does a read of its logs, which would write rows back.
+	logUnlock, logFree := serverlog.TryLock(t.ID)
+	if !logFree {
+		s.failedBody(w, http.StatusConflict, lang, "api.target.busy", "api.target.busy_hint")
+		return
+	}
+	defer logUnlock()
 	block, err := fix.NewRepo(s.deps.Store).TargetBlock(ctx, t.ID)
 	if err != nil {
 		s.internal(w, r)
@@ -1153,6 +1161,8 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		s.targetRefused(w, r, lang, err, false)
 		return
 	}
+	// What Michel read in its logs goes with it: errors, text, sources, settings.
+	logsKept := serverlog.ForgetTargetAudited(ctx, s.serverLogs(), s.deps.Audit, targetActor, t.ID) != nil
 	// The opt-in goes with the server, except for what another still uses.
 	released := target.ReleasedRules(t, others)
 	removed, rulesFailed := 0, false
@@ -1165,9 +1175,9 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, r)
 		return
 	}
-	if rulesFailed {
-		// The server is gone; its network rules could not be taken back.
-		writeJSON(w, http.StatusOK, map[string]bool{"removed": true, "rules_not_removed": true})
+	if rulesFailed || logsKept {
+		// The server is gone; its network rules or its log data could not be taken back.
+		writeJSON(w, http.StatusOK, map[string]bool{"removed": true, "rules_not_removed": rulesFailed, "logs_not_erased": logsKept})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"removed": true})

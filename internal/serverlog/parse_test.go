@@ -25,7 +25,7 @@ func TestParseAcceptsTheSchema(t *testing.T) {
 		"R\tcritical\tApp\\\\Foo\tsrc/Foo.php:7\tlocal\t2026-11-02T10\t3",
 		"R\tcritical\tApp\\Foo\tsrc/Foo.php:7\tlocal\t2026-11-02T11+01:00\t4",
 		"R\terror\t\t\t\t\t2",
-		"U\t" + parsePath,
+		"U\t" + parsePath + "\tdenied",
 		"M",
 		"",
 	}, "\n")), src, FilterOptions{}, filterNow)
@@ -254,7 +254,7 @@ func TestParseBoundaries(t *testing.T) {
 	}
 	// A wildcard source takes what matches its last segment, nothing beyond.
 	wild := Source{Path: "/var/log/demo/app-*.log", Format: FormatPHP}
-	out := ParseOutput([]byte("F\t/var/log/demo/app-1.log\t1\t0\t0\t0\t1\nF\t/var/log/demo/sub/app-1.log\t1\t0\t0\t0\t0\nU\t/var/log/demo/app-*.log\nU\t/var/log/demo/other.log\n"), wild, FilterOptions{}, filterNow)
+	out := ParseOutput([]byte("F\t/var/log/demo/app-1.log\t1\t0\t0\t0\t1\nF\t/var/log/demo/sub/app-1.log\t1\t0\t0\t0\t0\nU\t/var/log/demo/app-*.log\tdenied\nU\t/var/log/demo/other.log\tdenied\n"), wild, FilterOptions{}, filterNow)
 	if len(out.Files) != 1 || !out.Files[0].First || len(out.Unseen) != 1 || out.Rejected != 2 {
 		t.Errorf("wildcard: %+v", out)
 	}

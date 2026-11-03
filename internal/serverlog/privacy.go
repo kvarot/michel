@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 	"unicode/utf8"
 
@@ -54,16 +55,18 @@ func Deviations(s Settings) []string {
 	return d
 }
 
-// newDeviations are the deviations of next that cur did not already have:
-// only a new step away from the recommendation asks for a confirmation.
-func newDeviations(cur, next Settings) []string {
+// NewDeviations are the deviations of next that cur did not already have: only
+// a new step away from the recommendation asks for a confirmation. A retention
+// already away from 90 days that moves to another value other than 90 is a new
+// step too (100 to 365 days keeps data longer than the user agreed to).
+func NewDeviations(cur, next Settings) []string {
 	had := map[string]bool{}
 	for _, k := range Deviations(cur) {
 		had[k] = true
 	}
 	var out []string
 	for _, k := range Deviations(next) {
-		if !had[k] {
+		if !had[k] || (k == DeviationRetention && next.RetentionDays != cur.RetentionDays) {
 			out = append(out, k)
 		}
 	}
@@ -113,7 +116,7 @@ func ChangeSettings(ctx context.Context, repo *Repo, log *audit.Logger, t target
 	if err != nil {
 		return err
 	}
-	fresh := newDeviations(cur, next)
+	fresh := NewDeviations(cur, next)
 	if len(fresh) > 0 && !confirmed {
 		return fmt.Errorf("%w (%v)", ErrConfirmationNeeded, fresh)
 	}
@@ -196,12 +199,17 @@ func (r *Repo) rowCounts(ctx context.Context) ([3]int64, error) {
 	return c, nil
 }
 
+// secretMarkerRe is the marker the masker puts in place of a secret. It holds
+// digits, which a raw text never may: the check sees it as a plain word, so that
+// a text that was masked and stored passes it again when it is read back.
+var secretMarkerRe = regexp.MustCompile(`\[secret-[0-9a-f]{8}-[0-9]+\]`)
+
 // cleanedText is the text a server error may carry out of the filter: it must
 // pass validText, then the masker hides what looks like a secret and the
 // result is capped. ok is false for a text that must be dropped. Alerts use it
 // too, so that what is stored and what is sent are the same text.
 func cleanedText(text string) (string, bool) {
-	if !validText(text) {
+	if !validText(secretMarkerRe.ReplaceAllString(text, "[secret]")) {
 		return "", false
 	}
 	masked := mask.New().Mask(text)
@@ -219,4 +227,15 @@ func EraseTargetAudited(ctx context.Context, repo *Repo, log *audit.Logger, acto
 		return err
 	}
 	return auditPurge(ctx, log, actor, targetID, map[string]any{"scope": "all"})
+}
+
+// ForgetTargetAudited removes everything Michel holds about the logs of a server
+// (Repo.ForgetTarget: errors, counts, positions, notes, sources and settings)
+// and audits it. It is what removing a server does; the audit names the scope,
+// never what was erased.
+func ForgetTargetAudited(ctx context.Context, repo *Repo, log *audit.Logger, actor, targetID string) error {
+	if err := repo.ForgetTarget(ctx, targetID); err != nil {
+		return err
+	}
+	return auditPurge(ctx, log, actor, targetID, map[string]any{"scope": "server_removed"})
 }

@@ -154,7 +154,8 @@ func Script(src Source, cursors []Cursor, o FilterOptions) (string, error) {
 	noMatch := ""
 	listCheck := "false"
 	if strings.ContainsAny(src.Path, "*?") {
-		noMatch = "if [ \"$#\" -eq 1 ] && [ \"$1\" = " + shellQuote(src.Path) + " ]; then\n\tnomatch=1\n\tprintf 'U\\t%s\\n' \"$1\"\n\ttell \"$1\"\nfi\n"
+		noMatch = "if [ \"$#\" -eq 1 ] && [ \"$1\" = " + shellQuote(src.Path) + " ]; then\n\tnomatch=1\n\ttdenied=0\n\ttell \"$1\"\n" +
+			"\tif [ \"$tdenied\" = 1 ]; then\n\t\tprintf 'U\\t%s\\tdenied\\n' \"$1\"\n\telse\n\t\tprintf 'U\\t%s\\tabsent\\n' \"$1\"\n\tfi\nfi\n"
 		listCheck = "[ ! -r \"$d\" ]"
 	}
 
@@ -300,7 +301,7 @@ export LC_ALL
 found=$(for tool in awk tail head tr ls wc; do command -v "$tool" || echo '!'; done)
 case "$found" in
 *!*)
-	printf 'U\t%s\n' @DECL@
+	printf 'U\t%s\ttools\n' @DECL@
 	exit 0
 	;;
 esac
@@ -331,20 +332,26 @@ tell() {
 	fi
 	if [ ! -x "$d" ] || @LISTCHECK@; then
 		unknown=1
+		tdenied=1
 	fi
 }
 read_one() {
 	if [ -L "$f" ]; then
-		printf 'U\t%s\n' "$f"
+		printf 'U\t%s\tlink\n' "$f"
 		return
 	fi
 	if [ ! -e "$f" ]; then
-		printf 'U\t%s\n' "$f"
+		tdenied=0
 		tell "$f"
+		if [ "$tdenied" = 1 ]; then
+			printf 'U\t%s\tdenied\n' "$f"
+		else
+			printf 'U\t%s\tabsent\n' "$f"
+		fi
 		return
 	fi
 	if [ ! -f "$f" ]; then
-		printf 'U\t%s\n' "$f"
+		printf 'U\t%s\tnot_file\n' "$f"
 		return
 	fi
 	set -- $(ls -di "$f")
@@ -364,12 +371,12 @@ read_one() {
 				unknown=1
 			fi
 		fi
-		printf 'U\t%s\n' "$f"
+		printf 'U\t%s\tdenied\n' "$f"
 		return
 	fi
 	if ! digits "$id"; then
 		unknown=1
-		printf 'U\t%s\n' "$f"
+		printf 'U\t%s\ttools\n' "$f"
 		return
 	fi
 	if [ @FIRST@ = 1 ]; then
@@ -409,7 +416,7 @@ read_one() {
 		printf '\n'
 	} | awk -v f="$f" -v id="$id" -v base="$((start - lead))" -v lead="$lead" -v skip="$skip" -v rot="$rot" -v win="$((win + lead))" -v full=@CAP@ -v gcap="$gpf" "$prog")
 	if [ "$?" -ne 0 ]; then
-		printf 'U\t%s\n' "$f"
+		printf 'U\t%s\tother\n' "$f"
 	else
 		printf '%s\n' "$res"
 	fi
@@ -465,7 +472,7 @@ nomatch=0
 fi
 if [ "$bad" = 1 ]; then
 	unknown=1
-	printf 'U\t%s\n' @DECL@
+	printf 'U\t%s\tother\n' @DECL@
 fi
 if [ @FIRST@ = 1 ] && [ "$located" = 0 ] && [ "$unknown" = 0 ]; then
 	printf 'N\n'
@@ -585,7 +592,7 @@ function scan(l,   k) {
 }
 END {
 	if (used + length(prev) != win + 0) {
-		printf "U\t%s\n", f
+		printf "U\t%s\tother\n", f
 		exit 0
 	}
 	pos = base + used

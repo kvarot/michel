@@ -236,3 +236,77 @@ func TestTargetLogsReadFailureSaysWhyWithoutThePathOfTheAgent(t *testing.T) {
 		t.Errorf("read without agent: %v", err)
 	}
 }
+
+func TestTargetLogsSayWhyAFileWasNotRead(t *testing.T) {
+	e := newLogEnv(t)
+	missing := filepath.Join(filepath.Dir(e.file), "later.log")
+	e.withRepo(t, func(ctx context.Context, repo *serverlog.Repo, tg target.Target) {
+		if _, err := repo.AddSource(ctx, serverlog.Source{TargetID: tg.ID, Path: logShPath(missing), Format: serverlog.FormatPHP, Active: true}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	_, out, _, err := run(t, e.dir, "target", "logs", "read", "srv-demo")
+	if err != nil || !strings.Contains(out, "1 file could not be read") {
+		t.Fatalf("read: %q %v", out, err)
+	}
+	_, out, _, err = run(t, e.dir, "target", "logs", "list", "srv-demo")
+	if err != nil || !strings.Contains(out, "Not read: "+logShPath(missing)) || !strings.Contains(out, "does not exist") {
+		t.Fatalf("list: %q %v", out, err)
+	}
+	_, out, _, err = run(t, e.dir, "target", "logs", "list", "srv-demo", "--json")
+	var v struct {
+		Sources []struct {
+			LastRead string
+			Unseen   []struct{ File, Cause, Reason string }
+		}
+	}
+	if err != nil || json.Unmarshal([]byte(out), &v) != nil || len(v.Sources) != 1 || len(v.Sources[0].Unseen) != 1 || v.Sources[0].Unseen[0].Cause != "absent" ||
+		!strings.HasPrefix(v.Sources[0].LastRead, "0001-") {
+		t.Fatalf("list --json: %q %v", out, err)
+	}
+}
+
+func TestTargetRemoveErasesWhatWasReadInTheLogs(t *testing.T) {
+	e := newLogEnv(t)
+	src := e.addSource(t)
+	e.withRepo(t, func(ctx context.Context, repo *serverlog.Repo, tg target.Target) {
+		if _, _, _, err := repo.Apply(ctx, src, []serverlog.Record{{Level: serverlog.LevelError, Type: "PDOException", Location: "Invoice.php:42", Hour: time.Now(), Count: 3}}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	_, out, _, err := run(t, e.dir, "target", "remove", "srv-demo")
+	if err != nil || !strings.Contains(out, "erased") {
+		t.Fatalf("remove: %q %v", out, err)
+	}
+	s, err := store.Open(filepath.Join(e.dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, tb := range []string{"log_source", "log_signature", "log_bucket", "log_cursor", "log_note", "log_settings", "log_unseen"} {
+		var n int
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM ` + tb).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s holds %d rows after the removal (%v)", tb, n, err)
+		}
+	}
+	if rows := auditRows(t, e.dir, "log.purge"); len(rows) != 1 || rows[0].evidence["scope"] != "server_removed" {
+		t.Errorf("audit log.purge = %+v", rows)
+	}
+}
+
+func TestTargetLogsListScrubsLikeTheAPI(t *testing.T) {
+	e := newLogEnv(t)
+	src := e.addSource(t)
+	bad := filepath.ToSlash(os.TempDir()) + "/leak/Invoice.php:42"
+	e.withRepo(t, func(ctx context.Context, repo *serverlog.Repo, tg target.Target) {
+		if _, _, _, err := repo.Apply(ctx, src, []serverlog.Record{{Level: serverlog.LevelError, Type: "Boom", Location: bad, Hour: time.Now(), Count: 1}}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, args := range [][]string{{"target", "logs", "list", "srv-demo"}, {"target", "logs", "list", "srv-demo", "--json"}} {
+		_, out, _, err := run(t, e.dir, args...)
+		if err != nil || strings.Contains(out, "leak") || (!strings.Contains(out, "<path>") && !strings.Contains(out, "u003cpath")) {
+			t.Errorf("%v: %q %v", args, out, err)
+		}
+	}
+}

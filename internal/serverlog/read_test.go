@@ -763,8 +763,9 @@ func TestPlaceholderNeedsAnAnswerThatSaysNothingIsThere(t *testing.T) {
 		answer string
 		want   int
 	}{
-		"nothing there":    {"U\t/var/log/a.log\nN\n", 1},
-		"no word":          {"U\t/var/log/a.log\n", 0},
+		"nothing there":    {"U\t/var/log/a.log\tabsent\nN\n", 1},
+		"no word":          {"U\t/var/log/a.log\tabsent\n", 0},
+		"old form":         {"U\t/var/log/a.log\nN\n", 0},
 		"located line out": {"F\t/var/log/a.log\tnot-an-id\t10\t0\t0\t1\nN\n", 0},
 		"located":          {"F\t/var/log/a.log\t5\t10\t0\t0\t1\n", 1},
 	}

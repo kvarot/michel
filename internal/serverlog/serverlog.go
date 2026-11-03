@@ -64,6 +64,8 @@ type Source struct {
 	Pattern            string
 	Active             bool
 	CreatedAt          time.Time
+	// PathAt is when the path last changed (zero if it never did).
+	PathAt time.Time
 }
 
 // Cursor is the read position in one file of a source.
@@ -131,8 +133,12 @@ type Settings struct {
 	ReadCap          int64
 	ReadTimeout      time.Duration
 	MaxAlertsPerHour int
-	SMS              bool
-	Routes           map[Level]Route
+	// SpikeFactor and SpikeMin: an hour spikes when it holds at least SpikeMin
+	// occurrences and SpikeFactor times the hour before.
+	SpikeFactor int
+	SpikeMin    int64
+	SMS         bool
+	Routes      map[Level]Route
 }
 
 // Bounds of the settings. Interval is between MinInterval and MaxInterval, or
@@ -145,6 +151,15 @@ const (
 	// ManualInterval is the interval of a server read by hand only: the
 	// scheduler never reads it. It mirrors target.ManualOnly.
 	ManualInterval = -time.Second
+
+	// The upper bounds keep a read from slowing a server down or filling the
+	// answer: the cap of one pass, its time, and the spike threshold.
+	MaxReadCap     = 64 << 20
+	MaxReadTimeout = 5 * time.Minute
+	MinSpikeFactor = 2
+	MaxSpikeFactor = 1000
+	MinSpikeMin    = 1
+	MaxSpikeMin    = 1000000
 )
 
 // DefaultSettings returns the recommended settings for a server of env: no
@@ -168,6 +183,8 @@ func DefaultSettings(env target.Env) Settings {
 		ReadCap:          5 << 20,
 		ReadTimeout:      30 * time.Second,
 		MaxAlertsPerHour: 10,
+		SpikeFactor:      spikeFactor,
+		SpikeMin:         spikeMin,
 		Routes:           routes,
 	}
 }

@@ -51,8 +51,13 @@ type LogSourceView struct {
 	CreatedAt    string        `json:"created_at"`
 	LastReadAt   string        `json:"last_read_at"`
 	Notes        []LogNoteView `json:"notes"`
-	NoChannel    bool          `json:"no_channel"`
-	Warning      string        `json:"warning,omitempty"`
+	// Unseen lists the files of the source that the last read could not open,
+	// by path and why. LastReadAt leaves them out.
+	Unseen []TargetUnseenView `json:"unseen"`
+	// Note is a word of advice for the format (PostgreSQL's %e), when it has one.
+	Note      string `json:"note,omitempty"`
+	NoChannel bool   `json:"no_channel"`
+	Warning   string `json:"warning,omitempty"`
 }
 
 // LogNoteView is what Michel could not read, or left out, in a source: the
@@ -121,6 +126,14 @@ type LogErrorView struct {
 	Detail   string `json:"detail,omitempty"`
 }
 
+// LogErrorsView is the answer of GET /logs/errors: the latest errors, and whether
+// the list was cut (Total is how many there are).
+type LogErrorsView struct {
+	Errors    []LogErrorView `json:"errors"`
+	Total     int            `json:"total"`
+	Truncated bool           `json:"truncated"`
+}
+
 // LogDeviationView is a setting away from the recommended choice, with the
 // risk in plain words.
 type LogDeviationView struct {
@@ -149,6 +162,8 @@ type LogSettingsView struct {
 	MaxAlertsPerHour   int                `json:"max_alerts_per_hour"`
 	SMS                bool               `json:"sms"`
 	Routes             map[string]string  `json:"routes"`
+	SpikeFactor        int                `json:"spike_factor"`
+	SpikeMin           int64              `json:"spike_min"`
 	Recommended        LogRecommendedView `json:"recommended"`
 	Deviations         []LogDeviationView `json:"deviations"`
 	// Health is the stronger warning of a server that holds health data, set
@@ -208,6 +223,8 @@ type LogSettingsPatch struct {
 	ReadTimeoutSeconds *int              `json:"read_timeout_seconds"`
 	MaxAlertsPerHour   *int              `json:"max_alerts_per_hour"`
 	SMS                *bool             `json:"sms"`
+	SpikeFactor        *int              `json:"spike_factor"`
+	SpikeMin           *int64            `json:"spike_min"`
 	Routes             map[string]string `json:"routes"`
 	Confirmed          bool              `json:"confirmed"`
 }
@@ -260,10 +277,10 @@ func LogChannelHears(p policy.Policy, st serverlog.Settings) bool {
 	return false
 }
 
-// logPath writes a declared path for the page: no control character, no path of
+// LogPath writes a declared path for the page: no control character, no path of
 // this computer. The user's own declaration is otherwise shown as it is, since
 // it is what the page sends back.
-func logPath(p string) string { return localPaths(srvText("", p)) }
+func LogPath(p string) string { return localPaths(srvText("", p)) }
 
 // byteSize writes a size in bytes in KiB, MiB or GiB.
 func byteSize(n int64) string {
@@ -372,6 +389,67 @@ func (s *server) logSourceOf(w http.ResponseWriter, r *http.Request, lang i18n.L
 	return serverlog.Source{}, nil, false
 }
 
+// LogUnseenReason is the sentence for why a file was not read, by the cause code
+// the filter wrote (serverlog.Cause*): the real cause, in plain words, so that a
+// refused link does not read as a rights problem.
+func LogUnseenReason(lang i18n.Lang, cause string) string {
+	switch cause {
+	case serverlog.CauseDenied:
+		return i18n.T(lang, "api.logs.unseen.denied")
+	case serverlog.CauseLink:
+		return i18n.T(lang, "api.logs.unseen.link")
+	case serverlog.CauseAbsent:
+		return i18n.T(lang, "api.logs.unseen.absent")
+	case serverlog.CauseNotFile:
+		return i18n.T(lang, "api.logs.unseen.not_file")
+	case serverlog.CauseTools:
+		return i18n.T(lang, "api.logs.unseen.tools")
+	}
+	return i18n.T(lang, "api.logs.unseen.other")
+}
+
+// LogNoteText is the sentence of a note of a source.
+func LogNoteText(lang i18n.Lang, n serverlog.Note) string { return noteText(lang, n) }
+
+// LogStateNotes are the notes of a source worth showing now, oldest kind first:
+// the latest of each kind. A note about a state (too many files) shows only
+// while the last read still found it: touched is the date of the last read of
+// the source. The unseen files have their own list, so their note is left out.
+func LogStateNotes(notes []serverlog.Note, sourceID string, touched time.Time) []serverlog.Note {
+	latest := map[string]serverlog.Note{}
+	for _, n := range notes {
+		if n.SourceID == sourceID {
+			latest[n.Kind] = n
+		}
+	}
+	var out []serverlog.Note
+	for _, kind := range []string{serverlog.NoteGap, serverlog.NoteSkipped, serverlog.NoteRotated, serverlog.NoteRejected, serverlog.NoteTooManyFiles} {
+		n, ok := latest[kind]
+		if !ok || (kind == serverlog.NoteTooManyFiles && n.To.Before(touched)) {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// LogLastRead is when a source was last read for real: the latest read date of
+// its files, those that could not be opened left out (a pass that opened
+// nothing is no read).
+func LogLastRead(cursors []serverlog.Cursor, unseen []serverlog.UnseenFile) time.Time {
+	bad := map[string]bool{}
+	for _, u := range unseen {
+		bad[u.File] = true
+	}
+	var last time.Time
+	for _, c := range cursors {
+		if !bad[c.File] && !strings.HasSuffix(c.File, "/") && c.ReadAt.After(last) {
+			last = c.ReadAt
+		}
+	}
+	return last
+}
+
 // sourceViews builds the views of the sources of t.
 func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Target, srcs []serverlog.Source) ([]LogSourceView, error) {
 	repo := s.serverLogs()
@@ -383,6 +461,10 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 	if err != nil {
 		return nil, err
 	}
+	unseen, err := repo.Unseen(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
 	hears := LogChannelHears(s.currentPolicy(), st)
 	out := make([]LogSourceView, 0, len(srcs))
 	for _, src := range srcs {
@@ -390,26 +472,21 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 		if err != nil {
 			return nil, err
 		}
-		var last time.Time
+		var touched time.Time
 		for _, c := range cursors {
-			if c.ReadAt.After(last) {
-				last = c.ReadAt
+			if c.ReadAt.After(touched) {
+				touched = c.ReadAt
 			}
 		}
-		v := LogSourceView{ID: src.ID, Path: logPath(src.Path), Format: string(src.Format), LevelField: srvText("", src.LevelField),
+		v := LogSourceView{ID: src.ID, Path: LogPath(src.Path), Format: string(src.Format), LevelField: srvText("", src.LevelField),
 			ChannelField: srvText("", src.ChannelField), Pattern: srvText("", src.Pattern), Active: src.Active,
-			CreatedAt: stamp(src.CreatedAt), LastReadAt: stamp(last), Notes: []LogNoteView{}}
-		// The latest note of each kind (the notes come oldest first).
-		latest := map[string]serverlog.Note{}
-		for _, n := range notes {
-			if n.SourceID == src.ID {
-				latest[n.Kind] = n
-			}
+			CreatedAt: stamp(src.CreatedAt), LastReadAt: stamp(LogLastRead(cursors, unseen[src.ID])), Notes: []LogNoteView{},
+			Unseen: []TargetUnseenView{}, Note: formatNote(lang, src.Format)}
+		for _, n := range LogStateNotes(notes, src.ID, touched) {
+			v.Notes = append(v.Notes, LogNoteView{Kind: n.Kind, Text: noteText(lang, n), From: stamp(n.From), To: stamp(n.To), Amount: n.Amount})
 		}
-		for _, kind := range []string{serverlog.NoteGap, serverlog.NoteSkipped, serverlog.NoteRotated, serverlog.NoteUnseen, serverlog.NoteRejected, serverlog.NoteTooManyFiles} {
-			if n, ok := latest[kind]; ok {
-				v.Notes = append(v.Notes, LogNoteView{Kind: kind, Text: noteText(lang, n), From: stamp(n.From), To: stamp(n.To), Amount: n.Amount})
-			}
+		for _, u := range unseen[src.ID] {
+			v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u.File), Reason: LogUnseenReason(lang, u.Cause)})
 		}
 		if src.Active && !hears {
 			v.NoChannel, v.Warning = true, i18n.T(lang, "api.logs.no_channel")
@@ -441,14 +518,8 @@ func (s *server) logSummary(ctx context.Context, t target.Target, v *TargetView)
 			v.LogNoChannel = !LogChannelHears(s.currentPolicy(), st)
 		}
 	}
-	sigs, err := repo.Signatures(ctx, t.ID)
-	if err != nil {
+	if v.LogNew, err = repo.CountNew(ctx, t.ID); err != nil {
 		return err
-	}
-	for _, g := range sigs {
-		if g.Status == serverlog.StatusNew || g.Status == serverlog.StatusReopened {
-			v.LogNew++
-		}
 	}
 	return nil
 }
@@ -456,7 +527,10 @@ func (s *server) logSummary(ctx context.Context, t target.Target, v *TargetView)
 // ---- the SSH command that shows the lines ---------------------------------------
 
 var (
-	safeWordRe  = regexp.MustCompile(`^[A-Za-z0-9._@:/+=,~%-]+$`)
+	safeWordRe = regexp.MustCompile(`^[A-Za-z0-9._@:/+=,~%-]+$`)
+	// plainArgRe is a name given to ssh (an alias, a user, a host): it cannot start with
+	// a dash, or ssh would read it as an option (-oProxyCommand=...).
+	plainArgRe  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._@:/+=,~%-]*$`)
 	termTypeRe  = regexp.MustCompile(`^[A-Za-z_\\][A-Za-z0-9_\\]{0,127}$`)
 	termPlaceRe = regexp.MustCompile(`^[A-Za-z0-9_.-][A-Za-z0-9_./-]{0,199}\.[A-Za-z]+:[0-9]{1,6}$`)
 )
@@ -498,9 +572,9 @@ func globWord(p string) string {
 func detailCommand(t target.Target, src serverlog.Source, g serverlog.Signature) string {
 	var ssh string
 	switch {
-	case t.Alias != "" && safeWordRe.MatchString(t.Alias):
+	case t.Alias != "" && plainArgRe.MatchString(t.Alias):
 		ssh = "ssh " + t.Alias
-	case t.Host != "" && safeWordRe.MatchString(t.Host) && (t.User == "" || safeWordRe.MatchString(t.User)):
+	case t.Host != "" && plainArgRe.MatchString(t.Host) && (t.User == "" || plainArgRe.MatchString(t.User)):
 		ssh = "ssh"
 		if t.Port != 0 && t.Port != 22 {
 			ssh += fmt.Sprintf(" -p %d", t.Port)
@@ -641,20 +715,28 @@ func (s *server) logSourcePatch(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	repo := s.serverLogs()
-	if err := repo.UpdateSource(ctx, src); err != nil {
+	// Another file, or a source turned on again after being off, is a first
+	// reading: Michel starts from the end of the files and does not replay what
+	// was written meanwhile (spec § 5.2). The positions are forgotten with the
+	// change, in one step, and not while a read runs (it would write them back).
+	reset := src.Path != old.Path || (src.Active && !old.Active)
+	if reset {
+		unlock, free := serverlog.TryLock(t.ID)
+		if !free {
+			s.logRefused(w, http.StatusConflict, lang, "api.logs.busy")
+			return
+		}
+		defer unlock()
+	}
+	if err := repo.UpdateSourceReset(ctx, src, reset, s.deps.Now()); err != nil {
 		s.internal(w, r)
 		return
 	}
-	// Another file, or a source turned on again after being off, is a first
-	// reading: Michel starts from the end of the files and does not replay what
-	// was written meanwhile (spec § 5.2).
-	if src.Path != old.Path || (src.Active && !old.Active) {
-		if err := repo.PruneCursors(ctx, src.ID, nil); err != nil {
-			s.internal(w, r)
-			return
-		}
+	ev := map[string]any{"source": src.ID, "changed": changed, "active": src.Active}
+	if src.Path != old.Path {
+		ev["path"] = src.Path
 	}
-	if err := s.logAudit(ctx, "log.source_update", t.ID, map[string]any{"source": src.ID, "changed": changed, "active": src.Active}); err != nil {
+	if err := s.logAudit(ctx, "log.source_update", t.ID, ev); err != nil {
 		s.internal(w, r)
 		return
 	}
@@ -677,6 +759,12 @@ func (s *server) logSourceDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	unlock, free := serverlog.TryLock(t.ID)
+	if !free {
+		s.logRefused(w, http.StatusConflict, lang, "api.logs.busy")
+		return
+	}
+	defer unlock()
 	if err := s.serverLogs().DeleteSource(r.Context(), src.ID); err != nil {
 		if errors.Is(err, serverlog.ErrNotFound) {
 			s.logRefused(w, http.StatusNotFound, lang, "api.logs.source_not_found")
@@ -716,7 +804,7 @@ func (s *server) logSourceDiscover(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []LogCandidateView{}
 	for _, c := range cands {
-		out = append(out, LogCandidateView{Path: logPath(c.Path), Format: string(c.Format), Why: c.Why, Text: whyText(lang, c.Why),
+		out = append(out, LogCandidateView{Path: LogPath(c.Path), Format: string(c.Format), Why: c.Why, Text: whyText(lang, c.Why),
 			Known: known[c.Path], Note: formatNote(lang, c.Format)})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -760,14 +848,24 @@ func (s *server) logSourceTry(w http.ResponseWriter, r *http.Request) {
 	extend(w)
 	dctx, cancel := s.detached(r)
 	defer cancel()
+	// Every try is one audit row, success or failure: the path read (it is not a
+	// declared source), the format, and numbers. The detached context writes it
+	// even when the page has gone.
+	trace := func(result string, ev map[string]any) error {
+		ev["try"], ev["path"], ev["format"] = true, src.Path, string(src.Format)
+		return s.targetAudit(dctx, "log.read", t.ID, result, ev)
+	}
 	client, err := sshx.Dial(dctx, s.deps.Servers.Check.SSH, t)
 	if err != nil {
+		_ = trace("failed", map[string]any{"reason": serverlog.ReasonOf(err)})
 		s.targetRefused(w, r, lang, err, true)
 		return
 	}
 	defer client.Close()
-	out, err := serverlog.Try(dctx, client, src, o, st.ReadTimeout, s.deps.Now())
+	now := s.deps.Now()
+	out, err := serverlog.Try(dctx, client, src, o, st.ReadTimeout, now)
 	if err != nil {
+		_ = trace("failed", map[string]any{"reason": serverlog.ReasonOf(err)})
 		// What the server printed is not repeated: only the sentence.
 		s.logRefused(w, http.StatusBadGateway, lang, "api.logs.try_failed")
 		return
@@ -776,10 +874,15 @@ func (s *server) logSourceTry(w http.ResponseWriter, r *http.Request) {
 		TooManyFiles: out.TooManyFiles, None: out.None, Note: formatNote(lang, src.Format)}
 	var occurrences int64
 	for _, rec := range out.Records {
-		rv := LogRecordView{Level: string(rec.Level), Type: srvText(t.User, rec.Type), Location: srvText(t.User, rec.Location),
-			Channel: srvText(t.User, rec.Channel), Hour: stamp(rec.Hour), Count: rec.Count}
+		rv := LogRecordView{Level: string(rec.Level), Type: s.logText(t.User, rec.Type), Location: s.logText(t.User, rec.Location),
+			Channel: s.logText(t.User, rec.Channel), Hour: stamp(rec.Hour), Count: rec.Count}
+		// The text goes through the cleaner a real read goes through (the check, the
+		// masker, the cap): what is shown is what would be stored. What it refuses
+		// is left out.
 		if o.Text && rec.Text != "" {
-			rv.Text = srvText(t.User, rec.Text)
+			if txt, ok := serverlog.CleanedText(rec.Text); ok {
+				rv.Text = s.logText(t.User, txt)
+			}
 		}
 		occurrences += rec.Count
 		v.Records = append(v.Records, rv)
@@ -788,7 +891,7 @@ func (s *server) logSourceTry(w http.ResponseWriter, r *http.Request) {
 		v.SkippedBytes += f.Skipped
 	}
 	for _, u := range out.Unseen {
-		v.Unseen = append(v.Unseen, TargetUnseenView{What: logPath(u), Reason: i18n.T(lang, "api.logs.unseen.unreadable")})
+		v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u), Reason: LogUnseenReason(lang, out.UnseenCause[u])})
 	}
 	switch {
 	case len(v.Records) > 0 || len(v.Unseen) > 0:
@@ -797,9 +900,9 @@ func (s *server) logSourceTry(w http.ResponseWriter, r *http.Request) {
 	default:
 		v.Message = i18n.T(lang, "api.logs.try.empty")
 	}
-	// The trace of a read: what it brought back in numbers, nothing of it.
-	if err := s.logAudit(ctx, "log.read", t.ID, map[string]any{"try": true, "format": string(src.Format), "records": len(out.Records),
-		"occurrences": occurrences, "rejected": out.Rejected, "unseen": len(out.Unseen)}); err != nil {
+	if err := trace("ok", map[string]any{"from": "start", "to": stamp(now), "volume": serverlog.ReadVolume(out), "skipped": v.SkippedBytes,
+		"records": len(out.Records), "occurrences": occurrences, "rejected": out.Rejected, "unseen": len(out.Unseen),
+		"fingerprint": serverlog.Fingerprint(out.Records)}); err != nil {
 		s.internal(w, r)
 		return
 	}
@@ -814,9 +917,10 @@ const maxLogErrors = 500
 // errorView builds the view of an error. The cleaned text is decrypted and
 // returned only when the settings of the server keep it.
 func (s *server) errorView(ctx context.Context, t target.Target, st serverlog.Settings, srcs map[string]serverlog.Source, g serverlog.Signature) (LogErrorView, error) {
-	v := LogErrorView{ID: g.ID, SourceID: g.SourceID, Level: string(g.Level), Type: srvText(t.User, g.Type), Location: srvText(t.User, g.Location),
-		Channel: srvText(t.User, g.Channel), Status: string(g.Status), FirstAt: stamp(g.FirstAt), LastAt: stamp(g.LastAt), Total: g.Total}
-	if src, ok := srcs[g.SourceID]; ok {
+	v := LogErrorView{ID: g.ID, SourceID: g.SourceID, Level: string(g.Level), Type: s.logText(t.User, g.Type), Location: s.logText(t.User, g.Location),
+		Channel: s.logText(t.User, g.Channel), Status: string(g.Status), FirstAt: stamp(g.FirstAt), LastAt: stamp(g.LastAt), Total: g.Total}
+	// An error last seen before its source changed file came from another file.
+	if src, ok := srcs[g.SourceID]; ok && !g.LastAt.Before(src.PathAt) {
 		v.Detail = detailCommand(t, src, g)
 	}
 	if st.StoreText {
@@ -825,7 +929,7 @@ func (s *server) errorView(ctx context.Context, t target.Target, st serverlog.Se
 			return LogErrorView{}, err
 		}
 		if ok {
-			v.Text = srvText(t.User, txt)
+			v.Text = s.logText(t.User, txt)
 		}
 	}
 	return v, nil
@@ -865,6 +969,7 @@ func (s *server) logErrors(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, r)
 		return
 	}
+	total := len(sigs)
 	if len(sigs) > maxLogErrors {
 		sigs = sigs[:maxLogErrors]
 	}
@@ -877,7 +982,7 @@ func (s *server) logErrors(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, LogErrorsView{Errors: out, Total: total, Truncated: total > len(out)})
 }
 
 // logErrorPatch marks an error seen, or ignored ("do not warn me about this one
@@ -983,7 +1088,7 @@ func (s *server) settingsView(lang i18n.Lang, t target.Target, st serverlog.Sett
 	devs := serverlog.Deviations(st)
 	v := LogSettingsView{Interval: intervalText(st.Interval), StoreText: st.StoreText, AlertText: st.AlertText, RetentionDays: st.RetentionDays,
 		ResolveAfterDays: int(st.ResolveAfter / (24 * time.Hour)), ReadCapBytes: st.ReadCap, ReadTimeoutSeconds: int(st.ReadTimeout / time.Second),
-		MaxAlertsPerHour: st.MaxAlertsPerHour, SMS: st.SMS, Routes: map[string]string{},
+		MaxAlertsPerHour: st.MaxAlertsPerHour, SMS: st.SMS, SpikeFactor: st.SpikeFactor, SpikeMin: st.SpikeMin, Routes: map[string]string{},
 		Recommended: LogRecommendedView{StoreText: false, AlertText: false, RetentionDays: serverlog.RecommendedRetentionDays},
 		Deviations:  deviationViews(lang, devs)}
 	for _, l := range serverlog.Levels {
@@ -1070,6 +1175,12 @@ func (s *server) logSettingsPatch(w http.ResponseWriter, r *http.Request) {
 	if p.SMS != nil {
 		next.SMS = *p.SMS
 	}
+	if p.SpikeFactor != nil {
+		next.SpikeFactor = *p.SpikeFactor
+	}
+	if p.SpikeMin != nil {
+		next.SpikeMin = *p.SpikeMin
+	}
 	for name, route := range p.Routes {
 		level := serverlog.Level(name)
 		known := false
@@ -1106,16 +1217,7 @@ func (s *server) logSettingsPatch(w http.ResponseWriter, r *http.Request) {
 // logConfirm answers 409: the new steps away from the recommended choice, each
 // with its risk, and the stronger word for a server that holds health data.
 func (s *server) logConfirm(w http.ResponseWriter, lang i18n.Lang, t target.Target, cur, next serverlog.Settings) {
-	had := map[string]bool{}
-	for _, c := range serverlog.Deviations(cur) {
-		had[c] = true
-	}
-	var fresh []string
-	for _, c := range serverlog.Deviations(next) {
-		if !had[c] {
-			fresh = append(fresh, c)
-		}
-	}
+	fresh := serverlog.NewDeviations(cur, next)
 	body := LogConfirmBody{Error: i18n.T(lang, "api.logs.confirm_needed"), Hint: i18n.T(lang, "api.logs.confirm_needed_hint"), Code: logConfirmCode,
 		Deviations: deviationViews(lang, fresh)}
 	if t.Classification == policy.ClassHealth {
@@ -1138,6 +1240,13 @@ func (s *server) logPurge(w http.ResponseWriter, r *http.Request) {
 	if !s.readBody(w, r, &b, true) {
 		return
 	}
+	// A read that runs would write rows back behind the erasure.
+	unlock, free := serverlog.TryLock(t.ID)
+	if !free {
+		s.logRefused(w, http.StatusConflict, lang, "api.logs.busy")
+		return
+	}
+	defer unlock()
 	ctx := r.Context()
 	repo := s.serverLogs()
 	switch b.Scope {

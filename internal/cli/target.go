@@ -19,6 +19,7 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/servererr"
+	"github.com/kvarot/michel/internal/serverlog"
 	"github.com/kvarot/michel/internal/sshx"
 	"github.com/kvarot/michel/internal/target"
 )
@@ -593,7 +594,7 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <id>",
 		Short: "Take a server out of Michel (nothing is done on the server)",
-		Long: "Remove deletes the server from Michel's registry with its links and its stored inventories. Its findings and " +
+		Long: "Remove deletes the server from Michel's registry with its links, its stored inventories and everything Michel read in its logs. Its findings and " +
 			"fixes stay as history. Nothing is done on the server itself.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -607,6 +608,11 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 				return deps.Errorf("cli.target.remove.busy", t.Name)
 			}
 			defer unlock()
+			logUnlock, logFree := serverlog.TryLock(t.ID)
+			if !logFree {
+				return deps.Errorf("cli.target.logs.read.busy", t.Name)
+			}
+			defer logUnlock()
 			repo := target.NewRepo(deps.Store)
 			block, err := fix.NewRepo(deps.Store).TargetBlock(ctx, t.ID)
 			if err != nil {
@@ -634,6 +640,8 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 			if err := repo.Remove(ctx, t.ID); err != nil {
 				return targetFailure(deps, err, false)
 			}
+			// What Michel read in its logs goes with it.
+			logsKept := serverlog.ForgetTargetAudited(ctx, serverlog.NewRepo(deps.Store), deps.Audit, "cli", t.ID) != nil
 			// The opt-in goes with the server, except for what another uses.
 			removed, rulesFailed := 0, false
 			if gone := target.ReleasedRules(t, others); len(gone) > 0 {
@@ -647,6 +655,9 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 			if rulesFailed {
 				// The server is gone; its network rules could not be taken back.
 				fmt.Fprintln(deps.Stderr, deps.T("cli.target.remove.rules_failed", t.Name))
+			}
+			if logsKept {
+				fmt.Fprintln(deps.Stderr, deps.T("cli.target.remove.logs_failed", t.Name))
 			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.target.remove.done", t.Name))
 			return nil

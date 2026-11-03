@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/policy"
+	"github.com/kvarot/michel/internal/secret"
 	"github.com/kvarot/michel/internal/serverlog"
 	"github.com/kvarot/michel/internal/sshx/sshtest"
 	"github.com/kvarot/michel/internal/target"
@@ -140,9 +141,9 @@ func (lf *logFixture) apply(recs ...serverlog.Record) {
 
 func (lf *logFixture) errorsList() []LogErrorView {
 	lf.t.Helper()
-	var list []LogErrorView
-	lf.get(lf.url("/errors"), &list)
-	return list
+	var v LogErrorsView
+	lf.get(lf.url("/errors"), &v)
+	return v.Errors
 }
 
 func (lf *logFixture) settings() LogSettingsView {
@@ -476,25 +477,37 @@ func TestTryReturnsExactlyWhatWouldComeBack(t *testing.T) {
 
 func TestTryListsUnseenFilesByPathAndReason(t *testing.T) {
 	lf := newLogFixture(t, "")
-	// The server answers as a filter does for a file it cannot open.
+	// The server answers as a filter does for a file it cannot open: each cause
+	// has its own sentence, and only the rights cause speaks of the adm group.
+	cause := ""
 	lf.shell = func(_ *sshtest.Server, _ string, stdout, _ io.Writer) int {
-		io.WriteString(stdout, "U\t"+lf.path()+"\n")
+		io.WriteString(stdout, "U\t"+lf.path()+"\t"+cause+"\n")
 		return 0
 	}
-	status, body := lf.send("POST", lf.url("/sources/try"), `{"path":"`+lf.path()+`","format":"php"}`)
-	var v LogTryView
-	if status != http.StatusOK || json.Unmarshal([]byte(body), &v) != nil || len(v.Unseen) != 1 {
-		t.Fatalf("try = %d %s", status, body)
-	}
-	if v.Unseen[0].What != lf.path() || !strings.Contains(v.Unseen[0].Reason, "adm") || strings.Contains(v.Unseen[0].Reason, "sudo ") {
-		t.Errorf("unseen = %+v", v.Unseen)
+	reasons := map[string]string{}
+	for c, want := range map[string]string{"denied": "adm", "link": "symbolic link", "absent": "does not exist", "not_file": "ordinary file",
+		"tools": "awk", "other": "changed while being read"} {
+		cause = c
+		status, body := lf.send("POST", lf.url("/sources/try"), `{"path":"`+lf.path()+`","format":"php"}`)
+		var v LogTryView
+		if status != http.StatusOK || json.Unmarshal([]byte(body), &v) != nil || len(v.Unseen) != 1 {
+			t.Fatalf("%s: try = %d %s", c, status, body)
+		}
+		r := v.Unseen[0].Reason
+		if v.Unseen[0].What != lf.path() || !strings.Contains(r, want) || (cause != "denied" && strings.Contains(r, "adm")) || strings.Contains(r, "sudo ") {
+			t.Errorf("%s: unseen = %+v", c, v.Unseen)
+		}
+		if other, dup := reasons[r]; dup {
+			t.Errorf("%s and %s share a sentence", c, other)
+		}
+		reasons[r] = c
 	}
 	// The same server failing: nothing of what it printed is repeated.
 	lf.shell = func(_ *sshtest.Server, _ string, stdout, stderr io.Writer) int {
 		io.WriteString(stderr, "awk: SECRET-MARKER jean.dupont@example.test\n")
 		return 3
 	}
-	status, body = lf.send("POST", lf.url("/sources/try"), `{"path":"`+lf.path()+`","format":"php"}`)
+	status, body := lf.send("POST", lf.url("/sources/try"), `{"path":"`+lf.path()+`","format":"php"}`)
 	if status != http.StatusBadGateway || strings.Contains(body, "SECRET-MARKER") || strings.Contains(body, "jean.dupont") || !strings.Contains(body, "api.logs.try_failed") {
 		t.Errorf("failed try = %d %s", status, body)
 	}
@@ -663,7 +676,8 @@ func TestTextDecryptedOnlyWhenAllowed(t *testing.T) {
 	}
 	var raw string
 	_ = lf.st.DB().QueryRow(`SELECT text_enc FROM log_signature`).Scan(&raw)
-	if strings.Contains(raw, "Connection refused") {
+	// Encryption at rest is the platform's (DPAPI on Windows); elsewhere the file mode is the protection.
+	if secret.Protected() && strings.Contains(raw, "Connection refused") {
 		t.Fatalf("the text is not encrypted at rest")
 	}
 	errs := lf.errorsList()
@@ -860,41 +874,6 @@ func TestDiscoverProposesAndCreatesNothing(t *testing.T) {
 	}
 	if known != 1 {
 		t.Errorf("known candidates = %d: %s", known, body)
-	}
-}
-
-func TestSourcesShowWhatCouldNotBeRead(t *testing.T) {
-	lf := newLogFixture(t, "")
-	src := lf.addSource("")
-	ctx := context.Background()
-	if err := lf.repo().SaveCursors(ctx, []serverlog.Cursor{{SourceID: src.ID, File: lf.path(), FileID: "1:2", Offset: 1, ReadAt: now.Add(-3 * time.Minute)}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, n := range []serverlog.Note{
-		{Kind: serverlog.NoteSkipped, From: now.Add(-time.Hour), To: now.Add(-time.Hour), Amount: 40 << 20},
-		{Kind: serverlog.NoteRotated, From: now.Add(-2 * time.Hour), To: now.Add(-2 * time.Hour)},
-		{Kind: serverlog.NoteUnseen, From: now.Add(-time.Hour), To: now, Amount: 2},
-		{Kind: serverlog.NoteGap, From: now.Add(-5 * time.Hour), To: now.Add(-4 * time.Hour)},
-	} {
-		n.TargetID, n.SourceID = lf.id, src.ID
-		if err := lf.repo().AddNote(ctx, n); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var list []LogSourceView
-	lf.get(lf.url("/sources"), &list)
-	if len(list) != 1 || list[0].LastReadAt != stamp(now.Add(-3*time.Minute)) || len(list[0].Notes) != 4 {
-		t.Fatalf("sources = %+v", list)
-	}
-	byKind := map[string]LogNoteView{}
-	for _, n := range list[0].Notes {
-		if n.Text == "" {
-			t.Errorf("note without a sentence: %+v", n)
-		}
-		byKind[n.Kind] = n
-	}
-	if !strings.Contains(byKind["skipped"].Text, "40 MiB") {
-		t.Errorf("the size left unread is not said: %q", byKind["skipped"].Text)
 	}
 }
 

@@ -180,6 +180,7 @@ func (r *Repo) DeleteSource(ctx context.Context, id string) error {
 		`DELETE FROM log_read WHERE signature_id IN (SELECT id FROM log_signature WHERE source_id = ?)`,
 		`DELETE FROM log_signature WHERE source_id = ?`,
 		`DELETE FROM log_cursor WHERE source_id = ?`,
+		`DELETE FROM log_unseen WHERE source_id = ?`,
 		`DELETE FROM log_note WHERE source_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {
@@ -198,7 +199,7 @@ func (r *Repo) DeleteSource(ctx context.Context, id string) error {
 
 // Sources lists the sources of a server, oldest first.
 func (r *Repo) Sources(ctx context.Context, targetID string) ([]Source, error) {
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+sourceCols+` FROM log_source WHERE target_id = ? ORDER BY created_at, id`, targetID)
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+sourceCols+`, path_at FROM log_source WHERE target_id = ? ORDER BY created_at, id`, targetID)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the log sources: %w", err)
 	}
@@ -206,13 +207,16 @@ func (r *Repo) Sources(ctx context.Context, targetID string) ([]Source, error) {
 	var out []Source
 	for rows.Next() {
 		var s Source
-		var format, created string
+		var format, created, pathAt string
 		var active int
-		if err := rows.Scan(&s.ID, &s.TargetID, &s.Path, &format, &s.LevelField, &s.ChannelField, &s.Pattern, &active, &created); err != nil {
+		if err := rows.Scan(&s.ID, &s.TargetID, &s.Path, &format, &s.LevelField, &s.ChannelField, &s.Pattern, &active, &created, &pathAt); err != nil {
 			return nil, fmt.Errorf("cannot read the log sources: %w", err)
 		}
 		s.Format, s.Active = Format(format), active != 0
 		if s.CreatedAt, err = parseTime(created); err != nil {
+			return nil, err
+		}
+		if s.PathAt, err = parseTime(pathAt); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -282,10 +286,14 @@ func checkSettings(s Settings) error {
 		return bad("the delay before an error counts as resolved must be positive")
 	case time.Duration(s.RetentionDays)*24*time.Hour < s.ResolveAfter:
 		return bad("the retention cannot be shorter than the delay before an error counts as resolved")
-	case s.ReadCap <= 0:
-		return bad("the read size cap must be positive")
-	case s.ReadTimeout <= 0:
-		return bad("the read timeout must be positive")
+	case s.ReadCap <= 0 || s.ReadCap > MaxReadCap:
+		return bad("the read size cap must be positive and at most %d MiB", MaxReadCap>>20)
+	case s.ReadTimeout <= 0 || s.ReadTimeout > MaxReadTimeout:
+		return bad("the read timeout must be positive and at most %d seconds", int(MaxReadTimeout/time.Second))
+	case s.SpikeFactor < MinSpikeFactor || s.SpikeFactor > MaxSpikeFactor:
+		return bad("the spike factor must be between %d and %d", MinSpikeFactor, MaxSpikeFactor)
+	case s.SpikeMin < MinSpikeMin || s.SpikeMin > MaxSpikeMin:
+		return bad("the spike minimum must be between %d and %d", MinSpikeMin, MaxSpikeMin)
 	case s.MaxAlertsPerHour < 1:
 		return bad("the alert cap per hour must be at least 1")
 	}
@@ -298,7 +306,7 @@ func checkSettings(s Settings) error {
 }
 
 const settingsCols = `target_id, interval_s, store_text, alert_text, retention_days, resolve_after_s, read_cap, read_timeout_s,
-	max_alerts_per_hour, sms, route_critical, route_error, route_warning, route_info`
+	max_alerts_per_hour, sms, route_critical, route_error, route_warning, route_info, spike_factor, spike_min`
 
 // Settings returns the log settings of a server: the saved ones, or the
 // defaults for its environment when none were saved.
@@ -308,7 +316,7 @@ func (r *Repo) Settings(ctx context.Context, targetID string) (Settings, error) 
 	var store, alert, sms int
 	var rc, re, rw, ri string
 	err := r.s.DB().QueryRowContext(ctx, `SELECT `+settingsCols+` FROM log_settings WHERE target_id = ?`, targetID).Scan(
-		&s.TargetID, &interval, &store, &alert, &s.RetentionDays, &resolve, &s.ReadCap, &timeout, &s.MaxAlertsPerHour, &sms, &rc, &re, &rw, &ri)
+		&s.TargetID, &interval, &store, &alert, &s.RetentionDays, &resolve, &s.ReadCap, &timeout, &s.MaxAlertsPerHour, &sms, &rc, &re, &rw, &ri, &s.SpikeFactor, &s.SpikeMin)
 	if err == nil {
 		s.Interval, s.ResolveAfter, s.ReadTimeout = time.Duration(interval)*time.Second, time.Duration(resolve)*time.Second, time.Duration(timeout)*time.Second
 		s.StoreText, s.AlertText, s.SMS = store != 0, alert != 0, sms != 0
@@ -348,14 +356,15 @@ func (r *Repo) SaveSettings(ctx context.Context, s Settings) error {
 	if err := checkSettings(s); err != nil {
 		return err
 	}
-	_, err := r.s.DB().ExecContext(ctx, `INSERT INTO log_settings (`+settingsCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := r.s.DB().ExecContext(ctx, `INSERT INTO log_settings (`+settingsCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (target_id) DO UPDATE SET interval_s = excluded.interval_s, store_text = excluded.store_text, alert_text = excluded.alert_text,
 			retention_days = excluded.retention_days, resolve_after_s = excluded.resolve_after_s, read_cap = excluded.read_cap,
 			read_timeout_s = excluded.read_timeout_s, max_alerts_per_hour = excluded.max_alerts_per_hour, sms = excluded.sms,
-			route_critical = excluded.route_critical, route_error = excluded.route_error, route_warning = excluded.route_warning, route_info = excluded.route_info`,
+			route_critical = excluded.route_critical, route_error = excluded.route_error, route_warning = excluded.route_warning, route_info = excluded.route_info,
+			spike_factor = excluded.spike_factor, spike_min = excluded.spike_min`,
 		s.TargetID, int64(s.Interval/time.Second), boolInt(s.StoreText), boolInt(s.AlertText), s.RetentionDays, int64(s.ResolveAfter/time.Second),
 		s.ReadCap, int64(s.ReadTimeout/time.Second), s.MaxAlertsPerHour, boolInt(s.SMS),
-		string(s.Routes[LevelCritical]), string(s.Routes[LevelError]), string(s.Routes[LevelWarning]), string(s.Routes[LevelInfo]))
+		string(s.Routes[LevelCritical]), string(s.Routes[LevelError]), string(s.Routes[LevelWarning]), string(s.Routes[LevelInfo]), s.SpikeFactor, s.SpikeMin)
 	if err != nil {
 		return fmt.Errorf("cannot save the log settings: %w", err)
 	}
@@ -427,7 +436,9 @@ func (r *Repo) SetStatus(ctx context.Context, id string, st Status) error {
 	return nil
 }
 
-func spikes(cur, prev int64) bool { return cur >= spikeMin && cur >= spikeFactor*prev }
+func spikes(st Settings, cur, prev int64) bool {
+	return cur >= st.SpikeMin && cur >= int64(st.SpikeFactor)*prev
+}
 
 // Apply adds records read on src. It returns the errors seen for the first
 // time (fresh), those that came back after being resolved (reopened), and
@@ -510,7 +521,7 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 			ON CONFLICT (signature_id, hour) DO UPDATE SET count = log_bucket.count + excluded.count`, id, ts(hour), rc.Count); err != nil {
 			return nil, nil, nil, fmt.Errorf("cannot save the log counts: %w", err)
 		}
-		if !spikes(before, prev) && spikes(before+rc.Count, prev) && !has(freshIDs, id) && !has(reopenedIDs, id) {
+		if !spikes(st, before, prev) && spikes(st, before+rc.Count, prev) && !has(freshIDs, id) && !has(reopenedIDs, id) {
 			at, known := spikeHours[id]
 			if !known {
 				spikedIDs = append(spikedIDs, id)
@@ -749,6 +760,7 @@ func (r *Repo) EraseTarget(ctx context.Context, targetID string) error {
 		`DELETE FROM log_read WHERE signature_id IN (SELECT id FROM log_signature WHERE target_id = ?)`,
 		`DELETE FROM log_signature WHERE target_id = ?`,
 		`DELETE FROM log_cursor WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`,
+		`DELETE FROM log_unseen WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`,
 		`DELETE FROM log_note WHERE target_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, targetID); err != nil {
@@ -918,6 +930,10 @@ type WindowError struct {
 // exactly one period when the periods follow each other. last_alert_at plays
 // no part: an error already told by an alert is still in the digest.
 func (r *Repo) Window(ctx context.Context, targetID string, since, until time.Time) ([]WindowError, error) {
+	wst, err := r.settingsOrDefault(ctx, targetID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+sigCols+`, reopened_at FROM log_signature WHERE target_id = ? AND status <> ? ORDER BY last_at DESC, id`,
 		targetID, string(StatusIgnored))
 	if err != nil {
@@ -990,7 +1006,7 @@ func (r *Repo) Window(ctx context.Context, targetID string, since, until time.Ti
 			return nil, fmt.Errorf("cannot read the log counts: %w", err)
 		}
 		for h, n := range counts {
-			if !h.Before(from) && spikes(n, counts[h.Add(-time.Hour)]) {
+			if !h.Before(from) && spikes(wst, n, counts[h.Add(-time.Hour)]) {
 				w.Spiked = true
 			}
 		}

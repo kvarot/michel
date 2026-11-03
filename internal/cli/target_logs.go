@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kvarot/michel/internal/api"
-	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servererr"
 	"github.com/kvarot/michel/internal/serverlog"
 )
@@ -59,6 +58,14 @@ func newTargetLogsListCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return targetFailure(deps, err, false)
 			}
+			unseen, err := repo.Unseen(ctx, t.ID)
+			if err != nil {
+				return targetFailure(deps, err, false)
+			}
+			notes, err := repo.Notes(ctx, t.ID)
+			if err != nil {
+				return targetFailure(deps, err, false)
+			}
 			v := logListing{Server: t.Name, Deviations: append([]string{}, serverlog.Deviations(st)...), Sources: []logSrcRow{}, Errors: []logErrRow{}}
 			active := false
 			for _, s := range srcs {
@@ -66,26 +73,34 @@ func newTargetLogsListCmd(deps *Deps) *cobra.Command {
 				if err != nil {
 					return targetFailure(deps, err, false)
 				}
-				row := logSrcRow{ID: s.ID, Path: scan.SanitizeText(s.Path), Format: string(s.Format), Active: s.Active}
+				row := logSrcRow{ID: s.ID, Path: api.LogPath(s.Path), Format: string(s.Format), Active: s.Active, Unseen: []logUnseenRow{}, Notes: []string{}}
+				row.LastRead = api.LogLastRead(cursors, unseen[s.ID])
+				var touched time.Time
 				for _, c := range cursors {
-					if c.ReadAt.After(row.LastRead) {
-						row.LastRead = c.ReadAt
+					if c.ReadAt.After(touched) {
+						touched = c.ReadAt
 					}
+				}
+				for _, u := range unseen[s.ID] {
+					row.Unseen = append(row.Unseen, logUnseenRow{File: api.LogPath(u.File), Cause: u.Cause, Reason: api.LogUnseenReason(deps.Lang, u.Cause)})
+				}
+				for _, n := range api.LogStateNotes(notes, s.ID, touched) {
+					row.Notes = append(row.Notes, api.LogNoteText(deps.Lang, n))
 				}
 				active = active || s.Active
 				v.Sources = append(v.Sources, row)
 			}
 			v.NoChannel = active && !api.LogChannelHears(deps.Policy, st)
 			for _, g := range sigs {
-				row := logErrRow{ID: g.ID, Level: string(g.Level), Type: scan.SanitizeText(g.Type), Location: scan.SanitizeText(g.Location),
-					Channel: scan.SanitizeText(g.Channel), Status: string(g.Status), Total: g.Total, FirstAt: g.FirstAt, LastAt: g.LastAt}
+				row := logErrRow{ID: g.ID, Level: string(g.Level), Type: api.ServerText(t.User, g.Type), Location: api.ServerText(t.User, g.Location),
+					Channel: api.ServerText(t.User, g.Channel), Status: string(g.Status), Total: g.Total, FirstAt: g.FirstAt, LastAt: g.LastAt}
 				if st.StoreText {
 					txt, ok, err := repo.Text(ctx, g.ID)
 					if err != nil {
 						return targetFailure(deps, err, false)
 					}
 					if ok {
-						row.Text = scan.SanitizeText(txt)
+						row.Text = api.ServerText(t.User, txt)
 					}
 				}
 				v.Errors = append(v.Errors, row)
@@ -103,7 +118,12 @@ type logSrcRow struct {
 	ID, Path, Format string
 	Active           bool
 	LastRead         time.Time
+	Unseen           []logUnseenRow
+	Notes            []string
 }
+
+// logUnseenRow is a file that could not be read, and why.
+type logUnseenRow struct{ File, Cause, Reason string }
 
 type logErrRow struct {
 	ID, Level, Type, Location, Channel, Status string
@@ -149,6 +169,14 @@ func printLogs(deps *Deps, v logListing, declared int) error {
 	}
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+	for _, s := range v.Sources {
+		for _, u := range s.Unseen {
+			fmt.Fprintln(out, deps.T("cli.target.logs.unseen", u.File, u.Reason))
+		}
+		for _, n := range s.Notes {
+			fmt.Fprintln(out, deps.T("cli.target.logs.note", s.ID, n))
+		}
 	}
 	if len(v.Errors) == 0 {
 		fmt.Fprintln(out, deps.T("cli.target.logs.no_errors"))
@@ -225,6 +253,9 @@ func newTargetLogsReadCmd(deps *Deps) *cobra.Command {
 				return json.NewEncoder(deps.Stdout).Encode(res)
 			}
 			fmt.Fprintln(deps.Stdout, deps.N("cli.target.logs.read.done", res.Records, t.Name, res.Alerts))
+			if res.Unseen > 0 {
+				fmt.Fprintln(deps.Stdout, deps.N("cli.target.logs.read.unseen", res.Unseen))
+			}
 			if res.Rejected > 0 {
 				fmt.Fprintln(deps.Stdout, deps.N("cli.target.logs.read.rejected", res.Rejected))
 			}

@@ -24,10 +24,12 @@ type FileState struct {
 // Output is what is left of a filter's output once revalidated. Rejected counts
 // the lines thrown away; nothing of their content is kept anywhere.
 type Output struct {
-	Files        []FileState
-	Records      []Record
-	Rejected     int
-	Unseen       []string
+	Files    []FileState
+	Records  []Record
+	Rejected int
+	Unseen   []string
+	// UnseenCause says why, by file: one of the Cause* codes the filter wrote.
+	UnseenCause  map[string]string
 	TooManyFiles bool
 	// None says that the filter found nothing to read and could tell: the file,
 	// or its folder, is really absent (an unsearchable folder does not count).
@@ -118,9 +120,13 @@ func ParseOutput(out []byte, src Source, o FilterOptions, now time.Time) Output 
 					ok = false
 				}
 			case "U":
-				if ok = len(fields) == 2 && inSource(fields[1], src); ok && !seenUnseen[fields[1]] {
+				if ok = len(fields) == 3 && inSource(fields[1], src) && ValidCause(fields[2]); ok && !seenUnseen[fields[1]] {
 					seenUnseen[fields[1]] = true
 					res.Unseen = append(res.Unseen, fields[1])
+					if res.UnseenCause == nil {
+						res.UnseenCause = map[string]string{}
+					}
+					res.UnseenCause[fields[1]] = fields[2]
 				}
 			case "N":
 				if ok = len(fields) == 1; ok {
