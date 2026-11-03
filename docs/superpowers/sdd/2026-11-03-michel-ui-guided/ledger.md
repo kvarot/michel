@@ -124,3 +124,5 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 8b fix 2: 14c42e8, cbca0c7. Task 8b: complete. Next to close, with final fixes: `$config['password'] = '…'` and `new mysqli(...)` unmasked. Noise rate on real code not measured.
 - Task 13 fix: 008180f. Task 13: complete; final review covers it. "Michel t'en reparle demain" to soften in Task 15's text pass. Check `ServerLogs` TypeError against the real API in Task 16.
 - Task 14: dispatched, BASE 008180f.
+- Task 14: ccebcf0, review 3 high 5 medium 7 low, fix 0033c83. Task 14: complete. `queue` stays true. Path checked only when added.
+- Task 14b: dispatched, BASE 0033c83.
