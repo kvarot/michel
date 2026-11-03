@@ -54,7 +54,7 @@ func TestLogAlertExactDefaultBody(t *testing.T) {
 	if len(out) != 1 || out[0].Result != ResultOK {
 		t.Fatalf("%+v", out)
 	}
-	want := "Michel · server errors\nServer srv-demo: 1 error in the logs\n- PDOException, Invoice.php:42, 37 times (new)\n" + logPage
+	want := "Michel · errors in the server logs\nServer srv-demo: 1 error in the logs\n- PDOException, Invoice.php:42, 37 times (new)\n" + logPage
 	got := hookText(t, h)
 	if got != want {
 		t.Errorf("text = %q, want %q", got, want)
@@ -80,7 +80,7 @@ func TestLogAlertNamesTheReasonOfEachItem(t *testing.T) {
 		{Kind: serverlog.AlertSpike, Type: "C", Count: 400},
 	}}
 	_, body := logMessage(i18n.EN, in, "")
-	for _, w := range []string{"3 errors in the logs", "- A, a.php:1, 2 times (new)", "- B, b.php:2, 1 time (came back)", "- C, 400 times (far more often than before)"} {
+	for _, w := range []string{"3 errors in the logs", "- A, a.php:1, 2 times (new)", "- B, b.php:2, 1 time (back)", "- C, 400 times (far more often than before)"} {
 		if !strings.Contains(body, w) {
 			t.Errorf("%q lacks %q", body, w)
 		}
@@ -93,7 +93,7 @@ func TestLogAlertListIsBounded(t *testing.T) {
 		in.Items = append(in.Items, serverlog.AlertItem{Kind: serverlog.AlertNew, Type: "E", Location: "f.php:1", Count: 1})
 	}
 	_, body := logMessage(i18n.EN, in, "")
-	if !strings.Contains(body, "8 errors in the logs") || !strings.Contains(body, "... and 3 more errors, see the page") ||
+	if !strings.Contains(body, "8 errors in the logs") || !strings.Contains(body, "… and 3 more errors, see the server page in Michel") ||
 		strings.Count(body, "- E") != maxLogItems {
 		t.Errorf("body = %q", body)
 	}
@@ -228,7 +228,7 @@ func TestNotReadingMessageSaysWhy(t *testing.T) {
 		}
 	}
 	_, body := logMessage(i18n.EN, in, "")
-	if !strings.Contains(body, "SSH key agent is locked") {
+	if !strings.Contains(body, "ssh-agent) is locked") {
 		t.Errorf("no cause: %q", body)
 	}
 	for _, r := range []string{serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
