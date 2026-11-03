@@ -44,8 +44,8 @@
               {{ $t('fix.proposal.refuse') }}
             </v-btn>
           </div>
-          <FieldHelp id="fix.approve" :field="$t('fix.proposal.approve')" />
-          <FieldHelp id="fix.refuse" :field="$t('fix.proposal.refuse')" />
+          <FieldHelp named id="fix.approve" :field="$t('fix.proposal.approve')" />
+          <FieldHelp named id="fix.refuse" :field="$t('fix.proposal.refuse')" />
           <p v-if="approving" class="m-voice m-prop__busy" role="status">
             <v-progress-circular indeterminate size="16" width="2" color="primary" />
             {{ $t('fix.proposal.approving') }}

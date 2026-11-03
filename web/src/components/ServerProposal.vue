@@ -51,8 +51,8 @@
             </v-btn>
             <v-btn variant="outlined" :loading="refusing" :disabled="approving || refusing" @click="refuseOpen = true">{{ $t('fix.proposal.refuse') }}</v-btn>
           </div>
-          <FieldHelp id="fix.approve" :field="$t('fix.proposal.approve')" />
-          <FieldHelp id="fix.refuse" :field="$t('fix.proposal.refuse')" />
+          <FieldHelp named id="fix.approve_server" :field="$t('fix.proposal.approve')" />
+          <FieldHelp named id="fix.refuse" :field="$t('fix.proposal.refuse')" />
           <p v-if="approving" class="m-voice m-sprop__busy" role="status">
             <v-progress-circular indeterminate size="16" width="2" color="primary" />
             {{ $t('srvfix.approving') }}

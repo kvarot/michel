@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
-import { helpIds, helpIdsIn, helpKey, maxHelpLength } from './helpView.js'
+import { helpIds, helpIdsIn, helpKey, helpTagsIn, maxHelpLength } from './helpView.js'
 
 const sources = import.meta.glob('../components/*.vue', { query: '?raw', import: 'default', eager: true })
 const used = new Set()
@@ -42,6 +42,28 @@ describe('FieldHelp in the components', () => {
   })
   test('every listed id is shown somewhere', () => {
     expect(helpIds.filter((id) => !used.has(id))).toEqual([])
+  })
+  test('every FieldHelp tag has an id the test can read', () => {
+    for (const [path, src] of Object.entries(sources)) {
+      if (path.endsWith('/FieldHelp.vue')) continue
+      expect(helpTagsIn(src), path).toBe(helpIdsIn(src).length)
+    }
+  })
+  test('a tag the reader cannot read is counted, so it fails the test above', () => {
+    for (const bad of ['<FieldHelp :id="x" :field="y" />', '<field-help id="a.b" :field="y" />', '<FieldHelp v-if="n > 1" id="a.b" :field="y" />']) {
+      expect(helpTagsIn(bad), bad).toBe(1)
+      expect(helpIdsIn(bad), bad).toEqual([])
+    }
+  })
+  test('a named FieldHelp is read like the others', () => {
+    expect(helpIdsIn('<FieldHelp named id="a.b" :field="x" />')).toEqual(['a.b'])
+  })
+  test('the proposals of a server and of a project have their own approve help', () => {
+    const of = (name) => helpIdsIn(sources[`../components/${name}.vue`])
+    expect(of('ServerProposal')).toContain('fix.approve_server')
+    expect(of('ServerProposal')).not.toContain('fix.approve')
+    expect(of('FixProposal')).toContain('fix.approve')
+    expect(of('FixProposal')).not.toContain('fix.approve_server')
   })
   test('the reader finds ids in a source', () => {
     expect(helpIdsIn('<FieldHelp id="a.b" :field="x" />\n<FieldHelp\n  :field="y" id="c.d"/>')).toEqual(['a.b', 'c.d'])

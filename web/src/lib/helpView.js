@@ -12,7 +12,7 @@ export const helpIds = [
   'project.level', 'project.auto', 'project.ai',
   'decision.action', 'decision.until', 'decision.why',
   'logs.path', 'logs.format', 'logs.try', 'logs.interval', 'logs.store_text', 'logs.alert_text', 'logs.retention', 'logs.sms',
-  'fix.approve', 'fix.refuse',
+  'fix.approve', 'fix.approve_server', 'fix.refuse',
   'settings.token', 'settings.advanced', 'settings.theme', 'settings.lang',
 ]
 
@@ -26,6 +26,17 @@ export const maxHelpLength = 280
  */
 export function helpKey(id) {
   return `help.${id}`
+}
+
+/**
+ * helpTagsIn counts the FieldHelp tags of a component source, in either
+ * spelling. A tag helpIdsIn cannot read (a bound :id, <field-help>, a ">" in an
+ * earlier attribute) is counted here and not there, and fails the test.
+ * @param {string} source
+ * @returns {number}
+ */
+export function helpTagsIn(source) {
+  return (source.match(/<(?:FieldHelp|field-help)\b/g) || []).length
 }
 
 /**
