@@ -124,3 +124,34 @@ body, .v-application { font-family: var(--m-ui); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* Guided interface: lines, tags, panels, verdicts. */
+:root { --m-line: rgb(var(--v-theme-line)); }
+
+/* A tag is a bold word on a solid fill: nothing is transparent, so the
+   contrast never depends on what lies underneath. */
+.m-tag--urgent, .m-tag--look, .m-tag--done, .m-tag--info {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.m-tag--urgent { color: rgb(var(--v-theme-error)); background: rgb(var(--v-theme-tag-urgent)); }
+.m-tag--look { color: rgb(var(--v-theme-warning)); background: rgb(var(--v-theme-tag-look)); }
+.m-tag--done { color: rgb(var(--v-theme-success)); background: rgb(var(--v-theme-tag-done)); }
+.m-tag--info { color: rgb(var(--v-theme-secondary)); background: rgb(var(--v-theme-tag-info)); }
+
+.m-panel {
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid var(--m-line);
+  border-radius: 8px;
+}
+
+.m-verdict {
+  font-family: var(--m-voice);
+  font-weight: 600;
+  font-size: clamp(1.5rem, 1.2rem + 1.4vw, 1.9rem);
+  max-width: 30ch;
+}
