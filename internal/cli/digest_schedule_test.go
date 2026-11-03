@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	_ "time/tzdata"
 
 	"net/url"
 
@@ -635,14 +637,84 @@ func demoWithDB(t *testing.T) (dir, db string) {
 
 // Ruling R29 (finding N2): a digest held because the channels that carry the
 // server sections failed is retried, but the channel that already got it gets
-// no second copy the same day; the next day every channel gets it again.
+// no second copy the same local day; the next local day every channel gets it
+// again. The clock is pinned: four tries span 48 minutes, so whether they stay
+// in one day depends on the hour, and a test on the real clock failed each
+// evening from 23:12 (three local days, three copies, as the ruling says).
 func TestHeldDigestIsNotSentAgainToTheChannelsThatGotIt(t *testing.T) {
+	// The copies seen after each try, written by hand: the tries come 16 minutes
+	// apart, then the fifth comes 26 hours after the fourth.
+	for _, c := range []struct {
+		name string
+		zone string
+		at   [5]int // year, month, day, hour, minute
+		want []int
+	}{
+		{"midday", "Europe/Paris", [5]int{2026, 11, 3, 12, 0}, []int{1, 1, 1, 1, 2}},
+		{"last try at 23:59", "Europe/Paris", [5]int{2026, 11, 3, 23, 11}, []int{1, 1, 1, 1, 2}},
+		{"last try at midnight", "Europe/Paris", [5]int{2026, 11, 3, 23, 12}, []int{1, 1, 1, 2, 3}},
+		{"evening crosses midnight", "Europe/Paris", [5]int{2026, 11, 3, 23, 20}, []int{1, 1, 1, 2, 3}},
+		{"crosses the UTC day only, Paris", "Europe/Paris", [5]int{2026, 11, 3, 0, 30}, []int{1, 1, 1, 1, 2}},
+		{"crosses the UTC day only, Tokyo", "Asia/Tokyo", [5]int{2026, 11, 3, 8, 50}, []int{1, 1, 1, 1, 2}},
+		{"crosses the UTC day only, Los Angeles", "America/Los_Angeles", [5]int{2026, 11, 3, 15, 50}, []int{1, 1, 1, 1, 2}},
+		{"evening, Los Angeles", "America/Los_Angeles", [5]int{2026, 11, 3, 23, 30}, []int{1, 1, 2, 2, 3}},
+		{"evening, Apia", "Pacific/Apia", [5]int{2026, 11, 3, 23, 50}, []int{1, 2, 2, 2, 3}},
+		{"the hour after midnight does not exist", "America/Havana", [5]int{2026, 3, 7, 23, 30}, []int{1, 1, 2, 2, 3}},
+		{"the clock goes back an hour", "Europe/Paris", [5]int{2026, 10, 25, 1, 50}, []int{1, 1, 1, 1, 2}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			base := time.Date(c.at[0], time.Month(c.at[1]), c.at[2], c.at[3], c.at[4], 0, 0, loadZone(t, c.zone))
+			got, _ := heldDigestCopies(t, base)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("from %s, copies after each try = %v, want %v", base, got, c.want)
+			}
+		})
+	}
+	// Many hours, most of them around midnight where the day changes: a copy on
+	// the first try of each local day, none on the others.
+	for _, zone := range []string{"Europe/Paris", "Asia/Kathmandu", "America/New_York", "UTC"} {
+		loc := loadZone(t, zone)
+		midnight := time.Date(2026, 11, 4, 0, 0, 0, 0, loc)
+		for _, minutes := range []int{-780, -49, -48, -32, -16, -1} {
+			base := midnight.Add(time.Duration(minutes) * time.Minute)
+			t.Run(zone+" "+base.Format("15:04"), func(t *testing.T) {
+				got, tries := heldDigestCopies(t, base)
+				want, day := 0, ""
+				for i, at := range tries {
+					if d := at.Format("2006-01-02"); d != day {
+						want, day = want+1, d
+					}
+					if got[i] != want {
+						t.Errorf("after the try of %s: %d copies, want %d (all: %v)", at, got[i], want, got)
+					}
+				}
+			})
+		}
+	}
+}
+
+// loadZone returns a named time zone, from the data built into the test.
+func loadZone(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loc
+}
+
+// heldDigestCopies runs the loop of serve from base with a scoped webhook that
+// answers and an unlimited mail that fails, so the digest stays held: four
+// tries the first day (the clock moves 16 minutes after each), then one 26 hours
+// later. It returns how many copies the webhook had after each try, and when
+// each try was.
+func heldDigestCopies(t *testing.T, base time.Time) (copies []int, tries []time.Time) {
+	t.Helper()
 	dir, _ := scannedDemo(t, false)
 	h := newHookRecorder(t)
 	writeCfgText(t, dir, "sovereignty:\n  network:\n    default_egress: deny\n    allow:\n      - {host: 127.0.0.1, purpose: notify.webhook}\n      - {host: smtp.example.org, purpose: notify.email}\n"+
 		"notify:\n  digest_at: \"00:00\"\n  channels:\n    - name: hook\n      type: webhook\n      url: "+h.URL+"/michel\n      projects: [demo]\n"+
 		"    - name: mail-perso\n      type: email\n      host: smtp.example.org\n      port: 587\n      from: michel@example.org\n      to: [me@example.org]\n      username: me\n      password_secret: smtp-perso\n")
-	base := time.Now()
 	var offset atomic.Int64
 	clock := func() time.Time { return base.Add(time.Duration(offset.Load())) }
 	mailTries := func() int {
@@ -654,29 +726,29 @@ func TestHeldDigestIsNotSentAgainToTheChannelsThatGotIt(t *testing.T) {
 		}
 		return n
 	}
-	// Four tries the first day (the clock moves 16 minutes after each), then the next day.
-	moved, nextDay := 0, false
 	loopRunClock(t, dir, clock, func() bool {
 		n := mailTries()
-		if n > moved && n < 4 {
-			moved = n
-			offset.Add(int64(16 * time.Minute))
-		}
-		if n >= 4 && !nextDay {
-			nextDay = true
-			offset.Add(int64(26 * time.Hour))
+		if n > len(tries) {
+			// The mail is audited once every channel was tried, and the next try
+			// waits for the clock to move: this is the state after try n.
+			tries = append(tries, clock())
+			copies = append(copies, h.count())
+			switch {
+			case n < 4:
+				offset.Add(int64(16 * time.Minute))
+			case n == 4:
+				offset.Add(int64(26 * time.Hour))
+			}
 		}
 		return n >= 5
 	})
-	if n := mailTries(); n < 5 {
-		t.Fatalf("mail tries = %d", n)
-	}
-	if h.count() != 2 {
-		t.Errorf("the scoped channel got %d copies: want one the first day and one the next", h.count())
+	if n := mailTries(); n != 5 || len(tries) != 5 {
+		t.Fatalf("mail tries = %d, seen %d", n, len(tries))
 	}
 	if runs := digestRuns(t, dir); len(runs) != 0 {
 		t.Errorf("a held digest was recorded: %+v", runs)
 	}
+	return copies, tries
 }
 
 // Serve with no channel: the first window starts when serve first looked, it
