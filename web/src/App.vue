@@ -68,7 +68,7 @@
         />
         <FixPage v-else-if="page === 'fix'" :route="fixRoute" @changed="stale = true" />
         <ServersPage v-else-if="page === 'servers'" :route="serversRoute" @changed="stale = true" />
-        <TodayPage v-else :digest="digest" :meta="meta" @decided="loadToday(false)" />
+        <TodayPage v-else :digest="digest" :meta="meta" :refreshing="refreshing" @decided="loadToday(false)" @refresh="loadToday(true)" />
       </div>
     </v-main>
 
@@ -133,7 +133,7 @@ export default {
       return this.state !== 'ready' || navMode(this.$vuetify.display.width) === 'bottom'
     },
     refreshable() {
-      return this.page === 'todo' || this.page === 'projects'
+      return this.page === 'projects'
     },
     showHeader() {
       return this.showBrand || (this.state === 'ready' && this.refreshable)
