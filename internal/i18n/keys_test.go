@@ -30,6 +30,9 @@ var dynamicPrefixes = []string{
 	// serverrules.<rule>.title/.explain are named by the Key of each rule in
 	// the embedded rules.yaml.
 	"serverrules.",
+	// api.project.* are named by the refusals of the project routes (the key
+	// and its _hint) and by how a scan from the page ended (codeOfScan).
+	"api.project.",
 	// api.target.* are named by the refusals of the server routes (servererr.Key),
 	// their hints (the key and _hint) and the state of a server.
 	"api.target.",

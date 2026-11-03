@@ -37,6 +37,10 @@ type ProjectView struct {
 	// scanned; LastScanStatus is its status, or "never".
 	LastScanAt     string `json:"last_scan_at"`
 	LastScanStatus string `json:"last_scan_status"`
+	// Scanning says a scan started from the page is running; LastFailure is how
+	// the last one failed, if it did. Both live in the memory of this process.
+	Scanning    bool             `json:"scanning"`
+	LastFailure *TargetLastCheck `json:"last_failure"`
 }
 
 // FindingView is a finding with its project's name instead of its id, the

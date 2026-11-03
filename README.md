@@ -20,6 +20,8 @@ bin/michel serve --open       # the Today page, on this computer only
 bin/michel audit verify
 ```
 
+Adding and checking a project also work from the page: My projects, "Add a project" and "Check this project" (the same pass as `michel scan`, run in the background). The test command and the classification stay on the command line.
+
 - Sources (registry, consent, KEV/EPSS, feeds, plugins, skills, MCP): `docs/sources.md`
 - Fix agent (levels, consent, work copy, proof, residual risks): `docs/fix.md`
 - Servers (SSH, scripts, levels, SMS, troubleshooting, logs): `docs/servers.md`

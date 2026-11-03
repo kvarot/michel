@@ -9,7 +9,7 @@ export const helpIds = [
   'server.host', 'server.user', 'server.port', 'server.name', 'server.site', 'server.kind', 'server.env',
   'server.level', 'server.auto', 'server.executor', 'server.sudo', 'server.interval', 'server.preprod',
   'server.active', 'server.fingerprint', 'server.check', 'server.snapshot',
-  'project.level', 'project.auto', 'project.ai',
+  'project.level', 'project.auto', 'project.ai', 'project.path', 'project.name',
   'decision.action', 'decision.until', 'decision.why', 'exposure.decision',
   'logs.path', 'logs.format', 'logs.try', 'logs.interval', 'logs.store_text', 'logs.alert_text', 'logs.retention', 'logs.sms',
   'fix.approve', 'fix.approve_server', 'fix.refuse',

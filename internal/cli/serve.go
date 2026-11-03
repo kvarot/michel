@@ -22,6 +22,7 @@ import (
 	"github.com/kvarot/michel/internal/buildinfo"
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/policy"
+	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/serverlog"
@@ -82,6 +83,34 @@ func loopbackListen(deps *Deps, addr string) (string, error) {
 	return addr, nil
 }
 
+// serveScanProject is what the page's "Check this project" runs: the same pass
+// as michel scan, whose warnings go to the terminal of michel serve, and the
+// queue of the worker of this process, as a server check from the page does.
+// One scan at a time, as michel scan --all: the scanner never ran two at once.
+func serveScanProject(cmd *cobra.Command, deps *Deps) func(ctx context.Context, p project.Project) error {
+	var one sync.Mutex
+	return func(ctx context.Context, p project.Project) error {
+		one.Lock()
+		defer one.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		r, _, err := scanOneProject(ctx, cmd, deps, p, true)
+		if err != nil {
+			// The page only says it failed: the reason may name files.
+			fmt.Fprintln(deps.Stderr, deps.T("cli.scan.error_line", p.Name, err))
+			return err
+		}
+		switch r.Status {
+		case scan.ScanEmpty:
+			return api.ErrNothingToScan
+		case scan.ScanFailed:
+			return errors.New("the scan failed")
+		}
+		return nil
+	}
+}
+
 func newServeCmd(deps *Deps) *cobra.Command {
 	var listen string
 	var open bool
@@ -91,7 +120,8 @@ func newServeCmd(deps *Deps) *cobra.Command {
 		Long: "Serve starts the Today page and its JSON API on a loopback address (127.0.0.1 by default): no other computer " +
 			"can reach it. The first start creates an access token, kept in the data folder like the other secrets; serve " +
 			"prints the page link with the token once, and the page then keeps it. Decisions taken on the page are " +
-			"recorded and audited like 'michel decide' (author web). The project folders are never touched. " +
+			"recorded and audited like 'michel decide' (author web). A project can be added and checked from the page; the check " +
+			"is the same pass as 'michel scan'. The project folders are never touched. " +
 			"Ctrl+C stops the server.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -156,7 +186,8 @@ func newServeCmd(deps *Deps) *cobra.Command {
 				AllowedHosts: []string{bound, net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("localhost", port), net.JoinHostPort("::1", port)},
 				PolicyPath:   sd.PolicyPath, Reload: sd.Reload,
 				Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir, Rematch: serverRematch(cmd, deps)},
-				Fix:     &fd, FixWorker: true, Servers: api.Servers{Check: cd, Home: home}}
+				Fix:     &fd, FixWorker: true, Servers: api.Servers{Check: cd, Home: home},
+				ScanProject: serveScanProject(cmd, deps)}
 			if fsys, ok := web.Dist(); ok {
 				d.Web = fsys
 			}

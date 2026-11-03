@@ -123,7 +123,7 @@ func (s *server) today(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) projects(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, lang := r.Context(), s.answerLang(r)
 	list, err := project.NewRepo(s.deps.Store).List(ctx)
 	if err != nil {
 		s.internal(w, r)
@@ -134,7 +134,7 @@ func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 		if !p.Active {
 			continue
 		}
-		v, err := s.projectView(ctx, p)
+		v, err := s.projectView(ctx, lang, p)
 		if err != nil {
 			s.internal(w, r)
 			return
@@ -145,7 +145,7 @@ func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 }
 
 // projectView counts p's findings the way the digest does.
-func (s *server) projectView(ctx context.Context, p project.Project) (ProjectView, error) {
+func (s *server) projectView(ctx context.Context, lang i18n.Lang, p project.Project) (ProjectView, error) {
 	v := ProjectView{Name: scan.SanitizeText(p.Name), Classification: string(p.Classification), FixLevel: p.FixLevel,
 		AutoFixMinor: p.AutoFixMinor, HasTestCmd: strings.TrimSpace(p.TestCmd) != "", GitRepo: workcopy.IsGitRepo(p.Path),
 		Open: map[string]int{}, Decided: map[string]int{}, LastScanStatus: "never"}
@@ -182,6 +182,7 @@ func (s *server) projectView(ctx context.Context, p project.Project) (ProjectVie
 	case !errors.Is(err, sql.ErrNoRows):
 		return ProjectView{}, err
 	}
+	s.scanState(lang, p, &v)
 	return v, nil
 }
 
@@ -236,7 +237,7 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		s.auditFailed(w, r)
 		return
 	}
-	v, err := s.projectView(ctx, p)
+	v, err := s.projectView(ctx, lang, p)
 	if err != nil {
 		s.internal(w, r)
 		return
