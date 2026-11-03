@@ -83,3 +83,10 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 6 fix 2: 635dac4. Task 6: complete. Browser not re-looked after fix 2.
 - Task 7 fix: d1769d8: verified needs the flaw still gone, a third group "Revenues". F6 left for Task 13, F7 (empty package and osv id title) parked. Controller read the stat; no scoped re-review, final review covers. Task 7: complete.
 - Task 8: dispatched, BASE d1769d8.
+- Task 8: c5de278, review 1 critical 4 important 6 minor 5 French. Fix round dispatched.
+- Ruling R42: the text says a key written in code stays in the copy and reaches Anthropic; the agent's start is not changed in this plan — plan 5 flow, to show Kévin first in the final report — costs a warning that comes after the start until he decides.
+- Ruling R43: a code flaw has no rescan on the copy: "Vérifiée" needs `proven_fixed` and the flaw still gone, `rescan_clean` is required only where a rescan could run; the proposal says Michel could not check it on the copy, never "toujours là" — R2's rare case is every code flaw — costs relying on the post-merge scan alone.
+- Ruling R44: on `applied`, step "Corrigée" is not done and not green: it reads ready, not yet in your code — the table in the plan was wrong — costs one more label.
+- Task 8 fix: 9a947c6, 1dd13bd. Accepted: `inconclusive` stops at Corrigée. For Task 14 or a later fix: stored `rescan_ran` so a dependency flaw whose rescan failed does not say "toujours là"; CLI "toujours là" on a code flaw; `fix.chat.applied`. Plan R2 and its Task 8 table are superseded by R43, R44.
+- Waiting on Kévin: hold the agent when a key is found in the code? Recommended yes. Not built until he answers.
+- Task 9: dispatched, BASE 1dd13bd.
