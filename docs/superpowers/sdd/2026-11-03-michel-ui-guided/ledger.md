@@ -97,3 +97,6 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 8 fix 2: f7c7c6a, 5cdab86, a172aaa. `fix.Prove` takes `Pass{Scanned, Sources}`, an attempt waits when its tool did not look. Task 14's control must pass a real Pass. Parked: `SkippedKnown` in plugin/run.go can close a plugin vulnerability OSV starts reporting and so prove a fix; a code flaw whose tool does not run in `michel scan` stays `applied`, documented. Task 8: complete; final review covers fix 2.
 - Task 9 fix: 3441242, d3e2169. Parked: a fix first started on the preprod's own card has no production link; refused page repeats a sentence. Task 9: complete, scoped re-review running.
 - Task 10: dispatched, BASE d3e2169.
+- Task 9 fix 2: 9915d1c. Task 9: complete. Left: `approval_*` says "sur ce serveur" for a preprod's settings; `servers.unknown.body_preprod` wording.
+- Task 10: d802e69, review 1 important 3 minor, fix 57944dd: zero rows is not a read. A server without `ss` stays unread with a permanent note, to tell Kévin. Task 10: complete.
+- Task 11: dispatched, BASE 57944dd.
