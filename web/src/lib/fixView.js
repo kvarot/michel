@@ -16,6 +16,23 @@ export function isFinal(state) {
   return finals.includes(state)
 }
 
+/** @param {object} f FindingView @returns {boolean} whether a finding still has to be fixed: new, pending, or decided "fix". */
+export function isOpen(f) {
+  if (f.status === 'new' || f.status === 'pending') return true
+  return f.status === 'decided' && f.decision?.action === 'fix'
+}
+
+/**
+ * canDecide tells whether the flaw view offers its decision: no fix yet, or a
+ * project's fix that went nowhere. A fix under way or waiting has its own
+ * buttons; a server's flaw is decided on its server's sheet.
+ * @param {object|null} attempt AttemptView, null for a flaw without a fix
+ */
+export function canDecide(attempt) {
+  if (!attempt) return true
+  return !attempt.server && ['refused', 'failed', 'inconclusive', 'superseded'].includes(attempt.state)
+}
+
 /**
  * groupOf is the group of an attempt state: still to fix after a refusal or
  * a failure, running while the agent works or Michel applies an approved

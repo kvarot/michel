@@ -124,19 +124,20 @@
         @resolve="serverAction('resolve', 'resolve')"
         @again="again"
       />
-      <FixProposal
-        v-else-if="selectedFinding"
-        class="m-fix__right"
-        :attempt="current"
-        :finding="selectedFinding"
-        :sheet="sheet"
-        :sheet-loading="sheetLoading"
-        :approving="approving"
-        :refusing="refusing"
-        :updated="proposalUpdated"
-        @approve="approve"
-        @refuse="refuse"
-      />
+      <div v-else-if="selectedFinding" class="m-fix__right m-fix__side">
+        <FixProposal
+          :attempt="current"
+          :finding="selectedFinding"
+          :sheet="sheet"
+          :sheet-loading="sheetLoading"
+          :approving="approving"
+          :refusing="refusing"
+          :updated="proposalUpdated"
+          @approve="approve"
+          @refuse="refuse"
+        />
+        <DecisionPanel v-if="toDecide" :key="toDecide.id" :finding="toDecide" @decided="onDecided" />
+      </div>
     </div>
 
     <v-dialog v-model="consent.open" max-width="520" scrollable persistent>
@@ -155,12 +156,13 @@
 
 <script>
 import AiConsentDialog from './AiConsentDialog.vue'
+import DecisionPanel from './DecisionPanel.vue'
 import FixChat from './FixChat.vue'
 import FixProposal from './FixProposal.vue'
 import ServerProposal from './ServerProposal.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
-import { acceptResult, activityLine, fixHash, groupAttempts, isFinal, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
+import { acceptResult, activityLine, canDecide, fixHash, groupAttempts, isFinal, isOpen, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
 import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../lib/serversView.js'
 
 
@@ -168,18 +170,12 @@ import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../
 // attempt started alone (level 2) or proposed through michel mcp shows up.
 const listEvery = 15000
 
-/** isOpen tells whether a finding still has to be fixed: new, pending, or decided "fix". */
-function isOpen(f) {
-  if (f.status === 'new' || f.status === 'pending') return true
-  return f.status === 'decided' && f.decision?.action === 'fix'
-}
-
 // FixPage is the "Corriger" page: the list by state on the left, the
 // conversation with the agent in the middle, the flaw and the proposal on
 // the right. route is {attempt, finding} from the address.
 export default {
   name: 'FixPage',
-  components: { AiConsentDialog, FixChat, FixProposal, ServerProposal },
+  components: { AiConsentDialog, DecisionPanel, FixChat, FixProposal, ServerProposal },
   props: {
     route: { type: Object, default: () => ({ attempt: '', finding: '' }) },
   },
@@ -243,6 +239,11 @@ export default {
       if (f) return f
       if (this.sheet && this.sheet.id === this.route.finding) return this.sheet
       return { id: this.route.finding, package: '', severity: '' }
+    },
+    // toDecide is the flaw's sheet when the page offers its decision.
+    toDecide() {
+      const id = this.selectedFinding?.id
+      return id && this.sheet?.id === id && canDecide(this.current) ? this.sheet : null
     },
     agentProblem() {
       if (this.agentError) {
@@ -390,6 +391,17 @@ export default {
       } finally {
         if (this.sheetFor === id) this.sheetLoading = false
       }
+    },
+
+    /**
+     * onDecided takes the answer as the new sheet, as FindingSheet does: the
+     * panel stays on screen with its confirmation and its proof.
+     */
+    onDecided(view) {
+      this.sheet = view
+      this.sheetFor = view.id
+      this.$emit('changed')
+      this.loadList(true)
     },
 
     /** select shows the address's attempt or finding. */
@@ -749,6 +761,7 @@ export default {
 .m-fix__item--on { background: rgba(var(--v-theme-primary), 0.1); border-color: rgba(var(--v-theme-primary), 0.35); }
 .m-fix__item-top { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
 .m-fix__pkg { font-weight: 600; min-width: 0; }
+.m-fix__side { display: grid; gap: 1rem; min-width: 0; }
 .m-fix__center {
   display: grid;
   gap: 1rem;

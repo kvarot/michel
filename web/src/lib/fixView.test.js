@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  acceptResult, activityLine, canApprove, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, levelLabel, levels, mergeMessages,
+  acceptResult, activityLine, canApprove, canDecide, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
   proposalFacts, proposalSentence, splitMasked, stateLine,
 } from './fixView.js'
 
@@ -212,5 +212,22 @@ describe('acceptResult', () => {
     expect(acceptResult({ alive: false, pending: 'a1' }, 'a1')).toBe(false)
     expect(acceptResult({ alive: true, pending: 'b1' }, 'a1')).toBe(false)
     expect(acceptResult({ alive: true, pending: null }, 'a1')).toBe(false)
+  })
+})
+
+describe('what can still be decided', () => {
+  test('isOpen: new, pending, or decided to fix', () => {
+    expect(isOpen({ status: 'new', decision: null })).toBe(true)
+    expect(isOpen({ status: 'pending', decision: null })).toBe(true)
+    expect(isOpen({ status: 'decided', decision: { action: 'fix' } })).toBe(true)
+    expect(isOpen({ status: 'decided', decision: { action: 'defer' } })).toBe(false)
+    expect(isOpen({ status: 'decided', decision: { action: 'ignore' } })).toBe(false)
+    expect(isOpen({ status: 'gone', decision: null })).toBe(false)
+  })
+  test('canDecide: a flaw without a fix, or a fix of a project that went nowhere', () => {
+    expect(canDecide(null)).toBe(true)
+    for (const state of ['refused', 'failed', 'inconclusive', 'superseded']) expect(canDecide({ state }), state).toBe(true)
+    for (const state of ['preparing', 'running', 'proposed', 'approved', 'applied', 'proven_fixed']) expect(canDecide({ state }), state).toBe(false)
+    expect(canDecide({ state: 'failed', server: { target: { id: 'a' } } })).toBe(false)
   })
 })
