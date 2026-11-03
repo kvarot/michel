@@ -637,11 +637,15 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 					dependents++
 				}
 			}
+			// What Michel read in its logs goes first. If that fails the server stays and
+			// removing it can be tried again (once it is gone nothing could erase the logs).
+			erased, forgetErr := serverlog.ForgetTargetAudited(context.WithoutCancel(ctx), serverlog.NewRepo(deps.Store), deps.Audit, "cli", t.ID)
+			if !erased {
+				return deps.Errorf("cli.target.remove.logs_failed", t.Name)
+			}
 			if err := repo.Remove(ctx, t.ID); err != nil {
 				return targetFailure(deps, err, false)
 			}
-			// What Michel read in its logs goes with it.
-			logsKept := serverlog.ForgetTargetAudited(ctx, serverlog.NewRepo(deps.Store), deps.Audit, "cli", t.ID) != nil
 			// The opt-in goes with the server, except for what another uses.
 			removed, rulesFailed := 0, false
 			if gone := target.ReleasedRules(t, others); len(gone) > 0 {
@@ -649,15 +653,12 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 				removed, rulesFailed = len(done), err != nil
 			}
 			if err := targetRecord(cmd, deps, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed,
-				"rules_error": rulesFailed, "preprod_cleared": dependents}); err != nil {
+				"rules_error": rulesFailed, "preprod_cleared": dependents, "logs_error": forgetErr != nil}); err != nil {
 				return err
 			}
 			if rulesFailed {
 				// The server is gone; its network rules could not be taken back.
 				fmt.Fprintln(deps.Stderr, deps.T("cli.target.remove.rules_failed", t.Name))
-			}
-			if logsKept {
-				fmt.Fprintln(deps.Stderr, deps.T("cli.target.remove.logs_failed", t.Name))
 			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.target.remove.done", t.Name))
 			return nil

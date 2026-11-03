@@ -43,8 +43,18 @@ func Read(ctx context.Context, c *sshx.Client, src Source, cursors []Cursor, o F
 		return Output{}, nil, err
 	}
 	next := make([]Cursor, 0, len(out.Files)+1)
+	unseen := map[string]bool{}
+	for _, u := range out.Unseen {
+		unseen[u] = true
+	}
 	for _, f := range out.Files {
-		next = append(next, Cursor{SourceID: src.ID, File: f.File, FileID: f.FileID, Offset: f.Offset, ReadAt: now})
+		c := Cursor{SourceID: src.ID, File: f.File, FileID: f.FileID, Offset: f.Offset, ReadAt: now}
+		// A file located by its metadata because it could not be opened was not read:
+		// its position carries no read date.
+		if unseen[f.File] {
+			c.ReadAt = time.Time{}
+		}
+		next = append(next, c)
 	}
 	if len(cursors) == 0 && len(out.Files) == 0 && out.None && out.Rejected == 0 {
 		next = append(next, placeholderCursor(src, now))

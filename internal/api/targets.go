@@ -1125,7 +1125,7 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 	// Nor does a read of its logs, which would write rows back.
 	logUnlock, logFree := serverlog.TryLock(t.ID)
 	if !logFree {
-		s.failedBody(w, http.StatusConflict, lang, "api.target.busy", "api.target.busy_hint")
+		s.logRefused(w, http.StatusConflict, lang, "api.logs.busy")
 		return
 	}
 	defer logUnlock()
@@ -1157,12 +1157,20 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 			dependents++
 		}
 	}
-	if err := s.targets().Remove(ctx, t.ID); err != nil {
+	// What Michel read in its logs goes first: errors, text, sources, settings. If
+	// that fails the server stays, and removing it can be tried again (once it is
+	// gone, nothing could erase the logs). The page leaving does not interrupt it.
+	dctx, cancel := s.detached(r)
+	defer cancel()
+	erased, forgetErr := serverlog.ForgetTargetAudited(dctx, s.serverLogs(), s.deps.Audit, targetActor, t.ID)
+	if !erased {
+		s.failedBody(w, http.StatusInternalServerError, lang, "api.target.logs_failed", "api.target.logs_failed_hint")
+		return
+	}
+	if err := s.targets().Remove(dctx, t.ID); err != nil {
 		s.targetRefused(w, r, lang, err, false)
 		return
 	}
-	// What Michel read in its logs goes with it: errors, text, sources, settings.
-	logsKept := serverlog.ForgetTargetAudited(ctx, s.serverLogs(), s.deps.Audit, targetActor, t.ID) != nil
 	// The opt-in goes with the server, except for what another still uses.
 	released := target.ReleasedRules(t, others)
 	removed, rulesFailed := 0, false
@@ -1171,13 +1179,13 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		removed, rulesFailed = len(gone), err != nil
 	}
 	if err := s.targetAudit(ctx, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "rules_error": rulesFailed,
-		"preprod_cleared": dependents}); err != nil {
+		"preprod_cleared": dependents, "logs_error": forgetErr != nil}); err != nil {
 		s.internal(w, r)
 		return
 	}
-	if rulesFailed || logsKept {
-		// The server is gone; its network rules or its log data could not be taken back.
-		writeJSON(w, http.StatusOK, map[string]bool{"removed": true, "rules_not_removed": rulesFailed, "logs_not_erased": logsKept})
+	if rulesFailed {
+		// The server is gone; its network rules could not be taken back.
+		writeJSON(w, http.StatusOK, map[string]bool{"removed": true, "rules_not_removed": true})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"removed": true})

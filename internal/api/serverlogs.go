@@ -434,16 +434,13 @@ func LogStateNotes(notes []serverlog.Note, sourceID string, touched time.Time) [
 }
 
 // LogLastRead is when a source was last read for real: the latest read date of
-// its files, those that could not be opened left out (a pass that opened
-// nothing is no read).
-func LogLastRead(cursors []serverlog.Cursor, unseen []serverlog.UnseenFile) time.Time {
-	bad := map[string]bool{}
-	for _, u := range unseen {
-		bad[u.File] = true
-	}
+// its files. A pass that opened nothing moves no date (the reader leaves them), a
+// file located but never opened has none, and the placeholder of an activation
+// is no file.
+func LogLastRead(cursors []serverlog.Cursor) time.Time {
 	var last time.Time
 	for _, c := range cursors {
-		if !bad[c.File] && !strings.HasSuffix(c.File, "/") && c.ReadAt.After(last) {
+		if !strings.HasSuffix(c.File, "/") && c.ReadAt.After(last) {
 			last = c.ReadAt
 		}
 	}
@@ -480,7 +477,7 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 		}
 		v := LogSourceView{ID: src.ID, Path: LogPath(src.Path), Format: string(src.Format), LevelField: srvText("", src.LevelField),
 			ChannelField: srvText("", src.ChannelField), Pattern: srvText("", src.Pattern), Active: src.Active,
-			CreatedAt: stamp(src.CreatedAt), LastReadAt: stamp(LogLastRead(cursors, unseen[src.ID])), Notes: []LogNoteView{},
+			CreatedAt: stamp(src.CreatedAt), LastReadAt: stamp(LogLastRead(cursors)), Notes: []LogNoteView{},
 			Unseen: []TargetUnseenView{}, Note: formatNote(lang, src.Format)}
 		for _, n := range LogStateNotes(notes, src.ID, touched) {
 			v.Notes = append(v.Notes, LogNoteView{Kind: n.Kind, Text: noteText(lang, n), From: stamp(n.From), To: stamp(n.To), Amount: n.Amount})

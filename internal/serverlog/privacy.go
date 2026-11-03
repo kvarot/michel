@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -200,23 +201,39 @@ func (r *Repo) rowCounts(ctx context.Context) ([3]int64, error) {
 }
 
 // secretMarkerRe is the marker the masker puts in place of a secret. It holds
-// digits, which a raw text never may: the check sees it as a plain word, so that
-// a text that was masked and stored passes it again when it is read back.
-var secretMarkerRe = regexp.MustCompile(`\[secret-[0-9a-f]{8}-[0-9]+\]`)
+// digits, which a raw text never may: a text that was masked and stored is
+// checked with the marker seen as a word when it is read back (readBackText),
+// and only then. The counter has three digits at most.
+var secretMarkerRe = regexp.MustCompile(`\[secret-[0-9a-f]{8}-[0-9]{1,3}\]`)
+
+// partialMarkerRe is a marker cut at the end of a text by the cap.
+var partialMarkerRe = regexp.MustCompile(`\[secret-?[0-9a-f]*(?:-[0-9]*)?$`)
 
 // cleanedText is the text a server error may carry out of the filter: it must
-// pass validText, then the masker hides what looks like a secret and the
-// result is capped. ok is false for a text that must be dropped. Alerts use it
-// too, so that what is stored and what is sent are the same text.
+// pass validText (a raw text: no marker, no digit), then the masker hides what
+// looks like a secret and the result is capped. ok is false for a text that must
+// be dropped. Alerts use it too, so that what is stored and what is sent are the
+// same text.
 func cleanedText(text string) (string, bool) {
-	if !validText(secretMarkerRe.ReplaceAllString(text, "[secret]")) {
+	if !validText(text) {
 		return "", false
 	}
 	masked := mask.New().Mask(text)
 	if utf8.RuneCountInString(masked) > MaxTextRunes {
 		masked = string([]rune(masked)[:MaxTextRunes])
+		// A marker cut by the cap would never pass the check again.
+		masked = strings.TrimRight(partialMarkerRe.ReplaceAllString(masked, ""), " ")
 	}
 	return masked, true
+}
+
+// readBackText checks a text that was stored (masked and capped) when it is read
+// back: the check of a raw text, with the masker's own marker seen as a word.
+func readBackText(text string) (string, bool) {
+	if !validText(secretMarkerRe.ReplaceAllString(text, "[secret]")) {
+		return "", false
+	}
+	return text, true
 }
 
 // EraseTargetAudited removes all log data of a server held by Michel (errors,
@@ -232,10 +249,10 @@ func EraseTargetAudited(ctx context.Context, repo *Repo, log *audit.Logger, acto
 // ForgetTargetAudited removes everything Michel holds about the logs of a server
 // (Repo.ForgetTarget: errors, counts, positions, notes, sources and settings)
 // and audits it. It is what removing a server does; the audit names the scope,
-// never what was erased.
-func ForgetTargetAudited(ctx context.Context, repo *Repo, log *audit.Logger, actor, targetID string) error {
+// never what was erased. erased tells whether the data went, whatever happened to the audit write after.
+func ForgetTargetAudited(ctx context.Context, repo *Repo, log *audit.Logger, actor, targetID string) (erased bool, err error) {
 	if err := repo.ForgetTarget(ctx, targetID); err != nil {
-		return err
+		return false, err
 	}
-	return auditPurge(ctx, log, actor, targetID, map[string]any{"scope": "server_removed"})
+	return true, auditPurge(ctx, log, actor, targetID, map[string]any{"scope": "server_removed"})
 }

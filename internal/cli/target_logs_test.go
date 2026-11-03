@@ -310,3 +310,79 @@ func TestTargetLogsListScrubsLikeTheAPI(t *testing.T) {
 		}
 	}
 }
+
+// If the logs of a server cannot be erased, the server is not removed and the
+// command says so; the removal can be tried again.
+func TestTargetRemoveKeepsTheServerWhenItsLogsCannotBeErased(t *testing.T) {
+	e := newLogEnv(t)
+	e.addSource(t)
+	s, err := store.Open(filepath.Join(e.dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`DROP TABLE log_unseen`); err != nil { // makes the erasure fail
+		t.Fatal(err)
+	}
+	s.Close()
+	_, out, _, err := run(t, e.dir, "target", "remove", "srv-demo")
+	if err == nil || !strings.Contains(err.Error(), "the server is not removed") || strings.Contains(out, "Removed server") || strings.Contains(err.Error(), "log_unseen") {
+		t.Fatalf("remove: out %q err %v", out, err)
+	}
+	if _, err := targetByName(t, e.dir, "srv-demo"); err != nil {
+		t.Errorf("the server is gone: %v", err)
+	}
+	if rows := auditRows(t, e.dir, "target.remove"); len(rows) != 0 {
+		t.Errorf("a removal that did not happen is audited: %+v", rows)
+	}
+}
+
+func TestTargetRemoveAuditSaysTheLogsWent(t *testing.T) {
+	e := newLogEnv(t)
+	e.addSource(t)
+	if _, _, _, err := run(t, e.dir, "target", "remove", "srv-demo"); err != nil {
+		t.Fatal(err)
+	}
+	rows := auditRows(t, e.dir, "target.remove")
+	if len(rows) != 1 || rows[0].evidence["logs_error"] != false {
+		t.Errorf("audit = %+v", rows)
+	}
+}
+
+// The notes of a source show in the list, and the command to see more names
+// the server.
+func TestTargetLogsListShowsNotesAndReadNamesTheServer(t *testing.T) {
+	e := newLogEnv(t)
+	src := e.addSource(t)
+	at := time.Date(2026, 11, 3, 6, 0, 0, 0, time.UTC)
+	e.withRepo(t, func(ctx context.Context, repo *serverlog.Repo, tg target.Target) {
+		if err := repo.SaveCursors(ctx, []serverlog.Cursor{{SourceID: src.ID, File: src.Path, FileID: "1:2", Offset: 5, ReadAt: at}}); err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range []serverlog.Note{
+			{Kind: serverlog.NoteSkipped, From: at, To: at, Amount: 40 << 20},
+			{Kind: serverlog.NoteRotated, From: at, To: at},
+			{Kind: serverlog.NoteGap, From: at.Add(-5 * time.Hour), To: at.Add(-4 * time.Hour)},
+		} {
+			n.TargetID, n.SourceID = tg.ID, src.ID
+			if err := repo.AddNote(ctx, n); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	_, out, _, err := run(t, e.dir, "target", "logs", "list", "srv-demo")
+	for _, want := range []string{"Source " + src.ID + ": Part of this log was not read (40 MiB)", "replaced or emptied", "could not read this log from"} {
+		if err != nil || !strings.Contains(out, want) {
+			t.Errorf("list lacks %q: %q %v", want, out, err)
+		}
+	}
+	// Reading a missing file: the hint names the server.
+	e.withRepo(t, func(ctx context.Context, repo *serverlog.Repo, tg target.Target) {
+		if err := repo.UpdateSource(ctx, serverlog.Source{ID: src.ID, TargetID: tg.ID, Path: logShPath(e.file) + ".gone", Format: serverlog.FormatPHP, Active: true}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	_, out, _, err = run(t, e.dir, "target", "logs", "read", "srv-demo")
+	if err != nil || !strings.Contains(out, "michel target logs list srv-demo") {
+		t.Errorf("read: %q %v", out, err)
+	}
+}

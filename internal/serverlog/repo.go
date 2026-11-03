@@ -442,8 +442,8 @@ func spikes(st Settings, cur, prev int64) bool {
 
 // Apply adds records read on src. It returns the errors seen for the first
 // time (fresh), those that came back after being resolved (reopened), and
-// those whose count in an hour just reached ten times the hour before, with
-// at least 100 occurrences (spiked, with SpikeHour the latest hour that did). An
+// those whose count in an hour just reached SpikeFactor times the hour before
+// (10 by default), with at least SpikeMin occurrences (100 by default) (spiked, with SpikeHour the latest hour that did). An
 // ignored error is counted but never returned. The text of a record is stored
 // only when the server settings allow it, and never takes part in the identity.
 func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Time) (fresh, reopened, spiked []Signature, err error) {
@@ -834,12 +834,32 @@ func (r *Repo) LastRead(ctx context.Context, targetID string) (time.Time, error)
 
 // TouchCursors says that the source was read at at: every position of it is
 // still good then, so its read date moves, files that did not change included.
-// The date of the last read is what tells a gap from a quiet log.
-func (r *Repo) TouchCursors(ctx context.Context, sourceID string, at time.Time) error {
-	if _, err := r.s.DB().ExecContext(ctx, `UPDATE log_cursor SET read_at = ? WHERE source_id = ?`, ts(at), sourceID); err != nil {
+// The date of the last read is what tells a gap from a quiet log. The files in
+// except were not opened by this read (unseen): their date stays the day they
+// were last read.
+func (r *Repo) TouchCursors(ctx context.Context, sourceID string, at time.Time, except []string) error {
+	skip := make(map[string]bool, len(except))
+	for _, f := range except {
+		skip[f] = true
+	}
+	cs, err := r.Cursors(ctx, sourceID)
+	if err != nil {
+		return err
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
 		return fmt.Errorf("cannot save the log positions: %w", err)
 	}
-	return nil
+	defer tx.Rollback()
+	for _, c := range cs {
+		if skip[c.File] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE log_cursor SET read_at = ? WHERE source_id = ? AND file = ?`, ts(at), sourceID, c.File); err != nil {
+			return fmt.Errorf("cannot save the log positions: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // PruneCursors removes the positions of a source whose file is not in keep: the
@@ -1016,8 +1036,9 @@ func (r *Repo) Window(ctx context.Context, targetID string, since, until time.Ti
 }
 
 // Text returns the cleaned text kept for an error; ok is false when none is.
-// It goes through the same check as the text of an alert, so that what the
-// digest says is what an alert would say.
+// It was masked and capped when it was stored; it is checked again here, with the
+// masker's own marker allowed (readBackText), so that what the digest says is
+// what an alert said.
 func (r *Repo) Text(ctx context.Context, id string) (string, bool, error) {
 	var enc []byte
 	err := r.s.DB().QueryRowContext(ctx, `SELECT text_enc FROM log_signature WHERE id = ?`, id).Scan(&enc)
@@ -1034,6 +1055,6 @@ func (r *Repo) Text(ctx context.Context, id string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	txt, ok := cleanedText(txt)
+	txt, ok := readBackText(txt)
 	return txt, ok, nil
 }

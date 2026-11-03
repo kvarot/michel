@@ -2,9 +2,11 @@ package serverlog
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -182,7 +184,7 @@ func TestForgetTargetErasesEverythingOfAServer(t *testing.T) {
 	if err := e.r.AddNote(ctx, Note{TargetID: e.tgt.ID, SourceID: e.src.ID, Kind: NoteGap, From: t0, To: t0.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ForgetTargetAudited(ctx, e.r, log, "web", e.tgt.ID); err != nil {
+	if erased, err := ForgetTargetAudited(ctx, e.r, log, "web", e.tgt.ID); err != nil || !erased {
 		t.Fatal(err)
 	}
 	for _, tb := range []string{"log_signature", "log_bucket", "log_read", "log_cursor", "log_note", "log_unseen", "log_source", "log_settings"} {
@@ -355,5 +357,133 @@ func TestUnseenCauseUnderEachShell(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A pass that read nothing leaves the read dates alone: the date of a file that
+// cannot be opened today is the day it was last read, not the day of the pass.
+func TestPassDoesNotTouchTheDateOfWhatItDidNotRead(t *testing.T) {
+	for _, wildcard := range []bool{false, true} {
+		name := "plain file"
+		if wildcard {
+			name = "wildcard"
+		}
+		t.Run(name, func(t *testing.T) {
+			pe := newPassEnv(t, target.EnvProd, FormatPHP)
+			ctx := context.Background()
+			if wildcard {
+				src := pe.src
+				src.Path = shPath(filepath.Dir(pe.file)) + "/app-*.log"
+				pe.file = filepath.Join(filepath.Dir(pe.file), "app-1.log")
+				appendTo(t, pe.file, "")
+				if err := pe.repo.UpdateSource(ctx, src); err != nil {
+					t.Fatal(err)
+				}
+				pe.src = src
+			}
+			pe.activate()
+			pe.write("PHP Warning:  x in /var/www/demo/a.php on line 3")
+			readAt := pe.clock.Now()
+			pe.run()
+			cs, _ := pe.repo.Cursors(ctx, pe.src.ID)
+			if len(cs) != 1 || !cs[0].ReadAt.Equal(readAt) {
+				t.Fatalf("after the read: %+v", cs)
+			}
+			pe.clock.Advance(10 * time.Minute)
+			if err := os.Remove(pe.file); err != nil {
+				t.Fatal(err)
+			}
+			if res := pe.run(); res.Unseen != 1 {
+				t.Fatalf("the pass that follows: %+v", res)
+			}
+			cs, _ = pe.repo.Cursors(ctx, pe.src.ID)
+			for _, c := range cs {
+				if !c.ReadAt.Equal(readAt) {
+					t.Errorf("the date of %s moved to %v by a pass that read nothing (read at %v)", c.File, c.ReadAt, readAt)
+				}
+			}
+		})
+	}
+}
+
+// A file that cannot be opened when the source is activated is located by its
+// metadata, but it was not read: its position carries no read date.
+func TestActivationOfAnUnreadableFileLeavesNoReadDate(t *testing.T) {
+	needTools(t)
+	pe := newPassEnv(t, target.EnvProd, FormatPHP)
+	appendTo(t, pe.file, "PHP Warning:  x in /var/www/demo/a.php on line 3\n")
+	allow := denyRead(t, pe.file)
+	defer allow()
+	pe.run()
+	cs, _ := pe.repo.Cursors(context.Background(), pe.src.ID)
+	for _, c := range cs {
+		if c.File == pe.src.Path && !c.ReadAt.IsZero() {
+			t.Errorf("a file never read has the read date %v", c.ReadAt)
+		}
+	}
+	if un, _ := pe.repo.Unseen(context.Background(), pe.tgt.ID); len(un[pe.src.ID]) != 1 {
+		t.Skip("the file can still be read on this machine")
+	}
+}
+
+// A marker of the masker cut by the cap is dropped, so that the text that is
+// stored comes back (a half marker is refused by the check).
+func TestMarkerCutByTheCapIsDropped(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	st, _ := e.r.Settings(ctx, e.tgt.ID)
+	st.StoreText = true
+	if err := e.r.SaveSettings(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	half := regexp.MustCompile(`\[secret[^\]]*$`)
+	cut := 0
+	for n := 160; n <= 183; n++ {
+		r := rec(1, t0)
+		r.Type = fmt.Sprintf("Cut%d", n)
+		r.Text = strings.Repeat("a", n) + " password: hunter"
+		if _, _, _, err := e.r.Apply(ctx, e.src, []Record{r}, t0); err != nil {
+			t.Fatal(err)
+		}
+		txt, ok, err := e.r.Text(ctx, SignatureID(e.src.ID, r.Level, r.Type, r.Location, r.Channel))
+		if err != nil || !ok || half.MatchString(txt) || strings.Contains(txt, "hunter") {
+			t.Fatalf("filler %d: %q %v %v", n, txt, ok, err)
+		}
+		if !strings.Contains(txt, "[secret-") {
+			cut++
+		}
+	}
+	if cut == 0 {
+		t.Errorf("no filler length made the cap cut the marker: the test checks nothing")
+	}
+}
+
+// The check lets the masker's own marker through and nothing else with digits.
+func TestMarkerExemptionIsNarrow(t *testing.T) {
+	// Read side (a text that was masked and stored): the marker is a word, nothing
+	// else with digits passes.
+	for text, want := range map[string]bool{
+		"x [secret-41111111-1] y":                  true,
+		"x [secret-41111111-1111111111111111] y":   false,
+		"x [secret-41111111-1] 198.51.100.7":       false,
+		"x [secret-41111111-1] jean.dupont@host":   false,
+		"x [secret-41111111-1] https://host/a?b=c": false,
+		"x [secret-4111111-1] y":                   false,
+		"x [secret-41111111-1":                     false,
+		"call [secret-12345678-1] 0612345678":      false,
+	} {
+		if _, ok := readBackText(text); ok != want {
+			t.Errorf("readBackText(%q) = %v, want %v", text, ok, want)
+		}
+	}
+	// Write side (a raw text from the filter, the seal, the alerts): strict, a
+	// marker is not welcome in it.
+	for _, raw := range []string{"x [secret-41111111-1] y", "x [secret-41111111-1111111111111111] y", "ip 198.51.100.7", "jean.dupont@host", "https://host/a"} {
+		if _, ok := cleanedText(raw); ok {
+			t.Errorf("cleanedText(%q) passed", raw)
+		}
+		if enc, _ := sealText(raw); enc != nil {
+			t.Errorf("sealText(%q) sealed a raw text that is not clean", raw)
+		}
 	}
 }

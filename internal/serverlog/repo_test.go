@@ -538,7 +538,7 @@ func TestCursorHelpers(t *testing.T) {
 		t.Fatalf("after the prune: %+v", got)
 	}
 	later := t0.Add(time.Hour)
-	if err := e.r.TouchCursors(ctx, e.src.ID, later); err != nil {
+	if err := e.r.TouchCursors(ctx, e.src.ID, later, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = e.r.Cursors(ctx, e.src.ID)

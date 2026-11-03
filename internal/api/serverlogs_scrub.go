@@ -60,7 +60,7 @@ func isPathByte(c byte) bool {
 	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
 		return true
 	}
-	return strings.IndexByte("._+-", c) >= 0
+	return strings.IndexByte("._+-~", c) >= 0
 }
 
 // scrubPoste replaces by <path> every path of s that starts with one of roots:
@@ -95,10 +95,20 @@ func scrubPoste(s string, roots []string) string {
 
 // ServerText makes a text read on a server safe to show: control characters
 // removed, a path of this computer replaced, the SSH user's home written ~. The
-// page and the command line use the same one.
-func ServerText(user, s string) string { return scrubPoste(srvText(user, s), posteRoots()) }
+// page and the command line use the same one; extra are the folders the caller
+// knows besides (the user's home, the data folder).
+func ServerText(user, s string, extra ...string) string {
+	return scrubPoste(srvText(user, s), posteRoots(extra...))
+}
 
 // logText is ServerText with the folders this handler knows besides.
 func (s *server) logText(user, v string) string {
-	return scrubPoste(srvText(user, v), posteRoots(s.deps.Servers.Home, s.deps.Sources.DataDir))
+	return scrubPoste(srvText(user, v), posteRoots(s.posteExtra()...))
 }
+
+// posteExtra are the folders of this computer the handler knows besides the usual
+// ones: the home it reads .ssh/config in, and the data folder.
+func (s *server) posteExtra() []string { return []string{s.deps.Servers.Home, s.deps.Sources.DataDir} }
+
+// PosteExtra is the same list for a caller without a handler (the command line).
+func PosteExtra(home, dataDir string) []string { return []string{home, dataDir} }

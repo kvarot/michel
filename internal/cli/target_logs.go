@@ -66,6 +66,10 @@ func newTargetLogsListCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return targetFailure(deps, err, false)
 			}
+			// The same scrub as the page: the folders of this computer, the data folder too.
+			home, _ := userHomeDir()
+			dataDir, _ := cmd.Flags().GetString("data-dir")
+			extra := api.PosteExtra(home, dataDir)
 			v := logListing{Server: t.Name, Deviations: append([]string{}, serverlog.Deviations(st)...), Sources: []logSrcRow{}, Errors: []logErrRow{}}
 			active := false
 			for _, s := range srcs {
@@ -74,7 +78,7 @@ func newTargetLogsListCmd(deps *Deps) *cobra.Command {
 					return targetFailure(deps, err, false)
 				}
 				row := logSrcRow{ID: s.ID, Path: api.LogPath(s.Path), Format: string(s.Format), Active: s.Active, Unseen: []logUnseenRow{}, Notes: []string{}}
-				row.LastRead = api.LogLastRead(cursors, unseen[s.ID])
+				row.LastRead = api.LogLastRead(cursors)
 				var touched time.Time
 				for _, c := range cursors {
 					if c.ReadAt.After(touched) {
@@ -92,15 +96,15 @@ func newTargetLogsListCmd(deps *Deps) *cobra.Command {
 			}
 			v.NoChannel = active && !api.LogChannelHears(deps.Policy, st)
 			for _, g := range sigs {
-				row := logErrRow{ID: g.ID, Level: string(g.Level), Type: api.ServerText(t.User, g.Type), Location: api.ServerText(t.User, g.Location),
-					Channel: api.ServerText(t.User, g.Channel), Status: string(g.Status), Total: g.Total, FirstAt: g.FirstAt, LastAt: g.LastAt}
+				row := logErrRow{ID: g.ID, Level: string(g.Level), Type: api.ServerText(t.User, g.Type, extra...), Location: api.ServerText(t.User, g.Location, extra...),
+					Channel: api.ServerText(t.User, g.Channel, extra...), Status: string(g.Status), Total: g.Total, FirstAt: g.FirstAt, LastAt: g.LastAt}
 				if st.StoreText {
 					txt, ok, err := repo.Text(ctx, g.ID)
 					if err != nil {
 						return targetFailure(deps, err, false)
 					}
 					if ok {
-						row.Text = api.ServerText(t.User, txt)
+						row.Text = api.ServerText(t.User, txt, extra...)
 					}
 				}
 				v.Errors = append(v.Errors, row)
@@ -254,7 +258,7 @@ func newTargetLogsReadCmd(deps *Deps) *cobra.Command {
 			}
 			fmt.Fprintln(deps.Stdout, deps.N("cli.target.logs.read.done", res.Records, t.Name, res.Alerts))
 			if res.Unseen > 0 {
-				fmt.Fprintln(deps.Stdout, deps.N("cli.target.logs.read.unseen", res.Unseen))
+				fmt.Fprintln(deps.Stdout, deps.N("cli.target.logs.read.unseen", res.Unseen, t.Name))
 			}
 			if res.Rejected > 0 {
 				fmt.Fprintln(deps.Stdout, deps.N("cli.target.logs.read.rejected", res.Rejected))

@@ -328,8 +328,12 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 			return err
 		}
 	}
-	if err := p.d.Repo.TouchCursors(ctx, src.ID, p.now); err != nil {
-		return err
+	// A pass that opened no file (all unseen, or nothing matched) moves no date: the
+	// page must not show a fresh read where nothing was read.
+	if len(out.Files) > 0 {
+		if err := p.d.Repo.TouchCursors(ctx, src.ID, p.now, out.Unseen); err != nil {
+			return err
+		}
 	}
 	if err := p.notes(ctx, src, out, cursors, lastRead); err != nil {
 		return err
