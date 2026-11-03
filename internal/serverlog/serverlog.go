@@ -128,12 +128,16 @@ type Settings struct {
 	Routes           map[Level]Route
 }
 
-// Bounds of the settings.
+// Bounds of the settings. Interval is between MinInterval and MaxInterval, or
+// ManualInterval.
 const (
 	MinRetentionDays = 7
 	MaxRetentionDays = 365
 	MinInterval      = time.Minute
 	MaxInterval      = 24 * time.Hour
+	// ManualInterval is the interval of a server read by hand only: the
+	// scheduler never reads it. It mirrors target.ManualOnly.
+	ManualInterval = -time.Second
 )
 
 // DefaultSettings returns the recommended settings for a server of env: no

@@ -23,9 +23,17 @@ import (
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servercheck"
+	"github.com/kvarot/michel/internal/serverlog"
 	"github.com/kvarot/michel/web"
 	"github.com/spf13/cobra"
 )
+
+// serverLogTick is how often michel serve looks for the servers whose logs are
+// due for a read (each one has its own interval, 5 minutes by default).
+const serverLogTick = 30 * time.Second
+
+// runLogScheduler reads the server logs until ctx ends. Replaced in tests.
+var runLogScheduler = serverlog.Scheduler
 
 // shutdownGrace is how long serve waits for requests in flight when stopped.
 const shutdownGrace = 5 * time.Second
@@ -173,6 +181,16 @@ func newServeCmd(deps *Deps) *cobra.Command {
 				defer close(schedDone)
 				servercheck.Scheduler(schedCtx, cd, serverCheckInterval)
 			}()
+			// The logs of the servers are read in the background, at the interval of
+			// each server, and the retention of the log data is applied from there.
+			// Alert stays nil until the channels are wired: nothing is then marked as
+			// told, so the digest still carries what an alert would have said.
+			logDone := make(chan struct{})
+			go func() {
+				defer close(logDone)
+				runLogScheduler(schedCtx, serverlog.Deps{Repo: serverlog.NewRepo(deps.Store), Targets: cd.Repo, Audit: deps.Audit,
+					SSH: cd.SSH, Now: deps.Now}, serverLogTick)
+			}()
 			// Server fixes left running by a process that stopped end
 			// unknown, with an urgent alert, once past their own bound.
 			sweepDone := make(chan struct{})
@@ -198,6 +216,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			_ = srv.Shutdown(shutdown)
 			stopSched()
 			<-schedDone
+			<-logDone
 			<-sweepDone
 			// The plugin runs the page started, the fix queue and the agents
 			// are stopped and waited for.

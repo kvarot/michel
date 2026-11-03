@@ -459,3 +459,157 @@ func TestSourcePathsGoThroughValidatePath(t *testing.T) {
 		t.Errorf("a plain wildcard in the last segment: %v", err)
 	}
 }
+
+func TestApplyKeepsAnErrorWithoutAType(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	r := Record{Level: LevelWarning, Location: "Demo.php:3", Hour: t0, Count: 2}
+	fresh, _, _, err := e.r.Apply(context.Background(), e.src, []Record{r}, t0)
+	if err != nil || len(fresh) != 1 || fresh[0].Type != "" {
+		t.Fatalf("fresh = %+v, %v", fresh, err)
+	}
+	if _, _, _, err := e.r.Apply(context.Background(), e.src, []Record{{Level: "nope", Count: 1}}, t0); !errors.Is(err, ErrInvalidRecord) {
+		t.Errorf("an unknown level: %v", err)
+	}
+}
+
+func TestMarkAlertedAndAlertedSince(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	fresh, _, _, err := e.r.Apply(ctx, e.src, []Record{rec(1, t0), {Level: LevelError, Type: "Other", Hour: t0, Count: 1}}, t0)
+	if err != nil || len(fresh) != 2 {
+		t.Fatal(fresh, err)
+	}
+	if n, _ := e.r.AlertedSince(ctx, e.tgt.ID, t0.Add(-time.Hour)); n != 0 {
+		t.Fatalf("nothing is told yet: %d", n)
+	}
+	if err := e.r.MarkAlerted(ctx, []string{fresh[0].ID}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.r.MarkAlerted(ctx, nil, t0); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := e.r.AlertedSince(ctx, e.tgt.ID, t0.Add(-time.Hour)); n != 1 {
+		t.Errorf("told in the last hour: %d", n)
+	}
+	if n, _ := e.r.AlertedSince(ctx, e.tgt.ID, t0); n != 0 {
+		t.Errorf("told after t0 itself: %d", n)
+	}
+	if n, _ := e.r.AlertedSince(ctx, "other-server", t0.Add(-time.Hour)); n != 0 {
+		t.Errorf("another server: %d", n)
+	}
+	got, _ := e.r.Signatures(ctx, e.tgt.ID)
+	told := 0
+	for _, g := range got {
+		if !g.LastAlertAt.IsZero() {
+			told++
+		}
+	}
+	if told != 1 {
+		t.Errorf("marked: %d", told)
+	}
+}
+
+func TestCursorHelpers(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	if at, err := e.r.LastRead(ctx, e.tgt.ID); err != nil || !at.IsZero() {
+		t.Fatalf("no position yet: %v, %v", at, err)
+	}
+	cs := []Cursor{
+		{SourceID: e.src.ID, File: "/var/log/demo/a.log", FileID: "1", Offset: 5, ReadAt: t0},
+		{SourceID: e.src.ID, File: "/var/log/demo/b.log", FileID: "2", Offset: 7, ReadAt: t0.Add(time.Minute)},
+		{SourceID: e.src.ID, File: "/var/log/demo/app-*.log/", ReadAt: t0},
+	}
+	if err := e.r.SaveCursors(ctx, cs); err != nil {
+		t.Fatal(err)
+	}
+	if at, _ := e.r.LastRead(ctx, e.tgt.ID); !at.Equal(t0.Add(time.Minute)) {
+		t.Errorf("LastRead = %v", at)
+	}
+	if err := e.r.PruneCursors(ctx, e.src.ID, []string{"/var/log/demo/a.log"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := e.r.Cursors(ctx, e.src.ID)
+	if len(got) != 1 || got[0].File != "/var/log/demo/a.log" || got[0].Offset != 5 {
+		t.Fatalf("after the prune: %+v", got)
+	}
+	later := t0.Add(time.Hour)
+	if err := e.r.TouchCursors(ctx, e.src.ID, later); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = e.r.Cursors(ctx, e.src.ID)
+	if !got[0].ReadAt.Equal(later) || got[0].Offset != 5 || got[0].FileID != "1" {
+		t.Errorf("touch changed more than the date: %+v", got[0])
+	}
+}
+
+func TestRecordStateExtendsWhatLasts(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	n := func(kind string, from, to time.Duration, amount int64) Note {
+		return Note{TargetID: e.tgt.ID, SourceID: e.src.ID, Kind: kind, From: t0.Add(from), To: t0.Add(to), Amount: amount}
+	}
+	// A condition seen on consecutive passes is one note.
+	for i := 0; i < 3; i++ {
+		d := time.Duration(i) * 5 * time.Minute
+		if err := e.r.RecordState(ctx, n(NoteUnseen, d, d+5*time.Minute, int64(i+1))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notes, _ := e.r.Notes(ctx, e.tgt.ID)
+	if len(notes) != 1 || !notes[0].From.Equal(t0) || !notes[0].To.Equal(t0.Add(15*time.Minute)) || notes[0].Amount != 3 {
+		t.Fatalf("notes = %+v", notes)
+	}
+	// After a pass without it, it comes back as a new note.
+	if err := e.r.RecordState(ctx, n(NoteUnseen, time.Hour, time.Hour+5*time.Minute, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if notes, _ = e.r.Notes(ctx, e.tgt.ID); len(notes) != 2 {
+		t.Fatalf("notes = %+v", notes)
+	}
+	// A gap is the same gap when it starts at the same time; one that starts
+	// where the last one ended is another.
+	if err := e.r.RecordState(ctx, n(NoteGap, 2*time.Hour, 3*time.Hour, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.r.RecordState(ctx, n(NoteGap, 2*time.Hour, 5*time.Hour, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.r.RecordState(ctx, n(NoteGap, 5*time.Hour, 6*time.Hour, 0)); err != nil {
+		t.Fatal(err)
+	}
+	gaps := 0
+	notes, _ = e.r.Notes(ctx, e.tgt.ID)
+	for _, x := range notes {
+		if x.Kind == NoteGap {
+			gaps++
+		}
+	}
+	if gaps != 2 {
+		t.Fatalf("gaps = %d in %+v", gaps, notes)
+	}
+	if latest, ok, err := e.r.LatestNote(ctx, e.tgt.ID, e.src.ID, NoteGap); err != nil || !ok || !latest.To.Equal(t0.Add(6*time.Hour)) {
+		t.Errorf("latest gap = %+v, %v, %v", latest, ok, err)
+	}
+	if _, ok, _ := e.r.LatestNote(ctx, e.tgt.ID, e.src.ID, NoteRotated); ok {
+		t.Error("a note of a kind that never happened")
+	}
+	if err := e.r.RecordState(ctx, Note{TargetID: e.tgt.ID, Kind: "bogus"}); !errors.Is(err, ErrInvalidNote) {
+		t.Errorf("unknown kind: %v", err)
+	}
+}
+
+func TestHourCount(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	fresh, _, _, err := e.r.Apply(ctx, e.src, []Record{rec(5, t0.Add(10*time.Minute))}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := e.r.HourCount(ctx, fresh[0].ID, t0); n != 5 {
+		t.Errorf("count = %d", n)
+	}
+	if n, _ := e.r.HourCount(ctx, fresh[0].ID, t0.Add(-time.Hour)); n != 0 {
+		t.Errorf("another hour = %d", n)
+	}
+}

@@ -271,8 +271,8 @@ func checkSettings(s Settings) error {
 	switch {
 	case strings.TrimSpace(s.TargetID) == "":
 		return bad("no server")
-	case s.Interval < MinInterval || s.Interval > MaxInterval:
-		return bad("the reading interval must be between 1 minute and 24 hours")
+	case s.Interval != ManualInterval && (s.Interval < MinInterval || s.Interval > MaxInterval):
+		return bad("the reading interval must be manual or between 1 minute and 24 hours")
 	case s.RetentionDays < MinRetentionDays || s.RetentionDays > MaxRetentionDays:
 		return bad("the retention must be between %d and %d days (got %d)", MinRetentionDays, MaxRetentionDays, s.RetentionDays)
 	case s.AlertText && !s.StoreText:
@@ -436,8 +436,8 @@ func spikes(cur, prev int64) bool { return cur >= spikeMin && cur >= spikeFactor
 // allow it, and never takes part in the identity.
 func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Time) (fresh, reopened, spiked []Signature, err error) {
 	for _, rc := range recs {
-		if !validLevel(rc.Level) || rc.Count <= 0 || strings.TrimSpace(rc.Type) == "" {
-			return nil, nil, nil, fmt.Errorf("%w: level %q, type %q, count %d", ErrInvalidRecord, rc.Level, rc.Type, rc.Count)
+		if !validLevel(rc.Level) || rc.Count <= 0 {
+			return nil, nil, nil, fmt.Errorf("%w: level %q, count %d", ErrInvalidRecord, rc.Level, rc.Count)
 		}
 	}
 	st, err := r.Settings(ctx, src.TargetID)
@@ -750,4 +750,157 @@ func (r *Repo) EraseText(ctx context.Context, targetID string) (int64, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// ---- what a pass needs ----
+
+// MarkAlerted records that the errors ids were told to the user at at.
+func (r *Repo) MarkAlerted(ctx context.Context, ids []string, at time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot save the log alerts: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `UPDATE log_signature SET last_alert_at = ? WHERE id = ?`, ts(at), id); err != nil {
+			return fmt.Errorf("cannot save the log alerts: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// AlertedSince counts the errors of a server told to the user after since: the
+// hourly cap counts errors, not messages (spec § 8.2: one alert per signature).
+func (r *Repo) AlertedSince(ctx context.Context, targetID string, since time.Time) (int, error) {
+	var n int
+	if err := r.s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM log_signature WHERE target_id = ? AND last_alert_at > ?`, targetID, ts(since)).Scan(&n); err != nil {
+		return 0, fmt.Errorf("cannot count the log alerts: %w", err)
+	}
+	return n, nil
+}
+
+// HourCount returns how many times an error was read in an hour.
+func (r *Repo) HourCount(ctx context.Context, signatureID string, hour time.Time) (int64, error) {
+	var n int64
+	err := r.s.DB().QueryRowContext(ctx, `SELECT count FROM log_bucket WHERE signature_id = ? AND hour = ?`, signatureID, ts(hour.UTC().Truncate(time.Hour))).Scan(&n)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("cannot read the log counts: %w", err)
+	}
+	return n, nil
+}
+
+// LastRead returns the latest date a source of the server was read (zero when
+// none was).
+func (r *Repo) LastRead(ctx context.Context, targetID string) (time.Time, error) {
+	var at sql.NullString
+	err := r.s.DB().QueryRowContext(ctx, `SELECT MAX(read_at) FROM log_cursor WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`, targetID).Scan(&at)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("cannot read the log positions: %w", err)
+	}
+	return parseTime(at.String)
+}
+
+// TouchCursors says that the source was read at at: every position of it is
+// still good then, so its read date moves, files that did not change included.
+// The date of the last read is what tells a gap from a quiet log.
+func (r *Repo) TouchCursors(ctx context.Context, sourceID string, at time.Time) error {
+	if _, err := r.s.DB().ExecContext(ctx, `UPDATE log_cursor SET read_at = ? WHERE source_id = ?`, ts(at), sourceID); err != nil {
+		return fmt.Errorf("cannot save the log positions: %w", err)
+	}
+	return nil
+}
+
+// PruneCursors removes the positions of a source whose file is not in keep: the
+// files that are gone, and the placeholder of an activation once real files
+// are known.
+func (r *Repo) PruneCursors(ctx context.Context, sourceID string, keep []string) error {
+	have, err := r.Cursors(ctx, sourceID)
+	if err != nil {
+		return err
+	}
+	kept := make(map[string]bool, len(keep))
+	for _, f := range keep {
+		kept[f] = true
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot save the log positions: %w", err)
+	}
+	defer tx.Rollback()
+	for _, c := range have {
+		if kept[c.File] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM log_cursor WHERE source_id = ? AND file = ?`, sourceID, c.File); err != nil {
+			return fmt.Errorf("cannot save the log positions: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// LatestNote returns the latest note of a kind for a source of a server.
+func (r *Repo) LatestNote(ctx context.Context, targetID, sourceID, kind string) (Note, bool, error) {
+	var n Note
+	var from, to string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT target_id, source_id, kind, from_at, to_at, amount FROM log_note
+		WHERE target_id = ? AND source_id = ? AND kind = ? ORDER BY to_at DESC, id DESC LIMIT 1`, targetID, sourceID, kind).Scan(
+		&n.TargetID, &n.SourceID, &n.Kind, &from, &to, &n.Amount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Note{}, false, nil
+	}
+	if err != nil {
+		return Note{}, false, fmt.Errorf("cannot read the log notes: %w", err)
+	}
+	if n.From, err = parseTime(from); err != nil {
+		return Note{}, false, err
+	}
+	if n.To, err = parseTime(to); err != nil {
+		return Note{}, false, err
+	}
+	return n, true, nil
+}
+
+// RecordState stores a note about something that lasts (a gap in the reading,
+// a file that cannot be read, too many files) without a new row per pass: when
+// the latest note of the same server, source and kind is the same period, it
+// is extended to n.To and takes n.Amount. For a gap the same period means the
+// same start; for the others, a note that reaches n.From.
+func (r *Repo) RecordState(ctx context.Context, n Note) error {
+	if !validNoteKind(n.Kind) {
+		return fmt.Errorf("%w: unknown kind %q", ErrInvalidNote, n.Kind)
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot save the log note: %w", err)
+	}
+	defer tx.Rollback()
+	var id, from, to string
+	err = tx.QueryRowContext(ctx, `SELECT id, from_at, to_at FROM log_note WHERE target_id = ? AND source_id = ? AND kind = ? ORDER BY to_at DESC, id DESC LIMIT 1`,
+		n.TargetID, n.SourceID, n.Kind).Scan(&id, &from, &to)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("cannot read the log notes: %w", err)
+	}
+	same := err == nil && ((n.Kind == NoteGap && from == ts(n.From)) || (n.Kind != NoteGap && to >= ts(n.From)))
+	if same {
+		newTo := ts(n.To)
+		if to > newTo {
+			newTo = to
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE log_note SET to_at = ?, amount = ? WHERE id = ?`, newTo, n.Amount, id); err != nil {
+			return fmt.Errorf("cannot save the log note: %w", err)
+		}
+		return tx.Commit()
+	}
+	nid, err := r.newID(time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO log_note (id, target_id, source_id, kind, from_at, to_at, amount) VALUES (?,?,?,?,?,?,?)`,
+		nid, n.TargetID, n.SourceID, n.Kind, ts(n.From), ts(n.To), n.Amount); err != nil {
+		return fmt.Errorf("cannot save the log note: %w", err)
+	}
+	return tx.Commit()
 }

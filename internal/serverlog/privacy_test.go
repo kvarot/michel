@@ -291,7 +291,7 @@ func TestPurgeAtRetention(t *testing.T) {
 		t.Fatalf("hourly counts after retention = %d", n)
 	}
 	pv := auditEvidence(t, e, "log.purge")
-	if len(pv) != 2 || !strings.Contains(pv[1], `"scope":"retention"`) || !strings.Contains(pv[1], `"signatures":1`) {
+	if len(pv) != 1 || !strings.Contains(pv[0], `"scope":"retention"`) || !strings.Contains(pv[0], `"signatures":1`) { // the run at 40 days removed nothing and is not audited
 		t.Fatalf("log.purge = %v", pv)
 	}
 }
@@ -337,5 +337,36 @@ func TestAuditCarriesNoContent(t *testing.T) {
 	}
 	if n < 5 {
 		t.Fatalf("audit events = %d", n)
+	}
+}
+
+func TestPurgeAuditedSkipsARunThatRemovesNothing(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx, log := context.Background(), auditor(e)
+	if _, _, _, err := e.r.Apply(ctx, e.src, []Record{rec(1, t0)}, t0); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing is old enough: no event, whatever the number of ticks.
+	for i := 0; i < 3; i++ {
+		if err := PurgeAudited(ctx, e.r, log, t0.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(auditEvidence(t, e, "log.purge")); n != 0 {
+		t.Fatalf("%d log.purge events for runs that removed nothing", n)
+	}
+	// Past the retention it removes, and says so once.
+	if err := PurgeAudited(ctx, e.r, log, t0.Add(100*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ev := auditEvidence(t, e, "log.purge")
+	if len(ev) != 1 || !strings.Contains(ev[0], `"signatures":1`) {
+		t.Fatalf("events = %v", ev)
+	}
+	if err := PurgeAudited(ctx, e.r, log, t0.Add(101*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(auditEvidence(t, e, "log.purge")); n != 1 {
+		t.Fatalf("an empty run after it was audited: %d events", n)
 	}
 }

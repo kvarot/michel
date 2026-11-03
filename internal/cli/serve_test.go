@@ -8,10 +8,12 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/serverlog"
 )
 
 func TestServeRefusesNonLoopback(t *testing.T) {
@@ -172,5 +174,50 @@ func TestServeNeverWritesUnderProject(t *testing.T) {
 	})
 	if err != nil || !strings.Contains(out2, printedToken) {
 		t.Errorf("second serve: %v %q", err, out2)
+	}
+}
+
+func TestServeStartsAndStopsLogScheduler(t *testing.T) {
+	var started, stopped atomic.Int32
+	var gotDeps atomic.Pointer[serverlog.Deps]
+	ctxEnded := make(chan struct{})
+	old := runLogScheduler
+	runLogScheduler = func(ctx context.Context, d serverlog.Deps, every time.Duration) {
+		started.Add(1)
+		gotDeps.Store(&d)
+		if every <= 0 || every > time.Minute {
+			t.Errorf("the scheduler looks for due servers every %v: more than the shortest interval, 1 minute", every)
+		}
+		<-ctx.Done()
+		close(ctxEnded)
+		stopped.Add(1)
+	}
+	t.Cleanup(func() { runLogScheduler = old })
+
+	dir := t.TempDir()
+	_, err := runServe(t, dir, func(*url.URL, string) {
+		// While serve runs the scheduler is running, and has what it needs.
+		deadline := time.Now().Add(10 * time.Second)
+		for started.Load() == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if started.Load() != 1 || stopped.Load() != 0 {
+			t.Errorf("while serving: started %d, stopped %d", started.Load(), stopped.Load())
+		}
+		if d := gotDeps.Load(); d == nil || d.Repo == nil || d.Targets == nil || d.Audit == nil || d.Now == nil {
+			t.Errorf("deps = %+v", d)
+		}
+	})
+	if err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	// serve returned: the scheduler has been told to stop, and waited for.
+	select {
+	case <-ctxEnded:
+	default:
+		t.Error("the scheduler's context did not end")
+	}
+	if started.Load() != 1 || stopped.Load() != 1 {
+		t.Errorf("after serve: started %d, stopped %d", started.Load(), stopped.Load())
 	}
 }

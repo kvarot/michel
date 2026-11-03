@@ -78,12 +78,9 @@ func newDeviations(cur, next Settings) []string {
 // like a secret, the result is capped and encrypted. A raw line is not a
 // cleaned text and does not pass validText as a rule.
 func sealText(text string) ([]byte, error) {
-	if !validText(text) {
+	masked, ok := cleanedText(text)
+	if !ok {
 		return nil, nil
-	}
-	masked := mask.New().Mask(text)
-	if utf8.RuneCountInString(masked) > MaxTextRunes {
-		masked = string([]rune(masked)[:MaxTextRunes])
 	}
 	b, err := secret.Protect([]byte(masked))
 	if err != nil {
@@ -154,7 +151,8 @@ func auditPurge(ctx context.Context, log *audit.Logger, actor, target string, ev
 	return err
 }
 
-// PurgeAudited applies the retention at now (Repo.Purge) and audits it with
+// PurgeAudited applies the retention at now (Repo.Purge) and audits it, unless
+// nothing went, with
 // the number of rows that went, never what they held.
 func PurgeAudited(ctx context.Context, repo *Repo, log *audit.Logger, now time.Time) error {
 	before, err := repo.rowCounts(ctx)
@@ -168,8 +166,12 @@ func PurgeAudited(ctx context.Context, repo *Repo, log *audit.Logger, now time.T
 	if err != nil {
 		return err
 	}
+	gone := [3]int64{before[0] - after[0], before[1] - after[1], before[2] - after[2]}
+	if gone == [3]int64{} {
+		return nil // a tick that removed nothing is not worth an audit event
+	}
 	return auditPurge(ctx, log, purgeActor, "", map[string]any{
-		"scope": "retention", "signatures": before[0] - after[0], "counts": before[1] - after[1], "notes": before[2] - after[2],
+		"scope": "retention", "signatures": gone[0], "counts": gone[1], "notes": gone[2],
 	})
 }
 
@@ -192,4 +194,19 @@ func (r *Repo) rowCounts(ctx context.Context) ([3]int64, error) {
 		}
 	}
 	return c, nil
+}
+
+// cleanedText is the text a server error may carry out of the filter: it must
+// pass validText, then the masker hides what looks like a secret and the
+// result is capped. ok is false for a text that must be dropped. Alerts use it
+// too, so that what is stored and what is sent are the same text.
+func cleanedText(text string) (string, bool) {
+	if !validText(text) {
+		return "", false
+	}
+	masked := mask.New().Mask(text)
+	if utf8.RuneCountInString(masked) > MaxTextRunes {
+		masked = string([]rune(masked)[:MaxTextRunes])
+	}
+	return masked, true
 }
