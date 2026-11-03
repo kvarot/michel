@@ -912,7 +912,7 @@
   "logs.interval.choice.hours.other": "every {n} h",
   "logs.interval.choice.manual": "only when I ask",
   "logs.interval.slow": "With this interval, you may hear of an error more than 10 minutes after it happened.",
-  "logs.interval.manual_advanced": "Michel reads the logs of this server only with the command `michel target logs read`. Nobody is warned in between.",
+  "logs.interval.manual_advanced": "Michel reads the logs of this server only with the command \"michel target logs read\". Nobody is warned in between.",
   "logs.interval.manual_simple": "Michel reads the logs of this server only when you ask for it on the command line. Nobody is warned in between.",
   "logs.alerts.title": "Which errors warn you?",
   "logs.alerts.hint": "For each seriousness, choose how Michel warns you. “In the morning summary” means the error is added to the summary Michel sends you once a day.",

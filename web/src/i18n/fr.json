@@ -912,7 +912,7 @@
   "logs.interval.choice.hours.other": "toutes les {n} h",
   "logs.interval.choice.manual": "seulement quand je le demande",
   "logs.interval.slow": "Avec cette fréquence, tu peux être prévenu d'une erreur plus de 10 minutes après.",
-  "logs.interval.manual_advanced": "Michel ne lit les journaux de ce serveur qu'avec la commande `michel target logs read`. Personne n'est prévenu entre-temps.",
+  "logs.interval.manual_advanced": "Michel ne lit les journaux de ce serveur qu'avec la commande « michel target logs read ». Personne n'est prévenu entre-temps.",
   "logs.interval.manual_simple": "Michel ne lit les journaux de ce serveur que quand tu le demandes en ligne de commande. Personne n'est prévenu entre-temps.",
   "logs.alerts.title": "Quelles erreurs te préviennent ?",
   "logs.alerts.hint": "Pour chaque gravité, choisis comment Michel te prévient. « Dans le résumé du matin » veut dire que l'erreur est ajoutée au résumé que Michel t'envoie une fois par jour.",
