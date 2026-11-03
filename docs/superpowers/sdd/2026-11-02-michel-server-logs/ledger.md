@@ -169,3 +169,13 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 8: minor (deferred): overlapping sources pass the duplicate check; dynamic prefix `api.logs.` turns off unused-key detection; `TestNoLogDataReachesAnAgent` checks direct imports only.
 - Task 8: fix round 1 sent, FIX_BASE d5d2311.
 - Task 8: fix round 1 implementer reply, commit dead316, migration 0020 (log_unseen, path_at, spike settings). Beyond findings: masked text could not be read back (Repo.Text refused the marker's digits), fixed; GET /errors now {errors,total,truncated}; 409 api.logs.busy while a read runs. WSL proof for api and serverlog with dash, gawk, mawk; busybox still not run.
+- Task 8: fix round 1/5 (5 Important, R31 and 12 Minor addressed; open: I1 wildcard source keeps a fresh last read, new Important: server removed before its logs, a failed erase leaves data nothing can erase and the CLI says erased; 4 new Minor, French fixes; commits d5d2311..dead316). Full suite and vet clean on dead316, uncached, run by the controller.
+- Task 8: minor (deferred): `serverlog.TryLock` is per process, a CLI `target remove` during a `serve` read does not see it; older pattern, same as `servercheck.TryLock`.
+- Task 8: fix round 2 sent, FIX_BASE dead316.
+- Task 8: fix round 2 implementer reply, commit ca97290.
+- Ruling R32: a source that read nothing shows its last real read, empty only if it never read, instead of the finding's literal zero — spec § 5.4 "dernière lecture réussie il y a X min" — costs nothing visible; the finding's defect is what the re-review checks.
+- Task 8: fix round 2/5 (I1 under R32, B1, B2, B3-B6, French addressed, 0 open; commits dead316..ca97290).
+- Task 8: minor (deferred): a source matching no file for hours no longer moves its date, a file appearing later can add a gap note; failed audit after a good erase records `logs_error:true`; forget error not logged on the API failure path.
+- Task 8: complete (commits 66f4be6..ca97290, review clean)
+- Kévin 2026-11-03: wants a clean, professional interface for Michel, guided step by step for someone who knows nothing of computing, possibly an advanced mode, every field and action understandable. Separate design under discussion, session card could not be shown (message came from a remote client).
+- Ruling R33: Task 9 goes ahead in the current visual style, every field and action explained in plain words, the redesign restyles it later — plan 7 should not wait on an open design — costs a restyle of one block.
