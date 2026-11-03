@@ -119,6 +119,8 @@ func isNonValue(v string) bool {
 type match struct {
 	start, end int
 	kind       Kind
+	// strong is the judgement of isStrong, true if any match merged here is.
+	strong bool
 }
 
 func rank(k Kind) int {
@@ -138,11 +140,14 @@ func find(s, tokenPrefix string) []match {
 	for _, d := range detectors {
 		for _, loc := range d.re.FindAllStringSubmatchIndex(s, -1) {
 			a, b := loc[0], loc[1]
+			unquoted := false
 			if len(loc) > 2 {
 				a, b = -1, -1
 				for g := 1 + d.skip; 2*g+1 < len(loc); g++ {
 					if loc[2*g] >= 0 {
 						a, b = loc[2*g], loc[2*g+1]
+						// The last group of valueExpr is the value without quotes.
+						unquoted = 2*g+3 >= len(loc)
 						break
 					}
 				}
@@ -156,7 +161,7 @@ func find(s, tokenPrefix string) []match {
 			if (d.kind == KindEnvValue || d.kind == KindAssignment) && isNonValue(s[a:b]) {
 				continue
 			}
-			all = append(all, match{a, b, d.kind})
+			all = append(all, match{a, b, d.kind, isStrong(d.kind, s[a:b], unquoted)})
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
@@ -165,6 +170,7 @@ func find(s, tokenPrefix string) []match {
 		if n := len(merged); n > 0 && m.start <= merged[n-1].end {
 			last := &merged[n-1]
 			last.end = max(last.end, m.end)
+			last.strong = last.strong || m.strong
 			if rank(m.kind) < rank(last.kind) {
 				last.kind = m.kind
 			}
@@ -180,6 +186,9 @@ type Hit struct {
 	File string
 	Line int
 	Kind Kind
+	// Strong says this should stop an agent (see isStrong); a weak hit is only
+	// told. It changes nothing in what is masked.
+	Strong bool
 }
 
 // maxScanFile caps what ScanFiles reads of one file.
@@ -218,7 +227,7 @@ func ScanFiles(root string, rel []string) []Hit {
 			if m.kind == KindAbsPath {
 				continue
 			}
-			hits = append(hits, Hit{File: r, Line: 1 + strings.Count(text[:m.start], "\n"), Kind: m.kind})
+			hits = append(hits, Hit{File: r, Line: 1 + strings.Count(text[:m.start], "\n"), Kind: m.kind, Strong: m.strong})
 		}
 	}
 	return hits

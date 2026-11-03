@@ -253,7 +253,7 @@ func TestPrepareSkipsExcludedFiles(t *testing.T) {
 func TestPrepareReportsSecretHits(t *testing.T) {
 	f := newFixture(t)
 	c := prepare(t, f)
-	want := []mask.Hit{{File: "src/app.php", Line: 3, Kind: mask.KindAWSKey}}
+	want := []mask.Hit{{File: "src/app.php", Line: 3, Kind: mask.KindAWSKey, Strong: true}}
 	if !slices.Equal(c.SecretHits, want) {
 		t.Errorf("SecretHits %+v, want %+v", c.SecretHits, want)
 	}

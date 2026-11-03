@@ -382,7 +382,7 @@ func TestScanFilesReportsNoValue(t *testing.T) {
 	write("src/clean.go", "package x\n")
 	write("bin.dat", fakeAWS()+"\x00\x01")
 	hits := ScanFiles(root, []string{".env", "src/a.php", "src/clean.go", "bin.dat", "missing.txt", "../escape"})
-	want := []Hit{{File: ".env", Line: 2, Kind: KindEnvValue}, {File: "src/a.php", Line: 3, Kind: KindAWSKey}}
+	want := []Hit{{File: ".env", Line: 2, Kind: KindEnvValue, Strong: true}, {File: "src/a.php", Line: 3, Kind: KindAWSKey, Strong: true}}
 	if len(hits) != len(want) {
 		t.Fatalf("hits %+v", hits)
 	}
