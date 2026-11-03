@@ -163,10 +163,11 @@ export default {
       document.getElementById('main')?.focus()
     },
     onHash() {
+      const previous = this.page
       this.page = pageOf(window.location.hash)
       this.fixRoute = routeOf(window.location.hash)
       this.serversRoute = serversOf(window.location.hash)
-      this.$nextTick(this.focusMain)
+      if (this.page !== previous) this.$nextTick(this.focusMain)
       if ((this.page === 'todo' || this.page === 'projects') && this.stale && this.state === 'ready') {
         this.stale = false
         this.loadToday(false)
