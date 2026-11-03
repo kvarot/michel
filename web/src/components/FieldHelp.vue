@@ -7,12 +7,13 @@
       :aria-controls="textId"
       :aria-label="$t('help.label', { field })"
       @click="open = !open"
-      @keydown.esc="close"
+      @keydown.esc="onEsc"
     >
       <span aria-hidden="true">?</span>
     </button>
+    <span v-if="named" class="m-fh__name m-small" aria-hidden="true">{{ field }}</span>
     <!-- In line, under the field: it works with a finger and hides nothing. -->
-    <span v-if="open" :id="textId" class="m-fh__text m-small" role="note" @keydown.esc="close">{{ $t(key) }}</span>
+    <span v-if="open" :id="textId" class="m-fh__text m-small" role="note">{{ $t(key) }}</span>
   </span>
 </template>
 
@@ -23,7 +24,8 @@ let seq = 0
 
 // FieldHelp is the "?" next to a field: a real button that opens, right under
 // the field, what the field is for, what to put in it and what happens on a
-// mistake (text help.<id>). Échap closes it and gives the focus back to the button.
+// mistake (text help.<id>). Échap closes an open help, and only the help: the
+// focus stays on the button and the dialog around it stays open.
 export default {
   name: 'FieldHelp',
   props: {
@@ -31,6 +33,8 @@ export default {
     id: { type: String, required: true },
     // field is the name of the field, for the name of the button.
     field: { type: String, required: true },
+    // named shows the field's name next to the "?", where several "?" stack.
+    named: { type: Boolean, default: false },
   },
   data() {
     seq += 1
@@ -42,11 +46,11 @@ export default {
     },
   },
   methods: {
-    close() {
+    /** Escape closes an open help only; a closed one leaves Escape to the dialog around it. */
+    onEsc(e) {
       if (!this.open) return
+      e.stopPropagation()
       this.open = false
-      const btn = this.$el.querySelector('button')
-      if (btn) btn.focus()
     },
   },
 }
@@ -74,6 +78,7 @@ export default {
 @media (min-width: 600px) { .m-fh__btn::after { inset: -4px; } }
 .m-fh__btn[aria-expanded='true'] { background: rgb(var(--v-theme-primary)); color: rgb(var(--v-theme-on-primary)); }
 .m-fh__btn:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 3px; }
+.m-fh__name { margin-left: 0.4rem; }
 .m-fh__text {
   display: block;
   margin-top: 0.4rem;

@@ -107,6 +107,7 @@
           <v-btn type="submit" size="small" variant="tonal" color="primary" :loading="trying === 'manual'" :disabled="!draft.path || !!trying || busy">{{ $t('logs.add.try') }}</v-btn>
           <v-btn size="small" variant="flat" color="primary" :disabled="!draft.path || !!trying || busy" @click="start(manualDraft)">{{ $t('logs.add.start') }}</v-btn>
         </div>
+        <FieldHelp id="logs.try" :field="$t('logs.add.try')" />
         <p class="m-muted m-small">{{ $t('logs.add.try_hint') }} {{ $t('logs.add.start_hint') }}</p>
       </form>
       <TryResult v-if="$ui.advanced && tries.manual" :result="tries.manual" :lang="lang" @close="delete tries.manual" />

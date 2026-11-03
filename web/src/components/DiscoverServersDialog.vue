@@ -219,7 +219,8 @@ export default {
 
 <style scoped>
 .m-disc__title { white-space: normal; font-family: var(--m-voice); font-weight: 600; }
-.m-disc__body { display: grid; gap: 0.8rem; }
+/* max-content: in a dialog that scrolls, a grid row would otherwise shrink, and the note above would be cut. */
+.m-disc__body { display: grid; gap: 0.8rem; grid-auto-rows: max-content; align-content: start; }
 .m-disc__body p { margin: 0; line-height: 1.5; }
 .m-disc__note p + p { margin-top: 0.25rem; }
 .m-disc__strong { font-weight: 650; }

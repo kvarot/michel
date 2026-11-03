@@ -224,11 +224,15 @@
 
         <h4 class="m-sheet__sub">{{ $t('servers.settings.kind_env') }}</h4>
         <div class="m-sheet__pair">
-          <v-select :model-value="view.kind" :items="kindItems" :label="$t('servers.discover.kind')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('kind', v)" />
-          <v-select :model-value="view.env" :items="envItems" :label="$t('servers.discover.env')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('env', v)" />
+          <div>
+            <v-select :model-value="view.kind" :items="kindItems" :label="$t('servers.discover.kind')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('kind', v)" />
+            <FieldHelp id="server.kind" :field="$t('servers.discover.kind')" />
+          </div>
+          <div>
+            <v-select :model-value="view.env" :items="envItems" :label="$t('servers.discover.env')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('env', v)" />
+            <FieldHelp id="server.env" :field="$t('servers.discover.env')" />
+          </div>
         </div>
-        <FieldHelp id="server.kind" :field="$t('servers.discover.kind')" />
-        <FieldHelp id="server.env" :field="$t('servers.discover.env')" />
         <p v-if="view.kind === 'hds'" class="m-muted m-small">{{ $t('servers.settings.hds_note') }}</p>
         <v-switch :model-value="view.active" :label="$t('servers.settings.active')" color="primary" density="comfortable" hide-details inset :disabled="saving" @update:model-value="(v) => set('active', !!v)" />
         <FieldHelp id="server.active" :field="$t('servers.settings.active')" />
