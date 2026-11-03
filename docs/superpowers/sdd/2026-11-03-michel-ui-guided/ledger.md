@@ -67,3 +67,6 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Ruling R37: the words on sudo and on automatic undo change, not the code — plan 6 behaviour is merged and reviewed; the help must be true — costs nothing on behaviour; to show Kévin: sudo also reads backups and simulates updates, a root script runs without a click at level 3 with auto_config, a server without site address has no outage detection, a software update is never undone.
 - Noted: plan 6 spec line 89 still says "Jamais pour lire", historic, left. Dialog closing by Escape drops focus on body, to fix in Task 15. Non-specialist French pass running beside Task 5.
 - Task 5: dispatched, BASE c4cde86.
+- Task 4: French reader 8 important 4 minor, applied aaf5831. `help.settings.token` left: `michel serve` is never introduced, for Task 15. Task 4: complete.
+- Task 5: 46f399d, review 3 minor; backticks fixed ecac929; parked: load() order not pinned by a test, refreshView can overwrite an action error. Real clipboard content not observed. Task 5: complete.
+- Task 6: dispatched, BASE ecac929.
