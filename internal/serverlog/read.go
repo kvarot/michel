@@ -18,6 +18,14 @@ var ErrOutputCut = errors.New("the log read failed: the answer was too long and 
 // ErrReadFailed means the filter did not run to its end on the server.
 var ErrReadFailed = errors.New("the log read failed")
 
+// A read also fails when the filter ran well but could open no file of the
+// source (see sourceUnread). These say why, with no file name.
+var (
+	ErrSourceDenied = fmt.Errorf("%w: the server refused access to the files of the source", ErrReadFailed)
+	ErrSourceTools  = fmt.Errorf("%w: a tool is missing on the server", ErrReadFailed)
+	ErrSourceOther  = fmt.Errorf("%w: no file of the source could be read", ErrReadFailed)
+)
+
 // Read runs the filter of src on the server, with `sh -s` and no privilege, and
 // revalidates what comes back (ParseOutput). cursors are the positions saved so
 // far for the source. The returned cursors are the ones to store, each replacing

@@ -1281,3 +1281,169 @@ func (pe *passEnv) setShell(sh sshtest.ShellFunc) {
 	defer pe.mu.Unlock()
 	pe.shell = sh
 }
+
+// answer makes a simulated server that gives these lines back, whatever the
+// filter asks: what a real server says when it cannot open its files, on any
+// machine the tests run on.
+func answer(lines ...string) sshtest.ShellFunc {
+	return func(_ *sshtest.Server, _ string, out, _ io.Writer) int {
+		io.WriteString(out, strings.Join(lines, "\n")+"\n")
+		return 0
+	}
+}
+
+func unseenLine(file, cause string) string { return "U\t" + file + "\t" + cause }
+
+// locatedLine is what an activation says of a file it found, readable or not.
+func locatedLine(file string) string { return "F\t" + file + "\t123\t0\t0\t0\t1" }
+
+// readLineOf is what a read says of a file it opened and found nothing new in.
+func readLineOf(file string) string { return "F\t" + file + "\t123\t0\t0\t0\t0" }
+
+// A source of which no file could be read has failed its read, whatever the
+// position saved: the cause is told, and all the rest is saved as for a read.
+func TestPassFailsWhenNoFileCouldBeRead(t *testing.T) {
+	for _, tc := range []struct{ cause, reason string }{
+		{CauseDenied, ReasonDenied},
+		{CauseTools, ReasonTools},
+		{CauseOther, ReasonError},
+	} {
+		t.Run(tc.cause, func(t *testing.T) {
+			pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+			pe.activate()
+			ctx := context.Background()
+			before, _ := pe.repo.Cursors(ctx, pe.src.ID)
+			pe.clock.Advance(5 * time.Minute)
+			pe.setShell(answer(unseenLine(pe.src.Path, tc.cause)))
+			res, err := Pass(ctx, pe.deps, pe.tgt.ID)
+			if !errors.Is(err, ErrReadFailed) || res.Reason != tc.reason || res.Unseen != 1 {
+				t.Fatalf("result %+v, err %v", res, err)
+			}
+			if strings.Contains(err.Error(), pe.src.Path) {
+				t.Errorf("the error names the file: %v", err)
+			}
+			after, _ := pe.repo.Cursors(ctx, pe.src.ID)
+			if len(after) != 1 || after[0].Offset != before[0].Offset || !after[0].ReadAt.Equal(before[0].ReadAt) {
+				t.Errorf("positions: %+v -> %+v", before, after)
+			}
+			if notes := pe.notes(NoteUnseen); len(notes) != 1 {
+				t.Errorf("unseen notes = %+v", notes)
+			}
+			unseen, err := pe.repo.Unseen(ctx, pe.tgt.ID)
+			if err != nil || len(unseen[pe.src.ID]) != 1 || unseen[pe.src.ID][0].Cause != tc.cause {
+				t.Errorf("unseen rows = %+v, %v", unseen, err)
+			}
+			var result, ev string
+			if err := pe.s.DB().QueryRow(`SELECT result, evidence FROM audit_event WHERE action = 'log.read' ORDER BY id DESC LIMIT 1`).Scan(&result, &ev); err != nil ||
+				result != "failed" || !strings.Contains(ev, `"reason":"`+tc.reason+`"`) || strings.Contains(ev, pe.src.Path) {
+				t.Errorf("audit = %q %s (%v)", result, ev, err)
+			}
+		})
+	}
+}
+
+// At activation an unreadable file is located by its metadata: it comes with an
+// F line as well as its U line, and still nothing could be read.
+func TestPassFailsWhenTheOnlyFileIsLocatedButUnreadable(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	ctx := context.Background()
+	pe.setShell(answer(locatedLine(pe.src.Path), unseenLine(pe.src.Path, CauseDenied)))
+	res, err := Pass(ctx, pe.deps, pe.tgt.ID)
+	if !errors.Is(err, ErrSourceDenied) || res.Reason != ReasonDenied {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	// The place in the file is kept, with no read date, as before.
+	cs, _ := pe.repo.Cursors(ctx, pe.src.ID)
+	if len(cs) != 1 || cs[0].FileID != "123" || !cs[0].ReadAt.IsZero() {
+		t.Errorf("positions = %+v", cs)
+	}
+	if unseen, err := pe.repo.Unseen(ctx, pe.tgt.ID); err != nil || len(unseen[pe.src.ID]) != 1 {
+		t.Errorf("unseen rows = %+v, %v", unseen, err)
+	}
+}
+
+// The real filter on a file this user cannot read, at activation and after it.
+func TestPassFailsOnARealDeniedFile(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	pe.write(mono("CRITICAL", "PDOException", "Invoice.php", 42))
+	denyRead(t, pe.file)
+	for i := 0; i < 2; i++ {
+		res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
+		if !errors.Is(err, ErrSourceDenied) || res.Reason != ReasonDenied || res.Records != 0 {
+			t.Fatalf("pass %d: result %+v, err %v", i, res, err)
+		}
+	}
+}
+
+// A pattern with one file read and others not is a read that worked, with its
+// note: what could be read was read.
+func TestPassWithAFileReadStaysGood(t *testing.T) {
+	cases := map[string]func(a, b string) []string{
+		"after the activation": func(a, b string) []string { return []string{readLineOf(a), unseenLine(b, CauseDenied)} },
+		"at the activation": func(a, b string) []string {
+			return []string{locatedLine(a), locatedLine(b), unseenLine(b, CauseDenied)}
+		},
+	}
+	for name, lines := range cases {
+		t.Run(name, func(t *testing.T) {
+			pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+			dir := pe.src.Path[:strings.LastIndex(pe.src.Path, "/")]
+			pe.src.Path = dir + "/*.log"
+			if err := pe.repo.UpdateSource(context.Background(), pe.src); err != nil {
+				t.Fatal(err)
+			}
+			pe.setShell(answer(lines(dir+"/a.log", dir+"/b.log")...))
+			res := pe.run()
+			if res.Unseen != 1 {
+				t.Errorf("result %+v", res)
+			}
+			if notes := pe.notes(NoteUnseen); len(notes) != 1 {
+				t.Errorf("unseen notes = %+v", notes)
+			}
+		})
+	}
+}
+
+// Nothing there is a wait, not a failure: an absent file, nothing found at the
+// activation. A link or a folder in place of the file is told on the sheet.
+func TestPassWithNothingToOpenStaysGood(t *testing.T) {
+	for _, cause := range []string{CauseAbsent, CauseLink, CauseNotFile} {
+		t.Run(cause, func(t *testing.T) {
+			pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+			pe.setShell(answer(unseenLine(pe.src.Path, cause)))
+			pe.run()
+		})
+	}
+	t.Run("nothing found", func(t *testing.T) {
+		pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+		pe.setShell(answer("N"))
+		pe.run()
+	})
+}
+
+// Several causes for a source that read nothing: refused rights say the most.
+func TestPassReasonOfMixedCauses(t *testing.T) {
+	for _, tc := range []struct {
+		causes []string
+		reason string
+	}{
+		{[]string{CauseAbsent, CauseDenied}, ReasonDenied},
+		{[]string{CauseOther, CauseDenied}, ReasonDenied},
+		{[]string{CauseOther, CauseTools}, ReasonTools},
+		{[]string{CauseLink, CauseOther}, ReasonError},
+	} {
+		t.Run(strings.Join(tc.causes, "+"), func(t *testing.T) {
+			pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+			dir := pe.src.Path[:strings.LastIndex(pe.src.Path, "/")]
+			pe.src.Path = dir + "/*.log"
+			if err := pe.repo.UpdateSource(context.Background(), pe.src); err != nil {
+				t.Fatal(err)
+			}
+			pe.setShell(answer(unseenLine(dir+"/a.log", tc.causes[0]), unseenLine(dir+"/b.log", tc.causes[1])))
+			res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
+			if !errors.Is(err, ErrReadFailed) || res.Reason != tc.reason {
+				t.Fatalf("result %+v, err %v", res, err)
+			}
+		})
+	}
+}

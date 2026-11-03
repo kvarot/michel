@@ -942,3 +942,102 @@ func TestSchedulerAnnouncesTheFirstRoundOnceItIsOver(t *testing.T) {
 		t.Errorf("announced %d times", n)
 	}
 }
+
+// Rights lost on the only file of a prod source: the third failure, 30 minutes
+// apart, tells it once with its cause. Rights back end the incident, and the
+// reading goes on from where it stood.
+func TestLostRightsTellNotReadingOnProd(t *testing.T) {
+	for _, tc := range []struct{ cause, reason string }{
+		{CauseDenied, ReasonDenied},
+		{CauseTools, ReasonTools},
+		{CauseOther, ReasonError},
+	} {
+		t.Run(tc.cause, func(t *testing.T) {
+			pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+			s := newScheduler(pe.deps)
+			ctx := context.Background()
+			step := func() {
+				pe.clock.Advance(30 * time.Minute)
+				s.tick(ctx)
+			}
+			s.tick(ctx) // the activation goes well
+			pe.setShell(answer(unseenLine(pe.src.Path, tc.cause)))
+			step()
+			step()
+			if got := pe.alerts.kinds(); len(got) != 0 {
+				t.Fatalf("after two failures: %v", got)
+			}
+			step()
+			step()
+			told := pe.alerts.ofKind(AlertNotReading)
+			if len(told) != 1 || told[0].Reason != tc.reason {
+				t.Fatalf("not reading = %+v, all %v", told, pe.alerts.kinds())
+			}
+			// Rights back: the line written meanwhile is read, the incident is over.
+			pe.write(mono("CRITICAL", "PDOException", "Invoice.php", 42))
+			pe.setShell(nil)
+			step()
+			if sigs := pe.signatures(); len(sigs) != 1 || sigs[0].Total != 1 {
+				t.Fatalf("after the rights came back: %+v", sigs)
+			}
+			if unseen, err := pe.repo.Unseen(ctx, pe.tgt.ID); err != nil || len(unseen) != 0 {
+				t.Errorf("unseen rows = %+v, %v", unseen, err)
+			}
+			s.mu.Lock()
+			_, open := s.incidents[pe.tgt.ID]
+			s.mu.Unlock()
+			if open {
+				t.Error("the incident outlived the good read")
+			}
+			if n := len(pe.alerts.ofKind(AlertNotReading)); n != 1 {
+				t.Errorf("not reading alerts = %d", n)
+			}
+		})
+	}
+}
+
+// Unreadable from the activation on, the file located by its metadata: an
+// incident as well.
+func TestUnreadableFromTheActivationTellsNotReading(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	s := newScheduler(pe.deps)
+	ctx := context.Background()
+	pe.setShell(answer(locatedLine(pe.src.Path), unseenLine(pe.src.Path, CauseDenied)))
+	s.tick(ctx)
+	pe.setShell(answer(unseenLine(pe.src.Path, CauseDenied)))
+	for i := 0; i < 2; i++ {
+		pe.clock.Advance(30 * time.Minute)
+		s.tick(ctx)
+	}
+	told := pe.alerts.ofKind(AlertNotReading)
+	if len(told) != 1 || told[0].Reason != ReasonDenied {
+		t.Fatalf("not reading = %+v, all %v", told, pe.alerts.kinds())
+	}
+}
+
+// On preprod no alert goes: the gap note carries it to the digest (see
+// TestDigestShowsReadGap for that side).
+func TestLostRightsNoteAGapOnPreprod(t *testing.T) {
+	pe := newPassEnv(t, target.EnvPreprod, FormatMonolog)
+	s := newScheduler(pe.deps)
+	ctx := context.Background()
+	s.tick(ctx)
+	pe.setShell(answer(unseenLine(pe.src.Path, CauseDenied)))
+	for i := 0; i < 3; i++ {
+		pe.clock.Advance(30 * time.Minute)
+		s.tick(ctx)
+	}
+	if got := pe.alerts.kinds(); len(got) != 0 {
+		t.Fatalf("alerts = %v", got)
+	}
+	gaps := pe.notes(NoteGap)
+	if len(gaps) != 1 || !gaps[0].From.Equal(readNow) || !gaps[0].To.Equal(readNow.Add(90*time.Minute)) {
+		t.Fatalf("gaps = %+v", gaps)
+	}
+	s.mu.Lock()
+	inc := s.incidents[pe.tgt.ID]
+	s.mu.Unlock()
+	if inc == nil || inc.reason != ReasonDenied {
+		t.Errorf("incident = %+v", inc)
+	}
+}

@@ -56,6 +56,7 @@ const (
 	ReasonDenied         = "denied"
 	ReasonTimeout        = "timeout"
 	ReasonOutputCut      = "output_cut"
+	ReasonTools          = "tools"
 	ReasonInactive       = "inactive"
 	ReasonBusy           = "busy"
 	ReasonError          = "error"
@@ -376,11 +377,52 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 	res.Records += len(out.Records)
 	res.Rejected += out.Rejected
 	res.Unseen += len(out.Unseen)
+	// Everything above is kept, as for any read: the place in the files, the notes
+	// and the list of what is unseen. What remains is to say that it failed.
+	if err := sourceUnread(out); err != nil {
+		p.audit(ctx, "failed", map[string]any{"source": src.ID, "reason": reasonOf(err)})
+		return err
+	}
 	p.audit(ctx, "ok", map[string]any{
 		"source": src.ID, "from": ts(lastRead), "to": ts(p.now),
 		"volume": bytesRead(out, cursors), "skipped": skippedBytes(out), "records": len(out.Records),
 		"occurrences": occurrences(out), "rejected": out.Rejected, "fingerprint": fingerprint(out.Records),
 	})
+	return nil
+}
+
+// sourceUnread says why a source failed although the filter ran well: no file of
+// it could be opened in this read, and that is not simply because there is
+// nothing to open. A file counts as opened when it has an F line and no U line:
+// an unreadable file located by its metadata at the activation has both. A file
+// that is absent, a link or a folder, and an activation that found nothing (N),
+// are told on the sheet and are no failure on their own. One file read is enough
+// for a good read, with its note for the others.
+func sourceUnread(out Output) error {
+	for _, f := range out.Files {
+		if _, unseen := out.UnseenCause[f.File]; !unseen {
+			return nil
+		}
+	}
+	var denied, tools, other bool
+	for _, cause := range out.UnseenCause {
+		switch cause {
+		case CauseDenied:
+			denied = true
+		case CauseTools:
+			tools = true
+		case CauseOther:
+			other = true
+		}
+	}
+	switch {
+	case denied:
+		return ErrSourceDenied
+	case tools:
+		return ErrSourceTools
+	case other:
+		return ErrSourceOther
+	}
 	return nil
 }
 
@@ -656,6 +698,10 @@ func reasonOf(err error) string {
 		return ReasonTimeout
 	case errors.Is(err, ErrOutputCut):
 		return ReasonOutputCut
+	case errors.Is(err, ErrSourceDenied):
+		return ReasonDenied
+	case errors.Is(err, ErrSourceTools):
+		return ReasonTools
 	case errors.Is(err, ErrInactive):
 		return ReasonInactive
 	case errors.Is(err, ErrPassRunning):

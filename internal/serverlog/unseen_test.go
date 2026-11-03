@@ -414,7 +414,8 @@ func TestActivationOfAnUnreadableFileLeavesNoReadDate(t *testing.T) {
 	appendTo(t, pe.file, "PHP Warning:  x in /var/www/demo/a.php on line 3\n")
 	allow := denyRead(t, pe.file)
 	defer allow()
-	pe.run()
+	// The pass fails (see TestPassFailsOnARealDeniedFile); the position stays.
+	_, _ = Pass(context.Background(), pe.deps, pe.tgt.ID)
 	cs, _ := pe.repo.Cursors(context.Background(), pe.src.ID)
 	for _, c := range cs {
 		if c.File == pe.src.Path && !c.ReadAt.IsZero() {

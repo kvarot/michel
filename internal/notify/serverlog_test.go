@@ -232,7 +232,7 @@ func TestNotReadingMessageSaysWhy(t *testing.T) {
 		t.Errorf("no cause: %q", body)
 	}
 	for _, r := range []string{serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
-		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonOutputCut, serverlog.ReasonInactive, serverlog.ReasonBusy, serverlog.ReasonError, "something else"} {
+		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy, serverlog.ReasonError, "something else"} {
 		for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
 			in.Reason = r
 			if _, b := logMessage(lang, in, ""); strings.Contains(b, "!") {
