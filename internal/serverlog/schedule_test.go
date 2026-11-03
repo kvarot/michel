@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -561,6 +562,253 @@ func TestLockedAgentIsOneAlert(t *testing.T) {
 	}
 	if len(e.alerts.all()) != 2 {
 		t.Fatalf("the second lock gave %d alerts: %v", len(e.alerts.all()), e.alerts.kinds())
+	}
+}
+
+// lockedAgent makes the fake read of a server fail for the SSH agent.
+func lockedAgent(context.Context, string) (PassResult, error) {
+	return PassResult{Reason: ReasonNoAgent}, sshx.ErrNoAgent
+}
+
+func TestStaleCarrierDoesNotSilenceTheNextAgentAlert(t *testing.T) {
+	ctx := context.Background()
+	for name, retire := range map[string]func(e *schedEnv, tg target.Target, src Source){
+		"turned off": func(e *schedEnv, tg target.Target, _ Source) {
+			tg.Active = false
+			if err := e.targets.Update(ctx, tg); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"removed": func(e *schedEnv, tg target.Target, _ Source) {
+			if err := e.targets.Remove(ctx, tg.ID); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"manual": func(e *schedEnv, tg target.Target, _ Source) { e.interval(tg, ManualInterval) },
+		"last source off": func(e *schedEnv, _ target.Target, src Source) {
+			src.Active = false
+			if err := e.repo.UpdateSource(ctx, src); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newSchedEnv(t)
+			carrier, src := e.server("srv-carrier", target.EnvProd, true)
+			e.interval(carrier, 10*time.Minute)
+			s := e.scheduler(&fakePass{fn: lockedAgent})
+			tick := func() {
+				s.tick(ctx)
+				e.clock.Advance(10 * time.Minute)
+			}
+			for i := 0; i < 4; i++ {
+				tick()
+			}
+			if len(e.alerts.all()) != 1 {
+				t.Fatalf("setup: %v", e.alerts.kinds())
+			}
+			retire(e, carrier, src)
+			next, _ := e.server("srv-next", target.EnvProd, true)
+			e.interval(next, 10*time.Minute)
+			for i := 0; i < 5; i++ {
+				tick()
+			}
+			got := e.alerts.all()
+			if len(got) != 2 || got[1].Target.ID != next.ID {
+				t.Fatalf("no one is told for the next server: %+v", got)
+			}
+		})
+	}
+}
+
+func TestPastTheAgentClearsAStandingAgentAlert(t *testing.T) {
+	for name, past := range map[string]func(context.Context, string) (PassResult, error){
+		"a good read":     func(context.Context, string) (PassResult, error) { return PassResult{}, nil },
+		"another failure": failing(ReasonTimeout),
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newSchedEnv(t)
+			carrier, _ := e.server("srv-carrier", target.EnvProd, true)
+			e.interval(carrier, 10*time.Minute)
+			f := &fakePass{fn: lockedAgent}
+			s := e.scheduler(f)
+			ctx := context.Background()
+			tick := func() {
+				s.tick(ctx)
+				e.clock.Advance(10 * time.Minute)
+			}
+			for i := 0; i < 4; i++ {
+				tick()
+			}
+			if len(e.alerts.all()) != 1 {
+				t.Fatalf("setup: %v", e.alerts.kinds())
+			}
+			// The carrier now reads once a day: it says nothing for a long time.
+			e.interval(carrier, 24*time.Hour)
+			other, _ := e.server("srv-other", target.EnvProd, true)
+			e.interval(other, 10*time.Minute)
+			f.fn = past
+			tick()
+			// The other server gets past the agent, and then the agent is locked anew.
+			f.fn = lockedAgent
+			for i := 0; i < 5; i++ {
+				tick()
+			}
+			got := e.alerts.ofKind(AlertNotReading)
+			if len(got) != 2 || got[1].Target.ID != other.ID || got[1].Reason != ReasonNoAgent {
+				t.Fatalf("the new lock was not told: %+v", got)
+			}
+		})
+	}
+}
+
+func TestServerStillFailingForTheAgentKeepsItsIncident(t *testing.T) {
+	e := newSchedEnv(t)
+	carrier, _ := e.server("srv-carrier", target.EnvProd, true)
+	e.interval(carrier, 10*time.Minute)
+	f := &fakePass{fn: lockedAgent}
+	s := e.scheduler(f)
+	tick := func() {
+		s.tick(context.Background())
+		e.clock.Advance(10 * time.Minute)
+	}
+	for i := 0; i < 4; i++ {
+		tick()
+	}
+	other, _ := e.server("srv-other", target.EnvProd, true)
+	e.interval(other, 10*time.Minute)
+	// In the same rounds one server reads and the other still cannot: its incident
+	// goes on, it is not a new one told again.
+	f.fn = func(ctx context.Context, id string) (PassResult, error) {
+		if id == carrier.ID {
+			return lockedAgent(ctx, id)
+		}
+		return PassResult{}, nil
+	}
+	for i := 0; i < 5; i++ {
+		tick()
+	}
+	if got := e.alerts.all(); len(got) != 1 {
+		t.Fatalf("alerts = %+v", got)
+	}
+}
+
+func TestNotReadingNotesTheGapWithoutAPosition(t *testing.T) {
+	e := newSchedEnv(t)
+	pre, _ := e.server("srv-pre", target.EnvPreprod, true)
+	dev, _ := e.server("srv-dev", target.EnvDev, true)
+	for _, tg := range []target.Target{pre, dev} {
+		e.interval(tg, 10*time.Minute)
+	}
+	s := e.scheduler(&fakePass{fn: failing(ReasonTimeout)})
+	for i := 0; i < 4; i++ {
+		s.tick(context.Background())
+		e.clock.Advance(10 * time.Minute)
+	}
+	if len(e.alerts.all()) != 0 {
+		t.Fatalf("alerts = %v", e.alerts.kinds())
+	}
+	// Failing since the activation: the gap runs from the first failure.
+	for _, tg := range []target.Target{pre, dev} {
+		notes, err := e.repo.Notes(context.Background(), tg.ID)
+		if err != nil || len(notes) != 1 || notes[0].Kind != NoteGap || !notes[0].From.Equal(readNow) || !notes[0].To.Equal(readNow.Add(30*time.Minute)) {
+			t.Errorf("%s: notes = %+v, %v", tg.Name, notes, err)
+		}
+	}
+}
+
+func TestNotReadingNoteFailureIsLoggedAndTriedAgain(t *testing.T) {
+	e := newSchedEnv(t)
+	pre, _ := e.server("srv-pre", target.EnvPreprod, true)
+	e.interval(pre, 10*time.Minute)
+	s := e.scheduler(&fakePass{fn: failing(ReasonTimeout)})
+	ctx := context.Background()
+	tick := func() {
+		s.tick(ctx)
+		e.clock.Advance(10 * time.Minute)
+	}
+	for i := 0; i < 3; i++ {
+		tick()
+	}
+	buf := captureLog(t)
+	renameTable(t, e.s, "log_note", "log_note_off")
+	tick() // the bar is reached and the note cannot be written
+	renameTable(t, e.s, "log_note_off", "log_note")
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "gap") {
+		t.Errorf("the lost note is not said: %q", buf.String())
+	}
+	if s.incidents[pre.ID].alerted {
+		t.Fatal("the incident counts as told with no note written")
+	}
+	tick()
+	notes, err := e.repo.Notes(ctx, pre.ID)
+	if err != nil || len(notes) != 1 || notes[0].Kind != NoteGap {
+		t.Fatalf("the note was not written the next time: %+v, %v", notes, err)
+	}
+	if !s.incidents[pre.ID].alerted {
+		t.Error("the note is written: the incident is told")
+	}
+}
+
+func TestNotReadingGapLastsAsLongAsTheIncident(t *testing.T) {
+	e := newSchedEnv(t)
+	pre, _ := e.server("srv-pre", target.EnvPreprod, true)
+	e.interval(pre, 10*time.Minute)
+	s := e.scheduler(&fakePass{fn: failing(ReasonTimeout)})
+	at := readNow
+	for i := 0; i < 10; i++ {
+		at = e.clock.Now()
+		s.tick(context.Background())
+		e.clock.Advance(10 * time.Minute)
+	}
+	notes, err := e.repo.Notes(context.Background(), pre.ID)
+	if err != nil || len(notes) != 1 || !notes[0].From.Equal(readNow) || !notes[0].To.Equal(at) {
+		t.Fatalf("notes = %+v, want one up to %v (%v)", notes, at, err)
+	}
+}
+
+func TestHealthySourceGetsNoGapNote(t *testing.T) {
+	e := newSchedEnv(t)
+	tg, bad := e.server("srv-demo", target.EnvProd, true)
+	e.interval(tg, 10*time.Minute)
+	ctx := context.Background()
+	good, err := e.repo.AddSource(ctx, Source{TargetID: tg.ID, Path: "/var/log/demo/other.log", Format: FormatMonolog, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.repo.SaveCursors(ctx, []Cursor{{SourceID: bad.ID, File: bad.Path, FileID: "1", Offset: 1, ReadAt: readNow}}); err != nil {
+		t.Fatal(err)
+	}
+	// One source is read at each pass, the other one fails the pass.
+	s := e.scheduler(&fakePass{fn: func(context.Context, string) (PassResult, error) {
+		if err := e.repo.SaveCursors(ctx, []Cursor{{SourceID: good.ID, File: good.Path, FileID: "2", Offset: 1, ReadAt: e.clock.Now()}}); err != nil {
+			t.Error(err)
+		}
+		return PassResult{Reason: ReasonTimeout}, errors.New("the read failed")
+	}})
+	for i := 0; i < 4; i++ {
+		s.tick(ctx)
+		e.clock.Advance(10 * time.Minute)
+	}
+	notes, err := e.repo.Notes(ctx, tg.ID)
+	if err != nil || len(notes) != 1 || notes[0].SourceID != bad.ID {
+		t.Fatalf("notes = %+v, %v (failing source %s)", notes, err, bad.ID)
+	}
+}
+
+func TestRetentionRunsWithoutAnAuditLogger(t *testing.T) {
+	e := newSchedEnv(t)
+	tg, src := e.server("srv-demo", target.EnvProd, true)
+	ctx := context.Background()
+	old := readNow.Add(-100 * 24 * time.Hour)
+	if _, _, _, err := e.repo.Apply(ctx, src, []Record{rec(1, old)}, old); err != nil {
+		t.Fatal(err)
+	}
+	d := e.deps
+	d.Audit = nil
+	newScheduler(d).maintain(ctx)
+	if sigs, _ := e.repo.Signatures(ctx, tg.ID); len(sigs) != 0 {
+		t.Fatalf("the old error is kept: %+v", sigs)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -28,8 +29,8 @@ const (
 	// 100 occurrences). Count is the occurrences of that hour.
 	AlertSpike AlertKind = "spike"
 	// AlertVolume: a log so big that the read cap was reached. One item per
-	// source; Count is the bytes left unread. It follows the route of the
-	// error level.
+	// source, named by SourceID; Count is the bytes left unread. It follows the
+	// route of the error level.
 	AlertVolume AlertKind = "volume"
 	// AlertNotReading: Michel no longer reads. Reason is the cause (a key of
 	// the Reason* constants), Items name the servers (Type is the server name,
@@ -56,17 +57,26 @@ const (
 	ReasonError          = "error"
 )
 
-// AlertItem is one error in an alert. Text is set only when the server settings
-// send the text of errors (it is the cleaned text, never a log line); Location
-// is the project relative `file:line` (never a server path).
+// AlertItem is one error in an alert. Kind is its own reason, which can differ
+// from the one of the alert. Text is set only when the server settings send the
+// text of errors (it is the cleaned text, never a log line); Location is the
+// project relative `file:line` (never a server path). SourceID is set on volume
+// items only: it is an id, never the path of the log.
 type AlertItem struct {
+	Kind                 AlertKind
 	Level                Level
 	Type, Location, Text string
 	Count                int64
+	SourceID             string
 }
 
 // AlertInput is one alert, to be sent on the channels of the user. Channels
 // live outside this package: they get it through Deps.Alert.
+//
+// One pass sends at most one alert for its errors (spec § 8.2): new, reopened
+// and spike items go together, and Kind is the first present of AlertNew,
+// AlertReopened, AlertSpike. AlertVolume and AlertCapReached say something else
+// and stay separate messages.
 type AlertInput struct {
 	Target target.Target
 	Kind   AlertKind
@@ -119,12 +129,33 @@ const (
 // asks (the scheduler or a read by hand).
 var running sync.Map
 
-// capSent remembers when the "cap reached" message was last sent for a server:
-// one per hour (spec § 8.2).
-var capSent struct {
+// hourlyMemo remembers when a message was last sent, for a message that goes at
+// most once an hour. It lives in memory: a restart can repeat a message.
+type hourlyMemo struct {
 	sync.Mutex
 	at map[string]time.Time
 }
+
+// due says whether the message of key may go now, and remembers it.
+func (m *hourlyMemo) due(key string, now time.Time) bool {
+	m.Lock()
+	defer m.Unlock()
+	if m.at == nil {
+		m.at = map[string]time.Time{}
+	}
+	if at, ok := m.at[key]; ok && now.Sub(at) < capWindow && !now.Before(at) {
+		return false
+	}
+	m.at[key] = now
+	return true
+}
+
+var (
+	// capSent: the "cap reached" message, by server (spec § 8.2).
+	capSent hourlyMemo
+	// volumeSent: the volume alert, by source.
+	volumeSent hourlyMemo
+)
 
 // capWindow is the hour the cap is counted over.
 const capWindow = time.Hour
@@ -186,7 +217,7 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 	}
 	defer client.Close()
 
-	p := &onePass{d: d, t: t, st: st, now: now, texts: map[string]string{}, counts: map[string]int64{}, hours: map[string]time.Time{}}
+	p := &onePass{d: d, t: t, st: st, now: now, texts: map[string]string{}, counts: map[string]int64{}}
 	var res PassResult
 	var firstErr error
 	for _, src := range sources {
@@ -202,16 +233,18 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 			}
 		}
 	}
-	if err := p.alert(ctx, &res); err != nil && firstErr == nil {
-		firstErr = err
+	// The read happened whatever comes next: what fails from here on is said in
+	// the log, and does not count as "not reading".
+	if err := p.alert(ctx, &res); err != nil && ctx.Err() == nil {
+		slog.Warn("serverlog: the alerts of a log read could not be completed", "target", t.ID, "err", err)
 	}
 	if firstErr != nil {
 		return res, firstErr
 	}
 	// A missing occurrence is no proof after a gap, but the delay is the user's
 	// and the record is "resolved", never "fixed".
-	if _, err := d.Repo.Resolve(ctx, now); err != nil {
-		return res, err
+	if _, err := d.Repo.Resolve(ctx, t.ID, now); err != nil && ctx.Err() == nil {
+		slog.Warn("serverlog: cannot mark the log errors as resolved", "target", t.ID, "err", err)
 	}
 	return res, nil
 }
@@ -225,16 +258,14 @@ type onePass struct {
 
 	cands   []candidate
 	volumes []AlertItem
-	// What the records of this pass said, by signature: the cleaned text, the
-	// occurrences and the latest hour.
+	// What the records of this pass said, by signature: the cleaned text and the
+	// occurrences.
 	texts  map[string]string
 	counts map[string]int64
-	hours  map[string]time.Time
 }
 
 // candidate is an error to tell now.
 type candidate struct {
-	kind AlertKind
 	id   string
 	item AlertItem
 }
@@ -262,10 +293,10 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 		if p.texts[id] == "" {
 			p.texts[id] = r.Text
 		}
-		if r.Hour.After(p.hours[id]) {
-			p.hours[id] = r.Hour
-		}
 	}
+	// Apply has committed: these errors will not come back as new, so they are
+	// queued before anything else can fail.
+	p.queue(ctx, src, fresh, reopened, spiked, lastRead)
 	if err := p.d.Repo.SaveCursors(ctx, next); err != nil {
 		return err
 	}
@@ -296,13 +327,12 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 		"volume": bytesRead(out, cursors), "skipped": skippedBytes(out), "records": len(out.Records),
 		"occurrences": occurrences(out), "rejected": out.Rejected, "fingerprint": fingerprint(out.Records),
 	})
-	p.queue(src, fresh, reopened, spiked)
 	return nil
 }
 
 // notes stores what was left unread or out, and a gap in the reading. The
-// volume alert (a log that grows past the cap) comes at most once an hour per
-// source and follows the route of the error level.
+// volume alert (a log that grows past the cap) follows the route of the error
+// level; alert sends it at most once an hour per source.
 func (p *onePass) notes(ctx context.Context, src Source, out Output, cursors []Cursor, lastRead time.Time) error {
 	from := lastRead
 	if from.IsZero() || from.After(p.now) {
@@ -315,12 +345,8 @@ func (p *onePass) notes(ctx context.Context, src Source, out Output, cursors []C
 		return p.d.Repo.RecordState(ctx, Note{TargetID: p.t.ID, SourceID: src.ID, Kind: kind, From: from, To: p.now, Amount: amount})
 	}
 	if n := skippedBytes(out); n > 0 {
-		last, found, err := p.d.Repo.LatestNote(ctx, p.t.ID, src.ID, NoteSkipped)
-		if err != nil {
-			return err
-		}
-		if p.st.Routes[LevelError] == RouteImmediate && (!found || !last.To.After(p.now.Add(-capWindow))) {
-			p.volumes = append(p.volumes, AlertItem{Level: LevelError, Count: n})
+		if p.st.Routes[LevelError] == RouteImmediate {
+			p.volumes = append(p.volumes, AlertItem{Kind: AlertVolume, Level: LevelError, SourceID: src.ID, Count: n})
 		}
 		if err := add(NoteSkipped, n); err != nil {
 			return err
@@ -355,10 +381,15 @@ func (p *onePass) notes(ctx context.Context, src Source, out Output, cursors []C
 	// A read that follows a long silence: the poste was off, or the server
 	// could not be reached. The note is one per source, even if the silence
 	// began with an incident already noted.
-	if !lastRead.IsZero() && p.st.Interval != ManualInterval && p.now.Sub(lastRead) >= gapAfter(p.st.Interval) {
+	if p.afterGap(lastRead) {
 		return p.d.Repo.RecordState(ctx, Note{TargetID: p.t.ID, SourceID: src.ID, Kind: NoteGap, From: lastRead, To: p.now})
 	}
 	return nil
+}
+
+// afterGap says whether a read that follows lastRead ends a gap in the reading.
+func (p *onePass) afterGap(lastRead time.Time) bool {
+	return !lastRead.IsZero() && p.st.Interval != ManualInterval && p.now.Sub(lastRead) >= gapAfter(p.st.Interval)
 }
 
 // gapAfter is the silence from which a read counts as the end of a gap: more
@@ -370,20 +401,33 @@ func gapAfter(interval time.Duration) time.Duration {
 	return gapFloor
 }
 
-// queue keeps the errors of a source that the route of their level tells now.
-func (p *onePass) queue(src Source, fresh, reopened, spiked []Signature) {
+// queue keeps the errors of a source that the route of their level tells now. A
+// spike of an hour that ended inside a gap in the reading is over and was not
+// seen as it happened: it is counted, not told as current.
+func (p *onePass) queue(ctx context.Context, src Source, fresh, reopened, spiked []Signature, lastRead time.Time) {
 	add := func(kind AlertKind, sigs []Signature) {
 		for _, g := range sigs {
 			if p.st.Routes[g.Level] != RouteImmediate {
 				continue
 			}
-			it := AlertItem{Level: g.Level, Type: g.Type, Location: g.Location, Count: p.counts[g.ID]}
+			it := AlertItem{Kind: kind, Level: g.Level, Type: g.Type, Location: g.Location, Count: p.counts[g.ID]}
+			if kind == AlertSpike {
+				if p.afterGap(lastRead) && !g.SpikeHour.Add(time.Hour).After(p.now) {
+					continue
+				}
+				n, err := p.d.Repo.HourCount(ctx, g.ID, g.SpikeHour)
+				if err != nil {
+					slog.Warn("serverlog: cannot read the count of the hour of a spike", "target", p.t.ID, "signature", g.ID, "err", err)
+				} else if n > 0 {
+					it.Count = n
+				}
+			}
 			if p.st.AlertText && p.st.StoreText {
 				if txt, ok := cleanedText(p.texts[g.ID]); ok {
 					it.Text = txt
 				}
 			}
-			p.cands = append(p.cands, candidate{kind: kind, id: g.ID, item: it})
+			p.cands = append(p.cands, candidate{id: g.ID, item: it})
 		}
 	}
 	add(AlertNew, fresh)
@@ -391,20 +435,13 @@ func (p *onePass) queue(src Source, fresh, reopened, spiked []Signature) {
 	add(AlertSpike, spiked)
 }
 
-// alert hands the queued errors to Deps.Alert: one alert per kind, the most
-// severe first, within the hourly cap of the server; what the cap leaves out
-// waits for the digest, with one message saying so.
+// alert hands the queued errors to Deps.Alert: one alert for all of them, the
+// most severe first, within the hourly cap of the server; what the cap leaves
+// out waits for the digest, with one message saying so. The volume alert goes
+// apart, at most once an hour per source.
 func (p *onePass) alert(ctx context.Context, res *PassResult) error {
 	if p.d.Alert == nil || (len(p.cands) == 0 && len(p.volumes) == 0) {
 		return nil
-	}
-	for i := range p.cands {
-		if p.cands[i].kind == AlertSpike {
-			c := &p.cands[i]
-			if n, err := p.d.Repo.HourCount(ctx, c.id, p.hours[c.id]); err == nil && n > 0 {
-				c.item.Count = n
-			}
-		}
 	}
 	sort.SliceStable(p.cands, func(i, j int) bool {
 		a, b := p.cands[i].item, p.cands[j].item
@@ -425,44 +462,44 @@ func (p *onePass) alert(ctx context.Context, res *PassResult) error {
 	if len(send) > room {
 		send, held = send[:room], true
 	}
-	var told []string
-	for _, kind := range []AlertKind{AlertNew, AlertReopened, AlertSpike} {
-		var items []AlertItem
-		for _, c := range send {
-			if c.kind == kind {
-				items = append(items, c.item)
-				told = append(told, c.id)
-			}
-		}
-		if len(items) > 0 {
-			p.d.Alert(ctx, AlertInput{Target: p.t, Kind: kind, Items: items})
-			res.Alerts++
-		}
+	told := make([]string, 0, len(send))
+	items := make([]AlertItem, 0, len(send))
+	for _, c := range send {
+		told = append(told, c.id)
+		items = append(items, c.item)
 	}
-	if len(p.volumes) > 0 {
-		p.d.Alert(ctx, AlertInput{Target: p.t, Kind: AlertVolume, Items: p.volumes})
+	if len(items) > 0 {
+		p.d.Alert(ctx, AlertInput{Target: p.t, Kind: groupKind(items), Items: items})
 		res.Alerts++
 	}
-	if held && capMessageDue(p.t.ID, p.now) {
+	var volumes []AlertItem
+	for _, it := range p.volumes {
+		if volumeSent.due(it.SourceID, p.now) {
+			volumes = append(volumes, it)
+		}
+	}
+	if len(volumes) > 0 {
+		p.d.Alert(ctx, AlertInput{Target: p.t, Kind: AlertVolume, Items: volumes})
+		res.Alerts++
+	}
+	if held && capSent.due(p.t.ID, p.now) {
 		p.d.Alert(ctx, AlertInput{Target: p.t, Kind: AlertCapReached})
 		res.Alerts++
 	}
 	return p.d.Repo.MarkAlerted(ctx, told, p.now)
 }
 
-// capMessageDue says whether the "cap reached" message of a server may go now,
-// and remembers it.
-func capMessageDue(targetID string, now time.Time) bool {
-	capSent.Lock()
-	defer capSent.Unlock()
-	if capSent.at == nil {
-		capSent.at = map[string]time.Time{}
+// groupKind is the kind of an alert that groups errors: the first present of
+// new, reopened, spike.
+func groupKind(items []AlertItem) AlertKind {
+	for _, kind := range []AlertKind{AlertNew, AlertReopened} {
+		for _, it := range items {
+			if it.Kind == kind {
+				return kind
+			}
+		}
 	}
-	if at, ok := capSent.at[targetID]; ok && now.Sub(at) < capWindow && !now.Before(at) {
-		return false
-	}
-	capSent.at[targetID] = now
-	return true
+	return AlertSpike
 }
 
 func levelRank(l Level) int {
@@ -480,9 +517,11 @@ func (p *onePass) audit(ctx context.Context, result string, ev map[string]any) {
 	if p.d.Audit == nil {
 		return
 	}
-	// A failed audit write must not lose a read that happened: it is the one
-	// trace left, and the next read goes on.
-	_, _ = p.d.Audit.Record(ctx, audit.Event{Actor: auditActorRead, Action: auditActionRead, Target: p.t.ID, Result: result, Evidence: ev})
+	// A failed audit write does not undo a read that happened, and the next read
+	// goes on; the log says that this one has no trace.
+	if _, err := p.d.Audit.Record(ctx, audit.Event{Actor: auditActorRead, Action: auditActionRead, Target: p.t.ID, Result: result, Evidence: ev}); err != nil {
+		slog.Warn("serverlog: cannot write log.read to the audit log", "target", p.t.ID, "source", ev["source"], "result", result, "err", err)
+	}
 }
 
 func latestRead(cs []Cursor) time.Time {

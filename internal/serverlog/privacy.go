@@ -152,8 +152,8 @@ func auditPurge(ctx context.Context, log *audit.Logger, actor, target string, ev
 }
 
 // PurgeAudited applies the retention at now (Repo.Purge) and audits it, unless
-// nothing went, with
-// the number of rows that went, never what they held.
+// nothing went, with the number of rows that went, never what they held. A nil
+// log records nothing (see Deps.Audit).
 func PurgeAudited(ctx context.Context, repo *Repo, log *audit.Logger, now time.Time) error {
 	before, err := repo.rowCounts(ctx)
 	if err != nil {
@@ -167,7 +167,7 @@ func PurgeAudited(ctx context.Context, repo *Repo, log *audit.Logger, now time.T
 		return err
 	}
 	gone := [3]int64{before[0] - after[0], before[1] - after[1], before[2] - after[2]}
-	if gone == [3]int64{} {
+	if gone == [3]int64{} || log == nil {
 		return nil // a tick that removed nothing is not worth an audit event
 	}
 	return auditPurge(ctx, log, purgeActor, "", map[string]any{

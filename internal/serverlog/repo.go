@@ -431,9 +431,9 @@ func spikes(cur, prev int64) bool { return cur >= spikeMin && cur >= spikeFactor
 // Apply adds records read on src. It returns the errors seen for the first
 // time (fresh), those that came back after being resolved (reopened), and
 // those whose count in an hour just reached ten times the hour before, with
-// at least 100 occurrences (spiked). An ignored error is counted but never
-// returned. The text of a record is stored only when the server settings
-// allow it, and never takes part in the identity.
+// at least 100 occurrences (spiked, with SpikeHour the latest hour that did). An
+// ignored error is counted but never returned. The text of a record is stored
+// only when the server settings allow it, and never takes part in the identity.
 func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Time) (fresh, reopened, spiked []Signature, err error) {
 	for _, rc := range recs {
 		if !validLevel(rc.Level) || rc.Count <= 0 {
@@ -450,6 +450,7 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 	}
 	defer tx.Rollback()
 	var freshIDs, reopenedIDs, spikedIDs []string
+	spikeHours := map[string]time.Time{}
 	has := func(l []string, id string) bool {
 		for _, v := range l {
 			if v == id {
@@ -500,8 +501,14 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 			ON CONFLICT (signature_id, hour) DO UPDATE SET count = count + excluded.count`, id, ts(hour), rc.Count); err != nil {
 			return nil, nil, nil, fmt.Errorf("cannot save the log counts: %w", err)
 		}
-		if !spikes(before, prev) && spikes(before+rc.Count, prev) && !has(freshIDs, id) && !has(reopenedIDs, id) && !has(spikedIDs, id) {
-			spikedIDs = append(spikedIDs, id)
+		if !spikes(before, prev) && spikes(before+rc.Count, prev) && !has(freshIDs, id) && !has(reopenedIDs, id) {
+			at, known := spikeHours[id]
+			if !known {
+				spikedIDs = append(spikedIDs, id)
+			}
+			if !known || hour.After(at) {
+				spikeHours[id] = hour
+			}
 		}
 	}
 	load := func(ids []string) ([]Signature, error) {
@@ -527,29 +534,37 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 	if spiked, err = load(spikedIDs); err != nil {
 		return nil, nil, nil, err
 	}
+	for i := range spiked {
+		spiked[i].SpikeHour = spikeHours[spiked[i].ID]
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, nil, nil, fmt.Errorf("cannot save the log records: %w", err)
 	}
 	return fresh, reopened, spiked, nil
 }
 
-// Resolve marks as resolved the errors with no occurrence for the delay of
-// their server (ResolveAfter), except ignored ones. It returns them.
-func (r *Repo) Resolve(ctx context.Context, now time.Time) ([]Signature, error) {
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, target_id, last_at FROM log_signature WHERE status IN (?,?,?)`,
-		string(StatusNew), string(StatusSeen), string(StatusReopened))
+// Resolve marks as resolved the errors of one server with no occurrence for its
+// delay (ResolveAfter), except ignored ones. It returns them. Only the server
+// that was just read can say so: another one may simply not have been read.
+func (r *Repo) Resolve(ctx context.Context, targetID string, now time.Time) ([]Signature, error) {
+	st, err := r.settingsOrDefault(ctx, targetID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, last_at FROM log_signature WHERE target_id = ? AND status IN (?,?,?)`,
+		targetID, string(StatusNew), string(StatusSeen), string(StatusReopened))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the log errors: %w", err)
 	}
 	type cand struct {
-		id, target string
-		last       time.Time
+		id   string
+		last time.Time
 	}
 	var cands []cand
 	for rows.Next() {
 		var c cand
 		var last string
-		if err := rows.Scan(&c.id, &c.target, &last); err != nil {
+		if err := rows.Scan(&c.id, &last); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("cannot read the log errors: %w", err)
 		}
@@ -565,19 +580,9 @@ func (r *Repo) Resolve(ctx context.Context, now time.Time) ([]Signature, error) 
 	}
 	rows.Close()
 
-	delay := map[string]time.Duration{}
 	var due []string
 	for _, c := range cands {
-		d, ok := delay[c.target]
-		if !ok {
-			st, err := r.settingsOrDefault(ctx, c.target)
-			if err != nil {
-				return nil, err
-			}
-			d = st.ResolveAfter
-			delay[c.target] = d
-		}
-		if !now.Before(c.last.Add(d)) {
+		if !now.Before(c.last.Add(st.ResolveAfter)) {
 			due = append(due, c.id)
 		}
 	}
@@ -839,28 +844,6 @@ func (r *Repo) PruneCursors(ctx context.Context, sourceID string, keep []string)
 		}
 	}
 	return tx.Commit()
-}
-
-// LatestNote returns the latest note of a kind for a source of a server.
-func (r *Repo) LatestNote(ctx context.Context, targetID, sourceID, kind string) (Note, bool, error) {
-	var n Note
-	var from, to string
-	err := r.s.DB().QueryRowContext(ctx, `SELECT target_id, source_id, kind, from_at, to_at, amount FROM log_note
-		WHERE target_id = ? AND source_id = ? AND kind = ? ORDER BY to_at DESC, id DESC LIMIT 1`, targetID, sourceID, kind).Scan(
-		&n.TargetID, &n.SourceID, &n.Kind, &from, &to, &n.Amount)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Note{}, false, nil
-	}
-	if err != nil {
-		return Note{}, false, fmt.Errorf("cannot read the log notes: %w", err)
-	}
-	if n.From, err = parseTime(from); err != nil {
-		return Note{}, false, err
-	}
-	if n.To, err = parseTime(to); err != nil {
-		return Note{}, false, err
-	}
-	return n, true, nil
 }
 
 // RecordState stores a note about something that lasts (a gap in the reading,

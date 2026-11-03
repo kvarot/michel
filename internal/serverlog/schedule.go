@@ -128,11 +128,25 @@ func (s *scheduler) tick(ctx context.Context) {
 		return
 	}
 	var due []target.Target
+	eligible := make(map[string]bool, len(all))
 	for _, t := range all {
-		if t.Active && s.claim(ctx, t, now) {
-			due = append(due, t)
+		st, ok, err := s.eligible(ctx, t)
+		if err != nil {
+			// Not known: its incident stays, and it is not read this round.
+			if ctx.Err() == nil {
+				slog.Warn("serverlog: cannot read the log settings or sources", "target", t.ID, "err", err)
+			}
+			eligible[t.ID] = true
+			continue
+		}
+		if ok {
+			eligible[t.ID] = true
+			if s.claim(t, st, now) {
+				due = append(due, t)
+			}
 		}
 	}
+	s.dropIncidents(eligible)
 	outcomes := make([]passOutcome, len(due))
 	var wg sync.WaitGroup
 	for i, t := range due {
@@ -155,32 +169,46 @@ func (s *scheduler) tick(ctx context.Context) {
 	s.settle(ctx, outcomes)
 }
 
-// claim says whether t is to be read now, and marks it as running if so.
-func (s *scheduler) claim(ctx context.Context, t target.Target, now time.Time) bool {
+// eligible says whether the scheduler reads t at all: a server turned on, not
+// read by hand only, with an active source.
+func (s *scheduler) eligible(ctx context.Context, t target.Target) (Settings, bool, error) {
+	if !t.Active {
+		return Settings{}, false, nil
+	}
 	st, err := s.d.Repo.Settings(ctx, t.ID)
 	if err != nil {
-		if ctx.Err() == nil {
-			slog.Warn("serverlog: cannot read the log settings", "target", t.ID, "err", err)
-		}
-		return false
+		return Settings{}, false, err
 	}
 	if st.Interval == ManualInterval {
-		return false
+		return st, false, nil
 	}
 	srcs, err := s.d.Repo.Sources(ctx, t.ID)
 	if err != nil {
-		if ctx.Err() == nil {
-			slog.Warn("serverlog: cannot read the log sources", "target", t.ID, "err", err)
-		}
-		return false
+		return Settings{}, false, err
 	}
-	active := false
 	for _, src := range srcs {
-		active = active || src.Active
+		if src.Active {
+			return st, true, nil
+		}
 	}
-	if !active {
-		return false
+	return st, false, nil
+}
+
+// dropIncidents forgets the incidents of servers no longer read: they will
+// never get an outcome, and must not stand for anyone else.
+func (s *scheduler) dropIncidents(eligible map[string]bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range s.incidents {
+		if !eligible[id] {
+			delete(s.incidents, id)
+		}
 	}
+}
+
+// claim says whether t, with its settings st, is to be read now, and marks it as
+// running if so.
+func (s *scheduler) claim(t target.Target, st Settings, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.inflight[t.ID] {
@@ -202,8 +230,15 @@ func (s *scheduler) release(id string) {
 
 // settle updates the incidents with the outcomes of one round and tells the
 // new ones. A cause shared by several servers of the round (the SSH agent
-// locked or absent) is one alert.
+// locked or absent) is one alert. The gap of an incident past the bar is noted
+// at each failure, so it lasts as long as the incident and a note that could
+// not be written is tried again. A non-prod incident is told by that note only,
+// so it counts as told once the note is written.
 func (s *scheduler) settle(ctx context.Context, outcomes []passOutcome) {
+	if ctx.Err() != nil {
+		return
+	}
+	s.clearAgentIncidents(outcomes)
 	var declared []passOutcome
 	for _, o := range outcomes {
 		if ctx.Err() != nil || errors.Is(o.err, context.Canceled) {
@@ -219,17 +254,65 @@ func (s *scheduler) settle(ctx context.Context, outcomes []passOutcome) {
 			// Not a failure of the reading itself.
 		default:
 			slog.Warn("serverlog: the log read of a server failed", "target", o.t.ID, "name", o.t.Name, "reason", o.res.Reason)
-			if s.fail(ctx, o) {
+			reached, untold := s.fail(ctx, o)
+			if !reached {
+				continue
+			}
+			noted := s.noteGap(ctx, o)
+			switch {
+			case !untold:
+			case o.t.Env == target.EnvProd:
 				declared = append(declared, o)
+			case noted:
+				s.markTold(o.t.ID)
 			}
 		}
 	}
 	s.tell(ctx, declared)
 }
 
-// fail counts a failure and says whether the incident has just reached the
-// bar: 3 failures in a row and 30 minutes without a good read.
-func (s *scheduler) fail(ctx context.Context, o passOutcome) bool {
+// clearAgentIncidents ends the incidents about the SSH agent as soon as a server
+// of the round got past it (a good read, or a failure for another reason): the
+// agent is shared, so it is back for all, whenever each server is next read. A
+// server that still fails for the agent in this round keeps its incident.
+func (s *scheduler) clearAgentIncidents(outcomes []passOutcome) {
+	past := false
+	still := map[string]bool{}
+	for _, o := range outcomes {
+		switch {
+		case errors.Is(o.err, context.Canceled), errors.Is(o.err, ErrInactive), errors.Is(o.err, ErrPassRunning):
+		case o.err != nil && o.res.Reason == ReasonNoAgent:
+			still[o.t.ID] = true
+		default:
+			past = true
+		}
+	}
+	if !past {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, inc := range s.incidents {
+		if inc.reason == ReasonNoAgent && !still[id] {
+			delete(s.incidents, id)
+		}
+	}
+}
+
+// markTold says that the incident of a server was told.
+func (s *scheduler) markTold(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if inc := s.incidents[id]; inc != nil {
+		inc.alerted = true
+	}
+}
+
+// fail counts a failure and says whether the incident is past the bar (3
+// failures in a row and 30 minutes without a good read), and if so whether it
+// still has to be told. A prod incident counts as told from here: its alert goes
+// at once, whatever becomes of the note.
+func (s *scheduler) fail(ctx context.Context, o passOutcome) (reached, untold bool) {
 	since := s.goodRead(ctx, o.t.ID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -243,11 +326,14 @@ func (s *scheduler) fail(ctx context.Context, o passOutcome) bool {
 	if since.IsZero() || since.After(inc.first) {
 		since = inc.first
 	}
-	if inc.alerted || inc.failures < notReadingFailures || o.at.Sub(since) < notReadingAfter {
-		return false
+	if inc.failures < notReadingFailures || o.at.Sub(since) < notReadingAfter {
+		return false, false
 	}
-	inc.alerted = true
-	return true
+	untold = !inc.alerted
+	if o.t.Env == target.EnvProd {
+		inc.alerted = true
+	}
+	return true, untold
 }
 
 // goodRead is when the server was last read well: this process knows it, else
@@ -266,23 +352,16 @@ func (s *scheduler) goodRead(ctx context.Context, id string) time.Time {
 	return at
 }
 
-// tell notes the gap of each new incident (the digest carries it) and sends the
-// alert of the servers whose route is immediate: prod ones. Servers failing
-// for the SSH agent are one alert; if one is already sent and still stands,
-// the newcomers join it without another one.
+// tell sends the alert of the new incidents whose route is immediate: prod ones.
+// Servers failing for the SSH agent are one alert; if one is already sent and
+// still stands, the newcomers join it without another one.
 func (s *scheduler) tell(ctx context.Context, declared []passOutcome) {
 	if len(declared) == 0 {
 		return
 	}
-	for _, o := range declared {
-		s.noteGap(ctx, o)
-	}
 	sort.SliceStable(declared, func(i, j int) bool { return declared[i].t.Name < declared[j].t.Name })
 	var agent []passOutcome
 	for _, o := range declared {
-		if o.t.Env != target.EnvProd {
-			continue
-		}
 		if o.res.Reason == ReasonNoAgent {
 			agent = append(agent, o)
 			continue
@@ -318,7 +397,7 @@ func (s *scheduler) send(ctx context.Context, group []passOutcome, reason string
 	items := make([]AlertItem, len(group))
 	s.mu.Lock()
 	for i, o := range group {
-		items[i] = AlertItem{Type: o.t.Name}
+		items[i] = AlertItem{Kind: AlertNotReading, Type: o.t.Name}
 		if inc := s.incidents[o.t.ID]; inc != nil {
 			inc.carrier = true
 		}
@@ -327,23 +406,55 @@ func (s *scheduler) send(ctx context.Context, group []passOutcome, reason string
 	s.d.Alert(ctx, AlertInput{Target: group[0].t, Kind: AlertNotReading, Items: items, Reason: reason})
 }
 
-// noteGap puts the silence in the notes of each source that has a position:
-// from its last read to now. The read that ends the incident extends the note.
-func (s *scheduler) noteGap(ctx context.Context, o passOutcome) {
+// noteGap puts the silence in the notes of each source that is behind: from its
+// last read, or from the first failure of the incident if it was never read, to
+// now. A source read recently is not behind, even if another one fails the pass.
+// The read that ends the incident extends the note. It says whether every note
+// was written; what could not be is logged, without content.
+func (s *scheduler) noteGap(ctx context.Context, o passOutcome) bool {
+	warn := func(err error) {
+		if ctx.Err() == nil {
+			slog.Warn("serverlog: cannot note a gap in the reading", "target", o.t.ID, "err", err)
+		}
+	}
+	st, err := s.d.Repo.Settings(ctx, o.t.ID)
+	if err != nil {
+		warn(err)
+		return false
+	}
 	srcs, err := s.d.Repo.Sources(ctx, o.t.ID)
 	if err != nil {
-		return
+		warn(err)
+		return false
 	}
+	first := o.at
+	s.mu.Lock()
+	if inc := s.incidents[o.t.ID]; inc != nil {
+		first = inc.first
+	}
+	s.mu.Unlock()
+	noted := true
 	for _, src := range srcs {
 		if !src.Active {
 			continue
 		}
 		cs, err := s.d.Repo.Cursors(ctx, src.ID)
 		if err != nil {
+			warn(err)
+			noted = false
 			continue
 		}
-		if from := latestRead(cs); !from.IsZero() {
-			_ = s.d.Repo.RecordState(ctx, Note{TargetID: o.t.ID, SourceID: src.ID, Kind: NoteGap, From: from, To: o.at})
+		from := latestRead(cs)
+		switch {
+		case from.IsZero():
+			from = first
+		case o.at.Sub(from) < gapAfter(st.Interval):
+			continue
+		}
+		if err := s.d.Repo.RecordState(ctx, Note{TargetID: o.t.ID, SourceID: src.ID, Kind: NoteGap, From: from, To: o.at}); err != nil {
+			warn(err)
+			noted = false
 		}
 	}
+	return noted
 }

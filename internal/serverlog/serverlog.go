@@ -84,6 +84,9 @@ type Signature struct {
 	FirstAt, LastAt        time.Time
 	LastAlertAt            time.Time
 	Total                  int64
+	// SpikeHour is the hour that spiked, on what Apply returns as spiked only.
+	// It is not stored.
+	SpikeHour time.Time
 }
 
 // Record is a batch of identical occurrences read in one hour. Text is the

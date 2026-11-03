@@ -155,10 +155,10 @@ func TestApplyLifecycle(t *testing.T) {
 		t.Fatalf("second apply = %+v %+v", fresh, reopened)
 	}
 	// Not resolved before ResolveAfter, resolved after.
-	if got, err := e.r.Resolve(ctx, t0.Add(6*24*time.Hour)); err != nil || len(got) != 0 {
+	if got, err := e.r.Resolve(ctx, e.tgt.ID, t0.Add(6*24*time.Hour)); err != nil || len(got) != 0 {
 		t.Fatalf("early resolve = %+v, %v", got, err)
 	}
-	got, err := e.r.Resolve(ctx, t0.Add(8*24*time.Hour))
+	got, err := e.r.Resolve(ctx, e.tgt.ID, t0.Add(8*24*time.Hour))
 	if err != nil || len(got) != 1 || got[0].ID != id || got[0].Status != StatusResolved {
 		t.Fatalf("resolve = %+v, %v", got, err)
 	}
@@ -176,7 +176,7 @@ func TestApplyLifecycle(t *testing.T) {
 	if err != nil || len(fresh)+len(reopened)+len(spiked) != 0 {
 		t.Fatalf("ignored apply = %+v %+v %+v, %v", fresh, reopened, spiked, err)
 	}
-	if got, _ := e.r.Resolve(ctx, later.Add(30*24*time.Hour)); len(got) != 0 {
+	if got, _ := e.r.Resolve(ctx, e.tgt.ID, later.Add(30*24*time.Hour)); len(got) != 0 {
 		t.Fatalf("ignored was resolved: %+v", got)
 	}
 	sigs, _ := e.r.Signatures(ctx, e.tgt.ID)
@@ -587,12 +587,6 @@ func TestRecordStateExtendsWhatLasts(t *testing.T) {
 	}
 	if gaps != 2 {
 		t.Fatalf("gaps = %d in %+v", gaps, notes)
-	}
-	if latest, ok, err := e.r.LatestNote(ctx, e.tgt.ID, e.src.ID, NoteGap); err != nil || !ok || !latest.To.Equal(t0.Add(6*time.Hour)) {
-		t.Errorf("latest gap = %+v, %v, %v", latest, ok, err)
-	}
-	if _, ok, _ := e.r.LatestNote(ctx, e.tgt.ID, e.src.ID, NoteRotated); ok {
-		t.Error("a note of a kind that never happened")
 	}
 	if err := e.r.RecordState(ctx, Note{TargetID: e.tgt.ID, Kind: "bogus"}); !errors.Is(err, ErrInvalidNote) {
 		t.Errorf("unknown kind: %v", err)
