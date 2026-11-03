@@ -139,3 +139,23 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 6: minor (deferred to Task 8): a ticked log SMS shares the daily counter with flaws, say so where the box is ticked (spec § 8.3).
 - Task 6: minor (deferred): text cap test does not pin the exact length; per-channel audit uses `ctx`, a stop during send can lose lines; plural of not_reading follows the count of names.
 - Task 6: complete (commits 222a384..4863ab6, review clean)
+- Task 7: dispatched, BASE 35361db.
+- Task 7: implementer DONE_WITH_CONCERNS, commit 04c818e. R4 settled on digest_run.summary, no migration. Claim by conditional INSERT, deleted if no channel took it, older than 10 min counts as dead. One ok channel plus a failure counts as delivered. Log errors added to NewTotal. Reopened error listed in each digest until marked seen. FR "résumé" in new text, "digest" in older keys.
+- Task 7: French reader review done, sent to the implementer.
+- Ruling R25: French prose says "résumé" everywhere, never "digest", except command names — a non-specialist reader understands it at once, the titles and web page already use it — costs a rename if Kévin prefers "digest". Supersedes the Task 6 note keeping "digest".
+- Task 7: wording applied, commit ef05303. No warning exists yet at source activation without a channel (spec § 8.3): Task 8 and 9 to carry it.
+- Task 7: review needs fixes (1 Critical: error read after a digest with an older log hour is in no digest; 3 Important: first window slides, reopened told daily, catch-up digest before the first read; 14 Minor). Findings: task-7-findings-1.md. Send-once claim, lifecycle and race test judged sound.
+- Ruling R26: the digest counts by read time, each occurrence exactly once; `log_bucket` stays by log hour for spikes; new migration allowed; first digest at serve start waits for the first log round, 2 min at most — spec § 8.3 "jamais perdus ni envoyés deux fois", § 5.4 — costs a migration and a later first digest.
+- Ruling R27: "plus fréquentes" means most frequent in the window, not only spikes; only new and reopened count as new — spec § 8.3, an error steady at 90 an hour would never show — costs a steady error listed daily until silenced; to show to Kévin.
+- Ruling R28: with an unscoped channel enabled, delivered needs an ok on an unscoped channel, only those carry server sections; with only scoped channels any ok counts — spec § 8.3 — costs a repeat for scoped channels when only unscoped ones failed.
+- Task 7: fix round 1 sent, FIX_BASE ef05303.
+- Task 7: fix round 1 implementer reply, commit 730e431, migration 0019 (log_read, reopened_at, digest_start). Choices to check: 100 reads as frequent, 5 s LogReadLag, reading stamped with a fresh clock.
+- Task 7: fix round 1/5 (1 Critical, 3 Important, R26, R28 and 13 Minor addressed; R27 open: floor of 100 not ruled; new Important: log_read orphans on DeleteSource, scoped channels re-sent every 15 min under R28; commits ef05303..730e431). Full suite passes on 730e431, run by the controller.
+- Ruling R27b: no floor on frequent errors, listed by count up to the cap, no "often" label — R27 as written, a floor needs a number the spec does not give — costs a rarely seen error listed when the list has room.
+- Ruling R29: a channel that received a held digest gets no copy on a retry the same local day, memory in process, next day everyone again if still held; messages say some channels received it — spec "un seul par jour" with R28 — costs one repeat after a restart.
+- Task 7: minor (deferred): a spike in the boundary hour can be labelled again in the next digest; read_at stamped before the transaction, a commit later than the 5 s lag falls in no digest, rare, error stays on the page; manual send with scoped ok and unscoped failure moves the window, expected for manual.
+- Task 7: fix round 2 sent, FIX_BASE 730e431.
+- Task 7: fix round 2 implementer reply, commit 0008fd2. Limit: scan --digest keeps no memory between runs, a second run the same day after a held digest can re-send.
+- Task 7: fix round 2/5 (R27b, N1, N2, R29 and 4 Minor addressed, 0 open; commits 730e431..0008fd2), wording nit commit 9da1594.
+- Task 7: minor (deferred): scan --digest keeps no memory between runs, a second run the same day after a held digest can re-send to a channel that got it; a channel removed mid-day leaves `no_channel` with the digest held.
+- Task 7: complete (commits 35361db..9da1594, review clean)
