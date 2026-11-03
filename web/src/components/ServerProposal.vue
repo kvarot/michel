@@ -154,7 +154,7 @@
 <script>
 import FieldHelp from './FieldHelp.vue'
 import { formatDate, severityOf } from '../lib/digestView.js'
-import { backupLine, canApproveServer, envLabel, findingTitle, needsSnapshot, serversHash } from '../lib/serversView.js'
+import { backupLine, canApproveServer, envLabel, findingTitle, needsSnapshot, restoreNeeded, serversHash } from '../lib/serversView.js'
 
 // ServerProposal is the right of the Fix page for a fix of a server: the
 // flaw in plain words, then the proposal: its sentence, « réduit le risque,
@@ -230,8 +230,7 @@ export default {
     },
     // restoreNow: a package upgrade failed, or the site went down after it.
     restoreNow() {
-      if (!this.needsSnap || this.attempt.state !== 'failed') return false
-      return this.steps.some((s) => (s.op === 'package_upgrade' || s.op === 'check_site') && !s.ok && s.detail !== 'not run')
+      return restoreNeeded(this.attempt)
     },
     serverBackups() {
       return this.server.backup_list || []

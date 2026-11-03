@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, serverHeadline,
+  backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, restoreNeeded,
   serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers,
 } from './serversView.js'
 
@@ -103,21 +103,6 @@ describe('labels', () => {
 })
 
 describe('headline and order', () => {
-  test('serverHeadline: an urgent or critical server flaw is the headline, never "all calm" (B1)', () => {
-    const urgent = srv({ name: 'srv-demo', open_findings: 4, critical_open: 2, urgent_open: 2, state: { code: 'findings' } })
-    expect(serverHeadline([srv(), urgent], 'fr')).toEqual({
-      title: 'Le serveur srv-demo a une faille urgente.',
-      word: 'Ouvre sa fiche : elle dit quoi faire en premier.',
-    })
-    expect(serverHeadline([urgent, { ...urgent, id: 'b', name: 'srv-b' }], 'fr').title).toBe('2 serveurs ont une faille urgente.')
-    const critical = srv({ name: 'srv-demo', open_findings: 1, critical_open: 1, urgent_open: 0, state: { code: 'findings' } })
-    expect(serverHeadline([critical], 'fr').title).toBe('Le serveur srv-demo a une faille critique.')
-    expect(serverHeadline([critical], 'en').title).toBe('The server srv-demo has a critical flaw.')
-    expect(serverHeadline([srv({ open_findings: 2, state: { code: 'findings' } })], 'fr')).toBe(null)
-    expect(serverHeadline([{ ...urgent, active: false }], 'fr')).toBe(null)
-    expect(serverHeadline(null, 'fr')).toBe(null)
-  })
-
   test('touchedServers puts the urgent ones first', () => {
     const a = srv({ id: 'a', open_findings: 5, state: { code: 'findings' } })
     const b = srv({ id: 'b', open_findings: 1, urgent_open: 1, critical_open: 1, state: { code: 'findings' } })
@@ -247,5 +232,34 @@ describe('routes', () => {
     ]
     expect(touchedServers(list).map((t) => t.id)).toEqual(['c', 'b'])
     expect(touchedServers(null)).toEqual([])
+  })
+})
+
+describe('restoreNeeded', () => {
+  const attempt = (steps, extra = {}) => ({ state: 'failed', server: { needs_snapshot: true, steps, ...extra } })
+  test('a package upgrade that failed asks to restore', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: false, detail: 'failed' }]))).toBe(true)
+  })
+  test('a site that went down after the upgrade asks to restore', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: true, detail: '' }, { op: 'check_site', ok: false, detail: 'down' }]))).toBe(true)
+  })
+  test('a step that did not run does not', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: false, detail: 'not run' }]))).toBe(false)
+  })
+  test('a step that went well does not', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: true, detail: '' }]))).toBe(false)
+  })
+  test('another step that failed does not', () => {
+    expect(restoreNeeded(attempt([{ op: 'config_change', ok: false, detail: 'failed' }]))).toBe(false)
+  })
+  test('a fix without a snapshot does not', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: false, detail: 'failed' }], { needs_snapshot: false }))).toBe(false)
+  })
+  test('another state does not', () => {
+    expect(restoreNeeded({ ...attempt([{ op: 'package_upgrade', ok: false, detail: 'failed' }]), state: 'applied' })).toBe(false)
+  })
+  test('no attempt, or a project fix, does not', () => {
+    expect(restoreNeeded(null)).toBe(false)
+    expect(restoreNeeded({ state: 'failed' })).toBe(false)
   })
 })

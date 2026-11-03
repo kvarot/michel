@@ -121,28 +121,6 @@ export function touchedServers(list) {
       n(b, 'open_findings') - n(a, 'open_findings'))
 }
 
-/**
- * serverHeadline is the Today headline when a server has an urgent (else a
- * critical) open flaw: it comes before the projects' "all calm". null when
- * no server has one.
- * @param {object[]|null} list GET /targets
- * @param {string} lang
- * @returns {{title: string, word: string}|null}
- */
-export function serverHeadline(list, lang) {
-  const active = (Array.isArray(list) ? list : []).filter((t) => t && t.active !== false)
-  for (const kind of ['urgent', 'critical']) {
-    const hit = active.filter((t) => Number(t[`${kind}_open`]) > 0)
-    if (!hit.length) continue
-    const one = hit.length === 1
-    return {
-      title: one ? translate(lang, `servers.headline.${kind}_one`, { name: hit[0].name }) : translate(lang, `servers.headline.${kind}_many`, { n: hit.length }),
-      word: translate(lang, one ? 'servers.headline.word_one' : 'servers.headline.word_many'),
-    }
-  }
-  return null
-}
-
 const severityOrder = ['critical', 'high', 'medium', 'low']
 
 /**
@@ -278,6 +256,16 @@ export function isServerAttempt(attempt) {
 export function needsSnapshot(p) {
   const s = p && p.server ? p.server : p
   return !!(s && s.needs_snapshot)
+}
+
+/**
+ * restoreNeeded tells whether the user must restore their snapshot: a package
+ * upgrade failed, or the site went down after it, on a fix that needs a snapshot.
+ * @param {object|null} attempt AttemptView
+ */
+export function restoreNeeded(attempt) {
+  if (!needsSnapshot(attempt) || attempt.state !== 'failed') return false
+  return (attempt.server?.steps || []).some((s) => (s.op === 'package_upgrade' || s.op === 'check_site') && !s.ok && s.detail !== 'not run')
 }
 
 /**
