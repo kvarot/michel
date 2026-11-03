@@ -119,6 +119,14 @@ describe('a flaw that cannot be rechecked on the copy', () => {
     expect(p.verified).toBe(true)
     expect(p.note.key).toBe('deploy_unchecked')
   })
+  test('a finding with no status is a flaw Michel knows nothing of, not a flaw of the code', () => {
+    // The API joins the finding: a finding gone from the store comes empty.
+    const empty = attempt('proposed', { proposal: notClean, finding: { id: 'f1', ecosystem: '', status: '' } })
+    expect(rescanKey(empty)).toBe('fix.proposal.rescan_dirty')
+    const noStatus = attempt('proposed', { proposal: notClean, finding: { id: 'f1', ecosystem: '' } })
+    expect(rescanKey(noStatus)).toBe('fix.proposal.rescan_dirty')
+    expect(rescanKey(attempt('proposed', { proposal: notClean, finding: codeF() }))).toBe('fix.proposal.rescan_unknown')
+  })
   test('proven and seen again: not verified', () => {
     const a = attempt('proven_fixed', { proposal: notClean, finding: codeF({ status: 'new' }) })
     expect(isVerified(a)).toBe(false)
@@ -239,13 +247,39 @@ describe('the start of the advanced conversation (R14)', () => {
 
 describe('the words of the plan (F1, F6, F7, F9, FR)', () => {
   test('key files stay out, a key written in the code does not', () => {
-    expect(fr['plan.project.copy']).toContain('sans tes fichiers .env ni tes fichiers de clés')
-    expect(fr['plan.project.copy']).toContain('reste dans la copie')
-    expect(fr['plan.project.copy']).not.toContain('ni tes clés')
+    // workcopy/copy.go excludes .env*, *.pem, *.key, id_*: no other key file.
+    expect(fr['plan.project.copy']).toContain('sans tes fichiers .env ni tes clés au format .pem ou .key')
+    expect(fr['plan.project.copy']).toContain('une clé ou un mot de passe enregistré ailleurs dans ton projet (dans ton code, un fichier de réglages, une clé d\'un autre format) reste dans la copie')
+    expect(fr['plan.project.copy']).not.toContain('fichiers de clés')
+    expect(en['plan.project.copy']).toContain('your keys in .pem or .key format')
     expect(en['plan.project.copy']).toContain('stays in the copy')
-    expect(en['plan.project.copy']).not.toContain('or your keys')
-    expect(fr['plan.project.data']).toContain('y compris une clé écrite dans ton code')
-    expect(en['plan.project.data']).toContain('including a key written in your code')
+    expect(fr['plan.project.data']).toContain('y compris une clé enregistrée dans ces fichiers')
+    expect(en['plan.project.data']).toContain('including a key saved in these files')
+  })
+  test('the update is tried: a lockfile or a setting can make Michel refuse it', () => {
+    for (const k of ['update', 'update_near', 'update_any']) {
+      expect(fr['plan.project.' + k]).toContain('Michel essaie de mettre à jour')
+      expect(en['plan.project.' + k]).toContain('Michel tries to update')
+    }
+  })
+  test('the key on the page: hidden here, not from the agent', () => {
+    expect(fr['fix.secret_hint']).toBe("Michel cache cette clé secrète sur cette page. Si elle est écrite dans ton code, l'agent a pu la lire. La vraie valeur reste dans ton projet.")
+    expect(en['fix.secret_hint']).toContain('the agent may have read it')
+  })
+  test('the fix that cannot be told apart names the button of the server', () => {
+    for (const k of ['path.note.unknown', 'fix.line.unknown']) {
+      expect(fr[k]).toContain("Regarde si ton site marche normalement, puis clique sur « J'ai vérifié le serveur ».")
+      expect(fr[k]).toContain(fr['srvfix.unknown.resolve'])
+      expect(en[k]).toContain(en['srvfix.unknown.resolve'])
+    }
+  })
+  test('a flaw of the code seen in the project, never checked on the copy', () => {
+    expect(fr['path.note.deploy_unchecked']).toContain("Michel l'a vu dans ton projet (il ne pouvait pas le contrôler avant). Pense à publier")
+    expect(en['path.note.deploy_unchecked']).toContain('Michel saw it in your project (he could not check it before). Remember to publish')
+  })
+  test('the branch is named where PhpStorm shows it', () => {
+    expect(fr['git.manual.lead']).toContain('le nom est affiché en bas à droite de PhpStorm')
+    expect(en['git.manual.lead']).toContain('the name is shown at the bottom right of PhpStorm')
   })
   test('self_start names the consent', () => {
     expect(fr['plan.project.self_start']).toContain('une fois ton accord donné pour ce projet')

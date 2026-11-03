@@ -48,9 +48,9 @@ Sinon, la proposition t'attend. « Appliquer » veut dire « créer la branche �
 
 Claude Code envoie à Anthropic ce qu'il lit : c'est une IA externe au sens de la [politique de souveraineté](security/sovereignty-policy.md). Le premier clic sur **Corriger** dans un projet affiche donc un écran d'accord, un par projet. Il dit :
 
-- ce qui sort : le code de la copie que l'agent lit, la fiche (secrets masqués) et tes messages ; une clé ou un mot de passe écrit dans ce code part avec lui ; les fichiers exclus ne sortent pas ;
+- ce qui sort : les fichiers de la copie que l'agent lit, la fiche de la faille (secrets masqués) et tes messages ; une clé enregistrée dans ces fichiers part avec eux ; les fichiers exclus ne sortent pas ;
 - ce qui tourne : « Michel lance composer/npm et tes tests sur une copie, avec tes droits Windows ; le code écrit par l'agent s'exécute. » (voir « Risques qui restent ») ;
-- que le projet est classé sensible, quand c'est le cas (c'est le réglage par défaut) : les secrets sont masqués dans la fiche et dans ce que Michel affiche, pas dans les fichiers que l'agent lit, et les fichiers exclus ne sont pas copiés ;
+- que le projet est classé sensible, quand c'est le cas (c'est le réglage par défaut) : les secrets sont masqués dans la fiche de la faille et dans ce que Michel affiche, pas dans les fichiers que l'agent lit, et les fichiers exclus ne sont pas copiés ;
 - chaque site (« hôte ») pour lequel il n'existe pas encore de règle réseau :
   - Anthropic, usage `agent.claude` : `api.anthropic.com` (le service de l'IA) et `platform.claude.com` (où une connexion par abonnement renouvelle son accès) ;
   - les dépôts de paquets, usage `fix.install` : `repo.packagist.org`, `packagist.org`, `api.github.com`, `codeload.github.com` (les archives que Composer télécharge), `registry.npmjs.org` ;
@@ -122,7 +122,7 @@ Avant d'installer quoi que ce soit, Michel vérifie les réglages de ton projet.
 
 ## La proposition et la validation par empreinte
 
-Une proposition ne change plus une fois faite. Elle contient : un résumé en clair, les modifications (le « diff ») **calculées par Michel** à partir de l'instantané (pas recopiées de l'agent), les fichiers touchés, les commandes lancées par Michel, le résultat des tests (`passed` réussis, `failed` échoués, `not_run` pas lancés), le nouveau scan de la copie (une faille hors dépendance ne peut pas être scannée à nouveau sur la copie : la page dit que Michel n'a pas pu la contrôler), le risque, et une empreinte de l'ensemble (SHA-256 : un code qui change dès que le moindre détail du contenu change). Si l'agent continue et propose à nouveau, la nouvelle proposition remplace l'ancienne (`superseded`) et la page l'affiche.
+Une proposition ne change plus une fois faite. Elle contient : un résumé en clair, les modifications (le « diff ») **calculées par Michel** à partir de l'instantané (pas recopiées de l'agent), les fichiers touchés, les commandes lancées par Michel, le résultat des tests (`passed` réussis, `failed` échoués, `not_run` pas lancés), le nouveau scan de la copie (une faille trouvée par un outil externe (Semgrep, Trivy…) ne peut pas être scannée à nouveau sur la copie : la page dit que Michel n'a pas pu la contrôler), le risque, et une empreinte de l'ensemble (SHA-256 : un code qui change dès que le moindre détail du contenu change). Si l'agent continue et propose à nouveau, la nouvelle proposition remplace l'ancienne (`superseded`) et la page l'affiche.
 
 Michel refuse une modification qui touche un fichier hors de la copie (`..`, chemin complet, lien), un fichier protégé ou un fichier exclu : la tentative passe `failed`, la cause est dite en clair, rien n'est appliqué.
 
@@ -137,8 +137,9 @@ La page dit alors : « La branche michel/fix-… est prête. Fusionne-la puis d�
 ## La preuve
 
 - Tests réussis et nouveau scan propre **dans la copie** : obligatoires pour une application automatique (niveau 3), affichés pour les autres.
-- **`proven_fixed`** (corrigée, prouvé) : après ta fusion, un scan de ton projet (`michel scan`) ne voit plus la faille **et** le commit de la branche est dans la branche actuelle de ton dépôt (Michel le vérifie sans rien écrire, `git merge-base --is-ancestor`).
-- Faille disparue sans ce commit, ou commit fusionné alors que la faille est encore vue : la tentative passe `inconclusive` (pas concluant), avec la raison.
+- **`proven_fixed`** (corrigée, prouvé) : après ta fusion, pendant un `michel scan` de ton projet, l'outil qui a trouvé la faille regarde à nouveau et ne la voit plus **et** le commit de la branche est dans la branche actuelle de ton dépôt (Michel le vérifie sans rien écrire, `git merge-base --is-ancestor`). Cet outil, c'est le scan de tes dépendances pour une dépendance ; pour une faille trouvée par un outil externe (Semgrep, Trivy…), c'est cet outil, qui tourne à la fin du scan.
+- Faille disparue sans ce commit, ou commit fusionné alors que l'outil voit encore la faille : la tentative passe `inconclusive` (pas concluant), avec la raison.
+- Si cet outil n'a pas regardé pendant ce scan (éteint, pas réglé pour tourner pendant le scan, en échec ; pour une dépendance, un dossier sans fichier de dépendances), Michel ne conclut rien : la tentative reste `applied` jusqu'à un scan où il regarde. Lancer l'outil seul (`michel source run`, ou un rapport importé) ne conclut rien non plus.
 - Michel ne relance pas les tests après la fusion, parce qu'il ne lance jamais rien dans ton dossier : les tests ont tourné sur la copie, avant la fusion. Un scan sur ton ordinateur voit la fusion, pas le déploiement : Michel dit « corrigée dans ton code » et te rappelle de déployer ; il ne prétend pas que le serveur est à jour.
 
 Voici les états que tu verras sur la page : `preparing` (en préparation) → `proposed` (proposée) → `approved` (validée) ou `refused` (refusée) → `applied` (branche créée) → `proven_fixed` ou `inconclusive` ; `failed` (échouée, avec sa cause : l'agent s'est arrêté, Michel a refusé la modification ou n'a pas pu créer la branche) depuis `preparing`, `proposed` ou `approved` ; `superseded` (remplacée) quand une proposition plus récente prend sa place.

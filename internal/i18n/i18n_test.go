@@ -198,8 +198,8 @@ func TestTemplateIsCachedPerLanguage(t *testing.T) {
 // agent reads the file. The consent must not say the secrets stay.
 func TestConsentDoesNotPromiseThatSecretsStay(t *testing.T) {
 	for lang, want := range map[Lang]struct{ false1, false2, leaves, sensitive string }{
-		FR: {"pas les secrets", "secrets sont masqués et", "part avec lui", "pas dans les fichiers que l'agent lit"},
-		EN: {"not the secrets", "secrets are masked and", "goes with it", "not in the files the agent reads"},
+		FR: {"pas les secrets", "secrets sont masqués et", "part avec eux", "pas dans les fichiers que l'agent lit"},
+		EN: {"not the secrets", "secrets are masked and", "goes with them", "not in the files the agent reads"},
 	} {
 		leaves, sensitive := T(lang, "fix.consent.what_leaves"), T(lang, "fix.consent.sensitive")
 		if strings.Contains(strings.ToLower(leaves), want.false1) {

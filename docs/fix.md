@@ -48,9 +48,9 @@ Otherwise the proposal waits for you. "Apply" means "create the branch", never m
 
 Claude Code sends what it reads to Anthropic: it is an external AI provider in the sense of the [sovereignty policy](security/sovereignty-policy.md). So the first **Fix** on a project shows a consent screen, one per project. It says:
 
-- what leaves: the code of the copy the agent reads, the brief (secrets masked) and your messages; a key or password written in that code goes with it; the excluded files do not leave;
+- what leaves: the files of the copy the agent reads, the flaw's sheet (secrets masked) and your messages; a key saved in these files goes with them; the excluded files do not leave;
 - what runs: "Michel runs composer/npm and your tests on a copy, with your Windows rights; the code written by the agent runs." (see "Residual risks");
-- that the project is classified sensitive, when it is (the default): secrets are masked in the brief and in what Michel shows, not in the files the agent reads, and the excluded files are not copied;
+- that the project is classified sensitive, when it is (the default): secrets are masked in the flaw's sheet and in what Michel shows, not in the files the agent reads, and the excluded files are not copied;
 - each host that has no allow rule yet:
   - Anthropic, purpose `agent.claude`: `api.anthropic.com` (the API) and `platform.claude.com` (where a subscription login renews its token);
   - the package registries, purpose `fix.install`: `repo.packagist.org`, `packagist.org`, `api.github.com`, `codeload.github.com` (the archives Composer downloads), `registry.npmjs.org`;
@@ -118,7 +118,7 @@ Only **Composer and npm** are installed. A yarn or pnpm project is read and can 
 
 ## The proposal and the validation by fingerprint
 
-A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy (a flaw that is not in a dependency cannot be re-scanned on the copy: the page says Michel could not check it), the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
+A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy (a flaw found by an external tool (Semgrep, Trivy…) cannot be re-scanned on the copy: the page says Michel could not check it), the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
 
 Michel refuses a change that touches a file outside the copy (`..`, absolute path, link), a protected file or an excluded file: the attempt is `failed`, the cause is said in plain words, nothing is applied.
 
@@ -133,8 +133,9 @@ The page then says: "The branch michel/fix-… is ready. Merge it, then deploy w
 ## The proof
 
 - Tests `passed` and a clean re-scan **in the copy** are required for an automatic application (level 3), and shown for the others.
-- **`proven_fixed`**: after you merged, a scan of your project (`michel scan`) no longer sees the flaw **and** the branch's commit is in the current branch of your repository (Michel checks it read-only, `git merge-base --is-ancestor`).
-- The flaw gone without that commit, or the commit merged while the flaw is still seen: the attempt is `inconclusive`, with the reason.
+- **`proven_fixed`**: after you merged, during a `michel scan` of your project, the tool that found the flaw looks again and no longer sees it **and** the branch's commit is in the current branch of your repository (Michel checks it read-only, `git merge-base --is-ancestor`). That tool is the scan of your dependencies for a dependency; for a flaw found by an external tool (Semgrep, Trivy…), it is that tool, which runs at the end of the scan.
+- The flaw gone without that commit, or the commit merged while the tool still sees the flaw: the attempt is `inconclusive`, with the reason.
+- If that tool did not look during this scan (off, not set to run during the scan, failed; for a dependency, a folder with no dependency file), Michel concludes nothing: the attempt stays `applied` until a scan where it looks. Running the tool alone (`michel source run`, or an imported report) concludes nothing either.
 - Michel does not rerun the tests after the merge, because it never runs anything in your folder: the tests ran on the copy, before the merge. A local scan sees the merge, not the deployment: Michel says "fixed in your code" and reminds you to deploy; it does not claim the server is up to date.
 
 The states you will see on the page: `preparing` → `proposed` → `approved` or `refused` → `applied` → `proven_fixed` or `inconclusive`; `failed` from `preparing`, `proposed` or `approved` (with its cause: the agent stopped, Michel refused the change or could not create the branch); `superseded` when a newer proposal replaces one.
