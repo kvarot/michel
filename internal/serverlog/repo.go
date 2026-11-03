@@ -117,36 +117,15 @@ func validNoteKind(k string) bool {
 
 const sourceCols = `id, target_id, path, format, level_field, channel_field, pattern, active, created_at`
 
-// checkSource refuses a relative path, "..", a wildcard outside the last
-// segment, and an unknown format.
+// checkSource refuses an unknown format and any path ValidatePath refuses, the
+// one validator of a declared path. The errors never repeat the path.
 func checkSource(s Source) error {
 	switch s.Format {
 	case FormatPHP, FormatPostgres, FormatMonolog, FormatJSON, FormatText:
 	default:
 		return fmt.Errorf("%w %q", ErrInvalidFormat, s.Format)
 	}
-	p := s.Path
-	if !strings.HasPrefix(p, "/") {
-		return fmt.Errorf("%w %q: give an absolute path, starting with /", ErrInvalidPath, p)
-	}
-	for _, c := range p {
-		if c < 0x20 || c == 0x7f {
-			return fmt.Errorf("%w: the path holds a control character", ErrInvalidPath)
-		}
-	}
-	segs := strings.Split(p, "/")
-	for i, seg := range segs {
-		if seg == ".." {
-			return fmt.Errorf("%w %q: \"..\" is not allowed", ErrInvalidPath, p)
-		}
-		if i < len(segs)-1 && strings.ContainsAny(seg, "*?[") {
-			return fmt.Errorf("%w %q: a wildcard is only allowed in the last segment", ErrInvalidPath, p)
-		}
-	}
-	if strings.HasSuffix(p, "/") {
-		return fmt.Errorf("%w %q: give a file, not a folder", ErrInvalidPath, p)
-	}
-	return nil
+	return ValidatePath(s.Path)
 }
 
 // AddSource validates and stores s. ID and CreatedAt are set here.

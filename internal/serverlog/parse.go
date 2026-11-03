@@ -29,6 +29,9 @@ type Output struct {
 	Rejected     int
 	Unseen       []string
 	TooManyFiles bool
+	// None says that the filter found nothing to read and could tell: the file,
+	// or its folder, is really absent (an unsearchable folder does not count).
+	None bool
 }
 
 // The schema of what may come back from a server. The output of the filter is
@@ -118,6 +121,10 @@ func ParseOutput(out []byte, src Source, o FilterOptions, now time.Time) Output 
 				if ok = len(fields) == 2 && inSource(fields[1], src); ok && !seenUnseen[fields[1]] {
 					seenUnseen[fields[1]] = true
 					res.Unseen = append(res.Unseen, fields[1])
+				}
+			case "N":
+				if ok = len(fields) == 1; ok {
+					res.None = true
 				}
 			case "M":
 				if ok = len(fields) == 1; ok {

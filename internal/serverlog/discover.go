@@ -19,12 +19,16 @@ type Candidate struct {
 
 // Reasons of a proposal.
 const (
-	WhyPHPCLI      = "php_error_log_cli"
-	WhyPHPFPM      = "php_error_log_fpm"
-	WhyPHPPool     = "php_error_log_pool"
-	WhyPostgres    = "postgresql_default_folder"
-	WhyAppStorage  = "project_storage_logs"
-	WhyAppVarLog   = "project_var_log"
+	WhyPHPCLI     = "php_error_log_cli"
+	WhyPHPFPM     = "php_error_log_fpm"
+	WhyPHPPool    = "php_error_log_pool"
+	WhyPostgres   = "postgresql_default_folder"
+	WhyAppStorage = "project_storage_logs"
+	WhyAppVarLog  = "project_var_log"
+)
+
+// The usual places, under a linked project folder or on the server.
+const (
 	postgresGlob   = "/var/log/postgresql/postgresql-*.log"
 	projectStorage = "/storage/logs/*.log"
 	projectVarLog  = "/var/log/*.log"

@@ -23,8 +23,31 @@ type FilterOptions struct {
 const (
 	defaultReadCap  = 5 << 20
 	defaultMaxFiles = 50
-	maxGroups       = 1000
+	// maxFilesCeiling is the most files one pass reads, whatever the options say.
+	maxFilesCeiling = 50
+	// maxGroups is the groups of a whole pass, shared between its files.
+	maxGroups = 1000
+	// maxRecordLine and maxMetaLine bound a line of the answer: an R line (the
+	// longest type, location, channel, hour, a 20 digit count and 200 bytes of
+	// text) and an F or U line (a file name of 1024 bytes at most).
+	maxRecordLine = 660
+	maxMetaLine   = 1200
 )
+
+// worstCaseAnswer is the most bytes one pass can write for files files: each
+// file holds at most groups/files groups, plus the 4 groups of the levels that
+// take what is past the budget; and a file can write an F and a U line, with an
+// M, an N and the U line of the source itself besides. The SSH client keeps
+// sshx.MaxOutput bytes: past it the read counts as failed and moves nothing,
+// every time. What is past the group budget stays visible, as records of a level
+// alone.
+func worstCaseAnswer(files, groups int) int {
+	if files < 1 {
+		files = 1
+	}
+	perFile := max(groups/files, 1) + 4
+	return files*perFile*maxRecordLine + (2*files+3)*maxMetaLine
+}
 
 var (
 	// plainPathRe is every path the filter may name. The class is shared with
@@ -119,13 +142,20 @@ func Script(src Source, cursors []Cursor, o FilterOptions) (string, error) {
 	if maxFiles <= 0 {
 		maxFiles = defaultMaxFiles
 	}
+	if maxFiles > maxFilesCeiling {
+		maxFiles = maxFilesCeiling
+	}
 	first := "0"
 	if len(cursors) == 0 {
 		first = "1"
 	}
+	// A glob without a match stays as it was written: that is "no file", and the
+	// folder must be listable for the shell to have been able to tell.
 	noMatch := ""
+	listCheck := "false"
 	if strings.ContainsAny(src.Path, "*?") {
-		noMatch = "\tif [ \"$f\" = " + shellQuote(src.Path) + " ]; then\n\t\tprintf 'U\\t%s\\n' \"$f\"\n\t\tcontinue\n\tfi\n"
+		noMatch = "if [ \"$#\" -eq 1 ] && [ \"$1\" = " + shellQuote(src.Path) + " ]; then\n\tnomatch=1\n\tprintf 'U\\t%s\\n' \"$1\"\n\ttell \"$1\"\nfi\n"
+		listCheck = "[ ! -r \"$d\" ]"
 	}
 
 	// The message lines go before any value enters the program: a folder or a
@@ -137,7 +167,7 @@ func Script(src Source, cursors []Cursor, o FilterOptions) (string, error) {
 		prog = strings.NewReplacer("@CLEAN@", "", "@PRINT@", printDefault).Replace(prog)
 		prog = withoutMessage(prog)
 	}
-	prog = strings.NewReplacer(append(vars, "@DIRS@", dirs, "@GROUPS@", strconv.Itoa(maxGroups))...).Replace(prog)
+	prog = strings.NewReplacer(append(vars, "@DIRS@", dirs)...).Replace(prog)
 	if strings.Contains(prog, "'") {
 		return "", errors.New("serverlog: internal error: a quote in the filter")
 	}
@@ -145,6 +175,8 @@ func Script(src Source, cursors []Cursor, o FilterOptions) (string, error) {
 		"@DECL@", shellQuote(src.Path),
 		"@GLOB@", shellGlob(src.Path),
 		"@NOMATCH@", noMatch,
+		"@LISTCHECK@", listCheck,
+		"@GROUPS@", strconv.Itoa(maxGroups),
 		"@CURSORS@", cases,
 		"@FIRST@", first,
 		"@CAP@", strconv.FormatInt(readCap, 10),
@@ -243,11 +275,26 @@ func parserFor(src Source) (string, []string, error) {
 //	R level type location channel hour count [text]
 //	U file
 //	M
+//	N
+//
+// The R lines of a file come with its F line in one piece: awk's answer is held
+// in a variable and written only if awk ended well, so a crash cannot leave
+// records without their position (they would be counted again).
 //
 // The file class of plain_name below is plainPathRe's. A file name out of it, or
 // one holding "..", is never named: the source as a whole is reported unseen.
 // Past MaxFiles, the first names in glob order are left out: dated names sort
-// oldest first, and the errors of today are the ones that matter.
+// oldest first, and the errors of today are the ones that matter. The files are
+// served newest first, and they share the read cap of the pass (budget): a file
+// past it jumps to its end and says how much it left (the skipped field), with
+// no awk run. Locating a file at its end costs none of it. The group budget is
+// shared the same way (gpf, the groups of one file), so that the whole answer
+// stays under what the SSH client keeps (see worstCaseAnswer).
+//
+// N says that the first read found nothing at all, and could tell: the file or
+// its folder is really absent. Without it no placeholder is left (see Read).
+// A file present but unreadable is located by its metadata only (ls), at its
+// end, and stays unseen; nothing of its content is read.
 const shellProgram = `LC_ALL=C
 export LC_ALL
 found=$(for tool in awk tail head tr ls wc; do command -v "$tool" || echo '!'; done)
@@ -258,6 +305,10 @@ case "$found" in
 	;;
 esac
 prog='@PROG@'
+located=0
+unknown=0
+bad=0
+budget=@CAP@
 lookup() {
 	c_id=''
 	c_off=''
@@ -270,19 +321,59 @@ digits() {
 	esac
 	return 0
 }
+tell() {
+	d=${1%/*}
+	while [ -n "$d" ] && [ ! -d "$d" ]; do
+		d=${d%/*}
+	done
+	if [ -z "$d" ]; then
+		d=/
+	fi
+	if [ ! -x "$d" ] || @LISTCHECK@; then
+		unknown=1
+	fi
+}
 read_one() {
-	if [ ! -f "$f" ] || [ -L "$f" ] || [ ! -r "$f" ]; then
+	if [ -L "$f" ]; then
+		printf 'U\t%s\n' "$f"
+		return
+	fi
+	if [ ! -e "$f" ]; then
+		printf 'U\t%s\n' "$f"
+		tell "$f"
+		return
+	fi
+	if [ ! -f "$f" ]; then
 		printf 'U\t%s\n' "$f"
 		return
 	fi
 	set -- $(ls -di "$f")
 	id=$1
-	size=$(wc -c < "$f" | tr -d ' ')
-	if ! digits "$id" || ! digits "$size"; then
+	size=''
+	if [ -r "$f" ]; then
+		size=$(wc -c < "$f" | tr -d ' ')
+	fi
+	if ! digits "$size"; then
+		if [ @FIRST@ = 1 ]; then
+			set -- $(ls -dnl "$f")
+			size=$5
+			if digits "$id" && digits "$size"; then
+				located=1
+				printf 'F\t%s\t%s\t%s\t0\t0\t1\n' "$f" "$id" "$size"
+			else
+				unknown=1
+			fi
+		fi
+		printf 'U\t%s\n' "$f"
+		return
+	fi
+	if ! digits "$id"; then
+		unknown=1
 		printf 'U\t%s\n' "$f"
 		return
 	fi
 	if [ @FIRST@ = 1 ]; then
+		located=1
 		printf 'F\t%s\t%s\t%s\t0\t0\t1\n' "$f" "$id" "$size"
 		return
 	fi
@@ -299,54 +390,81 @@ read_one() {
 	start=$off
 	win=$((size - off))
 	skip=0
-	if [ "$win" -gt @CAP@ ]; then
-		start=$((size - @CAP@))
+	if [ "$win" -gt "$budget" ]; then
+		start=$((size - budget))
 		skip=$((start - off))
-		win=@CAP@
+		win=$budget
 	fi
 	if [ "$win" -eq 0 ]; then
-		printf 'F\t%s\t%s\t%s\t0\t%s\t0\n' "$f" "$id" "$off" "$rot"
+		printf 'F\t%s\t%s\t%s\t%s\t%s\t0\n' "$f" "$id" "$((off + skip))" "$skip" "$rot"
 		return
 	fi
-	{
+	budget=$((budget - win))
+	res=$({
 		tail -c +$((start + 1)) "$f" | head -c "$win" | tr '\000\015' '  '
 		printf '\n'
-	} | awk -v f="$f" -v id="$id" -v base="$start" -v skip="$skip" -v rot="$rot" -v win="$win" -v full=@CAP@ "$prog"
+	} | awk -v f="$f" -v id="$id" -v base="$start" -v skip="$skip" -v rot="$rot" -v win="$win" -v full=@CAP@ -v gcap="$gpf" "$prog")
 	if [ "$?" -ne 0 ]; then
 		printf 'U\t%s\n' "$f"
+	else
+		printf '%s\n' "$res"
 	fi
 }
 plain_name() {
+	if [ "${#1}" -gt 1024 ]; then
+		return 1
+	fi
 	case "$1" in
 	*[!A-Za-z0-9._/+=,:~\ -]*|*..*) return 1 ;;
 	esac
 	return 0
 }
-total=0
-for f in @GLOB@; do
-	if plain_name "$f"; then
-		total=$((total + 1))
+set -- @GLOB@
+nomatch=0
+@NOMATCH@if [ "$nomatch" = 0 ]; then
+	n=$#
+	total=0
+	i=1
+	while [ "$i" -le "$n" ]; do
+		eval "f=\${$i}"
+		if plain_name "$f"; then
+			total=$((total + 1))
+		else
+			bad=1
+		fi
+		i=$((i + 1))
+	done
+	drop=$((total - @MAX@))
+	keep=$total
+	if [ "$drop" -gt 0 ]; then
+		printf 'M\n'
+		keep=$((total - drop))
 	fi
-done
-drop=$((total - @MAX@))
-if [ "$drop" -gt 0 ]; then
-	printf 'M\n'
+	gpf=@GROUPS@
+	if [ "$keep" -gt 1 ]; then
+		gpf=$((@GROUPS@ / keep))
+	fi
+	if [ "$gpf" -lt 1 ]; then
+		gpf=1
+	fi
+	seen=0
+	i=$n
+	while [ "$i" -ge 1 ] && [ "$seen" -lt "$keep" ]; do
+		eval "f=\${$i}"
+		i=$((i - 1))
+		if ! plain_name "$f"; then
+			continue
+		fi
+		seen=$((seen + 1))
+		read_one
+	done
 fi
-count=0
-bad=0
-for f in @GLOB@; do
-@NOMATCH@	if ! plain_name "$f"; then
-		bad=1
-		continue
-	fi
-	count=$((count + 1))
-	if [ "$count" -le "$drop" ]; then
-		continue
-	fi
-	read_one
-done
 if [ "$bad" = 1 ]; then
+	unknown=1
 	printf 'U\t%s\n' @DECL@
+fi
+if [ @FIRST@ = 1 ] && [ "$located" = 0 ] && [ "$unknown" = 0 ]; then
+	printf 'N\n'
 fi
 exit 0
 `
@@ -438,7 +556,7 @@ function scan(l,   k) {
 	if (level == "") return
 	k = level SUBSEP typ SUBSEP loc SUBSEP chan SUBSEP hour
 	if (!(k in c)) {
-		if (@GROUPS@ <= groups) k = level SUBSEP SUBSEP SUBSEP SUBSEP
+		if (gcap + 0 <= groups) k = level SUBSEP SUBSEP SUBSEP SUBSEP
 		if (!(k in c)) groups++
 	}
 	c[k]++

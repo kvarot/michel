@@ -22,12 +22,16 @@ var ErrReadFailed = errors.New("the log read failed")
 // revalidates what comes back (ParseOutput). cursors are the positions saved so
 // far for the source. The returned cursors are the ones to store, each replacing
 // the saved one of the same file: the files read in this pass, plus a placeholder
-// when nothing at all was located.
+// when the activation found the source really empty.
 //
-// An activation (no cursor) locates the files at their end and reads nothing. If
-// it finds no file, the placeholder is returned (see placeholderCursor): a file
-// that appears later is read from its start, as any file appeared after the
-// activation.
+// An activation (no cursor) locates the files at their end and reads nothing. A
+// file that is present but unreadable is located the same way, by its metadata,
+// and still reported unseen: it is read from where it stood once it can be read.
+// The placeholder (see placeholderCursor) is returned only when the filter
+// established that nothing is there: the file, or its folder, is absent. If it
+// could not tell (a folder it cannot search, awk missing, a located file the
+// revalidation refused), no cursor is left and the next read is an activation
+// again. A file that appears after an activation is read from its start.
 //
 // Any failure (connection, exit status, timeout, cut or empty answer) returns
 // an error, no output and no cursor: nothing moves, the next pass starts again
@@ -42,7 +46,7 @@ func Read(ctx context.Context, c *sshx.Client, src Source, cursors []Cursor, o F
 	for _, f := range out.Files {
 		next = append(next, Cursor{SourceID: src.ID, File: f.File, FileID: f.FileID, Offset: f.Offset, ReadAt: now})
 	}
-	if len(cursors) == 0 && len(out.Files) == 0 {
+	if len(cursors) == 0 && len(out.Files) == 0 && out.None && out.Rejected == 0 {
 		next = append(next, placeholderCursor(src, now))
 	}
 	return out, next, nil

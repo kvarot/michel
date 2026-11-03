@@ -726,7 +726,9 @@ func TestMissingAndNotRegularAreUnseen(t *testing.T) {
 	}
 }
 
-func TestWildcardReadsEachFileUpToTheCap(t *testing.T) {
+// MaxFiles bounds the files of a pass (the cap on bytes is another test, see
+// TestPassBudgetIsSharedAndNewestFirst).
+func TestWildcardKeepsTheNewestFilesPastMaxFiles(t *testing.T) {
 	needTools(t)
 	dir := t.TempDir()
 	for _, day := range []string{"2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02"} {
@@ -739,6 +741,7 @@ func TestWildcardReadsEachFileUpToTheCap(t *testing.T) {
 		for _, f := range out.Files {
 			days = append(days, strings.TrimSuffix(strings.TrimPrefix(f.File, shPath(dir)+"/app-"), ".log"))
 		}
+		sort.Strings(days)
 		return strings.Join(days, " ")
 	}
 	if err := os.WriteFile(filepath.Join(dir, "other.log"), []byte(warnLine), 0o644); err != nil {
@@ -1048,4 +1051,25 @@ func sortedLines(b []byte) string {
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+// An awk that writes records and then dies must not leave records without their
+// position: they would be counted again by the next pass.
+func TestRecordsOfACrashedAwkAreNotKept(t *testing.T) {
+	needTools(t)
+	p := writeLog(t, warnLine)
+	src := Source{Path: p, Format: FormatPHP}
+	script, err := Script(src, earlier, FilterOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim := t.TempDir()
+	fake := "#!/bin/sh\ncat >/dev/null\nprintf 'R\twarning\t\ta.php:3\t\t2026-11-02T12\t1\n'\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(shim, "awk"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := ParseOutput(runWith(t, script, []string{"sh"}, shim), src, FilterOptions{}, filterNow)
+	if len(out.Records) != 0 || len(out.Files) != 0 || len(out.Unseen) != 1 || out.Rejected != 0 {
+		t.Errorf("crashed awk: %+v", out)
+	}
 }

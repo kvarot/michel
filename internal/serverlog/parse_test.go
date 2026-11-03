@@ -274,3 +274,16 @@ func TestParseBoundaries(t *testing.T) {
 		t.Errorf("binary: %+v", out)
 	}
 }
+
+func TestParseNoneLine(t *testing.T) {
+	src := Source{Path: parsePath, Format: FormatMonolog}
+	if out := ParseOutput([]byte("N\n"), src, FilterOptions{}, filterNow); !out.None || out.Rejected != 0 {
+		t.Errorf("N: %+v", out)
+	}
+	if out := ParseOutput([]byte("N\textra\n"), src, FilterOptions{}, filterNow); out.None || out.Rejected != 1 {
+		t.Errorf("N with a field: %+v", out)
+	}
+	if out := ParseOutput([]byte("U\t"+parsePath+"\n"), src, FilterOptions{}, filterNow); out.None {
+		t.Errorf("U is not N: %+v", out)
+	}
+}

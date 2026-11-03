@@ -34,30 +34,27 @@ func TestDiscoverProposes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]Format{
-		"/var/log/php-cli.log":                 FormatPHP,
-		"/var/log/php-fpm.log":                 FormatPHP,
-		"/var/log/php/demo-pool.log":           FormatPHP,
-		"/var/log/postgresql/postgresql-*.log": FormatPostgres,
-		"/var/www/demo/storage/logs/*.log":     FormatMonolog,
-		"/var/www/demo/var/log/*.log":          FormatMonolog,
+	want := map[string]Candidate{
+		"/var/log/php-cli.log":                 {Format: FormatPHP, Why: WhyPHPCLI},
+		"/var/log/php-fpm.log":                 {Format: FormatPHP, Why: WhyPHPFPM},
+		"/var/log/php/demo-pool.log":           {Format: FormatPHP, Why: WhyPHPPool},
+		"/var/log/postgresql/postgresql-*.log": {Format: FormatPostgres, Why: WhyPostgres},
+		"/var/www/demo/storage/logs/*.log":     {Format: FormatMonolog, Why: WhyAppStorage},
+		"/var/www/demo/var/log/*.log":          {Format: FormatMonolog, Why: WhyAppVarLog},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d candidates: %+v", len(got), got)
 	}
 	seen := map[string]bool{}
 	for _, c := range got {
-		f, ok := want[c.Path]
-		if !ok || f != c.Format {
+		w, ok := want[c.Path]
+		if !ok || w.Format != c.Format || w.Why != c.Why {
 			t.Errorf("unexpected candidate %+v", c)
 		}
 		if seen[c.Path] {
 			t.Errorf("%s proposed twice", c.Path)
 		}
 		seen[c.Path] = true
-		if c.Why == "" {
-			t.Errorf("%s has no reason", c.Path)
-		}
 		if err := ValidatePath(c.Path); err != nil {
 			t.Errorf("%s is proposed but refused: %v", c.Path, err)
 		}

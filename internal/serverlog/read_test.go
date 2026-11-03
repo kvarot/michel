@@ -402,24 +402,52 @@ func TestWildcardCapIsReported(t *testing.T) {
 	}
 }
 
-// denyRead makes path unreadable for this user, or skips the test.
-func denyRead(t *testing.T, path string) {
+// denyRead makes path unreadable for this user, or skips the test. The result
+// gives the right back.
+func denyRead(t *testing.T, path string) (allow func()) {
 	t.Helper()
+	return deny(t, path, 0o644, "(R)")
+}
+
+// denyDir makes a folder impossible to search for this user, or skips the test.
+func denyDir(t *testing.T, path string) (allow func()) {
+	t.Helper()
+	return deny(t, path, 0o755, "(RX)")
+}
+
+func deny(t *testing.T, path string, mode os.FileMode, right string) func() {
+	t.Helper()
+	var allow func()
 	if runtime.GOOS == "windows" {
 		user := os.Getenv("USERNAME")
 		if user == "" {
 			t.Skip("no user name to deny")
 		}
-		if err := exec.Command("icacls", path, "/deny", user+":(R)").Run(); err != nil {
-			t.Skipf("icacls cannot deny the file: %v", err)
+		if err := exec.Command("icacls", path, "/deny", user+":"+right).Run(); err != nil {
+			t.Skipf("icacls cannot deny: %v", err)
 		}
-		t.Cleanup(func() { exec.Command("icacls", path, "/remove:d", user).Run() })
-	} else if err := os.Chmod(path, 0); err != nil {
-		t.Skipf("chmod: %v", err)
+		allow = func() { exec.Command("icacls", path, "/remove:d", user).Run() }
+	} else {
+		if err := os.Chmod(path, 0); err != nil {
+			t.Skipf("chmod: %v", err)
+		}
+		allow = func() { os.Chmod(path, mode) }
 	}
+	t.Cleanup(allow)
 	if f, err := os.Open(path); err == nil {
 		f.Close()
-		t.Skip("this user can read the file anyway (root?)")
+		allow()
+		t.Skip("this user can read it anyway (root?)")
+	}
+	return allow
+}
+
+// metadataVisible skips when a denied file hides even its metadata, as Windows
+// does: the locate-by-metadata case needs a machine where it does not.
+func metadataVisible(t *testing.T, path string) {
+	t.Helper()
+	if err := exec.Command("ls", "-dnl", path).Run(); err != nil {
+		t.Skipf("this machine hides the metadata of a denied file: %v", err)
 	}
 }
 
@@ -429,12 +457,14 @@ func TestDeniedFileIsUnseenWithoutSudo(t *testing.T) {
 	appendTo(t, p, readLine)
 	denyRead(t, p)
 	src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
+	// At activation the file is located by its metadata (see the dedicated
+	// test); afterwards it is only unseen. Either way nothing is read.
 	for _, cs := range [][]Cursor{nil, {{SourceID: "S1", File: src.Path + "/"}}} {
 		out, _, err := Read(context.Background(), h.client, src, cs, FilterOptions{}, 30*time.Second, readNow)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(out.Unseen) != 1 || len(out.Files) != 0 || len(out.Records) != 0 {
+		if len(out.Unseen) != 1 || len(out.Files) > 1 || len(out.Records) != 0 || (len(cs) > 0 && len(out.Files) != 0) {
 			t.Fatalf("denied: %+v", out)
 		}
 	}
@@ -637,17 +667,281 @@ func TestPlaceholderCursorSurvivesTheRepoForAWildcard(t *testing.T) {
 	}
 }
 
-// Decision: a first read that finds only files it cannot read leaves a
-// placeholder like an empty one. The file is read from its start once it is
-// readable (the cap bounds how much history that is).
-func TestFirstReadOfOnlyUnreadableFilesLeavesAPlaceholder(t *testing.T) {
+// A file present but unreadable at activation is located at its end by its
+// metadata alone, and stays unseen: once it can be read, only what was added
+// since comes (spec 5.2), never the history.
+func TestUnreadableFileAtActivationIsLocatedAtItsEnd(t *testing.T) {
 	h := plainHost(t)
 	p := filepath.Join(t.TempDir(), "secret.log")
+	appendTo(t, p, readLine+readLine+readLine)
+	allow := denyRead(t, p)
+	metadataVisible(t, p)
+	src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
+	saved := map[string]Cursor{}
+
+	out, next := readSrc(t, h, src, saved, FilterOptions{})
+	fs := fileState(t, out)
+	if !fs.First || fs.Offset != int64(3*len(readLine)) || fs.FileID == "" || len(out.Unseen) != 1 || len(out.Records) != 0 {
+		t.Fatalf("activation: %+v", out)
+	}
+	if len(next) != 1 || next[0].File != src.Path || strings.HasSuffix(next[0].File, "/") {
+		t.Fatalf("a cursor at its end was expected: %+v", next)
+	}
+	// Still unreadable after the activation: unseen, and the position stays.
+	out, next = readSrc(t, h, src, saved, FilterOptions{})
+	if len(out.Unseen) != 1 || len(out.Files) != 0 || len(next) != 0 {
+		t.Fatalf("still denied: %+v %+v", out, next)
+	}
+	allow()
 	appendTo(t, p, readLine)
-	denyRead(t, p)
+	out, _ = readSrc(t, h, src, saved, FilterOptions{})
+	if total(out) != 1 || len(out.Unseen) != 0 {
+		t.Fatalf("readable now: want the new line only, got %+v", out)
+	}
+	for _, l := range append(h.srv.Log(), h.sent()...) {
+		if strings.Contains(l, "sudo") {
+			t.Errorf("sudo: %q", l)
+		}
+	}
+}
+
+// A folder that exists but cannot be searched does not say "nothing here": no
+// placeholder is left, the next read is still an activation.
+func TestUnsearchableFolderAtActivationLeavesNoPlaceholder(t *testing.T) {
+	for _, name := range []string{"app.log", "app-*.log"} {
+		t.Run(name, func(t *testing.T) {
+			h := plainHost(t)
+			dir := filepath.Join(t.TempDir(), "locked")
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			appendTo(t, filepath.Join(dir, "app-1.log"), readLine+readLine)
+			appendTo(t, filepath.Join(dir, "app.log"), readLine+readLine)
+			allow := denyDir(t, dir)
+			if _, err := os.Stat(filepath.Join(dir, "app.log")); err == nil {
+				t.Skip("the folder can still be searched on this machine")
+			}
+			src := Source{ID: "S1", Path: shPath(dir) + "/" + name, Format: FormatPHP}
+			saved := map[string]Cursor{}
+			out, next := readSrc(t, h, src, saved, FilterOptions{})
+			if len(out.Unseen) != 1 || out.None || len(next) != 0 || len(saved) != 0 {
+				t.Fatalf("locked folder: out=%+v cursors=%+v", out, next)
+			}
+			allow()
+			// An activation again: the history is located, not read.
+			out, _ = readSrc(t, h, src, saved, FilterOptions{})
+			if len(out.Records) != 0 || len(out.Files) == 0 || !out.Files[0].First {
+				t.Fatalf("second activation: %+v", out)
+			}
+			appendTo(t, filepath.Join(dir, strings.Replace(name, "*", "1", 1)), readLine)
+			out, _ = readSrc(t, h, src, saved, FilterOptions{})
+			if total(out) != 1 {
+				t.Fatalf("new line: %+v", out)
+			}
+		})
+	}
+}
+
+// awk missing at activation says nothing about the file: no placeholder.
+func TestAwkMissingLeavesNoPlaceholder(t *testing.T) {
+	h := startLogHost(t, func(h *logHost) sshtest.ShellFunc {
+		return h.realShell(append(os.Environ(), "PATH="+t.TempDir()))
+	})
+	p := filepath.Join(t.TempDir(), "app.log")
+	appendTo(t, p, readLine)
 	src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
 	out, next, err := Read(context.Background(), h.client, src, nil, FilterOptions{}, 30*time.Second, readNow)
-	if err != nil || len(out.Unseen) != 1 || len(next) != 1 || !strings.HasSuffix(next[0].File, "/") {
-		t.Fatalf("out=%+v next=%+v err=%v", out, next, err)
+	if err != nil || len(out.Unseen) != 1 || out.None || len(next) != 0 {
+		t.Fatalf("no awk at activation: out=%+v cursors=%+v err=%v", out, next, err)
+	}
+}
+
+// Only an answer that says "nothing is there" leaves a placeholder, and not
+// next to a line the revalidation threw away.
+func TestPlaceholderNeedsAnAnswerThatSaysNothingIsThere(t *testing.T) {
+	cases := map[string]struct {
+		answer string
+		want   int
+	}{
+		"nothing there":    {"U\t/var/log/a.log\nN\n", 1},
+		"no word":          {"U\t/var/log/a.log\n", 0},
+		"located line out": {"F\t/var/log/a.log\tnot-an-id\t10\t0\t0\t1\nN\n", 0},
+		"located":          {"F\t/var/log/a.log\t5\t10\t0\t0\t1\n", 1},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := startLogHost(t, func(*logHost) sshtest.ShellFunc {
+				return func(_ *sshtest.Server, _ string, stdout, _ io.Writer) int {
+					io.WriteString(stdout, c.answer)
+					return 0
+				}
+			})
+			src := Source{ID: "S1", Path: "/var/log/a.log", Format: FormatPHP}
+			_, next, err := Read(context.Background(), h.client, src, nil, FilterOptions{}, 30*time.Second, readNow)
+			if err != nil || len(next) != c.want {
+				t.Fatalf("cursors %+v err %v, want %d", next, err, c.want)
+			}
+		})
+	}
+}
+
+// The cap of a pass is shared by the files of a source, newest first. A file
+// past the budget jumps to its end and says what it left; locating costs nothing.
+func TestPassBudgetIsSharedAndNewestFirst(t *testing.T) {
+	h := plainHost(t)
+	dir := t.TempDir()
+	names := []string{"app-1.log", "app-2.log", "app-3.log"}
+	for _, n := range names {
+		appendTo(t, filepath.Join(dir, n), readLine)
+	}
+	src := Source{ID: "S1", Path: shPath(dir) + "/app-*.log", Format: FormatPHP}
+	saved := map[string]Cursor{}
+	// The activation reads nothing and uses none of the budget.
+	out, _ := readSrc(t, h, src, saved, FilterOptions{ReadCap: 10})
+	if len(out.Files) != 3 || len(out.Records) != 0 {
+		t.Fatalf("activation: %+v", out)
+	}
+	const lines = 100
+	for _, n := range names {
+		appendTo(t, filepath.Join(dir, n), strings.Repeat(readLine, lines))
+	}
+	chunk := int64(lines * len(readLine))
+	budget := chunk + chunk/2 // the newest file whole, half of the middle one
+	out, next := readSrc(t, h, src, saved, FilterOptions{ReadCap: budget})
+	if len(out.Files) != 3 || len(next) != 3 || out.Rejected != 0 {
+		t.Fatalf("one position per file: %+v", out)
+	}
+	byName := map[string]FileState{}
+	var read int64
+	for _, f := range out.Files {
+		byName[filepath.Base(f.File)] = f
+		read += chunk - f.Skipped
+		if f.Offset != int64(len(readLine))+chunk {
+			t.Errorf("%s: the position is not the end of the file: %+v", f.File, f)
+		}
+	}
+	if byName["app-3.log"].Skipped != 0 || byName["app-1.log"].Skipped != chunk {
+		t.Errorf("newest first: %+v", byName)
+	}
+	if s := byName["app-2.log"].Skipped; s != chunk/2 {
+		t.Errorf("the middle file reads what is left of the budget: skipped %d", s)
+	}
+	if read > budget {
+		t.Errorf("%d bytes read for a budget of %d", read, budget)
+	}
+	// The newest file whole, plus the whole lines of the tail of the middle one.
+	if n := total(out); n < lines+lines/2-2 || n > lines+lines/2 {
+		t.Errorf("records: %d", n)
+	}
+	// The next pass starts at the end of each file: the skipped bytes are gone.
+	out, _ = readSrc(t, h, src, saved, FilterOptions{ReadCap: budget})
+	if total(out) != 0 {
+		t.Errorf("second pass: %+v", out)
+	}
+}
+
+// What a pass of many files and many groups can write stays under what the SSH
+// client keeps; what is past the group budget stays visible as level records.
+func TestAnswerOfManyFilesAndGroupsStaysUnderTheClientLimit(t *testing.T) {
+	needTools(t)
+	dir := t.TempDir()
+	const files, lines = 50, 70
+	folder := strings.Repeat("d", 150)
+	class := "T" + strings.Repeat("a", 120)
+	for i := 0; i < files; i++ {
+		var b strings.Builder
+		for j := 0; j < lines; j++ {
+			fmt.Fprintf(&b, "[2026-11-02T12:00:00+01:00] PHP Fatal error:  Uncaught %s: m in /var/www/demo/%s/f%d.php:%d\n", class, folder, i, j+1)
+		}
+		appendTo(t, filepath.Join(dir, fmt.Sprintf("app-%02d.log", i)), b.String())
+	}
+	src := Source{Path: shPath(dir) + "/app-*.log", Format: FormatPHP}
+	o := FilterOptions{Text: true, RemoteDirs: []string{"/var/www/demo"}}
+	script, err := Script(src, earlier, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := run(t, script)
+	worst := worstCaseAnswer(files, maxGroups)
+	if len(raw) > worst || len(raw) >= sshx.MaxOutput {
+		t.Fatalf("answer of %d bytes, worst case %d, limit %d", len(raw), worst, sshx.MaxOutput)
+	}
+	for _, l := range strings.Split(string(raw), "\n") {
+		limit := maxRecordLine
+		if strings.HasPrefix(l, "F") || strings.HasPrefix(l, "U") {
+			limit = maxMetaLine
+		}
+		if len(l) > limit {
+			t.Fatalf("a line of %d bytes (limit %d)", len(l), limit)
+		}
+	}
+	out := ParseOutput(raw, src, o, filterNow)
+	if out.Rejected != 0 || len(out.Files) != files || total(out) != files*lines {
+		t.Fatalf("files %d, records %d, rejected %d", len(out.Files), total(out), out.Rejected)
+	}
+	groups := 0
+	folded := false
+	for _, r := range out.Records {
+		groups++
+		if r.Location == "" {
+			folded = true
+		}
+	}
+	if !folded || groups > files*(maxGroups/files+4) {
+		t.Errorf("groups %d, folded %v: the overflow must show as level records", groups, folded)
+	}
+}
+
+// The worst case the filter is built on stays under what the client keeps,
+// whatever the number of files, and a record line really can be that long.
+func TestWorstCaseAnswerIsUnderTheClientLimit(t *testing.T) {
+	for n := 1; n <= maxFilesCeiling; n++ {
+		if w := worstCaseAnswer(n, maxGroups); w >= sshx.MaxOutput {
+			t.Errorf("%d files: worst case %d >= %d", n, w, sshx.MaxOutput)
+		}
+	}
+	// The longest record: level, a 128 byte type, a 200 byte place with its line
+	// number, a 64 byte channel, an hour with an offset, a 20 digit count, 200
+	// bytes of text, 6 tabs and the newline.
+	longest := len("critical") + 128 + (200 + 1 + 6) + 64 + len("2026-11-02T12+01:00") + 20 + 200 + len("R") + 6 + 1
+	if longest > maxRecordLine {
+		t.Errorf("a record line can reach %d bytes, the bound says %d", longest, maxRecordLine)
+	}
+	// A file name is 1024 bytes at most (plain_name), the other fields are numbers.
+	if meta := len("F") + 1024 + 3*20 + 2 + 1 + 6 + 1 + 20; meta > maxMetaLine {
+		t.Errorf("an F line can reach %d bytes, the bound says %d", meta, maxMetaLine)
+	}
+}
+
+// A file really renamed away and replaced, then really truncated: the filter
+// notices from the disk, with no forged position.
+func TestRealRenameAndTruncationOnDisk(t *testing.T) {
+	h := plainHost(t)
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	appendTo(t, p, readLine+readLine)
+	src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
+	saved := map[string]Cursor{}
+	readSrc(t, h, src, saved, FilterOptions{})
+	oldID := saved[src.Path].FileID
+
+	if err := os.Rename(p, p+".1"); err != nil {
+		t.Fatal(err)
+	}
+	appendTo(t, p, readLine)
+	out, _ := readSrc(t, h, src, saved, FilterOptions{})
+	fs := fileState(t, out)
+	if !fs.Rotated || total(out) != 1 || fs.FileID == oldID || fs.Offset != int64(len(readLine)) {
+		t.Fatalf("renamed away and replaced: %+v (old id %s)", out, oldID)
+	}
+	// Same file, shorter than the saved position.
+	appendTo(t, p, readLine+readLine)
+	readSrc(t, h, src, saved, FilterOptions{})
+	if err := os.Truncate(p, int64(len(readLine))); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = readSrc(t, h, src, saved, FilterOptions{})
+	if fs := fileState(t, out); !fs.Rotated || total(out) != 1 {
+		t.Fatalf("truncated: %+v", out)
 	}
 }

@@ -2,7 +2,9 @@ package serverlog
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -428,5 +430,32 @@ func TestNotes(t *testing.T) {
 	got, err := e.r.Notes(ctx, e.tgt.ID)
 	if err != nil || len(got) != 1 || got[0] != n {
 		t.Fatalf("notes = %+v, %v", got, err)
+	}
+}
+
+// The repository takes only what ValidatePath takes: a path Script refuses
+// would be stored and then fail every read for good.
+func TestSourcePathsGoThroughValidatePath(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	bad := []string{"/var/log/$(id).log", "/var/log/a'b.log", "/var/log/a;b.log", "/var/log/`id`.log", "relative.log", "/var/log/../etc/x", "/var/*/x.log", "/var/log/"}
+	for _, p := range bad {
+		_, err := e.r.AddSource(ctx, Source{TargetID: e.tgt.ID, Path: p, Format: FormatPHP})
+		if !errors.Is(err, ErrInvalidPath) || strings.Contains(err.Error(), p) {
+			t.Errorf("AddSource(%q): %v", p, err)
+		}
+		src := e.src
+		src.Path = p
+		err = e.r.UpdateSource(ctx, src)
+		if !errors.Is(err, ErrInvalidPath) || strings.Contains(err.Error(), p) {
+			t.Errorf("UpdateSource(%q): %v", p, err)
+		}
+	}
+	stored, err := e.r.Sources(ctx, e.tgt.ID)
+	if err != nil || len(stored) != 1 || stored[0].Path != e.src.Path {
+		t.Errorf("a refused path reached the database: %+v %v", stored, err)
+	}
+	if _, err := e.r.AddSource(ctx, Source{TargetID: e.tgt.ID, Path: "/var/log/app-*.log", Format: FormatPHP}); err != nil {
+		t.Errorf("a plain wildcard in the last segment: %v", err)
 	}
 }
