@@ -188,3 +188,29 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 9: minor (deferred): candKey in ids breaks aria-describedby on a path with a space; `now` set only at load, "il y a X min" goes stale on an open sheet; `load()` has no sequencing; `refreshView` swallows its error; interval warning recomputed locally, API's `interval_note` unused; `c.strong` computed and unread; no component test of the 409 flow; dark theme not rechecked after the last commit. Redesign to pick these up.
 - Task 9: complete (commits d625b9a..a2e505e, review clean)
 - Task 10: dispatched, BASE ac427c0.
+
+## Task 10 real run, aggregates only (disposable container, "demo", Docker in WSL)
+- Markers with default settings: 0 in database and WAL, 0 in audit (348 events, verify passes), 0 in alerts, 0 in serve output, 0 in `target logs list --json`, 0 in Try.
+- Delay at 5 min interval: 271 s, 272 s, worst case 300 s. Computer off 32.5 min: alert 1 s after restart, gap dated in digest, 1 MiB of 6 MiB stated as skipped.
+- Rotation create: error before rotation lost as documented, no double count, note shown. Copytruncate past old position: 2 of 4 errors missed, no note, documented.
+- Not reading: 1 alert at 30 min 31 s, no repeat; back in 24 s, gap noted. Cleaned text: only the unquoted name stayed, as announced; back to none erases.
+- Two bugs found by the run and fixed with a failing test first: 36c7f03, 8b1bb68.
+- Not done: Windows OpenSSH agent (service unchanged), real host, shared hosting, hds, local-time server, midnight crossing, browser on the page, check of files written by the SSH user outside temp folders, rebuild of the final Dockerfile prefix line.
+- Task 10: implementer DONE_WITH_CONCERNS, bc4467d. FR reader 2 blocking, 18 important, 16 minor. Reviewer 0 critical, 5 important, 9 minor. Fix round 1 dispatched.
+- Ruling R34: the hourly cap counts alert messages, not errors, kept in process like R23 — by default the 10 counted errors are all critical, so one read could silence later criticals on prod until the digest, against decision 2 and the 10-minute target; spec 8.2 says "regroupée par passage" — costs up to 10 extra messages per hour in a storm.
+- Ruling R35: a read past 30 s stays a failed read, no jump to the end, docs corrected, deviation from spec 5.2 — on timeout no output comes back so no position is known; "I can no longer read" still fires — costs a source stuck on a very slow disk until someone acts, told by that alert.
+- Ruling R36: first_at and last_at stay read dates, deviation from spec 6 — resolve and digest rely on them and read dates resist forged line dates — costs a sheet date later than the line's; display-only fix possible.
+- Ruling R37: copytruncate past the old position stays undetected, documented — detection needs a content fingerprint of the file start — costs silent loss of lines on that rotation mode.
+- Ruling R38: refused connection keeps the generic "the read failed", deferred — spec 5.4 asks no cause and the alert goes — costs a less precise message.
+- Fix round 1: c7d604b, 0a19691, 1404d9f. Scoped re-review approved, no new finding. Message bound: 5 items then "and N more", existing. Concerns kept for final report: an error held by the cap is not re-queued, waits for the digest; SMS length not capped (predates); `AlertedSince` has no caller left.
+- Task 10: complete. Head 1404d9f.
+
+## Final review (base 11882b8, head 1404d9f): ready with fixes, 0 critical, 2 important, 7 minor. Raw-content, injection, auth, migrations verified clean by reading.
+- Ruling R39: lost rights or missing tools after activation fail the source read, so "I can no longer read" fires — spec anti-objective "droits perdus" — costs an alert on a server whose owner removed the rights on purpose.
+- Ruling R40: skipped volume goes in the digest unless `error` is ignored — spec 5.2 "same rule as error" — costs one more digest line.
+- Ruling R41: fix also M1 (BYTEA), M4 (ignored error drops its text), M5 (vanished file is not "tools"), M6 (agent test transitive); defer M2 (message says server when one source fails) and M3 (digest gap has no cause) — M2 over-warns rather than hides, M3 is a precision — costs a less precise message.
+- Final fix: 4a37d82, 0a5d66b, b7d0f55, bec4051, 07af3c2, 03dbf15, 4529433. Scoped re-review approved, 4 minor. M6 exception `cli/fix.go` verified a compile path: `SendFixWaiting` carries a count and a link.
+- Ruling R42: N1 and N3, two inexact sentences, fixed by the controller without a further review round — text only, no behaviour — costs nothing if wrong beyond wording.
+- Ruling R43: N2 (Resolve blocked for the server while one source fails) deferred with M2 — being conservative hides "back" alerts only for a source left broken, and that outage is itself told — costs missed "back" alerts on the other sources while it lasts.
+- Ruling R44: N4 (wildcard, rights lost on new files while an older one stays readable, stays on the sheet) deferred — ruling R39 covers no file read at all; a digest line for unseen files is the natural next step — costs silence outside the sheet in that case.
+- Final review clean after adjudication. Plan 7 complete.

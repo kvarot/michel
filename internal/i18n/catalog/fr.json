@@ -728,7 +728,7 @@
   "digest.serverlogs.new.other": "%d nouvelles erreurs",
   "digest.serverlogs.reopened.one": "%d erreur revenue",
   "digest.serverlogs.reopened.other": "%d erreurs revenues",
-  "digest.serverlogs.skipped": "%s des journaux de ce serveur n'ont pas été lus : ils ont grossi plus vite que Michel ne peut lire. Des erreurs écrites dans cette partie peuvent manquer.",
+  "digest.serverlogs.skipped": "%s des journaux de ce serveur n'ont pas été lus : ils ont trop grossi pour que Michel lise tout en une fois. Des erreurs écrites dans cette partie peuvent manquer.",
   "digest.serverlogs.title": "Journaux des serveurs",
   "digest.servers.fixed.one": "%d faille corrigée",
   "digest.servers.fixed.other": "%d failles corrigées",
