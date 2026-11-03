@@ -187,3 +187,73 @@ func TestScanOneQueuesOnlyWithTheLevel(t *testing.T) {
 		t.Errorf("level 1 queued %d", n)
 	}
 }
+
+// consentingProject is a project at level 2, with the AI consent, not scanned.
+func consentingProject(t *testing.T) (dir, db string) {
+	t.Helper()
+	dir, db = t.TempDir(), buildTestOSVDB(t)
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte("sovereignty:\n  mode: standard\n  data_classification: sensitive\n  network:\n    default_egress: deny\n    allow: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "project", "set", "demo", "--fix-level", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "fix", "consent", "demo", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	return dir, db
+}
+
+// With the level and the consent, what was asked decides.
+func TestScanOneQueuesAtLevelTwoWithConsent(t *testing.T) {
+	dir, db := consentingProject(t)
+	if _, _, err := scanOneDirectly(t, dir, db, "demo", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := queuedAttempts(t, dir); n != 0 {
+		t.Errorf("queue=false queued %d", n)
+	}
+	if _, _, err := scanOneDirectly(t, dir, db, "demo", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := queuedAttempts(t, dir); n == 0 {
+		t.Error("queue=true queued nothing")
+	}
+}
+
+// What michel serve hands to the API queues, as a server check from the page
+// does. It is called directly: through a running serve, the worker would take
+// the queue and start a real agent.
+func TestServeScanProjectQueuesAtLevelTwo(t *testing.T) {
+	dir, db := consentingProject(t)
+	var out, errOut bytes.Buffer
+	deps := &Deps{Stdout: &out, Stderr: &errOut, Now: time.Now}
+	t.Cleanup(func() { deps.Close() })
+	var scanErr error
+	root := NewRootCmd(deps)
+	sub := &cobra.Command{Use: "one", RunE: func(cmd *cobra.Command, _ []string) error {
+		p, err := projectRepo(deps).Get(cmd.Context(), "demo")
+		if err != nil {
+			return err
+		}
+		scanErr = serveScanProject(cmd, deps)(cmd.Context(), p)
+		return nil
+	}}
+	sub.Flags().String("osv-db", db, "")
+	root.AddCommand(sub)
+	root.SetArgs([]string{"--config", filepath.Join(dir, "config.yaml"), "--data-dir", dir, "one"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("%v\n%s", err, errOut.String())
+	}
+	deps.Close()
+	if scanErr != nil {
+		t.Fatalf("%v\n%s", scanErr, errOut.String())
+	}
+	if n := queuedAttempts(t, dir); n == 0 {
+		t.Error("the scan of michel serve queued nothing")
+	}
+}

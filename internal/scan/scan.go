@@ -189,6 +189,14 @@ func globExcludes(names []string) []string {
 
 type lockfile struct{ rel, abs, ecosystem string }
 
+// readableLockfile tells whether an entry named like a lockfile is read: not a
+// link, and not a pipe, a socket or a device, whose reading can block with no
+// end. fs.ModeIrregular stays readable: on Windows a file kept in the cloud is
+// that, and skipping it would hide a lockfile; a read that fails is reported.
+func readableLockfile(mode fs.FileMode) bool {
+	return mode&(fs.ModeSymlink|fs.ModeNamedPipe|fs.ModeSocket|fs.ModeDevice|fs.ModeCharDevice) == 0
+}
+
 // findLockfiles walks the project and returns the lockfiles Michel reads,
 // plus the relative paths of the osv-scanner.toml files it met.
 func findLockfiles(root string, exclude []string) ([]lockfile, []string, error) {
@@ -214,8 +222,8 @@ func findLockfiles(root string, exclude []string) ([]lockfile, []string, error) 
 			return nil
 		}
 		if eco, ok := lockfiles[d.Name()]; ok {
-			if d.Type()&fs.ModeSymlink != 0 {
-				slog.Debug("skipping symlinked lockfile", "path", path)
+			if !readableLockfile(d.Type()) {
+				slog.Debug("skipping a lockfile that is no plain file", "path", path)
 				return nil
 			}
 			rel, rerr := relPath(root, path)

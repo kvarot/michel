@@ -38,7 +38,8 @@
         class="m-card__scan"
       >
         {{ sentence }}
-        <span>{{ $t('project.scan_hint') }}</span>
+        <span>{{ $t(scanHint) }}</span>
+        <a v-if="project.last_scan_status === 'partial'" href="#/sources" class="m-card__scan-link">{{ $t('project.open_sources') }}</a>
       </v-alert>
       <div class="m-card__check">
         <p v-if="!failed && !scanProblem" class="m-card__scan-text m-small" :class="{ 'm-muted': !running }" role="status">
@@ -79,7 +80,7 @@ import FixSettings from './FixSettings.vue'
 import PackageRow from './PackageRow.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
-import { checkedWell, scanPath, scanSentence, showsFailure } from '../lib/projectsView.js'
+import { checkedWell, runsHere, scanHintKey, scanPath, scanSentence, showsFailure } from '../lib/projectsView.js'
 
 const checkPath = 'M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z'
 
@@ -89,6 +90,8 @@ export default {
   props: {
     project: { type: Object, required: true },
     items: { type: Array, default: () => [] },
+    // The digest was read after the last check: its counts can be trusted.
+    digestFresh: { type: Boolean, default: false },
   },
   emits: ['decided', 'scan-changed'],
   data() {
@@ -107,10 +110,13 @@ export default {
     },
     // No reassuring word unless the last check read the whole project.
     seen() {
-      return checkedWell(this.project)
+      return checkedWell(this.project, this.digestFresh)
     },
     running() {
-      return !!this.project.scanning || this.project.last_scan_status === 'running'
+      return runsHere(this.project)
+    },
+    scanHint() {
+      return scanHintKey(this.project.last_scan_status)
     },
     failed() {
       return showsFailure(this.project)
@@ -207,7 +213,7 @@ export default {
 }
 .m-card__scan { margin-top: 0.75rem; }
 .m-card__scan-text { margin: 0; }
-.m-card__scan-link { display: inline-block; margin-top: 0.25rem; color: inherit; font-weight: 600; }
+.m-card__scan-link { display: block; width: fit-content; margin-top: 0.25rem; color: inherit; font-weight: 600; }
 .m-card__check {
   display: flex;
   flex-wrap: wrap;

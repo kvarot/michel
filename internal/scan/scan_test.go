@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -393,6 +396,44 @@ func TestRunSkipsSymlinkedLockfile(t *testing.T) {
 	var n int
 	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM scan_manifest WHERE rel_path LIKE 'linked/%'`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("rows %d %v", n, err)
+	}
+}
+
+// Reading a named pipe blocks with no end, and holds every other check.
+func TestOnlyFilesAreReadAsLockfiles(t *testing.T) {
+	for mode, want := range map[fs.FileMode]bool{
+		0:                                 true,
+		fs.ModeNamedPipe:                  false,
+		fs.ModeSocket:                     false,
+		fs.ModeDevice:                     false,
+		fs.ModeDevice | fs.ModeCharDevice: false,
+		fs.ModeSymlink:                    false,
+		// A file kept in the cloud is this on Windows: reading it works, and
+		// when it does not the check says so. Skipping it would hide it.
+		fs.ModeIrregular: true,
+	} {
+		if got := readableLockfile(mode); got != want {
+			t.Errorf("readableLockfile(%v) = %v", mode, got)
+		}
+	}
+}
+
+func TestRunSkipsANamedPipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("NOT CHECKED: no named pipe in a folder on Windows")
+	}
+	e := newEnv(t, "project-a")
+	pipe := filepath.Join(e.proj.Path, "piped", "composer.lock")
+	if err := os.MkdirAll(filepath.Dir(pipe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("mkfifo", pipe).CombinedOutput(); err != nil {
+		t.Fatalf("mkfifo: %v\n%s", err, out)
+	}
+	for _, m := range e.run(t).Manifests {
+		if strings.HasPrefix(m.RelPath, "piped/") {
+			t.Errorf("the pipe was read: %+v", m)
+		}
 	}
 }
 

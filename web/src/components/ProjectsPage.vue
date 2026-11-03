@@ -22,6 +22,7 @@
         :key="p.name"
         :project="p"
         :items="groups[i] ? groups[i].items : []"
+        :digest-fresh="digestFresh"
         @decided="$emit('decided')"
         @scan-changed="onScanChanged"
       />
@@ -38,7 +39,7 @@ import AddProjectDialog from './AddProjectDialog.vue'
 import ProjectCard from './ProjectCard.vue'
 import { api } from '../api.js'
 import { groupAttention } from '../lib/digestView.js'
-import { anyScanning, withScanState } from '../lib/projectsView.js'
+import { anyScanning, needsDigest, withScanState } from '../lib/projectsView.js'
 
 // Between two looks at a running check; and how many failed looks in a row
 // are told to the person.
@@ -56,7 +57,7 @@ export default {
   },
   emits: ['decided'],
   data() {
-    return { views: [], dialog: false, notice: '', lost: false, misses: 0, timer: null }
+    return { views: [], dialog: false, notice: '', lost: false, misses: 0, timer: null, digestFresh: false, awaiting: false, firstLoad: true }
   },
   computed: {
     lang() {
@@ -74,6 +75,10 @@ export default {
     lang() {
       this.loadViews()
     },
+    // App answered: the cards may now trust the counts.
+    digest() {
+      this.digestFresh = true
+    },
   },
   created() {
     this.loadViews()
@@ -87,7 +92,7 @@ export default {
     async loadViews() {
       clearTimeout(this.timer)
       this.timer = null
-      const wasRunning = anyScanning(this.views)
+      const previous = this.views
       let list
       try {
         list = (await api.get(`/projects?lang=${encodeURIComponent(this.lang)}`)) || []
@@ -103,15 +108,23 @@ export default {
       this.misses = 0
       this.lost = false
       this.views = list
+      const wanted = needsDigest(previous, list, this.awaiting, this.firstLoad)
+      this.firstLoad = false
       if (anyScanning(list)) {
         this.timer = setTimeout(this.loadViews, pollEvery)
-      } else if (wasRunning) {
-        // A check ended: the counts of the cards changed.
+        return
+      }
+      this.awaiting = false
+      if (wanted) {
+        // A check may have ended: the counts of the cards changed, and until
+        // they arrive no card says "0 critical".
+        this.digestFresh = false
         this.$emit('decided')
       }
     },
     onScanChanged() {
       this.notice = ''
+      this.awaiting = true
       this.loadViews()
     },
     onAdded(added) {

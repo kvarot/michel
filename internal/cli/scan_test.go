@@ -378,6 +378,19 @@ demo     2          3         3         1/1/1/0/0                         0/0
 Michel n'a trouvé aucune nouvelle faille dans demo, 3 failles analysées. Ensuite : michel findings --project demo
 --- stderr
 `,
+	"plugin": `exit 0 
+--- stdout
+project  manifests  packages  findings  critical/high/medium/low/unknown  new/gone
+demo     2          3         3         1/1/1/0/0                         3/0
+Michel found 3 new findings in demo, 1 critical, analyzed 3 findings. Next: michel findings --project demo --severity critical
+trivy found 1 new finding in demo. Next: michel findings --project demo
+--- stderr
+`,
+	"plugin_json": `exit 0 
+--- stdout
+{"results":[{"scan_id":"<ID>","project":"demo","status":"ok","manifests":[{"rel_path":"composer.lock","ecosystem":"Packagist","lock_sha256":"<SHA>","packages":2,"findings":2},{"rel_path":"web/package-lock.json","ecosystem":"npm","lock_sha256":"<SHA>","packages":1,"findings":1}],"new":0,"still":3,"reappeared":0,"gone":0,"superseded":0,"by_severity":{"critical":1,"high":1,"medium":1}}],"failures":[],"plugins":[{"project":"demo","key":"plugin.trivy","run_id":"<ID>","new":0,"still":1,"gone":0,"skipped_known":0}]}
+--- stderr
+`,
 }
 
 // normScanOutput takes out what changes from one run to the next: the temporary
@@ -395,11 +408,34 @@ func normScanOutput(s string, folders map[string]string) string {
 	for _, l := range strings.SplitAfter(s, "\n") {
 		// The scanner's own log lines and the policy line hold a time or a path
 		// of this computer.
-		if !strings.HasPrefix(l, "time=") && !strings.HasPrefix(l, "policy:") && !strings.HasPrefix(l, "politique") && !strings.HasPrefix(l, "\n") {
+		if !strings.HasPrefix(l, "time=") && !strings.HasPrefix(l, "policy:") && !strings.HasPrefix(l, "politique") {
 			kept = append(kept, l)
 		}
 	}
 	return strings.Join(kept, "")
+}
+
+// With a plugin turned on, whose lines come after the summaries.
+func TestScanOutputUnchangedWithAPlugin(t *testing.T) {
+	dir, db, path := provableProject(t, true)
+	folders := map[string]string{path: "<A>", db: "<DB>", dir: "<DATA>"}
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"plugin", []string{"scan", "--project", "demo", "--osv-db", db}},
+		{"plugin_json", []string{"scan", "--project", "demo", "--osv-db", db, "--json"}},
+	} {
+		_, out, errOut, err := run(t, dir, c.args...)
+		code, message := 0, ""
+		if err != nil {
+			code, message = ExitCode(err), normScanOutput(err.Error(), folders)
+		}
+		got := fmt.Sprintf("exit %d %s\n--- stdout\n%s--- stderr\n%s", code, message, normScanOutput(out, folders), normScanOutput(errOut, folders))
+		if want := scanOutputWas[c.name]; got != want {
+			t.Errorf("%s changed:\n%s\n--- it was\n%s", c.name, got, want)
+		}
+	}
 }
 
 func TestScanOutputUnchanged(t *testing.T) {

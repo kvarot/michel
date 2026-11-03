@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -166,7 +167,10 @@ func TestAddProjectRefusesWhatIsNotAProject(t *testing.T) {
 		t.Fatal("no system folder found on this computer")
 	}
 	if runtime.GOOS == "windows" {
-		paths = append(paths, `\\example.test\share`, `//example.test/share`, sysFound+`.`, home+`:stream`)
+		paths = append(paths, `\\example.test\share`, `//example.test/share`, sysFound+`.`, home+`:stream`,
+			`\??\C:\Windows`, `/??/C:/Windows`, `\??\UNC\example.test\share\x`, `\\?\C:\Windows`, `\\?\UNC\example.test\share\x`,
+			`\\.\C:\Windows`, `//?/C:/Windows`, `//./C:/Windows`, `\\.\pipe\x`,
+			`C:\NUL`, `C:\Sites\CON`, `C:\Sites\COM1.txt`, `C:\Sites\conin$`)
 	} else {
 		paths = append(paths, "//etc")
 	}
@@ -179,14 +183,181 @@ func TestAddProjectRefusesWhatIsNotAProject(t *testing.T) {
 			t.Errorf("the answer holds the path: %s", body)
 		}
 	}
-	// The folder under a link counts, not the name of the link.
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(sysFound, link); err != nil {
-		t.Logf("no symbolic link here: %v", err)
-		return
+}
+
+// makeJunction makes a Windows junction, which needs no privilege: it always
+// runs on Windows, and a failure to make one is a failure of the test.
+func makeJunction(t *testing.T, link, target string) {
+	t.Helper()
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink /J: %v\n%s", err, out)
 	}
-	if st, eb, body := refusedCode(t, f, link, "new"); st != http.StatusBadRequest || eb.Code != "api.project.forbidden_path" {
-		t.Errorf("link = %d %s", st, body)
+	t.Cleanup(func() { _ = exec.Command("cmd", "/c", "rmdir", link).Run() })
+}
+
+// A folder reached through a link is never a project: the link could lead
+// anywhere later, and on Windows to a share.
+func TestAddProjectRefusesALink(t *testing.T) {
+	home := t.TempDir()
+	f := newFixtureWith(t, nil, func(f *fixture) { f.deps.Servers.Home = home })
+	refused := func(t *testing.T, path string) {
+		t.Helper()
+		if st, eb, body := refusedCode(t, f, path, "new"); st != http.StatusBadRequest || eb.Code != "api.project.forbidden_path" {
+			t.Errorf("%q = %d %s", path, st, body)
+		}
+	}
+	system := ""
+	for _, sys := range systemFolders() {
+		if fi, err := os.Stat(sys); err == nil && fi.IsDir() {
+			system = sys
+			break
+		}
+	}
+	if system == "" {
+		t.Fatal("no system folder found on this computer")
+	}
+	t.Run("symbolic link", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(system, link); err != nil {
+			if runtime.GOOS == "windows" {
+				t.Skipf("NOT CHECKED: this Windows session may not make a symbolic link: %v", err)
+			}
+			t.Fatal(err)
+		}
+		refused(t, link)
+	})
+	t.Run("junction", func(t *testing.T) {
+		if runtime.GOOS != "windows" {
+			t.Skip("NOT CHECKED: a junction exists only on Windows")
+		}
+		ordinary := t.TempDir()
+		under := filepath.Join(ordinary, "site")
+		if err := os.Mkdir(under, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		links := t.TempDir()
+		for name, target := range map[string]string{"system": system, "home": home, "data": f.dir, "ordinary": ordinary} {
+			link := filepath.Join(links, name)
+			makeJunction(t, link, target)
+			refused(t, link)
+		}
+		// A junction higher up counts as well.
+		refused(t, filepath.Join(links, "ordinary", "site"))
+		var n int
+		_ = f.st.DB().QueryRow(`SELECT COUNT(*) FROM project`).Scan(&n)
+		if n != 1 {
+			t.Errorf("projects = %d, want only the demo", n)
+		}
+		// The folder itself, without the junction, stays accepted.
+		if st, _, body := refusedCode(t, f, under, "site"); st != http.StatusCreated {
+			t.Errorf("the folder itself = %d %s", st, body)
+		}
+	})
+}
+
+func TestReparsePointOnTheWay(t *testing.T) {
+	dir := t.TempDir()
+	if reparsePointOnTheWay(dir) {
+		t.Errorf("an ordinary folder is seen as a link: %s", dir)
+	}
+	if reparsePointOnTheWay(filepath.Join(dir, "missing", "deeper")) {
+		t.Error("a folder that does not exist is not a link")
+	}
+	if runtime.GOOS != "windows" {
+		t.Skip("NOT CHECKED: reparse points exist only on Windows")
+	}
+	makeJunction(t, filepath.Join(dir, "j"), t.TempDir())
+	if !reparsePointOnTheWay(filepath.Join(dir, "j")) || !reparsePointOnTheWay(filepath.Join(dir, "j", "below")) {
+		t.Error("the junction was not seen")
+	}
+}
+
+func TestOnlyADriveLetter(t *testing.T) {
+	for p, want := range map[string]bool{
+		`C:\Sites\a`: true, `d:\a`: true,
+		`\??\C:\Windows`: false, `\\?\C:\Windows`: false, `\\.\C:\Windows`: false, `\\host\share\a`: false,
+		`1:\a`: false, `C:a`: false, `C:`: false, `\a`: false, ``: false, `é:\a`: false,
+	} {
+		if got := isDriveLetterPath(p); got != want {
+			t.Errorf("isDriveLetterPath(%q) = %v", p, got)
+		}
+	}
+}
+
+func TestDeviceNames(t *testing.T) {
+	for p, want := range map[string]bool{
+		`C:\NUL`: true, `C:\Sites\con`: true, `C:\Sites\COM1.txt`: true, `C:\Sites\LPT9`: true, `C:\a\conin$`: true,
+		`C:\a\AUX \b`: true, `C:\a\COM¹`: true, `C:\a\prn.x.y`: true,
+		`C:\Sites\conference`: false, `C:\Sites\com10`: false, `C:\Sites\lpt`: false, `C:\Sites\nullable`: false, `C:\Sites\my.con`: false,
+	} {
+		if got := hasDeviceName(p); got != want {
+			t.Errorf("hasDeviceName(%q) = %v", p, got)
+		}
+	}
+}
+
+// A hidden folder of the home folder is where the secrets live.
+func TestAddProjectRefusesAHiddenFolderOfTheHome(t *testing.T) {
+	home := t.TempDir()
+	f := newFixtureWith(t, nil, func(f *fixture) { f.deps.Servers.Home = home })
+	for _, rel := range []string{".ssh", filepath.Join(".config", "app"), filepath.Join("work", ".secret", "x")} {
+		p := filepath.Join(home, rel)
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if st, eb, body := refusedCode(t, f, p, "new"); st != http.StatusBadRequest || eb.Code != "api.project.forbidden_path" {
+			t.Errorf("%q = %d %s", rel, st, body)
+		}
+	}
+	ok := filepath.Join(home, "work", "site.v2")
+	if err := os.MkdirAll(ok, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, body := refusedCode(t, f, ok, "site"); st != http.StatusCreated {
+		t.Errorf("a plain folder of the home = %d %s", st, body)
+	}
+	// Hidden elsewhere is the person's choice.
+	other := filepath.Join(t.TempDir(), ".site")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, body := refusedCode(t, f, other, "other"); st != http.StatusCreated {
+		t.Errorf("a hidden folder outside the home = %d %s", st, body)
+	}
+}
+
+// A panic of a parser on an odd file ends one check, never michel serve; the
+// page gets a code, the reason stays on the terminal.
+func TestScanPanicBecomesAFailedCheck(t *testing.T) {
+	const secret = `boom in C:\secret\composer.lock`
+	var calls atomic.Int32
+	f := newFixtureWith(t, nil, func(f *fixture) {
+		f.deps.ScanProject = func(ctx context.Context, p project.Project) error {
+			if calls.Add(1) == 1 {
+				panic(secret)
+			}
+			return nil
+		}
+	})
+	if resp, body := f.do("POST", "/api/v1/projects/demo/scan", testToken, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("scan = %d %s", resp.StatusCode, body)
+	}
+	v := f.waitEnd("fr", "demo")
+	if v.LastFailure == nil || v.LastFailure.Code != "api.project.scan_failed" || v.LastFailure.Error != i18n.T(i18n.FR, "api.project.scan_failed") {
+		t.Errorf("view = %+v", v)
+	}
+	body := f.get("/api/v1/projects", nil)
+	for _, banned := range []string{"boom", "secret", "composer.lock"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("the page got %q: %s", banned, body)
+		}
+	}
+	// The server still runs, and the project can be checked again.
+	if resp, body := f.do("POST", "/api/v1/projects/demo/scan", testToken, ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("again = %d %s", resp.StatusCode, body)
+	}
+	if v := f.waitEnd("en", "demo"); v.LastFailure != nil {
+		t.Errorf("after the second check: %+v", v)
 	}
 }
 

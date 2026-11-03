@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
-import { anyScanning, checkedWell, cleanProjectPath, projectNameFromPath, scanPath, scanSentence, showsFailure, withScanState } from './projectsView.js'
+import { anyScanning, checkedWell, cleanProjectPath, needsDigest, projectNameFromPath, runsHere, scanHintKey, scanPath, scanSentence, showsFailure, withScanState } from './projectsView.js'
 
 const card = import.meta.glob('../components/ProjectCard.vue', { query: '?raw', import: 'default', eager: true })
 
@@ -35,7 +35,7 @@ describe('scanSentence', () => {
   test('scan sentence for never, running, failed, ok', () => {
     expect(scanSentence({ last_scan_status: 'never' }, 'fr', now)).toBe(fr['project.scan.never'])
     expect(scanSentence({ last_scan_status: 'never', scanning: true }, 'fr', now)).toBe(fr['project.scan.running'])
-    expect(scanSentence({ last_scan_status: 'running' }, 'en', now)).toBe(en['project.scan.running'])
+    expect(scanSentence({ last_scan_status: 'running', scanning: true }, 'en', now)).toBe(en['project.scan.running'])
     expect(scanSentence({ last_scan_status: 'failed' }, 'fr', now)).toBe(fr['project.scan.failed'])
     expect(scanSentence({ last_scan_status: 'ok', last_scan_at: '2026-11-03T10:00:00Z' }, 'fr', now)).toBe('Dernier contrôle : il y a 2 h.')
     expect(scanSentence({ last_scan_status: 'ok', last_scan_at: '2026-11-03T10:00:00Z' }, 'en', now)).toBe('Last check: 2 h ago.')
@@ -61,12 +61,12 @@ describe('scanSentence', () => {
 
 describe('scan state of a card', () => {
   test('a card reassures only after a whole check', () => {
-    expect(checkedWell({ last_scan_status: 'ok' })).toBe(true)
+    expect(checkedWell({ last_scan_status: 'ok' }, true)).toBe(true)
     for (const status of ['never', 'failed', 'interrupted', 'partial', 'running', 'empty', undefined]) {
-      expect(checkedWell({ last_scan_status: status }), status).toBe(false)
+      expect(checkedWell({ last_scan_status: status }, true), status).toBe(false)
     }
-    expect(checkedWell({ last_scan_status: 'ok', scanning: true })).toBe(false)
-    expect(checkedWell({ last_scan_status: 'ok', last_failure: { code: 'api.project.no_database' } })).toBe(false)
+    expect(checkedWell({ last_scan_status: 'ok', scanning: true }, true)).toBe(false)
+    expect(checkedWell({ last_scan_status: 'ok', last_failure: { code: 'api.project.no_database' } }, true)).toBe(false)
     const src = Object.values(card)[0]
     expect(src).toContain('v-else-if="seen" class="m-keep"')
     expect(src).toContain('v-if="seen && project.critical_open === 0"')
@@ -94,6 +94,67 @@ describe('scan state of a card', () => {
   })
   test('the address of a check holds the name, encoded', () => {
     expect(scanPath('mon site/é', 'fr')).toBe('/projects/mon%20site%2F%C3%A9/scan?lang=fr')
+  })
+})
+
+describe('the digest a card reassures on (H2)', () => {
+  const idle = [{ name: 'demo', last_scan_status: 'ok' }]
+  const running = [{ name: 'demo', scanning: true, last_scan_status: 'running' }]
+
+  test('no reassuring word until the digest read after the check has arrived', () => {
+    expect(checkedWell({ last_scan_status: 'ok' }, false)).toBe(false)
+    expect(checkedWell({ last_scan_status: 'ok' })).toBe(false)
+    expect(checkedWell({ last_scan_status: 'ok' }, true)).toBe(true)
+  })
+  test('a check that ended while the page was open', () => {
+    expect(needsDigest(running, idle, false, false)).toBe(true)
+  })
+  test('a click on a check too short to be seen running', () => {
+    expect(needsDigest(idle, idle, true, false)).toBe(true)
+  })
+  test('coming back to the page after the check ended', () => {
+    expect(needsDigest([], idle, false, true)).toBe(true)
+  })
+  test('not while a check runs, and not on an ordinary look', () => {
+    expect(needsDigest([], running, true, true)).toBe(false)
+    expect(needsDigest(idle, idle, false, false)).toBe(false)
+    expect(needsDigest(null, null, false, false)).toBe(false)
+  })
+  test('the end of a check nobody started here counts too', () => {
+    expect(needsDigest([{ last_scan_status: 'running' }], idle, false, false)).toBe(true)
+  })
+})
+
+describe('a check that may have died (H3)', () => {
+  test('only a check of this process counts as running here', () => {
+    expect(runsHere({ scanning: true, last_scan_status: 'running' })).toBe(true)
+    expect(runsHere({ last_scan_status: 'running' })).toBe(false)
+    expect(runsHere({ scanning: false })).toBe(false)
+    expect(Object.values(card)[0]).toContain('return runsHere(this.project)')
+  })
+  test('a status left at running has its own sentence, and no promise', () => {
+    expect(scanSentence({ last_scan_status: 'running' }, 'fr', now)).toBe(fr['project.scan.elsewhere'])
+    expect(scanSentence({ last_scan_status: 'running' }, 'en', now)).toBe(en['project.scan.elsewhere'])
+    expect(scanSentence({ last_scan_status: 'running', scanning: true }, 'fr', now)).toBe(fr['project.scan.running'])
+    expect(fr['project.scan.elsewhere']).not.toContain('il continue')
+    expect(en['project.scan.elsewhere']).not.toContain('goes on')
+  })
+  test('the page keeps looking at such a status, and never reassures', () => {
+    expect(anyScanning([{ last_scan_status: 'running' }])).toBe(true)
+    expect(checkedWell({ last_scan_status: 'running' }, true)).toBe(false)
+  })
+})
+
+describe('what a card offers after a check that is not whole (M4)', () => {
+  test('starting again is offered for a failure, not for a partial check', () => {
+    expect(scanHintKey('failed')).toBe('project.scan_hint')
+    expect(scanHintKey('interrupted')).toBe('project.scan_hint')
+    expect(scanHintKey('partial')).toBe('project.scan.partial_hint')
+    expect(fr['project.scan.partial']).toBe("Le dernier contrôle est incomplet : Michel n'a pas lu tous les fichiers.")
+    for (const cat of [fr, en]) {
+      expect(cat['project.scan.partial_hint']).not.toContain(cat['project.check'])
+      expect(cat['project.scan.partial_hint']).toContain('Sources')
+    }
   })
 })
 

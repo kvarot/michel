@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -144,11 +146,18 @@ func (s *server) projectFolder(raw string) (string, string) {
 	if len(raw) > maxPathLen || strings.IndexFunc(raw, unicode.IsControl) >= 0 {
 		return "", "api.project.not_dir"
 	}
-	if strangeOnWindows(raw) {
+	clean := filepath.Clean(raw)
+	// Before anything touches the disk: opening \??\UNC\host\share would send
+	// the Windows session's credentials to that host.
+	if runtime.GOOS == "windows" && (!isDriveLetterPath(clean) || hasDeviceName(clean)) {
 		return "", "api.project.forbidden_path"
 	}
-	clean := filepath.Clean(raw)
-	if s.forbiddenFolder(clean) {
+	if strangeOnWindows(raw) || s.forbiddenFolder(clean) {
+		return "", "api.project.forbidden_path"
+	}
+	// Each step from the top, without going through a link: a link is refused
+	// before the Stat below follows it, wherever it leads.
+	if reparsePointOnTheWay(clean) {
 		return "", "api.project.forbidden_path"
 	}
 	fi, err := os.Stat(clean)
@@ -176,9 +185,59 @@ func hasDotDot(p string) bool {
 }
 
 // isNetworkPath tells \\host\share and //host/share (and the \\?\ forms): just
-// opening one sends the Windows session's credentials to that host.
+// opening one sends the Windows session's credentials to that host. On Unix
+// //etc is /etc, a spelling refused as well.
 func isNetworkPath(p string) bool {
 	return strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, `//`) || strings.HasPrefix(p, `\/`) || strings.HasPrefix(p, `/\`)
+}
+
+// isDriveLetterPath is the only form of path accepted on Windows: a letter, a
+// colon and a backslash, on a cleaned path. Everything else (\??\, \\?\, \\.\,
+// a share) is a way around what the other checks read.
+func isDriveLetterPath(clean string) bool {
+	if len(clean) < 3 || clean[1] != ':' || clean[2] != '\\' {
+		return false
+	}
+	c := clean[0] | 0x20
+	return 'a' <= c && c <= 'z'
+}
+
+// hasDeviceName tells a segment that Windows reads as a device, whatever its
+// extension or the spaces after it: C:\Sites\NUL.txt is not a folder.
+func hasDeviceName(p string) bool {
+	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		base, _, _ := strings.Cut(seg, ".")
+		switch strings.ToUpper(strings.TrimRight(base, " ")) {
+		case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+			"COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+			"LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³":
+			return true
+		}
+	}
+	return false
+}
+
+// reparsePointOnTheWay walks a cleaned path from its top and tells whether the
+// path or one of its parents is a reparse point (a junction or a link), without
+// ever going through one. EvalSymlinks does not follow a junction. A step that
+// cannot be read for lack of rights is passed; one that does not exist ends the
+// walk, and the caller says the folder is not there.
+func reparsePointOnTheWay(clean string) bool {
+	vol := filepath.VolumeName(clean)
+	cur := vol + string(filepath.Separator)
+	for _, seg := range strings.FieldsFunc(clean[len(vol):], func(r rune) bool { return r == filepath.Separator }) {
+		cur = filepath.Join(cur, seg)
+		fi, err := os.Lstat(cur)
+		switch {
+		case errors.Is(err, fs.ErrPermission):
+			continue
+		case err != nil:
+			return false
+		case isReparsePoint(fi):
+			return true
+		}
+	}
+	return false
 }
 
 // strangeOnWindows tells the spellings Windows reads as another name: a
@@ -258,6 +317,27 @@ func (s *server) forbiddenFolder(p string) bool {
 			return true
 		}
 	}
+	if home != "" && (hiddenBelow(p, filepath.Clean(home)) || hiddenBelow(p, resolved(home))) {
+		return true
+	}
+	return false
+}
+
+// hiddenBelow tells whether p is under root through a folder whose name starts
+// with a dot, where the home folder keeps its secrets (.ssh, .config).
+func hiddenBelow(p, root string) bool {
+	if !isUnder(p, root) {
+		return false
+	}
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+		if seg != "." && strings.HasPrefix(seg, ".") {
+			return true
+		}
+	}
 	return false
 }
 
@@ -324,7 +404,16 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	started := s.goBackground(func(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, scanBound)
 		defer cancel()
-		s.scans.end(p.ID, s.deps.Now(), codeOfScan(run(ctx, p)))
+		code := "api.project.scan_failed"
+		defer func() {
+			// A parser that panics on an odd file ends this check, not michel
+			// serve. The reason may name files: the terminal only.
+			if r := recover(); r != nil {
+				fmt.Fprintln(os.Stderr, i18n.T(s.deps.Lang, "api.project.scan_panic", p.Name, scan.SanitizeText(fmt.Sprint(r))))
+			}
+			s.scans.end(p.ID, s.deps.Now(), code)
+		}()
+		code = codeOfScan(run(ctx, p))
 	})
 	if !started {
 		s.scans.end(p.ID, s.deps.Now(), "api.project.scan_failed")
