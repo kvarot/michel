@@ -128,7 +128,8 @@ func judge(a UpstreamAdvisory, version [3]int) (fixed string, vulnerable bool) {
 // vulnerability matcher handles those), only on its settings, and a
 // mitigation setting is reported only for a runtime known (or unable to be
 // ruled out) to be vulnerable. A compiled runtime whose version cannot be
-// read gets a visible finding instead of being skipped.
+// read gets a visible finding instead of being skipped. What listens on all
+// addresses is judged too, when the list is known (exposure.go).
 func Evaluate(t target.Target, inv target.Inventory, s Set) []scan.Finding {
 	return EvaluateWith(t, inv, s, Options{})
 }
@@ -179,7 +180,7 @@ func EvaluateWith(t target.Target, inv target.Inventory, s Set, o Options) []sca
 			}
 		}
 	}
-	return out
+	return append(out, exposureFindings(t, inv, s)...)
 }
 
 func unknownVersionFinding(t target.Target, rt target.PHPRuntime, key string, s Set) scan.Finding {

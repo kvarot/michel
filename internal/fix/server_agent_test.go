@@ -2,6 +2,7 @@ package fix
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -560,5 +561,55 @@ func TestPackageUpgradeNeverAuto(t *testing.T) {
 	}
 	if got := f.attempt(a.ID); got.State != StateProposed || s.pkgVer != "1.0-1" {
 		t.Fatalf("after the worker: %s, package %s", got.State, s.pkgVer)
+	}
+}
+
+// An exposure is never fixed by Michel, whatever the level.
+func TestExposureNeverQueued(t *testing.T) {
+	ctx := context.Background()
+	f := newServerFixture(t)
+	s := f.addServer("srv-demo", "8.2", demoIni, target.ExecMichel, target.SudoNopasswd, func(tg *target.Target) { tg.FixLevel = 3; tg.AutoConfig = true })
+	f.mustCheck(s)
+	const id = "fexposure0000001"
+	at := f.tick().UTC().Format(time.RFC3339)
+	if _, err := f.d.Store.DB().Exec(`INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id, severity_label,
+		installed_version, fixed_versions, status, first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, status_changed_at, summary, kind)
+		VALUES (?, ?, 'exposure:5432', 'server-exposure', '5432', 'exposed_database', 'medium', '', '[]', 'new', 's1', 's1', ?, ?, ?, 'demo', ?)`,
+		id, s.t.ID, at, at, at, scan.KindServerExposure); err != nil {
+		t.Fatal(err)
+	}
+	fi := scan.Finding{ID: id, ProjectID: s.t.ID, Kind: scan.KindServerExposure, Status: scan.StatusNew}
+	for _, level := range []int{2, 3} {
+		tg := s.t
+		tg.FixLevel = level
+		if EligibleServer(fi, tg, nil) {
+			t.Errorf("level %d: eligible", level)
+		}
+	}
+	if _, err := QueueEligibleServer(ctx, f.d, s.t.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range f.queued(t) {
+		if x == id {
+			t.Error("the exposure is queued")
+		}
+	}
+}
+
+// What an agent reads holds no port and no address that listens, whatever the
+// inventory knows.
+func TestAgentInventoryHasNoListeners(t *testing.T) {
+	const marker = "203.0.113.99"
+	inv := target.Inventory{ListenersRead: true, Listeners: []target.Listener{{Address: marker, Port: 54329, Scope: target.ScopeOpen}}}
+	view := serverInventoryView(target.Target{Kind: target.KindVPS, Env: target.EnvProd}, inv,
+		scan.Finding{ID: "01FINDINGDEMO", Kind: scan.KindServerConfig, OSVID: "expose_php", Summary: "demo"})
+	body, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{marker, "54329"} {
+		if strings.Contains(string(body), bad) {
+			t.Errorf("the view holds %q: %s", bad, body)
+		}
 	}
 }

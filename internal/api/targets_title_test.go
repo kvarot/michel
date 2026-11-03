@@ -8,6 +8,31 @@ import (
 	"github.com/kvarot/michel/internal/scan"
 )
 
+// The title of an exposure comes from the catalog: what Michel saw, and the
+// firewall stays an "if".
+func TestExposureTitleIsInFrench(t *testing.T) {
+	for osv, want := range map[string][2]string{
+		"exposed_database": {"Une base de données écoute sur toutes les adresses de ce serveur",
+			"Elle est joignable depuis l'extérieur si aucun pare-feu ne la bloque. Personne dehors n'a besoin d'y accéder : c'est une porte d'entrée possible vers tes données."},
+		"exposed_cache": {"Un cache (une mémoire rapide utilisée par le site) écoute sur toutes les adresses de ce serveur",
+			"Il est joignable depuis l'extérieur si aucun pare-feu ne le bloque. Personne dehors n'a besoin d'y accéder : c'est une porte d'entrée possible vers tes données."},
+	} {
+		f := scan.Finding{Kind: scan.KindServerExposure, OSVID: osv, Package: "5432", ManifestRelPath: "exposure:5432",
+			SeverityLabel: "medium", Summary: "english summary"}
+		v := targetFindingView(i18n.FR, "michel", f)
+		if v.Title != want[0] || v.Explain != want[1] {
+			t.Errorf("%s: %q / %q", osv, v.Title, v.Explain)
+		}
+		en := targetFindingView(i18n.EN, "michel", f)
+		if strings.Contains(en.Title, "écoute") || en.Title == "english summary" || !strings.Contains(en.Explain, "firewall") {
+			t.Errorf("%s en: %q / %q", osv, en.Title, en.Explain)
+		}
+		if v.Severity != "medium" {
+			t.Errorf("%s: severity %q", osv, v.Severity)
+		}
+	}
+}
+
 // A package finding reads in the page's language, whatever English summary
 // the scan stored.
 func TestServerPackageTitleFollowsTheLanguage(t *testing.T) {

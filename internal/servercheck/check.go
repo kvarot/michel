@@ -259,6 +259,15 @@ func judge(ctx context.Context, d CheckDeps, t target.Target, inv target.Invento
 			prefixes = append(prefixes, "fpm:")
 		}
 	}
+	// An exposure closes only on a complete read that no longer shows the
+	// service open. Without that list, nothing is known of any port; with it,
+	// a port still open keeps its finding even when no rule would open it
+	// today (the server became shared, the port became the connection one).
+	if serverrules.ListenersKnown(inv) {
+		unread = append(unread, serverrules.OpenPortKeys(inv)...)
+	} else {
+		prefixes = append(prefixes, serverrules.ExposurePrefix)
+	}
 	enriched := d.Lookup != nil
 	if enriched {
 		var cves []string

@@ -224,7 +224,7 @@ func ApplyServerFindings(ctx context.Context, tx *sql.Tx, targetID, runID string
 		return 0, 0, 0, nil, errors.New("a server finding needs the id of its server")
 	}
 	for _, f := range fs {
-		if f.ProjectID != targetID || (f.Kind != KindServerPackage && f.Kind != KindServerConfig) {
+		if f.ProjectID != targetID || (f.Kind != KindServerPackage && f.Kind != KindServerConfig && f.Kind != KindServerExposure) {
 			return 0, 0, 0, nil, fmt.Errorf("finding %s is not a finding of server %s", label(f), targetID)
 		}
 	}
@@ -431,7 +431,7 @@ func scanFinding(rows *sql.Rows) (Finding, error) {
 // (EffectiveSeverity). An empty status means everything except "gone"; "all"
 // means everything; "actionable" means new or pending.
 func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Finding, error) {
-	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ? AND kind NOT IN ('server_package', 'server_config')`
+	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ? AND kind NOT IN ('server_package', 'server_config', 'server_exposure')`
 	args := []any{projectID}
 	switch status {
 	case "all":
@@ -508,7 +508,7 @@ func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, er
 
 // ListServerFindings returns every finding of a server (any status), by id.
 func (r *Repo) ListServerFindings(ctx context.Context, targetID string) ([]Finding, error) {
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+findingColumns+` FROM finding WHERE project_id = ? AND source_key = '' AND kind IN ('server_package', 'server_config') ORDER BY id`, targetID)
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+findingColumns+` FROM finding WHERE project_id = ? AND source_key = '' AND kind IN ('server_package', 'server_config', 'server_exposure') ORDER BY id`, targetID)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the findings of the server: %w", err)
 	}

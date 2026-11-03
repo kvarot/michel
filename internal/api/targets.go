@@ -580,6 +580,11 @@ var ruleKeys = sync.OnceValue(func() map[string]string {
 			out[al] = a.Key
 		}
 	}
+	for _, r := range set.Listen {
+		if r.Key != "" {
+			out[r.Rule] = r.Key
+		}
+	}
 	return out
 })
 

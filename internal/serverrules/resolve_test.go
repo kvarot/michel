@@ -191,7 +191,7 @@ func TestNonZeroIntegerIsOn(t *testing.T) {
 }
 
 func TestParseRejectsTypos(t *testing.T) {
-	base := "version: 2\nconfig:\n  - {id: a, directive: x, risky: \"on\", severity: %s, changeable: %s, context: [%s], key: k}\n"
+	base := "version: 3\nconfig:\n  - {id: a, directive: x, risky: \"on\", severity: %s, changeable: %s, context: [%s], key: k}\n"
 	for _, c := range [][3]string{{"low", "all", "sapi:fmp"}, {"low", "all", "prodd"}, {"urgent", "all", "prod"}, {"low", "sometimes", "prod"}} {
 		if _, err := parse([]byte(fmt.Sprintf(base, c[0], c[1], c[2]))); err == nil {
 			t.Errorf("%v accepted", c)

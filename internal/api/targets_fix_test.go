@@ -312,3 +312,34 @@ func TestTargetTildeKeepsOtherUsers(t *testing.T) {
 		t.Error("an empty user rewrote a path")
 	}
 }
+
+// No route starts a fix of an exposure, and no attempt comes out of trying:
+// closing a service is the person's job.
+func TestExposureCannotStartAFix(t *testing.T) {
+	tf := newTargetFixture(t)
+	v := tf.addNamed("srv-demo", "192.0.2.60")
+	const id = "fexposure0000001"
+	tf.seedServerFinding(v.ID, id, scan.KindServerExposure, "exposed_database")
+	for path, want := range map[string]struct {
+		status int
+		code   string
+	}{
+		"/api/v1/targets/" + v.ID + "/fix/" + id:       {http.StatusNotFound, "fix.server.not_server"},
+		"/api/v1/targets/" + v.ID + "/agent-fix/" + id: {http.StatusNotFound, "fix.server.not_server"},
+		"/api/v1/findings/" + id + "/fix":              {http.StatusNotFound, ""},
+	} {
+		code, body := tf.send("POST", path, "")
+		var eb FixErrorBody
+		_ = json.Unmarshal([]byte(body), &eb)
+		if code != want.status || eb.Code != want.code {
+			t.Errorf("%s = %d %s", path, code, body)
+		}
+	}
+	var attempts int
+	if err := tf.st.DB().QueryRow(`SELECT COUNT(*) FROM fix_attempt`).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 {
+		t.Errorf("%d attempts", attempts)
+	}
+}
