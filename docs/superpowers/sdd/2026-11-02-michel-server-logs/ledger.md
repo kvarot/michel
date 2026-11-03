@@ -31,7 +31,7 @@ State 2026-11-02 16:09: no task started. Plan 6 real run not done yet (spec § 1
 | 7 | TestDeviationRemindedWeekly has no named state: see R4 |
 | 8 | Yes |
 | 9 | Yes |
-| 10 | Step 3 needs Docker, absent on this PC: see R5 |
+| 10 | Step 3 needs Docker, only inside WSL on this PC: see R5 |
 
 ## Rulings
 
@@ -39,7 +39,7 @@ State 2026-11-02 16:09: no task started. Plan 6 real run not done yet (spec § 1
 - Ruling R2: retention purge runs in the existing serve retention loop (spec § 11, "boucle de rétention existante"), Resolve runs at the end of each Pass for that server — the plan names neither — costs a late status change if wrong.
 - Ruling R3: common-cause grouping lives in Scheduler: one tick collects no_agent failures and emits one AlertNotReading; Pass reports the cause in PassResult.Reason — Pass cannot see other servers — costs a test move if wrong.
 - Ruling R4: weekly reminder uses the last digest_run carrying a reminder, or a stored date in log_settings if digest_run cannot hold it; implementer picks after reading digest — spec fixes the rate only — costs a repeated or late reminder if wrong.
-- Ruling R5: Task 10 Step 3 runs with Kévin on the PC with Docker; on this PC the task delivers docs, image and checklist, and the branch is not called finished before that run — no Docker here — costs a later fix round.
+- Ruling R5 (corrected 2026-11-03): Task 10 Step 3 stays to do, and the branch is not called finished before that run; Docker does exist on this PC, but only inside WSL (`wsl -d Ubuntu -- docker`), see the WSL section of `real-run-checklist.md` — the first version of this ruling said no Docker here, which was wrong — costs a later fix round.
 
 ## Execution
 
@@ -75,5 +75,31 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Scope change 2026-11-02 evening: Kévin, asked whether to start Task 3 before the plan 6 real run, answered "et continuer le plan", after "agit en autonomie". Tasks 3-10 run here, no push. Plan 6 real run and Task 10 Step 3 remain to do on the PC with Docker; branch not finished before that (R5).
 - Ruling R12: "et continuer le plan" read as lifting the stop before Task 3 — it answered the question put to him, and work stays local — costs rework if the real run changes the server code or if he meant the home session only.
 - Task 3: dispatched, BASE f0e8e5d.
-- Task 3: stopped by Kévin before finishing, on a work PC. Work not reviewed.
+- Task 3: stopped by Kévin before finishing, on another PC. Work not reviewed.
 - Task 3: unfinished work kept on branch wip/plan7-task3 (compiles, go vet clean, tests not run, no report, no review). Task 3 still to finish from it or restart from feat/server-logs.
+- Note 2026-11-03: plan 6 real run done and merged into main; results at the end of `docs/superpowers/sdd/2026-10-31-michel-servers/ledger.md`. Kévin chose to resume the Task 3 WIP. R12 has no object any more.
+- Task 3: resumed from wip/plan7-task3, origin/feat/server-logs and origin/main merged without conflict (HEAD 79261da). WIP tests run for the first time: pass on this PC, symlink case not exercised (no privilege).
+- Task 3: audit and finish dispatched, BASE f0e8e5d for the whole task, WIP commit 7aa7bff included in review.
+- Task 3: implementer DONE_WITH_CONCERNS, commit 711419d. Fixed: placeholder cursor of a wildcard source refused by Script. Symlink case and mawk, busybox, dash variants skipped on this PC; symlink checked by hand under WSL. Discover keeps the default PostgreSQL folder, the inventory has no postgresql.conf directives.
+- Task 3: review needs fixes (5 Important: cap per file, cut output can block a source, history read after activation, ValidatePath not guarding declaration, PostgreSQL proposal; 9 Minor). FIX_BASE 711419d.
+- Ruling R13: the read cap and the output bound hold per source and per pass, newest files served first; a file past the budget jumps to its end and says the volume — spec § 5.2 and Global Constraints fix "par source et par passage" — costs fewer records from the oldest dated files of a large wildcard.
+- Ruling R14: at activation a file present but unreadable is located by metadata only (`ls`, nothing read), and no placeholder is left when a parent folder exists but cannot be searched, when awk is missing or when a located line is rejected; a file that appears unreadable after activation stays unseen and is read from its start once readable — spec § 5.2 — costs a real file skipped up to the activation size.
+- Ruling R15: `checkSource` calls `ValidatePath`, single validator for declaration and proposals — spec § 4 — costs a refusal for a stored path outside the whitelist, which no read could have served anyway.
+- Ruling R16: Discover keeps `/var/log/postgresql/postgresql-*.log` for now, against spec § 4 "log_directory et log_filename si lisible" — the inventory has no postgresql.conf directives and the brief does not touch the collector; to show to Kévin — costs a wrong proposal on a server with a custom log folder, the source is then declared by hand.
+- Ruling R17: FPM values holding `$pool` are not proposed, to state in the Task 10 docs — the pool name is not paired with the value in the inventory — costs a manual declaration for those pools.
+- Task 3: minor (deferred to Task 5): cursors of files gone are never pruned, the placeholder stays once real cursors exist; Pass stores cursors and is the place to prune them.
+- Task 3: minor (deferred to Task 8): `Output.Unseen` holds server paths; decide what the "non vu" list exposes.
+- Task 3: minor (deferred to Task 10): `-L` checks the last component only and before the read; a symlinked parent or a swap in that window needs write access to the folder; state the limit in the docs.
+- Task 3: FileID inode only stays under R8.
+- Task 3: fix round 1 sent: I1 to I4, plus Minor awk records without a position, real file swap test, Why asserted per path, constants split. Done criterion is a review with nothing open, so cheap minors go in.
+- Task 3: fix round 1 implementer reply, commit f181eb4, re-review dispatched. Whole package also run on Linux under WSL (dash, gawk, mawk), symlink and unsearchable folder cases included.
+- Task 3: fix round 1/5 (8 addressed, 0 open; commits 711419d..f181eb4). Busybox not checked: absent on Windows and in WSL.
+- Ruling R18: a resume in the middle of a line is raised from Minor to the fix loop — a fragment of a visitor-controlled line can become a valid record once the newline arrives, which is Review Focus 1 — costs one more round.
+- Ruling R19: "newest first" is the last name in C order, not modification time, for the budget as for the 50-file cap; the skipped volume is stated, to explain in the Task 10 docs and to show to Kévin — dated names are the case wildcards serve, and POSIX sh has no portable sort by date without parsing `ls` — costs the newest errors skipped past the budget on a pattern such as `app.log*`.
+- Task 3: minor (deferred): group share counts idle files too (31 daily files give 32 groups each, the rest folds into level records, visible); a shell without builtin `printf` could fail on an answer over 128 KiB, not reachable on dash or busybox ash; a missing folder under an unlistable parent keeps activation repeating, conservative.
+- Task 3: fix round 2 sent: mid-line resume, tests (file appearing unreadable, `-r` branch, grammar), awk comment, tab count. FIX_BASE f181eb4.
+- Task 3: fix round 2/5 (3 addressed, 0 open; commits f181eb4..cc6e9c9)
+- Task 3: minor (deferred): a held fragment is read again each pass, within the cap; a half-line discarded after a resume is not counted as lost; a line of exactly the cap without its newline is jumped.
+- Task 3: skips on this PC: symlink, unsearchable and unlistable folder cases, mawk, busybox and dash variants of TestFilterVariants; whole package passes under WSL (dash, gawk, mawk), busybox not run anywhere.
+- Task 3: complete (commits 79261da..cc6e9c9, review clean)
+- Stop point: Task 4 not started. Branch wip/plan7-task3 not merged into feat/server-logs, Kévin decides.
