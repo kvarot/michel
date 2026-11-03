@@ -599,3 +599,50 @@ func TestHourCount(t *testing.T) {
 		t.Errorf("another hour = %d", n)
 	}
 }
+
+// "Stop warning me" also forgets the text: the row stays, without it, whatever
+// status the error takes afterwards. Other statuses leave the text alone.
+func TestIgnoringAnErrorErasesItsText(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	st, _ := e.r.Settings(ctx, e.tgt.ID)
+	st.StoreText = true
+	if err := e.r.SaveSettings(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	r := rec(1, t0)
+	r.Text = "cleaned text"
+	fresh, _, _, err := e.r.Apply(ctx, e.src, []Record{r}, t0)
+	if err != nil || len(fresh) != 1 {
+		t.Fatalf("apply = %+v, %v", fresh, err)
+	}
+	id := fresh[0].ID
+	// The column holds bytes as they were sealed, whatever its declared type.
+	if n := count(t, e, `SELECT COUNT(*) FROM log_signature WHERE typeof(text_enc) = 'blob'`); n != 1 {
+		t.Fatalf("stored text is not bytes: %d", n)
+	}
+	if err := e.r.SetStatus(ctx, id, StatusSeen); err != nil {
+		t.Fatal(err)
+	}
+	if txt, ok, err := e.r.Text(ctx, id); err != nil || !ok || txt != "cleaned text" {
+		t.Fatalf("seen lost its text: %q %v %v", txt, ok, err)
+	}
+	if err := e.r.SetStatus(ctx, id, StatusIgnored); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, e, `SELECT COUNT(*) FROM log_signature WHERE text_enc IS NOT NULL`); n != 0 {
+		t.Fatalf("an ignored error kept its text: %d", n)
+	}
+	if n := count(t, e, `SELECT COUNT(*) FROM log_signature`); n != 1 {
+		t.Fatalf("the row of the error is gone: %d", n)
+	}
+	if _, ok, err := e.r.Text(ctx, id); err != nil || ok {
+		t.Fatalf("text of an ignored error: %v %v", ok, err)
+	}
+	if err := e.r.SetStatus(ctx, id, StatusSeen); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := e.r.Text(ctx, id); err != nil || ok {
+		t.Fatalf("the text came back: %v %v", ok, err)
+	}
+}

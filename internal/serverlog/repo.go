@@ -421,12 +421,17 @@ func (r *Repo) Signatures(ctx context.Context, targetID string) ([]Signature, er
 	return out, rows.Err()
 }
 
-// SetStatus sets the status of an error (seen, ignored...).
+// SetStatus sets the status of an error (seen, ignored...). An ignored error
+// loses its text in the same statement: it keeps its row, never its text.
 func (r *Repo) SetStatus(ctx context.Context, id string, st Status) error {
 	if !validStatus(st) {
 		return fmt.Errorf("%w: unknown status %q", ErrInvalidRecord, st)
 	}
-	res, err := r.s.DB().ExecContext(ctx, `UPDATE log_signature SET status = ? WHERE id = ?`, string(st), id)
+	q := `UPDATE log_signature SET status = ? WHERE id = ?`
+	if st == StatusIgnored {
+		q = `UPDATE log_signature SET status = ?, text_enc = NULL WHERE id = ?`
+	}
+	res, err := r.s.DB().ExecContext(ctx, q, string(st), id)
 	if err != nil {
 		return fmt.Errorf("cannot save the log error: %w", err)
 	}
