@@ -32,6 +32,18 @@ describe('stripTechnicalIds', () => {
   })
 })
 
+describe('stripTechnicalIds leaves alone what no id touched', () => {
+  test('a sentence without an id is returned as it is', () => {
+    expect(stripTechnicalIds('Et voilà')).toBe('Et voilà')
+    expect(stripTechnicalIds('And so on')).toBe('And so on')
+    expect(stripTechnicalIds('Noir et')).toBe('Noir et')
+    expect(stripTechnicalIds('Corrigée : voici pourquoi.')).toBe('Corrigée : voici pourquoi.')
+  })
+  test('an id in the middle does not clean the edges', () => {
+    expect(stripTechnicalIds('Et voilà la faille CVE-2024-1111 corrigée.')).toBe('Et voilà la faille corrigée.')
+  })
+})
+
 describe('stripTechnicalIds grammar', () => {
   test('capitalises a sentence that began with an id', () => {
     expect(stripTechnicalIds('CVE-2024-12345 permet de lire des fichiers.')).toBe('Permet de lire des fichiers.')
