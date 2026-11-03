@@ -81,7 +81,23 @@ La copie ne contient que les fichiers de ton dernier commit. Restent donc dehors
 
 Avant que quoi que ce soit sorte de ton ordinateur, Michel passe ses détecteurs de secrets sur les fichiers de la copie. Quand ils trouvent ce qui a la forme d'une clé (un format connu, comme une clé AWS, ou une valeur écrite en clair qui ressemble à un secret sur un nom sensible, comme `password` ou `token`), la tentative s'arrête dans l'état `held` (en attente de ta réponse), à tous les niveaux et pour tous les démarrages, automatiques compris : pas d'agent, pas de mise à jour, rien ne sort. La page, `michel fix prepare` et `michel fix status` disent combien de clés possibles, dans quels fichiers et à quelles lignes, jamais la valeur.
 
-Michel juge à la forme de ce qui est écrit, sans savoir si la clé est vraie. Une ligne qui parle d'un mot de passe sans en montrer un (un type, une variable, un appel, une phrase, un exemple comme `your-key-here`) n'arrête pas l'agent : Michel le dit dans un message, et l'agent peut la lire. Une vraie clé d'une forme inhabituelle (un mot simple, une phrase, une valeur courte) peut ne pas l'arrêter non plus. Ce jugement décide seulement de l'arrêt : Michel masque toujours autant de choses sur la page et dans la fiche.
+Michel juge à la forme de ce qui est écrit, sans savoir si la clé est vraie. Ce jugement décide seulement de l'arrêt : Michel masque toujours autant de choses sur la page et dans la fiche.
+
+Ce qui arrête l'agent :
+
+- un format connu : clé AWS, jeton GitHub, clé privée, clé secrète Stripe de production (`sk_live_`, `rk_live_`), jeton JWT, jeton Slack (`xoxb-` et ses variantes). Toujours, même si c'est un exemple écrit dans ce format (`xoxb-your-bot-token`) ;
+- une valeur d'au moins 8 caractères, sans espace, sur un nom sensible (`password`, `token`, `api_key`, `DB_PASSWORD=`…), quand elle n'est pas faite de mots simples : des lettres mêlées à des chiffres ou à des signes, ou des lettres qui ne font pas un mot (majuscules éparpillées, 6 consonnes de suite) ;
+- la même chose en PHP : `define('DB_PASSWORD', '…')`, `'key' => 'base64:…'`, le troisième argument de `new PDO(…)` écrit entre guillemets ; et un mot de passe dans une adresse de connexion ;
+- un mot par défaut suivi de chiffres, entre guillemets ou dans une adresse (`password = 'admin123'`).
+
+Ce qui n'arrête pas l'agent, même si c'est une vraie clé. Michel le dit dans un message pour une ligne qu'il a vue, et l'agent peut la lire :
+
+- une ligne qui parle d'un mot de passe sans en montrer un : un type, une variable, un appel, une phrase, une valeur qui est un modèle d'un bout à l'autre (`${X}`, `{{ x }}`, `<x>`, `%x%`, `$x`, `[x]`, `{x}`), un exemple comme `your-key-here` ;
+- une valeur sans guillemets lue comme du code : avec `(`, `)`, `;`, `<`, `>` ou un guillemet après `NOM=`, avec un crochet, une accolade, `(`, `)`, `;`, `<`, `>` ou `->` après `nom:`. Donc `DB_PASSWORD=aB3;xY9!qZ` passe ;
+- un mot simple, une phrase, des mots simples reliés par des tirets (`cheval-correct-batterie`), une valeur de moins de 8 caractères, un mot par défaut (`password = 'password'`), un mot par défaut suivi de chiffres sans guillemets (`password: admin123`) ;
+- une valeur dont une partie est exactement `test`, `fake`, `mock`, `stub` ou `dummy` (`sk_test_…`, `mock-kP9mW2xQ7vT`), ou un exemple (`your`, `example`, `xxx`…) avec seulement des mots et des nombres à côté ;
+- une valeur qui commence par `npm:`, `workspace:`, `file:`, `link:`, `^`, `~` ou un mot de validation (`required|`, `nullable|`, `string|`, `sometimes|`), une valeur qui contient `://`, un chemin fait de mots courts en minuscules (`/etc/ssl/private/server.key`), et le hash public de l'ancienne `UserFactory` de Laravel ;
+- une valeur sans nom sensible que Michel sait lire à côté : `$config['password'] = '…'`, les arguments d'un appel comme `new mysqli('hote', 'root', '…')`, un simple `key:`.
 
 Quand la tentative s'arrête, tu choisis :
 
@@ -157,7 +173,7 @@ Voici les états que tu verras sur la page : `held` (clés possibles dans le cod
 
 ## Le masquage, et sa limite
 
-Avant que ce que Michel donne lui-même arrive à l'agent (la fiche, les réponses MCP), Michel masque les secrets : clés AWS, jetons GitHub, clés PEM, valeurs de type `.env`, affectations de mot de passe, secret, jeton ou clé, mots de passe dans une adresse de connexion ; les chemins complets de ton ordinateur deviennent des chemins relatifs. Chaque secret est remplacé par un repère `[secret-<aléatoire>-N]`. La table qui relie les repères aux vraies valeurs reste dans le coffre à secrets de Michel (chiffré par Windows, ou un fichier lisible par toi seul ailleurs) et n'est jamais envoyée. Le journal d'audit note combien de valeurs ont été masquées et de quel type, jamais les valeurs.
+Avant que ce que Michel donne lui-même arrive à l'agent (la fiche, les réponses MCP), Michel masque les secrets : clés AWS, jetons GitHub, clés Stripe de production, jetons JWT, jetons Slack, clés PEM, valeurs de type `.env`, affectations de mot de passe, secret, jeton ou clé, mots de passe dans une adresse de connexion ; les chemins complets de ton ordinateur deviennent des chemins relatifs. Chaque secret est remplacé par un repère `[secret-<aléatoire>-N]`. La table qui relie les repères aux vraies valeurs reste dans le coffre à secrets de Michel (chiffré par Windows, ou un fichier lisible par toi seul ailleurs) et n'est jamais envoyée. Le journal d'audit note combien de valeurs ont été masquées et de quel type, jamais les valeurs.
 
 - La page et l'API ne remettent jamais la vraie valeur : un secret y reste affiché comme un repère.
 - Michel ne met **jamais** de repère dans un commit : une modification qui en contient un est refusée (l'agent a pu le recopier depuis la fiche). Au moment de la proposition, l'agent est prévenu et peut proposer à nouveau ; si un repère arrivait quand même à l'étape de la branche, Michel ne crée pas la branche et la tentative passe `failed` avec cette cause (c'est un refus de Michel, pas le tien). Si une correction a vraiment besoin d'une valeur secrète dans le code, tu l'ajoutes à la main.

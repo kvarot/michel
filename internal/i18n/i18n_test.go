@@ -31,6 +31,35 @@ func TestCatalogsHaveSameKeys(t *testing.T) {
 	}
 }
 
+// A hold speaks of this fix only: an earlier one may have let things out. And
+// the answer can be given on the page too; weak lines still reach Anthropic.
+func TestTheWordsOfAHold(t *testing.T) {
+	for _, k := range []string{"cli.fix.hold.head", "fix.msg.secret_hits.one", "fix.msg.secret_hits.other", "fix.msg.secret_hits_folder.one", "fix.msg.secret_hits_folder.other", "fix.cause.hold_stale", "fix.cause.hold_withdrawn"} {
+		if !strings.Contains(catalogs[FR][k], "pour cette correction, rien n'est sorti de ton ordinateur") {
+			t.Errorf("fr %s: %q", k, catalogs[FR][k])
+		}
+		if !strings.Contains(catalogs[EN][k], "for this fix, nothing") {
+			t.Errorf("en %s: %q", k, catalogs[EN][k])
+		}
+	}
+	if got := catalogs[FR]["cli.fix.continue.need_terminal"]; got != "Cette réponse se donne à la main, dans un terminal comme PowerShell, ou sur la page. Michel ne l'accepte pas d'un script." {
+		t.Errorf("fr need_terminal: %q", got)
+	}
+	if got := catalogs[EN]["cli.fix.continue.need_terminal"]; !strings.Contains(got, "or on the page") {
+		t.Errorf("en need_terminal: %q", got)
+	}
+	for _, k := range []string{"fix.msg.weak_hits.one", "fix.msg.weak_hits.other"} {
+		for _, want := range []string{"sans rien qui ressemble à une vraie clé.", "et ce qu'il lit part chez Anthropic."} {
+			if !strings.Contains(catalogs[FR][k], want) {
+				t.Errorf("fr %s lacks %q", k, want)
+			}
+		}
+		if !strings.Contains(catalogs[EN][k], "what it reads reaches Anthropic.") {
+			t.Errorf("en %s: %q", k, catalogs[EN][k])
+		}
+	}
+}
+
 var verb = regexp.MustCompile(`%(\[\d+\])?[-+# 0]*\d*(\.\d+)?[a-zA-Z%]`)
 
 func TestCatalogsUseSameFormatVerbs(t *testing.T) {

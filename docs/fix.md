@@ -81,7 +81,23 @@ The copy holds only the files of your last commit. So left out are: whatever git
 
 Before anything leaves your computer, Michel runs its secret detectors on the files of the copy. When they find what has the shape of a key (a known format, such as an AWS key, or a value written out that looks like a secret on a sensitive name, such as `password` or `token`), the attempt stops in the state `held`, at every level and for every start, automatic ones included: no agent, no update, nothing leaves. The page, `michel fix prepare` and `michel fix status` say how many possible keys, in which files and on which lines, never the value.
 
-Michel judges by the shape of what is written, without knowing whether the key is real. A line that talks about a password without showing one (a type, a variable, a call, a sentence, an example such as `your-key-here`) does not stop the agent: Michel says so in a message, and the agent can read it. A real key of an unusual shape (a plain word, a sentence, a short value) may not stop it either. This judgement only decides the stop: Michel masks as much as ever on the page and in the sheet.
+Michel judges by the shape of what is written, without knowing whether the key is real. This judgement only decides the stop: Michel masks as much as ever on the page and in the sheet.
+
+What stops the agent:
+
+- a known format: AWS key, GitHub token, private key, Stripe live secret key (`sk_live_`, `rk_live_`), JSON Web Token, Slack token (`xoxb-` and its kin). Always, even when it is an example written in that format (`xoxb-your-bot-token`);
+- a value of at least 8 characters, without a space, on a sensitive name (`password`, `token`, `api_key`, `DB_PASSWORD=`…), when it is not made of plain words: letters mixed with digits or signs, or letters that make no word (scattered capitals, 6 consonants in a row);
+- the same in PHP: `define('DB_PASSWORD', '…')`, `'key' => 'base64:…'`, the third argument of `new PDO(…)` when written in quotes; and a password in a connection address;
+- a default word with digits, in quotes or in an address (`password = 'admin123'`).
+
+What does not stop the agent, even if it is a real key. Michel says so in a message for a line it saw, and the agent can read it:
+
+- a line that talks about a password without showing one: a type, a variable, a call, a sentence, a value that is a template from end to end (`${X}`, `{{ x }}`, `<x>`, `%x%`, `$x`, `[x]`, `{x}`), an example such as `your-key-here`;
+- a value without quotes read as code: holding `(`, `)`, `;`, `<`, `>` or a quote after `NAME=`, holding a bracket, a brace, `(`, `)`, `;`, `<`, `>` or `->` after `name:`. So `DB_PASSWORD=aB3;xY9!qZ` passes;
+- a plain word, a sentence, plain words joined by dashes (`cheval-correct-batterie`), a value under 8 characters, a default word (`password = 'password'`), a default word with digits without quotes (`password: admin123`);
+- a value with a part that is exactly `test`, `fake`, `mock`, `stub` or `dummy` (`sk_test_…`, `mock-kP9mW2xQ7vT`), or a placeholder (`your`, `example`, `xxx`…) with only words and numbers beside it;
+- a value starting with `npm:`, `workspace:`, `file:`, `link:`, `^`, `~` or a validation word (`required|`, `nullable|`, `string|`, `sometimes|`), a value holding `://`, a path of short lowercase words (`/etc/ssl/private/server.key`), and the public hash of Laravel's old `UserFactory`;
+- a value with no sensitive name beside it Michel can read: `$config['password'] = '…'`, the arguments of a call such as `new mysqli('host', 'root', '…')`, a plain `key:`.
 
 When the attempt stops, you choose:
 
@@ -153,7 +169,7 @@ The states you will see on the page: `held` (possible keys in the code: Michel w
 
 ## Masking, and its limit
 
-Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks secrets: AWS keys, GitHub tokens, PEM keys, `.env`-style values, password/secret/token/key assignments, passwords in connection URLs; the absolute paths of your computer become relative paths. Each secret is replaced by a token `[secret-<random>-N]`. The table linking the tokens to the real values stays in Michel's secret store (DPAPI-encrypted on Windows, a file readable by you only elsewhere) and is never sent. The audit records how many values were masked and of which kind, never the values.
+Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks secrets: AWS keys, GitHub tokens, Stripe live keys, JSON Web Tokens, Slack tokens, PEM keys, `.env`-style values, password/secret/token/key assignments, passwords in connection URLs; the absolute paths of your computer become relative paths. Each secret is replaced by a token `[secret-<random>-N]`. The table linking the tokens to the real values stays in Michel's secret store (DPAPI-encrypted on Windows, a file readable by you only elsewhere) and is never sent. The audit records how many values were masked and of which kind, never the values.
 
 - The page and the API never unmask: a secret shows as a token there.
 - Michel **never** unmasks into a commit: a change that holds a token is refused (the agent may have copied it from the brief). At the proposal, the agent is told and can propose again; should one reach the branch step, Michel creates no branch and the attempt is `failed` with that cause (it is Michel's refusal, not yours). If a fix really needs a secret value in code, you add it by hand.

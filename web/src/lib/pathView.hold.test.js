@@ -126,10 +126,12 @@ describe('the words of a hold', () => {
     expect(translate('en', 'path.hold.more', { n: 3, more: 3 })).toBe('And in 3 other files.')
   })
   test('the page says the shape decides, and that a real key may not stop the agent', () => {
-    for (const k of ['plan.project.copy', 'path.hold.check']) {
-      expect(fr[k], k).toContain('forme inhabituelle')
-      expect(en[k], k).toContain('unusual shape')
-    }
+    expect(fr['plan.project.copy']).toContain('forme inhabituelle')
+    expect(en['plan.project.copy']).toContain('unusual shape')
+    expect(fr['path.hold.check']).toContain("Une vraie clé écrite d'une façon inhabituelle peut aussi passer sans que Michel s'arrête.")
+    expect(en['path.hold.check']).toContain('A real key written in an unusual way can also get through without Michel stopping.')
+    expect(fr['path.note.withdrawn']).toContain('Une fois les clés enlevées de ces fichiers')
+    expect(en['path.note.withdrawn']).toContain('Once the keys are out of these files')
     expect(fr['plan.project.copy']).toContain("n'arrête pas l'agent")
     expect(en['plan.project.copy']).toContain('does not stop the agent')
   })
