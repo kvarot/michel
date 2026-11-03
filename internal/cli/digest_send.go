@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/digest"
 	"github.com/kvarot/michel/internal/notify"
+	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/spf13/cobra"
 )
@@ -54,7 +56,14 @@ func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.
 	repo := digest.NewRepo(deps.Store)
 	var seen string
 	if once {
-		last, hasLast, err := repo.Last(ctx)
+		// The state the claim will be compared with is read first: whatever is saved
+		// after it makes the claim fail, so no other check can lag behind it.
+		var err error
+		if seen, err = repo.Newest(ctx, now); err != nil {
+			return digestSend{}, err
+		}
+		// Only a digest that reached somebody counts as sent today.
+		last, hasLast, err := repo.LastDelivered(ctx)
 		if err != nil {
 			return digestSend{}, err
 		}
@@ -64,9 +73,6 @@ func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.
 		}
 		if busy || (hasLast && sameDay(last.CreatedAt, deps.Now())) {
 			return digestSend{State: digestSkipped}, nil
-		}
-		if seen, err = repo.Newest(ctx); err != nil {
-			return digestSend{}, err
 		}
 	}
 	swept, err := scan.SweepStale(ctx, deps.Store.DB(), now, scan.StaleScanAfter)
@@ -85,6 +91,15 @@ func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.
 	d, err := digest.Compute(ctx, deps.Store, now, deps.Lang, opt)
 	if err != nil {
 		return digestSend{}, err
+	}
+	if once && opt.Since.IsZero() {
+		// Without a digest sent yet, the start of this window is kept: a digest that
+		// reaches nobody records no run, and the next window must not start later.
+		if _, has, err := repo.Last(ctx); err == nil && !has {
+			if err := repo.HoldStart(ctx, d.Since); err != nil {
+				return digestSend{}, err
+			}
+		}
 	}
 	run := digest.RunOf(d, now)
 	if once {
@@ -105,25 +120,30 @@ func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.
 	deliveries, err := sendChannels(ctx, cmd, deps, d)
 	if err != nil {
 		if once {
-			_ = repo.Release(settle, run.ID)
+			if rerr := repo.Release(settle, run.ID); rerr != nil {
+				slog.Error("digest: cannot give back the claim", "err", rerr)
+			}
 		}
 		return digestSend{}, err
 	}
-	delivered := false
 	for _, dl := range deliveries {
 		run.Channels = append(run.Channels, dl.ChannelResult)
-		delivered = delivered || dl.Result == notify.ResultOK
+	}
+	delivered, reminded := deliveredTo(deps, deliveries)
+	if !reminded {
+		delete(run.Summary, "deviation_reminded")
 	}
 	recorded := !once || delivered
 	runID := run.ID
 	switch {
 	case !recorded:
 		if err := repo.Release(settle, run.ID); err != nil {
-			return digestSend{}, err
+			slog.Error("digest: cannot give back the claim of a digest nobody received, the next digest waits for it to expire", "err", err)
 		}
 		runID = ""
 	case once:
-		if err := repo.Finish(settle, run.ID, run.Channels); err != nil {
+		if err := repo.Finish(settle, run.ID, run.Channels, reminded); err != nil {
+			slog.Error("digest: the digest was sent but could not be recorded as sent: it may be sent again", "err", err)
 			return digestSend{}, err
 		}
 	default:
@@ -159,4 +179,37 @@ func heldMessage(deps *Deps, deliveries int) string {
 		return deps.T("cli.digest.no_channel")
 	}
 	return deps.T("cli.digest.not_delivered")
+}
+
+// deliveredTo says whether the digest reached somebody, and whether the
+// sections about servers did. A channel limited to some projects gets no
+// server section, so when a channel without such a limit is enabled, only an
+// ok on one of those counts as delivered (else the errors of the servers would
+// be taken for told and be lost); when every channel is limited, any ok counts.
+// The weekly reminder of the settings is a server section: it counts as told
+// on an unlimited channel only.
+func deliveredTo(deps *Deps, deliveries []notify.Delivery) (delivered, reminded bool) {
+	scoped := map[string]bool{}
+	unlimited := false
+	for _, c := range deps.Policy.Notify.Channels {
+		if !c.IsEnabled() || c.Type == policy.ChannelSMS {
+			continue
+		}
+		scoped[c.Name] = len(c.Projects) > 0
+		unlimited = unlimited || len(c.Projects) == 0
+	}
+	anyOK := false
+	for _, dl := range deliveries {
+		if dl.Result != notify.ResultOK {
+			continue
+		}
+		anyOK = true
+		if !scoped[dl.Name] {
+			reminded = true
+		}
+	}
+	if unlimited {
+		return reminded, reminded
+	}
+	return anyOK, reminded
 }

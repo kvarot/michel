@@ -49,7 +49,7 @@ open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "hi
 {{- if .ServerLogs}}
 {{serverLogsTitle}}:
 {{range .ServerLogs}}  {{serverLogHead .}}
-{{range .Top}}    {{serverLogItem .}}
+{{range .Top}}    - {{serverLogItem .}}
 {{if .Text}}      {{.Text}}
 {{end}}{{end}}{{range .Gaps}}    {{serverLogGap .}}
 {{end}}{{if .Deviations}}    {{serverLogDeviations .}}

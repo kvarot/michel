@@ -20,6 +20,18 @@ const digestRetry = 15 * time.Minute
 // digestLoop is runDigestLoop; replaced in tests.
 var digestLoop = runDigestLoop
 
+// digestLogWait is how long the first look at the digest waits for the first round
+// of the log scheduler (deps.LogsReady): what was written while the computer was
+// off, and the holes in the reading, are then in the digest. A variable for tests.
+var digestLogWait = 2 * time.Minute
+
+// Test hooks of the loop: tick is called at the start of each look, waiting
+// when the loop starts to wait for the logs.
+var (
+	digestTickHook    = func() {}
+	digestWaitingHook = func() {}
+)
+
 // digestBeforeClaim, when set (tests), is called once a digest is computed and
 // before it is claimed: the point where two senders can meet.
 var digestBeforeClaim = func() {}
@@ -69,13 +81,15 @@ func digestChannels(deps *Deps) int {
 // next one covers the same period.
 func runDigestLoop(ctx context.Context, cmd *cobra.Command, deps *Deps, every time.Duration) {
 	var retryAt time.Time
+	warned := false
 	tick := func() {
+		digestTickHook()
 		now := deps.Now()
 		if digestChannels(deps) == 0 || now.Before(retryAt) {
 			return
 		}
 		repo := digest.NewRepo(deps.Store)
-		last, hasLast, err := repo.Last(ctx)
+		last, hasLast, err := repo.LastDelivered(ctx)
 		if err == nil {
 			var busy bool
 			if busy, err = repo.InFlight(ctx, now); err == nil && busy {
@@ -103,8 +117,25 @@ func runDigestLoop(ctx context.Context, cmd *cobra.Command, deps *Deps, every ti
 			slog.Warn("serve: cannot send the digest", "err", err)
 			retryAt = now.Add(digestRetry)
 		case res.State == digestHeld:
+			// Said once per incident, not at each retry; nothing of the digest in it.
+			if !warned {
+				slog.Warn("serve: the digest reached nobody, it is tried again later and nothing is lost")
+				warned = true
+			}
 			retryAt = now.Add(digestRetry)
+		default:
+			warned = false
 		}
+	}
+	if deps.LogsReady != nil {
+		digestWaitingHook()
+		wait := time.NewTimer(digestLogWait)
+		select {
+		case <-deps.LogsReady:
+		case <-wait.C:
+		case <-ctx.Done():
+		}
+		wait.Stop()
 	}
 	tick()
 	t := time.NewTicker(every)

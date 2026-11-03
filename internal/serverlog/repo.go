@@ -486,9 +486,17 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 			}
 			_, err = tx.ExecContext(ctx, `UPDATE log_signature SET status = ?, total = total + ?, last_at = ?, text_enc = COALESCE(?, text_enc) WHERE id = ?`,
 				string(newStatus), rc.Count, ts(now), text, id)
+			if err == nil && has(reopenedIDs, id) {
+				_, err = tx.ExecContext(ctx, `UPDATE log_signature SET reopened_at = ? WHERE id = ?`, ts(now), id)
+			}
 		}
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("cannot save the log records: %w", err)
+		}
+		// What the digest counts: by the time Michel read it, once.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO log_read (signature_id, read_at, count) VALUES (?,?,?)
+			ON CONFLICT (signature_id, read_at) DO UPDATE SET count = count + excluded.count`, id, ts(now), rc.Count); err != nil {
+			return nil, nil, nil, fmt.Errorf("cannot save the log counts: %w", err)
 		}
 		var before, prev int64
 		if err := tx.QueryRowContext(ctx, `SELECT count FROM log_bucket WHERE signature_id = ? AND hour = ?`, id, ts(hour)).Scan(&before); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -710,6 +718,8 @@ func (r *Repo) purgeTarget(ctx context.Context, targetID, cutoff string) error {
 	}{
 		// Counts of errors that expire, then old counts of the others.
 		{`DELETE FROM log_bucket WHERE signature_id IN (SELECT id FROM log_signature WHERE target_id = ? AND last_at < ?)`, []any{targetID, cutoff}},
+		{`DELETE FROM log_read WHERE signature_id IN (SELECT id FROM log_signature WHERE target_id = ? AND last_at < ?)`, []any{targetID, cutoff}},
+		{`DELETE FROM log_read WHERE read_at < ? AND signature_id IN (SELECT id FROM log_signature WHERE target_id = ?)`, []any{cutoff, targetID}},
 		{`DELETE FROM log_bucket WHERE hour < ? AND signature_id IN (SELECT id FROM log_signature WHERE target_id = ?)`, []any{cutoff, targetID}},
 		// Ignored errors keep their row without text; the others go.
 		{`UPDATE log_signature SET text_enc = NULL WHERE target_id = ? AND status = ? AND last_at < ?`, []any{targetID, ign, cutoff}},
@@ -735,6 +745,7 @@ func (r *Repo) EraseTarget(ctx context.Context, targetID string) error {
 	defer tx.Rollback()
 	for _, q := range []string{
 		`DELETE FROM log_bucket WHERE signature_id IN (SELECT id FROM log_signature WHERE target_id = ?)`,
+		`DELETE FROM log_read WHERE signature_id IN (SELECT id FROM log_signature WHERE target_id = ?)`,
 		`DELETE FROM log_signature WHERE target_id = ?`,
 		`DELETE FROM log_cursor WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`,
 		`DELETE FROM log_note WHERE target_id = ?`,
@@ -888,49 +899,75 @@ func (r *Repo) RecordState(ctx context.Context, n Note) error {
 	return tx.Commit()
 }
 
-// WindowError is an error that occurred since a date, for the digest.
+// WindowError is an error read in a period, for the digest.
 type WindowError struct {
 	Signature
-	// Count is how many times it was read since then.
+	// Count is how many times it was read in the period.
 	Count int64
-	// Spiked says that an hour since then reached the spike threshold.
+	// Spiked says that an hour of the period reached the spike threshold.
 	Spiked bool
+	// ReopenedAt is when it last came back after being resolved (zero if never).
+	ReopenedAt time.Time
 }
 
-// Window lists the errors of a server with occurrences since since, ignored
-// ones left out, the latest first. last_alert_at plays no part: an error
-// already told by an alert is still in the digest.
-func (r *Repo) Window(ctx context.Context, targetID string, since time.Time) ([]WindowError, error) {
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+sigCols+` FROM log_signature WHERE target_id = ? AND status <> ? ORDER BY last_at DESC, id`,
+// Window lists the errors of a server read in the period (since, until],
+// ignored ones left out, the latest first. It counts by the time Michel read
+// the errors, not by the hour written in the log, so that what is read after a
+// digest is in the next one whatever its log hour, and each reading falls in
+// exactly one period when the periods follow each other. last_alert_at plays
+// no part: an error already told by an alert is still in the digest.
+func (r *Repo) Window(ctx context.Context, targetID string, since, until time.Time) ([]WindowError, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+sigCols+`, reopened_at FROM log_signature WHERE target_id = ? AND status <> ? ORDER BY last_at DESC, id`,
 		targetID, string(StatusIgnored))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the log errors: %w", err)
 	}
-	var sigs []Signature
+	var sigs []WindowError
 	for rows.Next() {
-		g, err := scanSignature(rows)
-		if err != nil {
+		var g Signature
+		var level, status, first, last, alert, reopened string
+		if err := rows.Scan(&g.ID, &g.TargetID, &g.SourceID, &level, &g.Type, &g.Location, &g.Channel, &status, &first, &last, &alert, &g.Total, &reopened); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("cannot read the log errors: %w", err)
 		}
-		sigs = append(sigs, g)
+		g.Level, g.Status = Level(level), Status(status)
+		w := WindowError{Signature: g}
+		var perr error
+		if w.FirstAt, perr = parseTime(first); perr == nil {
+			if w.LastAt, perr = parseTime(last); perr == nil {
+				w.LastAlertAt, perr = parseTime(alert)
+			}
+		}
+		if perr == nil && reopened != "" {
+			w.ReopenedAt, perr = parseTime(reopened)
+		}
+		if perr != nil {
+			rows.Close()
+			return nil, perr
+		}
+		sigs = append(sigs, w)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return nil, fmt.Errorf("cannot read the log errors: %w", err)
 	}
 	rows.Close()
-	// One hour before the window is read too: it is what the first hour of the
-	// window is compared with.
 	from := since.UTC().Truncate(time.Hour)
 	var out []WindowError
-	for _, g := range sigs {
+	for _, w := range sigs {
+		if err := r.s.DB().QueryRowContext(ctx, `SELECT COALESCE(SUM(count), 0) FROM log_read WHERE signature_id = ? AND read_at > ? AND read_at <= ?`,
+			w.ID, ts(since), ts(until)).Scan(&w.Count); err != nil {
+			return nil, fmt.Errorf("cannot read the log counts: %w", err)
+		}
+		if w.Count == 0 {
+			continue
+		}
+		// Spikes stay by the hour of the log: an hour is compared with the one before it.
 		buckets, err := r.s.DB().QueryContext(ctx, `SELECT hour, count FROM log_bucket WHERE signature_id = ? AND hour >= ? ORDER BY hour`,
-			g.ID, ts(from.Add(-time.Hour)))
+			w.ID, ts(from.Add(-time.Hour)))
 		if err != nil {
 			return nil, fmt.Errorf("cannot read the log counts: %w", err)
 		}
-		w := WindowError{Signature: g}
 		counts := map[time.Time]int64{}
 		for buckets.Next() {
 			var hour string
@@ -952,17 +989,11 @@ func (r *Repo) Window(ctx context.Context, targetID string, since time.Time) ([]
 			return nil, fmt.Errorf("cannot read the log counts: %w", err)
 		}
 		for h, n := range counts {
-			if h.Before(from) {
-				continue
-			}
-			w.Count += n
-			if spikes(n, counts[h.Add(-time.Hour)]) {
+			if !h.Before(from) && spikes(n, counts[h.Add(-time.Hour)]) {
 				w.Spiked = true
 			}
 		}
-		if w.Count > 0 {
-			out = append(out, w)
-		}
+		out = append(out, w)
 	}
 	return out, nil
 }

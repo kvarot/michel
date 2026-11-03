@@ -41,13 +41,19 @@ func Scheduler(ctx context.Context, d Deps, every time.Duration) {
 	defer wg.Wait()
 	tick := time.NewTicker(every)
 	defer tick.Stop()
+	first := true
 	for {
 		s.maintain(ctx)
 		// Each round runs on its own: a slow server holds its own round only.
 		wg.Add(1)
+		announce := first && d.FirstRound != nil
+		first = false
 		go func() {
 			defer wg.Done()
 			s.tick(ctx)
+			if announce {
+				d.FirstRound()
+			}
 		}()
 		select {
 		case <-ctx.Done():

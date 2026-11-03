@@ -309,7 +309,17 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 	case hasLast:
 		d.Since = last.Until.UTC()
 	default:
-		d.Since = now.Add(-DefaultWindow)
+		// No digest yet: the start kept by a first digest that reached nobody,
+		// else the last 24 hours.
+		held, ok, err := NewRepo(s).HeldStart(ctx)
+		if err != nil {
+			return Digest{}, err
+		}
+		if ok {
+			d.Since = held
+		} else {
+			d.Since = now.Add(-DefaultWindow)
+		}
 	}
 	if now.Sub(d.Since) > LabelWindow {
 		d.SinceLabel = i18n.T(lang, "digest.since_label", d.Since.Format(dateLayout(lang)))
@@ -416,6 +426,10 @@ func retitle(d *Digest) {
 	lang := d.Lang
 	if d.NewTotal > 0 {
 		d.Title = i18n.N(lang, "digest.title.new", d.NewTotal, d.Assistant)
+	} else if len(d.ServerLogs) > 0 {
+		// Only the logs have something to say (a frequent error, a hole in the
+		// reading, a reminder): not "nothing new".
+		d.Title = i18n.T(lang, "digest.title.logs", d.Assistant)
 	} else {
 		d.Title = i18n.T(lang, "digest.title.nothing_new", d.Assistant)
 	}

@@ -59,6 +59,10 @@ notify:
 	}
 }
 
+// loopReady, when set by a test, is what the loop of loopRun waits for (as serve
+// makes it wait for the first round of the log scheduler).
+var loopReady <-chan struct{}
+
 // loopRun runs the digest loop of michel serve, with the clock at now, in a
 // real command (store, audit and policy wired as for serve), until done says
 // so or 20 seconds pass; it then stops the loop and waits for it to end.
@@ -66,6 +70,7 @@ func loopRun(t *testing.T, dir string, now time.Time, done func() bool) {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	deps := &Deps{Stdout: &out, Stderr: &errOut, Now: func() time.Time { return now }}
+	deps.LogsReady = loopReady
 	t.Cleanup(func() { deps.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -95,10 +100,27 @@ func loopRun(t *testing.T, dir string, now time.Time, done func() bool) {
 }
 
 // loopFor runs the loop for a while; the caller checks what it did.
-func loopFor(t *testing.T, dir string, now time.Time, d time.Duration) {
+func loopFor(t *testing.T, dir string, now time.Time, looks int) {
 	t.Helper()
-	start := time.Now()
-	loopRun(t, dir, now, func() bool { return time.Since(start) > d })
+	ticks := countTicks(t)
+	loopRun(t, dir, now, func() bool { return ticks.Load() >= int32(looks) })
+}
+
+// countTicks counts the looks of the digest loop through its test hook, so that
+// a check that nothing was sent proves the loop did look.
+func countTicks(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	var n atomic.Int32
+	old := digestTickHook
+	digestTickHook = func() { n.Add(1) }
+	t.Cleanup(func() { digestTickHook = old })
+	return &n
+}
+
+// runsAudited is true once n digests were recorded in the audit log, that is
+// once their send is over (a count of requests received is not).
+func runsAudited(t *testing.T, dir string, n int) func() bool {
+	return func() bool { return len(auditRows(t, dir, "digest.run")) >= n }
 }
 
 // tomorrowAt is a moment of the day after the real day (UTC), so that any
@@ -151,7 +173,7 @@ func TestDigestCatchesUpAfterStart(t *testing.T) {
 	}
 	writeHookCfg(t, dir, h.URL, "")
 	// serve starts at 14:00: the 08:00 digest was missed, it goes out now.
-	loopRun(t, dir, tomorrowAt(14, 0), func() bool { return h.count() > 0 })
+	loopRun(t, dir, tomorrowAt(14, 0), runsAudited(t, dir, 2))
 	if h.count() != 1 {
 		t.Fatalf("the webhook got %d digests", h.count())
 	}
@@ -168,7 +190,7 @@ func TestDigestCatchesUpAfterStart(t *testing.T) {
 	}
 	// Later the same day, nothing more.
 	before := h.count()
-	loopFor(t, dir, tomorrowAt(16, 0), 300*time.Millisecond)
+	loopFor(t, dir, tomorrowAt(16, 0), 3)
 	if h.count() != before || len(digestRuns(t, dir)) != 2 {
 		t.Errorf("a second digest left the same day: %d sends, %d runs", h.count(), len(digestRuns(t, dir)))
 	}
@@ -178,21 +200,21 @@ func TestServeDigestWaitsForTheHour(t *testing.T) {
 	dir, _ := scannedDemo(t, false)
 	h := newHookRecorder(t)
 	writeHookCfg(t, dir, h.URL, "08:00")
-	loopFor(t, dir, tomorrowAt(7, 30), 300*time.Millisecond)
+	loopFor(t, dir, tomorrowAt(7, 30), 3)
 	if h.count() != 0 || len(digestRuns(t, dir)) != 0 {
 		t.Errorf("sent before 08:00: %d sends, %d runs", h.count(), len(digestRuns(t, dir)))
 	}
 	writeHookCfg(t, dir, h.URL, "off")
-	loopFor(t, dir, tomorrowAt(15, 0), 300*time.Millisecond)
+	loopFor(t, dir, tomorrowAt(15, 0), 3)
 	if h.count() != 0 || len(digestRuns(t, dir)) != 0 {
 		t.Errorf("sent with digest_at off: %d sends, %d runs", h.count(), len(digestRuns(t, dir)))
 	}
 	writeHookCfg(t, dir, h.URL, "09:30")
-	loopFor(t, dir, tomorrowAt(9, 0), 300*time.Millisecond)
+	loopFor(t, dir, tomorrowAt(9, 0), 3)
 	if h.count() != 0 {
 		t.Errorf("sent before the hour set by the user")
 	}
-	loopRun(t, dir, tomorrowAt(9, 30), func() bool { return h.count() > 0 })
+	loopRun(t, dir, tomorrowAt(9, 30), runsAudited(t, dir, 1))
 	if h.count() != 1 {
 		t.Errorf("not sent at the hour set by the user: %d", h.count())
 	}
@@ -208,7 +230,7 @@ func TestServeDigestKeepsWindowWithoutDelivery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("notify:\n  channels: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loopFor(t, dir, time.Now(), 300*time.Millisecond)
+	loopFor(t, dir, time.Now(), 3)
 	if len(digestRuns(t, dir)) != 0 || len(auditRows(t, dir, "digest.run")) != 0 {
 		t.Fatalf("a run was recorded without any channel: %+v", digestRuns(t, dir))
 	}
@@ -228,7 +250,7 @@ func TestServeDigestKeepsWindowWithoutDelivery(t *testing.T) {
 
 	// The channel works again: the same three findings are in the digest.
 	writeHookCfg(t, dir, h.URL, "00:00")
-	loopRun(t, dir, time.Now(), func() bool { return h.count() > 0 })
+	loopRun(t, dir, time.Now(), runsAudited(t, dir, 1))
 	if h.count() != 1 {
 		t.Fatalf("webhook got %d", h.count())
 	}
@@ -452,4 +474,155 @@ func TestServeStartsAndStopsDigestLoop(t *testing.T) {
 	if started.Load() != 1 || stopped.Load() != 1 {
 		t.Errorf("after serve: started %d, stopped %d", started.Load(), stopped.Load())
 	}
+}
+
+func writeCfgText(t *testing.T, dir, text string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Finding I1: a first digest that reaches nobody does not let the window slide
+// with the clock; the elements of the first 24 hours are still in the digest
+// sent more than 24 hours later.
+func TestFirstWindowDoesNotSlideWithoutDelivery(t *testing.T) {
+	dir, _ := scannedDemo(t, false)
+	writeFailingCfg(t, dir)
+	loopRun(t, dir, time.Now(), func() bool { return len(auditRows(t, dir, "notify.send")) > 0 })
+	if runs := digestRuns(t, dir); len(runs) != 0 {
+		t.Fatalf("runs = %+v", runs)
+	}
+	h := newHookRecorder(t)
+	writeHookCfg(t, dir, h.URL, "00:00")
+	// Thirty hours on: a window of "the last 24 hours" would have lost them.
+	loopRun(t, dir, time.Now().Add(30*time.Hour), runsAudited(t, dir, 1))
+	var doc map[string]any
+	if h.count() != 1 || json.Unmarshal(h.bodies[0], &doc) != nil || doc["new_total"] != float64(3) {
+		t.Errorf("sends %d, body %s", h.count(), h.bodies)
+	}
+}
+
+// Ruling R28: with an unscoped channel enabled, only an ok on it counts, because
+// only it carries the server sections; with scoped channels alone, any ok counts.
+func TestDeliveryNeedsAnUnscopedChannelWhenThereIsOne(t *testing.T) {
+	dir, db := demoWithDB(t)
+	h := newHookRecorder(t)
+	both := "sovereignty:\n  network:\n    default_egress: deny\n    allow:\n      - {host: 127.0.0.1, purpose: notify.webhook}\n      - {host: smtp.example.org, purpose: notify.email}\n" +
+		"notify:\n  digest_at: \"00:00\"\n  channels:\n    - name: hook\n      type: webhook\n      url: " + h.URL + "/michel\n      projects: [demo]\n" +
+		"    - name: mail-perso\n      type: email\n      host: smtp.example.org\n      port: 587\n      from: michel@example.org\n      to: [me@example.org]\n      username: me\n      password_secret: smtp-perso\n"
+	writeCfgText(t, dir, both)
+	_, _, _, err := run(t, dir, "--lang", "en", "scan", "--all", "--no-analyze", "--digest", "--osv-db", db)
+	if err == nil || ExitCode(err) != 1 {
+		t.Fatalf("err = %v", err)
+	}
+	if h.count() != 1 || len(digestRuns(t, dir)) != 0 {
+		t.Errorf("the scoped channel alone was taken for a delivery: %d sends, runs %+v", h.count(), digestRuns(t, dir))
+	}
+	only := strings.Split(both, "    - name: mail-perso")[0]
+	writeCfgText(t, dir, only)
+	if _, _, _, err := run(t, dir, "--lang", "en", "scan", "--all", "--no-analyze", "--digest", "--osv-db", db); err != nil {
+		t.Fatal(err)
+	}
+	if len(digestRuns(t, dir)) != 1 {
+		t.Errorf("a digest delivered on the only (scoped) channel was not recorded: %+v", digestRuns(t, dir))
+	}
+}
+
+// A manual digest nobody received does not count as the digest of the day.
+func TestManualDigestNobodyGotDoesNotBlockTheScheduledOne(t *testing.T) {
+	dir, db := demoWithDB(t)
+	writeFailingCfg(t, dir)
+	if _, _, _, err := run(t, dir, "digest", "--send"); err == nil {
+		t.Fatal("a failing channel gave no error")
+	}
+	h := newHookRecorder(t)
+	writeHookCfg(t, dir, h.URL, "")
+	_, out, _, err := run(t, dir, "--lang", "en", "scan", "--all", "--no-analyze", "--digest", "--osv-db", db)
+	if err != nil || strings.Contains(out, "already sent") || h.count() != 1 {
+		t.Errorf("err %v, sends %d\n%s", err, h.count(), out)
+	}
+}
+
+// Ruling R26: the first look at the digest waits for the first round of the log
+// scheduler, at most digestLogWait.
+func TestDigestWaitsForTheFirstLogRound(t *testing.T) {
+	dir, _ := scannedDemo(t, false)
+	writeFailingCfg(t, dir)
+	waiting, ticked := make(chan struct{}, 1), make(chan struct{}, 100)
+	var ticks atomic.Int32
+	oldW, oldT := digestWaitingHook, digestTickHook
+	digestWaitingHook = func() { waiting <- struct{}{} }
+	digestTickHook = func() { ticks.Add(1); ticked <- struct{}{} }
+	t.Cleanup(func() { digestWaitingHook, digestTickHook, loopReady = oldW, oldT, nil })
+
+	ready := make(chan struct{})
+	loopReady = ready
+	var checked sync.WaitGroup
+	checked.Add(1)
+	go func() {
+		defer checked.Done()
+		select {
+		case <-waiting:
+		case <-time.After(10 * time.Second):
+			t.Error("the loop did not wait for the logs")
+			close(ready)
+			return
+		}
+		// The loop is blocked on the logs: no look has been made.
+		if n := ticks.Load(); n != 0 {
+			t.Errorf("%d looks before the first log round", n)
+		}
+		close(ready)
+	}()
+	first := true
+	loopRun(t, dir, time.Now(), func() bool {
+		select {
+		case <-ticked:
+			first = false
+			return true
+		default:
+			return false
+		}
+	})
+	checked.Wait()
+	if first {
+		t.Error("no look after the first log round")
+	}
+
+	// The wait is bounded: the logs never answer, the digest is looked at anyway.
+	oldWait := digestLogWait
+	digestLogWait = 20 * time.Millisecond
+	t.Cleanup(func() { digestLogWait = oldWait })
+	loopReady = make(chan struct{})
+	for len(ticked) > 0 {
+		<-ticked
+	}
+	got := false
+	loopRun(t, dir, time.Now(), func() bool {
+		select {
+		case <-ticked:
+			got = true
+			return true
+		default:
+			return false
+		}
+	})
+	if !got {
+		t.Error("the wait for the logs is not bounded")
+	}
+}
+
+// demoWithDB is a data folder with the project demo scanned, and the folder of
+// the test databases (for the commands that scan again).
+func demoWithDB(t *testing.T) (dir, db string) {
+	t.Helper()
+	dir, db = t.TempDir(), buildTestOSVDB(t)
+	if _, _, _, err := run(t, dir, "project", "add", copyProject(t, "project-a"), "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "scan", "--project", "demo", "--no-analyze", "--osv-db", db); err != nil {
+		t.Fatal(err)
+	}
+	return dir, db
 }

@@ -28,6 +28,9 @@ const (
 	// AlertSpike: errors that jumped to ten times the hour before (and at least
 	// 100 occurrences). Count is the occurrences of that hour.
 	AlertSpike AlertKind = "spike"
+	// AlertFrequent: an error read very often in the period of a digest (it
+	// is not new, and did not spike). Only the digest uses it.
+	AlertFrequent AlertKind = "frequent"
 	// AlertVolume: a log so big that the read cap was reached. One item per
 	// source, named by SourceID; Count is the bytes left unread. It follows the
 	// route of the error level.
@@ -97,7 +100,12 @@ type Deps struct {
 	// Alert is told about each alert to send now; nil tells no one (and an
 	// error is then not marked as told).
 	Alert func(context.Context, AlertInput)
-	Now   func() time.Time
+	// FirstRound, when set, is called once the first round of the scheduler is
+	// over (every server due was read or failed). The digest of michel serve
+	// waits for it, so that what was written while the computer was off is in
+	// the first digest, holes included.
+	FirstRound func()
+	Now        func() time.Time
 }
 
 func (d Deps) now() time.Time {
@@ -286,7 +294,7 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 		}
 		return err
 	}
-	fresh, reopened, spiked, err := p.d.Repo.Apply(ctx, src, out.Records, p.now)
+	fresh, reopened, spiked, err := p.d.Repo.Apply(ctx, src, out.Records, p.d.now())
 	if err != nil {
 		return err
 	}

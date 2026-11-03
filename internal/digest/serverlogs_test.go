@@ -3,6 +3,7 @@ package digest
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -132,11 +133,11 @@ func TestDigestListsNewAndFrequentErrors(t *testing.T) {
 		}
 	}
 	// The most severe first, then the most frequent.
-	want := []string{"reopened:BackException", "spike:SpikeException", "new:FreshException"}
+	want := []string{"reopened:BackException", "new:FreshException", "spike:SpikeException"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("top = %v, want %v", got, want)
 	}
-	if s.Top[0].Count != 4 || s.Top[1].Count != 305 || s.Top[2].Count != 37 {
+	if s.Top[0].Count != 4 || s.Top[1].Count != 37 || s.Top[2].Count != 305 {
 		t.Errorf("counts = %+v", s.Top)
 	}
 	text, err := RenderText(d)
@@ -224,6 +225,9 @@ func TestDigestShowsReadGap(t *testing.T) {
 	fr, _ := RenderText(l.compute(i18n.FR, Options{}))
 	if !strings.Contains(fr, "entre le 22/10/2026 à 22h30 UTC et le 23/10/2026 à 05h30 UTC") {
 		t.Errorf("fr:\n%s", fr)
+	}
+	if page, _ := RenderHTML(d); !strings.Contains(page, "<li>Michel could not read the logs between 2026-10-22 22:30 UTC") {
+		t.Errorf("html:\n%s", page)
 	}
 	// Past the window it is gone.
 	d2, err := Compute(ctx, l.st, now.Add(30*time.Hour), i18n.EN, Options{Since: now})
@@ -318,6 +322,9 @@ func TestDeviationRemindedWeekly(t *testing.T) {
 	if !strings.Contains(fr, "Rappel de la semaine") {
 		t.Errorf("fr:\n%s", fr)
 	}
+	if page, _ := RenderHTML(d); !strings.Contains(page, "<li>Reminder, once a week") {
+		t.Errorf("html:\n%s", page)
+	}
 	// The run that carried it is the mark: three days later nothing, a week
 	// later it comes back.
 	run := RunOf(d, now)
@@ -402,5 +409,138 @@ func TestInactiveServerIsNotInTheDigest(t *testing.T) {
 	}
 	if d := l.compute(i18n.EN, Options{}); len(d.ServerLogs) != 0 {
 		t.Errorf("sections = %+v", d.ServerLogs)
+	}
+}
+
+// Reproduction of finding C1: an error read after the last digest is told in
+// the next one even when the hour written in its log is older than that digest.
+func TestDigestCountsErrorsByReadTime(t *testing.T) {
+	l := newLogFixture(t, target.EnvProd)
+	ctx := context.Background()
+	if err := NewRepo(l.st).Save(ctx, Run{Since: now.Add(-25 * time.Hour), Until: now.Add(-time.Hour), Lang: i18n.EN, CreatedAt: now.Add(-time.Hour),
+		Channels: []ChannelResult{{Name: "hook", Type: "webhook", Result: "ok"}}}); err != nil {
+		t.Fatal(err)
+	}
+	// Written five hours ago, read half an hour ago: after the digest.
+	r := serverlog.Record{Level: serverlog.LevelError, Type: "LateException", Location: "Demo.php:42", Hour: now.Add(-5 * time.Hour), Count: 7}
+	if _, _, _, err := l.repo.Apply(ctx, l.src, []serverlog.Record{r}, now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	_, s := l.logSection(i18n.EN)
+	if s.New != 1 || len(s.Top) != 1 || s.Top[0].Type != "LateException" || s.Top[0].Count != 7 {
+		t.Fatalf("section = %+v", s)
+	}
+}
+
+// Each reading falls in exactly one of two digests that follow each other,
+// the boundary included.
+func TestDigestCountsEachReadingOnce(t *testing.T) {
+	l := newLogFixture(t, target.EnvProd)
+	ctx := context.Background()
+	boundary := now.Add(-time.Hour)
+	read := func(typ string, at time.Time) {
+		r := serverlog.Record{Level: serverlog.LevelError, Type: typ, Location: "Demo.php:42", Hour: boundary.Truncate(time.Hour), Count: 1}
+		if _, _, _, err := l.repo.Apply(ctx, l.src, []serverlog.Record{r}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read("BeforeException", boundary.Add(-2*time.Second))
+	read("OnTheLineException", boundary)
+	read("AfterException", boundary.Add(2*time.Second))
+	types := func(d Digest) string {
+		var out []string
+		for _, s := range d.ServerLogs {
+			for _, it := range s.Top {
+				out = append(out, it.Type)
+			}
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+	first, err := Compute(ctx, l.st, boundary, i18n.EN, Options{Since: boundary.Add(-24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Compute(ctx, l.st, now, i18n.EN, Options{Since: boundary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := types(first), types(second)
+	for _, typ := range []string{"BeforeException", "OnTheLineException", "AfterException"} {
+		if strings.Contains(a, typ) == strings.Contains(b, typ) {
+			t.Errorf("%s is in %q and %q: it must be in exactly one", typ, a, b)
+		}
+	}
+}
+
+// Finding I2: an error back three days ago and still coming is not told as
+// back again in today's digest.
+func TestReopenedIsToldOnceInTheWindowItReturned(t *testing.T) {
+	l := newLogFixture(t, target.EnvProd)
+	ctx := context.Background()
+	l.apply("BackException", serverlog.LevelError, 2, now.Add(-10*24*time.Hour), "")
+	if err := l.repo.SetStatus(ctx, l.sig("BackException").ID, serverlog.StatusResolved); err != nil {
+		t.Fatal(err)
+	}
+	l.apply("BackException", serverlog.LevelError, 4, now.Add(-3*24*time.Hour), "")
+	l.apply("BackException", serverlog.LevelError, 4, now.Add(-time.Hour), "")
+	d := l.compute(i18n.EN, Options{})
+	if len(d.ServerLogs) != 0 || d.NewTotal != 0 || !strings.Contains(d.Title, "nothing new") {
+		t.Fatalf("told again: %+v total %d title %q", d.ServerLogs, d.NewTotal, d.Title)
+	}
+	// In the window it came back, it is told.
+	d, err := Compute(ctx, l.st, now.Add(-2*24*time.Hour), i18n.EN, Options{Since: now.Add(-4 * 24 * time.Hour)})
+	if err != nil || len(d.ServerLogs) != 1 || d.ServerLogs[0].Reopened != 1 {
+		t.Errorf("window of the return: %v %+v", err, d.ServerLogs)
+	}
+}
+
+// Ruling R27: the most frequent errors of the window are listed, not only
+// the ones that spiked; new and back ones come first; only those count as new.
+func TestDigestListsSteadyFrequentErrors(t *testing.T) {
+	l := newLogFixture(t, target.EnvProd)
+	ctx := context.Background()
+	l.apply("SteadyException", serverlog.LevelError, 1, now.Add(-10*24*time.Hour), "")
+	for h := 1; h <= 3; h++ {
+		r := serverlog.Record{Level: serverlog.LevelError, Type: "SteadyException", Location: "Demo.php:42", Hour: now.Add(-time.Duration(h) * time.Hour).Truncate(time.Hour), Count: 90}
+		if _, _, _, err := l.repo.Apply(ctx, l.src, []serverlog.Record{r}, now.Add(-time.Duration(h)*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l.apply("QuietException", serverlog.LevelError, 3, now.Add(-10*24*time.Hour), "")
+	l.apply("QuietException", serverlog.LevelError, 3, now.Add(-2*time.Hour), "")
+	l.apply("IgnoredBusyException", serverlog.LevelError, 1, now.Add(-10*24*time.Hour), "")
+	l.apply("IgnoredBusyException", serverlog.LevelError, 500, now.Add(-2*time.Hour), "")
+	if err := l.repo.SetStatus(ctx, l.sig("IgnoredBusyException").ID, serverlog.StatusIgnored); err != nil {
+		t.Fatal(err)
+	}
+	l.apply("FreshException", serverlog.LevelWarning, 1, now.Add(-time.Hour), "")
+	l.apply("NewException", serverlog.LevelError, 2, now.Add(-time.Hour), "")
+	d, s := l.logSection(i18n.EN)
+	var got []string
+	for _, it := range s.Top {
+		got = append(got, string(it.Kind)+":"+it.Type)
+	}
+	if strings.Join(got, ",") != "new:NewException,frequent:SteadyException" {
+		t.Fatalf("top = %v", got)
+	}
+	if s.Top[1].Count != 270 || d.NewTotal != 1 || s.New != 1 {
+		t.Errorf("count %d, new total %d, new %d", s.Top[1].Count, d.NewTotal, s.New)
+	}
+	text, _ := RenderText(d)
+	if !strings.Contains(text, "- SteadyException, Demo.php:42, 270 times (often)") {
+		t.Errorf("text:\n%s", text)
+	}
+	// Only a frequent error: not "nothing new".
+	if err := l.repo.SetStatus(ctx, l.sig("NewException").ID, serverlog.StatusIgnored); err != nil {
+		t.Fatal(err)
+	}
+	d, _ = l.logSection(i18n.EN)
+	if strings.Contains(d.Title, "nothing new") || d.Word != "" {
+		t.Errorf("title %q word %q", d.Title, d.Word)
+	}
+	page, _ := RenderHTML(d)
+	if strings.Contains(page, "<li>- ") {
+		t.Errorf("html has a text bullet:\n%s", page)
 	}
 }

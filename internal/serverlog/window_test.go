@@ -59,7 +59,7 @@ func TestWindowCountsWhatHappenedSince(t *testing.T) {
 		}
 	}
 
-	got, err := e.r.Window(ctx, e.tgt.ID, since)
+	got, err := e.r.Window(ctx, e.tgt.ID, since, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestWindowSpikeBeforeTheWindowIsNotASpike(t *testing.T) {
 	if _, _, _, err := e.r.Apply(ctx, e.src, []Record{r}, t0.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := e.r.Window(ctx, e.tgt.ID, t0.Add(-24*time.Hour))
+	got, err := e.r.Window(ctx, e.tgt.ID, t0.Add(-24*time.Hour), t0)
 	if err != nil || len(got) != 1 || got[0].Spiked || got[0].Count != 6 {
 		t.Errorf("window = %+v, %v", got, err)
 	}

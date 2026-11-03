@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kvarot/michel/internal/api"
@@ -186,10 +187,14 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			// Alerts go out on the notify channels; the digest carries the same errors.
 			logRepo := serverlog.NewRepo(deps.Store)
 			logDone := make(chan struct{})
+			firstRound := make(chan struct{})
+			var firstOnce sync.Once
+			deps.LogsReady = firstRound
 			go func() {
 				defer close(logDone)
 				runLogScheduler(schedCtx, serverlog.Deps{Repo: logRepo, Targets: cd.Repo, Audit: deps.Audit,
-					SSH: cd.SSH, Alert: serverLogAlert(cmd, deps, logRepo), Now: deps.Now}, serverLogTick)
+					SSH: cd.SSH, Alert: serverLogAlert(cmd, deps, logRepo), Now: deps.Now,
+					FirstRound: func() { firstOnce.Do(func() { close(firstRound) }) }}, serverLogTick)
 			}()
 			// The daily digest (08:00 by default) goes out from here too, on the same
 			// record as the scheduled task: one digest a day, whoever sends it.

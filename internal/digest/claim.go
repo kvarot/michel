@@ -27,8 +27,13 @@ const pendingRoom = 20
 func (r Run) Pending() bool { return r.Summary["pending"] == 1 }
 
 // Newest returns the id of the newest row, pending claims included ("" when
-// there is none). It is what Claim compares with.
-func (r *Repo) Newest(ctx context.Context) (string, error) {
+// there is none). It is what Claim compares with. It first removes the claims
+// left by a process that died (older than PendingTTL at now): they would pile
+// up and hide the last digest.
+func (r *Repo) Newest(ctx context.Context, now time.Time) (string, error) {
+	if _, err := r.s.DB().ExecContext(ctx, `DELETE FROM digest_run WHERE created_at < ? AND summary LIKE '%"pending":1%'`, timeText(now.Add(-PendingTTL))); err != nil {
+		return "", fmt.Errorf("cannot clean the digest runs: %w", err)
+	}
 	var id string
 	err := r.s.DB().QueryRowContext(ctx, `SELECT COALESCE((SELECT id FROM digest_run ORDER BY created_at DESC, id DESC LIMIT 1), '')`).Scan(&id)
 	if err != nil {
@@ -39,7 +44,10 @@ func (r *Repo) Newest(ctx context.Context) (string, error) {
 
 // Claim saves run as a pending claim, unless another run was saved since the
 // caller read Newest (seen). Of two processes that send at once, one wins: the
-// test and the insert are one statement, which the database runs alone.
+// test and the insert are one statement. SQLite runs a statement alone, so this
+// is safe there. On PostgreSQL two such statements can both pass the test: the
+// claim would then need a unique key (for example one row per local day) to
+// make the second insert fail.
 func (r *Repo) Claim(ctx context.Context, run Run, seen string) (bool, error) {
 	if run.ID == "" {
 		run.ID = ulid.Make().String()
@@ -69,7 +77,9 @@ func (r *Repo) Claim(ctx context.Context, run Run, seen string) (bool, error) {
 }
 
 // Finish turns a claim into a sent digest and records what happened on its channels.
-func (r *Repo) Finish(ctx context.Context, id string, channels []ChannelResult) error {
+// reminded says whether the weekly reminder of the settings reached somebody:
+// if not, the run does not carry the mark and the reminder comes again.
+func (r *Repo) Finish(ctx context.Context, id string, channels []ChannelResult, reminded bool) error {
 	var sm string
 	if err := r.s.DB().QueryRowContext(ctx, `SELECT summary FROM digest_run WHERE id = ?`, id).Scan(&sm); err != nil {
 		return fmt.Errorf("cannot read the digest run: %w", err)
@@ -77,6 +87,9 @@ func (r *Repo) Finish(ctx context.Context, id string, channels []ChannelResult) 
 	summary := map[string]int{}
 	_ = json.Unmarshal([]byte(sm), &summary)
 	delete(summary, "pending")
+	if !reminded {
+		delete(summary, deviationKey)
+	}
 	if channels == nil {
 		channels = []ChannelResult{}
 	}
@@ -108,4 +121,57 @@ func (r *Repo) InFlight(ctx context.Context, now time.Time) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// Delivered says whether the run reached somebody: a channel answered ok.
+func (r Run) Delivered() bool {
+	for _, c := range r.Channels {
+		if c.Result == "ok" {
+			return true
+		}
+	}
+	return false
+}
+
+// LastDelivered returns the last digest that reached somebody (a manual one
+// that nobody received does not count): the "already sent today" test of the
+// loop and of scan --digest rests on it.
+func (r *Repo) LastDelivered(ctx context.Context) (Run, bool, error) {
+	runs, err := r.List(ctx, 60)
+	if err != nil {
+		return Run{}, false, err
+	}
+	for _, run := range runs {
+		if run.Delivered() {
+			return run, true, nil
+		}
+	}
+	return Run{}, false, nil
+}
+
+// firstStartID is the key of the only row of digest_start.
+const firstStartID = "first"
+
+// HoldStart keeps since as the start of the first digest, unless one is kept.
+// A first digest that reaches nobody records no run; without this the window
+// would start 24 hours before each new attempt and the oldest elements would
+// slip out of it.
+func (r *Repo) HoldStart(ctx context.Context, since time.Time) error {
+	if _, err := r.s.DB().ExecContext(ctx, `INSERT INTO digest_start (id, since) VALUES (?, ?) ON CONFLICT (id) DO NOTHING`, firstStartID, timeText(since)); err != nil {
+		return fmt.Errorf("cannot keep the start of the first digest: %w", err)
+	}
+	return nil
+}
+
+// HeldStart returns the start kept by HoldStart.
+func (r *Repo) HeldStart(ctx context.Context) (time.Time, bool, error) {
+	var s string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT COALESCE((SELECT since FROM digest_start WHERE id = ?), '')`, firstStartID).Scan(&s)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("cannot read the start of the first digest: %w", err)
+	}
+	if s == "" {
+		return time.Time{}, false, nil
+	}
+	return parseTime(s), true, nil
 }

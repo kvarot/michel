@@ -16,6 +16,9 @@ import (
 // MaxLogTop is the most errors listed for one server; the counters say the rest.
 const MaxLogTop = 5
 
+// LogReadLag is how far back the period of the log errors is shifted (see serverLogs).
+const LogReadLag = 5 * time.Second
+
 // DeviationReminder is how often the digest recalls that the log settings of a
 // server are not the recommended ones.
 const DeviationReminder = 7 * 24 * time.Hour
@@ -88,6 +91,10 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 		return nil, err
 	}
 	repo := serverlog.NewRepo(c.s)
+	// The period is counted by the time of reading, shifted by LogReadLag so that a
+	// pass that is still saving its reading when the digest is computed falls in
+	// the next period, not in none.
+	since, until := c.since.Add(-LogReadLag), c.now.Add(-LogReadLag)
 	var out []ServerLogDigest
 	for _, t := range targets {
 		if !t.Active {
@@ -98,7 +105,7 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 			return nil, err
 		}
 		sl := ServerLogDigest{Name: scan.SanitizeText(t.Name)}
-		errs, err := repo.Window(ctx, t.ID, c.since)
+		errs, err := repo.Window(ctx, t.ID, since, until)
 		if err != nil {
 			return nil, err
 		}
@@ -106,6 +113,8 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 			item  serverlog.AlertItem
 			id    string
 			level int
+			// told first: new and back, before the frequent ones
+			news bool
 		}
 		var list []entry
 		for _, w := range errs {
@@ -114,22 +123,29 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 			}
 			var kind serverlog.AlertKind
 			switch {
-			case w.FirstAt.After(c.since):
+			case w.FirstAt.After(since) && !w.FirstAt.After(until):
 				kind = serverlog.AlertNew
 				sl.New++
-			case w.Status == serverlog.StatusReopened:
+			// Back only if it came back in the period: an error that came back days
+			// ago and keeps coming is not told as back again.
+			case w.Status == serverlog.StatusReopened && w.ReopenedAt.After(since) && !w.ReopenedAt.After(until):
 				kind = serverlog.AlertReopened
 				sl.Reopened++
 			case w.Spiked:
 				kind = serverlog.AlertSpike
+			case w.Count >= serverlog.FrequentMin:
+				kind = serverlog.AlertFrequent
 			default:
 				continue
 			}
-			list = append(list, entry{id: w.ID, level: levelRank(w.Level), item: serverlog.AlertItem{Kind: kind, Level: w.Level,
+			list = append(list, entry{id: w.ID, level: levelRank(w.Level), news: kind == serverlog.AlertNew || kind == serverlog.AlertReopened, item: serverlog.AlertItem{Kind: kind, Level: w.Level,
 				Type: scan.SanitizeText(w.Type), Location: scan.SanitizeText(w.Location), Count: w.Count}})
 		}
 		sort.SliceStable(list, func(i, j int) bool {
 			a, b := list[i], list[j]
+			if a.news != b.news {
+				return a.news
+			}
 			if a.level != b.level {
 				return a.level < b.level
 			}
@@ -214,7 +230,7 @@ func serverLogHead(lang i18n.Lang, s ServerLogDigest) string {
 }
 
 // serverLogItem is one error of the list: its type, where, how many times and
-// why it is told. The source of a log is never shown.
+// why it is told. No dash: the template adds the bullet. The source of a log is never shown.
 func serverLogItem(lang i18n.Lang, it serverlog.AlertItem) string {
 	label := scan.SanitizeText(it.Type)
 	if loc := scan.SanitizeText(it.Location); loc != "" {
@@ -230,7 +246,7 @@ func serverLogItem(lang i18n.Lang, it serverlog.AlertItem) string {
 	if it.Count > 0 {
 		line = i18n.N(lang, "notify.log.times", int(it.Count), label)
 	}
-	return "- " + line + " (" + i18n.T(lang, "notify.log.why."+string(it.Kind)) + ")"
+	return line + " (" + i18n.T(lang, "notify.log.why."+string(it.Kind)) + ")"
 }
 
 // serverLogGap says from when to when the logs were not read.
