@@ -304,7 +304,7 @@ func TestFileSwappedOrTruncatedBetweenReads(t *testing.T) {
 		t.Fatalf("truncated: %+v", out)
 	}
 
-	// A folder where the file was: unseen, nothing read.
+	// A file deleted, then a folder put in its place: unseen, nothing read.
 	gone := filepath.Join(dir, "gone.log")
 	appendTo(t, gone, readLine)
 	gsrc := Source{ID: "S3", Path: shPath(gone), Format: FormatPHP}
@@ -317,20 +317,36 @@ func TestFileSwappedOrTruncatedBetweenReads(t *testing.T) {
 	if len(out.Unseen) != 1 || len(out.Files) != 0 || len(out.Records) != 0 || len(next) != 0 {
 		t.Fatalf("deleted: %+v %+v", out, next)
 	}
-	// A symbolic link put in its place: unseen, the target is not read.
+	if err := os.Mkdir(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, next = readSrc(t, h, gsrc, gsaved, FilterOptions{})
+	if len(out.Unseen) != 1 || len(out.Files) != 0 || len(out.Records) != 0 || len(next) != 0 {
+		t.Fatalf("folder: %+v %+v", out, next)
+	}
+}
+
+// A symbolic link put where the file was is unseen: the target is not read
+// (spec § 4). Skipped where the machine cannot make a link (Windows without the
+// privilege); the check was made on Linux with the generated script.
+func TestSymlinkInPlaceOfTheFileIsUnseen(t *testing.T) {
+	h := plainHost(t)
+	dir := t.TempDir()
 	secret := filepath.Join(dir, "elsewhere.log")
 	appendTo(t, secret, readLine+readLine)
-	if err := os.Symlink(secret, gone); err != nil {
-		t.Logf("no symbolic link on this machine, the link case is not checked: %v", err)
-		return
+	link := filepath.Join(dir, "link.log")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("no symbolic link on this machine: %v", err)
 	}
-	if info, err := os.Lstat(gone); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Log("the link is not a real link here, the link case is not checked")
-		return
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Skip("the link is not a real link here")
 	}
-	out, _ = readSrc(t, h, gsrc, gsaved, FilterOptions{})
-	if len(out.Unseen) != 1 || len(out.Records) != 0 || len(out.Files) != 0 {
-		t.Fatalf("link: %+v", out)
+	src := Source{ID: "S3", Path: shPath(link), Format: FormatPHP}
+	for _, cs := range [][]Cursor{nil, {{SourceID: "S3", File: src.Path, FileID: "1", Offset: 0}}} {
+		out, _, err := Read(context.Background(), h.client, src, cs, FilterOptions{}, 30*time.Second, readNow)
+		if err != nil || len(out.Unseen) != 1 || len(out.Records) != 0 || len(out.Files) != 0 {
+			t.Fatalf("link: %+v %v", out, err)
+		}
 	}
 }
 
@@ -376,6 +392,13 @@ func TestWildcardCapIsReported(t *testing.T) {
 	out, _ := readSrc(t, h, src, saved, FilterOptions{})
 	if len(out.Files) != 50 || !out.TooManyFiles || total(out) != 50 {
 		t.Fatalf("51 files: %d read, too many=%v, count=%d", len(out.Files), out.TooManyFiles, total(out))
+	}
+	// The first name in glob order is the one left out: the dated files that
+	// matter are the newest.
+	for _, f := range out.Files {
+		if strings.HasSuffix(f.File, "app-00.log") {
+			t.Errorf("the oldest name was read: %s", f.File)
+		}
 	}
 }
 
@@ -561,5 +584,70 @@ func TestFileStateKeepsThePathOutOfJSON(t *testing.T) {
 	}
 	if strings.Contains(string(b), "someone") || strings.Contains(string(b), "app.log") {
 		t.Errorf("the path is in the JSON: %s", b)
+	}
+}
+
+// The placeholder of a wildcard source must still be a path Script accepts, and
+// must survive a round trip through the database: the next read builds a script
+// from what Repo gives back.
+func TestPlaceholderCursorSurvivesTheRepoForAWildcard(t *testing.T) {
+	h := plainHost(t)
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	for _, glob := range []string{"/app-*.log", "/app-????.log", "/one.log"} {
+		t.Run(glob, func(t *testing.T) {
+			dir := t.TempDir()
+			src, err := e.r.AddSource(ctx, Source{TargetID: e.tgt.ID, Path: shPath(dir) + glob, Format: FormatPHP, Active: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Activation with no file: only a placeholder is left.
+			out, next, err := Read(ctx, h.client, src, nil, FilterOptions{}, 30*time.Second, readNow)
+			if err != nil || len(out.Unseen) != 1 || len(next) != 1 {
+				t.Fatalf("activation: out=%+v next=%+v err=%v", out, next, err)
+			}
+			if err := e.r.SaveCursors(ctx, next); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := e.r.Cursors(ctx, src.ID)
+			if err != nil || len(stored) != 1 {
+				t.Fatalf("stored: %+v %v", stored, err)
+			}
+			// Still no file: the script is built from the stored placeholder.
+			if _, _, err := Read(ctx, h.client, src, stored, FilterOptions{}, 30*time.Second, readNow); err != nil {
+				t.Fatalf("read with the stored placeholder: %v", err)
+			}
+			// The file shows up: read from its start, never the placeholder's.
+			name := strings.NewReplacer("*", "2026", "?", "7").Replace(glob[1:])
+			appendTo(t, filepath.Join(dir, name), readLine+readLine)
+			out, next, err = Read(ctx, h.client, src, stored, FilterOptions{}, 30*time.Second, readNow)
+			if err != nil || total(out) != 2 || len(next) != 1 {
+				t.Fatalf("file appeared: out=%+v next=%+v err=%v", out, next, err)
+			}
+			for _, c := range next {
+				if strings.HasSuffix(c.File, "/") {
+					t.Errorf("the placeholder came back as a position: %+v", c)
+				}
+			}
+			// Try uses the same placeholder.
+			if _, err := Try(ctx, h.client, src, FilterOptions{}, 30*time.Second, readNow); err != nil {
+				t.Fatalf("Try: %v", err)
+			}
+		})
+	}
+}
+
+// Decision: a first read that finds only files it cannot read leaves a
+// placeholder like an empty one. The file is read from its start once it is
+// readable (the cap bounds how much history that is).
+func TestFirstReadOfOnlyUnreadableFilesLeavesAPlaceholder(t *testing.T) {
+	h := plainHost(t)
+	p := filepath.Join(t.TempDir(), "secret.log")
+	appendTo(t, p, readLine)
+	denyRead(t, p)
+	src := Source{ID: "S1", Path: shPath(p), Format: FormatPHP}
+	out, next, err := Read(context.Background(), h.client, src, nil, FilterOptions{}, 30*time.Second, readNow)
+	if err != nil || len(out.Unseen) != 1 || len(next) != 1 || !strings.HasSuffix(next[0].File, "/") {
+		t.Fatalf("out=%+v next=%+v err=%v", out, next, err)
 	}
 }

@@ -58,10 +58,13 @@ func Try(ctx context.Context, c *sshx.Client, src Source, o FilterOptions, timeo
 
 // placeholderCursor says that the source was activated, without naming a file:
 // its path ends with a slash, which no file path does (ValidatePath refuses a
-// folder), so it matches nothing in the filter. Any cursor at all makes the
-// next read take a file for one that appeared since.
+// folder), so it matches nothing in the filter. The wildcards of the source are
+// replaced, since a position names a plain path (Script refuses `*` and `?`
+// there). Any cursor at all makes the next read take a file for one that
+// appeared since.
 func placeholderCursor(src Source, now time.Time) Cursor {
-	return Cursor{SourceID: src.ID, File: src.Path + "/", ReadAt: now}
+	plain := strings.NewReplacer("*", "_", "?", "_").Replace(src.Path)
+	return Cursor{SourceID: src.ID, File: plain + "/", ReadAt: now}
 }
 
 func execute(ctx context.Context, c *sshx.Client, src Source, cursors []Cursor, o FilterOptions, timeout time.Duration, now time.Time) (Output, error) {
