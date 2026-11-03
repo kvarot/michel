@@ -100,3 +100,10 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 9 fix 2: 9915d1c. Task 9: complete. Left: `approval_*` says "sur ce serveur" for a preprod's settings; `servers.unknown.body_preprod` wording.
 - Task 10: d802e69, review 1 important 3 minor, fix 57944dd: zero rows is not a read. A server without `ss` stays unread with a permanent note, to tell Kévin. Task 10: complete.
 - Task 11: dispatched, BASE 57944dd.
+- Task 11: 4434d02, review 3 important 3 minor. Fix dispatched.
+- Ruling R47: a closed exposure is never "faille corrigée" nor "Vérifiée": digest count `NoLongerOpen`, Task 13's last step reads "Michel ne le voit plus ouvert à tous" — from inside a port can move or a service restart; overrides the brief's "servers.go ne change pas" and R2's exposure case — costs one more digest line.
+- Ruling R48: "Clean" texts no longer say nothing is open; they say no flaw waiting — a server with a kept exposure or an unknown port could read "Rien n'est ouvert" — costs a less comforting word.
+- Kévin: "je te donne les autorisation, agit en autonomie". Read as yes to the recommendation on keys found in code.
+- Ruling R49: when `SecretHits` is not empty, the agent does not start: the attempt waits for an explicit yes, no automatic start at any level; new Task 8b — R42's question, recommended, authorised in general terms — costs one more click and a waiting attempt at levels 2 and 3 until answered.
+- Task 11 fix: 58c03a0. Task 11: complete. For Task 13: `resolved.exposure` wording.
+- Task 8b: dispatched, BASE 58c03a0.
