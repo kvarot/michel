@@ -298,7 +298,7 @@ export function buildTodo({ digest, attempts, servers, details, findings, lang, 
   if (!out.length) {
     const looked = counted((d.projects || []).length, active.length, t)
     const busy = unseen.some((u) => u.key === 'in_progress')
-    return { head: t(busy ? 'todo.head.checking' : 'todo.head.none'), sub: !unseen.length && looked ? t('todo.sub.looked', { what: looked }) : '', lines: out, unseen }
+    return { head: t(busy ? 'todo.head.checking' : unseen.length ? 'todo.head.unseen' : 'todo.head.none'), sub: !unseen.length && looked ? t('todo.sub.looked', { what: looked }) : '', lines: out, unseen }
   }
   return { head: t('todo.head', { n: out.length }), sub: t('todo.sub.lines', { what: counted(projects, touched, t) }), lines: out, unseen }
 }

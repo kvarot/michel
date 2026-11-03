@@ -445,7 +445,7 @@ describe('a server without open flaws', () => {
     const r = build({ servers: [server('a')], details: {} })
     expect(r.lines).toEqual([])
     expect(r.unseen.map((u) => u.key)).toEqual(['server_not_read'])
-    expect(r.unseen[0].text).toBe("Michel n'a pas pu vérifier si tout a été contrôlé sur : srv-a.")
+    expect(r.unseen[0].text).toBe("Michel n'a pas pu savoir s'il a tout regardé sur : srv-a.")
   })
   test('past the cap, clean servers stay in the note', () => {
     const servers = Array.from({ length: 22 }, (_, i) => server(`c${i}`))
@@ -524,6 +524,7 @@ describe('never reassures', () => {
       for (const lang of ['fr', 'en']) {
         const r = build({ ...c, lang })
         expect(r.unseen.length, name).toBeGreaterThan(0)
+        expect(r.head, name).not.toMatch(/Rien à faire|Nothing to do/)
         for (const w of words) expect(allText(r), `${name} ${w}`).not.toMatch(w)
       }
     }

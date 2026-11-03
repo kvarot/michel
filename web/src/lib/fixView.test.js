@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  acceptResult, activityLine, canApprove, canDecide, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
+  acceptResult, activityLine, canApprove, canDecide, decidingAttempt, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
   proposalFacts, proposalSentence, splitMasked, stateLine,
 } from './fixView.js'
 
@@ -224,10 +224,20 @@ describe('what can still be decided', () => {
     expect(isOpen({ status: 'decided', decision: { action: 'ignore' } })).toBe(false)
     expect(isOpen({ status: 'gone', decision: null })).toBe(false)
   })
+  test('decidingAttempt: the newest attempt of the flaw, not the one shown', () => {
+    const old = { id: 'a1', state: 'failed', created_at: '2026-11-01T00:00:00Z', finding: { id: 'f' } }
+    const fresh = { id: 'a2', state: 'running', created_at: '2026-11-02T00:00:00Z', finding: { id: 'f' } }
+    const other = { id: 'a3', state: 'running', created_at: '2026-11-03T00:00:00Z', finding: { id: 'g' } }
+    expect(decidingAttempt([old, other, fresh], 'f', old)).toBe(fresh)
+    expect(decidingAttempt([fresh, old], 'f', old)).toBe(fresh)
+    expect(decidingAttempt([other], 'f', old)).toBe(old)
+    expect(decidingAttempt([], 'f', null)).toBe(null)
+  })
   test('canDecide: a flaw without a fix, or a fix of a project that went nowhere', () => {
     expect(canDecide(null)).toBe(true)
     for (const state of ['refused', 'failed', 'inconclusive', 'superseded']) expect(canDecide({ state }), state).toBe(true)
-    for (const state of ['preparing', 'running', 'proposed', 'approved', 'applied', 'proven_fixed']) expect(canDecide({ state }), state).toBe(false)
+    for (const state of ['preparing', 'running', 'proposed', 'approved', 'proven_fixed']) expect(canDecide({ state }), state).toBe(false)
+    expect(canDecide({ state: 'applied' }), 'applied').toBe(true)
     expect(canDecide({ state: 'failed', server: { target: { id: 'a' } } })).toBe(false)
   })
 })

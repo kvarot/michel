@@ -30,7 +30,23 @@ export function isOpen(f) {
  */
 export function canDecide(attempt) {
   if (!attempt) return true
-  return !attempt.server && ['refused', 'failed', 'inconclusive', 'superseded'].includes(attempt.state)
+  return !attempt.server && ['refused', 'failed', 'inconclusive', 'superseded', 'applied'].includes(attempt.state)
+}
+
+/**
+ * decidingAttempt is the newest attempt of a flaw (by created_at, whatever the
+ * list order), else the one shown, else null.
+ * @param {object[]} attempts
+ * @param {string} id finding id
+ * @param {object|null} shown
+ */
+export function decidingAttempt(attempts, id, shown) {
+  let best = null
+  for (const a of attempts || []) {
+    if (a?.finding?.id !== id) continue
+    if (!best || String(a.created_at || '') > String(best.created_at || '')) best = a
+  }
+  return best || shown || null
 }
 
 /**
