@@ -302,13 +302,16 @@ function rootScript(f) {
  * checked against internal/fix (server.go, server_auto.go, server_exec.go) and
  * internal/serverfix/validate.go. A plan with action null is terminal: it holds
  * only its own lines, since « always » is only true of a script that will exist.
- * @param {{finding: object, target: object|null, attempt?: object|null, tried?: boolean, preprodHealth?: boolean}} args
+ * @param {{finding: object, target: object|null, attempt?: object|null, tried?: boolean, preprodHealth?: boolean, preprodTarget?: object|null}} args
  *   finding is the TargetFindingView, target the TargetView. tried: an attempt on
  *   its preprod was made for this flaw, which serverTried counts. preprodHealth:
  *   the preprod holds health data, so startServerAgent refuses here too.
+ *   preprodTarget is the preprod's TargetView: the first script runs there under
+ *   its own settings. A preprod whose settings are unknown makes no promise of a
+ *   click nor of a run alone.
  * @returns {{title: string, lines: {key: string, params?: object}[], action: 'prepare'|null, why: string, warn: string|null}}
  */
-export function serverPlan({ finding, target, attempt = null, tried = false, preprodHealth = false }) {
+export function serverPlan({ finding, target, attempt = null, tried = false, preprodHealth = false, preprodTarget = null }) {
   const title = 'plan.server.title'
   const none = (lines, why) => ({ title, lines: lines.map((l) => (typeof l === 'string' ? { key: l } : l)), action: null, why, warn: null })
   if (!target) return none([], '')
@@ -326,10 +329,12 @@ export function serverPlan({ finding, target, attempt = null, tried = false, pre
   const site = !!target.site_url
   // executorFor (server.go): a root script is Michel's only with sudo without a password.
   const root = rootScript(f)
-  const michel = target.executor === 'michel' && (!root || target.sudo === 'nopasswd')
+  // With a preprod the first script runs there, under the preprod's settings.
+  const set = target.preprod ? preprodTarget : target
+  const michel = !!set && set.executor === 'michel' && (!root || set.sudo === 'nopasswd')
   // AutoApplicableServer (server_auto.go): only a tested configuration, so a root
   // file. ApplyAutoServer takes it right after it is prepared, even after a click.
-  const auto = michel && !pkg && root && target.fix_level === 3 && target.auto_config && site
+  const auto = michel && !pkg && root && set.fix_level === 3 && !!set.auto_config && !!set.site_url
 
   const lines = [{ key: !ready ? 'plan.server.no_ready' : auto ? 'plan.server.who_auto' : 'plan.server.who' }]
   if (target.preprod) lines.push({ key: 'plan.server.preprod', params: { name: target.preprod.name } })
@@ -341,7 +346,7 @@ export function serverPlan({ finding, target, attempt = null, tried = false, pre
   }
   lines.push({ key: 'plan.server.no_tests' })
 
-  lines.push({ key: `plan.server.approval_${auto ? 'auto' : michel ? 'michel' : 'user'}` })
+  if (set) lines.push({ key: `plan.server.approval_${auto ? 'auto' : michel ? 'michel' : 'user'}` })
   if (michel && !auto && root) lines.push({ key: 'plan.server.root' })
 
   // EligibleServer and serverTried (server_auto.go): once, on an active server;

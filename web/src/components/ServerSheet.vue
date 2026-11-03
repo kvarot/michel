@@ -84,6 +84,7 @@
               :target="view"
               :tried="tried(c)"
               :preprod-health="preprodHealth"
+              :preprod-target="preprodView"
               :can-start="!startingFor"
               :starting="startingFor === c.finding.id"
               @start="fix(c.finding)"
@@ -92,6 +93,7 @@
               <v-btn size="small" variant="tonal" color="primary" :href="fixHref(lastAttempt(c).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
               <span v-if="cardText(c)" class="m-small m-voice">{{ cardText(c) }}</span>
             </div>
+            <p v-if="provenNote(c)" class="m-small m-voice">{{ provenNote(c) }}</p>
             <!-- The answer of "Corriger" stays next to the card it was asked for. -->
             <v-alert v-if="actionError && errorFor === c.finding.id" type="error" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert" closable @click:close="clearError">
               <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
@@ -320,7 +322,7 @@ import { fixHash } from '../lib/fixView.js'
 import { plainRisk, showsPlan } from '../lib/pathView.js'
 import { logBadges } from '../lib/serverLogsView.js'
 import {
-  canOfferAgent, cardLine, cardOfFinding, envLabel, envs, findingTitle, healthServer, intervalLabel, intervals, kindLabel, kinds, lastAttemptOf, levelLabel,
+  canOfferAgent, cardLine, cardOfFinding, envLabel, envs, findingTitle, healthServer, intervalLabel, intervals, kindLabel, kinds, lastAttemptOf, levelLabel, provenOnlyOnPreprod,
   mergeFindings, serverAttemptLine, serverLevels, sortFindings, stateSentence, triedOnPreprod,
 } from '../lib/serversView.js'
 
@@ -532,6 +534,12 @@ export default {
     },
     cardText(c) {
       return cardLine(this.lastAttempt(c), this.lang, this.id)
+    },
+    /** provenNote says a flaw proven on the preprod has no fix prepared here, and what can be done. */
+    provenNote(c) {
+      const name = provenOnlyOnPreprod(this.fixes, this.preprodFixes, c)
+      if (!name) return ''
+      return `${this.$t('servers.line.proven_preprod_only', { name })} ${this.$t('servers.line.proven_preprod_only_do')}`
     },
     tried(c) {
       return triedOnPreprod(this.preprodFixes, c)

@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'vitest'
+import fr from '../i18n/fr.json'
+import en from '../i18n/en.json'
 import {
   backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, restoreNeeded,
-  canOfferAgent, cardLine, cardOfFinding, doneKey, guideServerTitle, healthServer, lastAttemptOf, serverAttemptLine, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers,
+  canOfferAgent, cardLine, cardOfFinding, doneKey, guideServerTitle, healthServer, lastAttemptOf, serverAttemptLine, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers, provenOnlyOnPreprod,
 } from './serversView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -361,5 +363,28 @@ describe('the title of a verified fix', () => {
   })
   test('nothing else known: the finding', () => {
     expect(guideServerTitle(f, null, null, 'fr')).toBe('expose_php is risky; advised: Off')
+  })
+})
+
+describe('proven on the preprod, nothing prepared here', () => {
+  const card = { ids: ['f1', 'f2'] }
+  const pre = (state, extra = {}) => ({ id: 'p', state, created_at: '2026-11-03T10:00:00Z', finding: { id: 'pf', status: 'new' }, server: { prod_finding_id: 'f2', target: { id: 'tp', name: 'srv-pre' } }, ...extra })
+  const own = { id: 'o', state: 'failed', created_at: '2026-11-02T10:00:00Z', finding: { id: 'f1' } }
+  test('says it, with the name', () => {
+    expect(provenOnlyOnPreprod([], [pre('proven_fixed')], card)).toBe('srv-pre')
+    expect(provenOnlyOnPreprod([], [pre('proven_fixed'), pre('failed', { id: 'older' })], card)).toBe('srv-pre')
+  })
+  test('not when the production has an attempt, or the preprod attempt is another state', () => {
+    expect(provenOnlyOnPreprod([own], [pre('proven_fixed')], card)).toBe('')
+    expect(provenOnlyOnPreprod([], [pre('failed')], card)).toBe('')
+    expect(provenOnlyOnPreprod([], [pre('proven_fixed', { server: { prod_finding_id: 'zz', target: { name: 'x' } } })], card)).toBe('')
+    expect(provenOnlyOnPreprod([], [], card)).toBe('')
+  })
+  test('the words say what to do', () => {
+    expect(fr['servers.line.proven_preprod_only']).toBe("Prouvée sur ta préprod {name} ; la correction de ce serveur n'a pas pu être préparée.")
+    expect(fr['servers.line.proven_preprod_only_do']).toContain('Vérifie à nouveau la préprod')
+    expect(fr['servers.line.proven_preprod_only_do']).toContain('délie-la')
+    expect(en['servers.line.proven_preprod_only']).toContain('{name}')
+    expect(en['servers.line.proven_preprod_only_do']).toContain('unlink')
   })
 })

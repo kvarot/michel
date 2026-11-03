@@ -31,7 +31,8 @@ describe('the level 3 rule says it runs alone, as root', () => {
     expect(k).toContain('approval_auto')
   })
   test('with a preprod, who_auto and the preprod line', () => {
-    const k = keys(cfg(), target({ ...rule, preprod: { id: 'p', name: 'srv-pre' } }))
+    const pre = { id: 'p', name: 'srv-pre' }
+    const k = keys(cfg(), target({ ...rule, preprod: pre }), { preprodTarget: { ...pre, ...rule, site_url: 'https://x.test' } })
     expect(k.slice(0, 2)).toEqual(['who_auto', 'preprod'])
   })
   test('a package always waits: who stays', () => {
@@ -152,5 +153,46 @@ describe('a fix of unknown outcome', () => {
     expect(fr['servers.unknown.body']).toContain("« J'ai vérifié le serveur »")
     expect(fr['servers.unknown.body_preprod']).toContain('{name}')
     expect(en['servers.unknown.body']).toContain('"I checked the server"')
+  })
+})
+
+describe('the first script runs under the preprod’s settings', () => {
+  const pre = { id: 'p', name: 'srv-pre' }
+  const asks = { fix_level: 1, executor: 'user', sudo: 'none', auto_config: false }
+  test('the preprod’s settings, when the view carries them', () => {
+    // The production's rule would run alone; the preprod's own settings ask for a click.
+    const k = keys(cfg(), target({ ...rule, preprod: pre }), { preprodTarget: { ...pre, ...asks, site_url: 'https://x.test' } })
+    expect(k).toContain('who')
+    expect(k).toContain('approval_user')
+    expect(k).not.toContain('who_auto')
+    expect(k).not.toContain('approval_auto')
+    // And the other way round: the preprod's rule runs alone, the production's does not.
+    const k2 = keys(cfg(), target({ ...asks, preprod: pre }), { preprodTarget: { ...pre, ...rule, site_url: 'https://x.test' } })
+    expect(k2.slice(0, 2)).toEqual(['who_auto', 'preprod'])
+    expect(k2).toContain('approval_auto')
+    const k3 = keys(cfg(), target({ ...asks, preprod: pre }), { preprodTarget: { ...pre, executor: 'michel', sudo: 'nopasswd', fix_level: 1 } })
+    expect(k3).toContain('approval_michel')
+    expect(k3).toContain('root')
+  })
+  test('without them, no promise of a click and none of a run alone', () => {
+    for (const t of [target({ ...rule, preprod: pre }), target({ ...asks, preprod: pre })]) {
+      const k = keys(cfg(), t)
+      expect(k).toContain('preprod')
+      expect(k).toContain('who')
+      for (const x of ['who_auto', 'approval_auto', 'approval_michel', 'approval_user', 'root']) expect(k, x).not.toContain(x)
+    }
+  })
+  test('no preprod: the server’s own settings, as before', () => {
+    expect(keys(cfg(), target(rule))).toContain('approval_auto')
+  })
+})
+
+describe('the exposure advice', () => {
+  test('a firewall block is not confirmed from the server, in plain words; the other way is', () => {
+    expect(fr['expo.how']).not.toContain('regarde depuis')
+    expect(fr['expo.how']).toContain("de l'intérieur du serveur")
+    expect(fr['expo.how']).toMatch(/Dans ce cas, choisis plutôt de réserver le service au serveur\.$/)
+    expect(en['expo.how']).toMatch(/In that case, choose to keep the service to the server instead\.$/)
+    expect(en['expo.how']).not.toContain('he looks from')
   })
 })

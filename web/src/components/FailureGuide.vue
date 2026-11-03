@@ -92,6 +92,8 @@ export default {
     // preprod holds health data. The sheet knows both; serverPlan reads them.
     tried: { type: Boolean, default: false },
     preprodHealth: { type: Boolean, default: false },
+    // preprodTarget: the preprod's TargetView, whose settings the first script follows.
+    preprodTarget: { type: Object, default: null },
   },
   emits: ['start', 'to-proposal'],
   data() {
@@ -148,7 +150,7 @@ export default {
     },
     plan() {
       if (!showsPlan(this.attempt, this.gone)) return null
-      if (this.server) return serverPlan({ finding: this.sheet || this.finding, target: this.target, attempt: this.attempt, tried: this.tried, preprodHealth: this.preprodHealth })
+      if (this.server) return serverPlan({ finding: this.sheet || this.finding, target: this.target, attempt: this.attempt, tried: this.tried, preprodHealth: this.preprodHealth, preprodTarget: this.preprodTarget })
       return projectPlan({ finding: this.sheet || this.finding, project: this.projectView, attempt: this.attempt })
     },
     steps() {

@@ -190,6 +190,21 @@ function preprodAttemptOf(preprodFixes, card) {
 }
 
 /**
+ * provenOnlyOnPreprod is the name of the preprod when its newest attempt for one
+ * of a card's flaws is proven and the production has none: the production's fix
+ * could not be prepared (fix.server.preprod_missing on a click), and nothing else
+ * on the card says so. '' otherwise.
+ * @param {object[]} fixes GET /fixes?target=
+ * @param {object[]} preprodFixes GET /fixes?target=<preprod>, newest first
+ * @param {{ids: string[]}} card
+ */
+export function provenOnlyOnPreprod(fixes, preprodFixes, card) {
+  if ((fixes || []).some((a) => card.ids.includes(a.finding?.id))) return ''
+  const a = (preprodFixes || []).find((x) => card.ids.includes(x.server?.prod_finding_id))
+  return a && a.state === 'proven_fixed' ? a.server?.target?.name || '' : ''
+}
+
+/**
  * triedOnPreprod says an attempt on the preprod was made for a card's flaws,
  * which serverTried (internal/fix/server_auto.go) counts: Michel will not try
  * alone again.

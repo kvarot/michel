@@ -901,7 +901,7 @@
   "fix.server.already_applied": "Cette correction a déjà été lancée une fois sur le serveur : Michel ne lance jamais deux fois la même. Prépare une nouvelle correction.",
   "fix.server.ambiguous": "Plusieurs fichiers règlent ce paramètre sur le serveur : Michel ne sait pas lequel modifier.",
   "fix.server.busy": "Une correction attend ou tourne déjà sur ce serveur. Attends qu'elle finisse, ou retrouve-la dans À faire : termine-la ou refuse-la d'abord.",
-  "fix.server.busy_preprod": "Une correction attend ou tourne déjà sur ta préprod %s, et ce serveur passe après elle. Attends qu'elle finisse, ou retrouve-la dans À faire : termine-la ou refuse-la d'abord.",
+  "fix.server.busy_preprod": "Une correction attend ou tourne déjà sur ta préprod %s, et cette correction doit d'abord passer sur la préprod. Attends qu'elle finisse, ou retrouve-la dans À faire : termine-la ou refuse-la d'abord.",
   "fix.server.check_failed": "La correction a tourné, mais la nouvelle vérification du serveur n'a pas marché : Michel ne peut pas prouver qu'elle a corrigé le problème.",
   "fix.server.check_partial": "La correction a tourné, mais la vérification n'a pas pu tout contrôler : Michel ne peut pas prouver qu'elle a corrigé le problème.",
   "fix.server.explain.append": "Ajouter la ligne %s = %s à la fin de %s.",
