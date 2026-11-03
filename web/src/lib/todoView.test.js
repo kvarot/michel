@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
-import { buildTodo, projectsToRead, serversToRead, toneOf, todoWords, unseenBelow } from './todoView.js'
+import { isVerified } from './pathView.js'
+import { buildTodo, projectsToRead, resolvedLines, serversToRead, toneOf, todoWords, unseenBelow } from './todoView.js'
 
 const now = new Date('2026-11-03T12:00:00Z')
 
@@ -652,5 +653,75 @@ describe('texts', () => {
       expect(fr[`todo.word.${w}`]).toBeTruthy()
       expect(en[`todo.word.${w}`]).toBeTruthy()
     }
+  })
+})
+
+/** An attempt as GET /fixes sends it (AttemptView, list form). */
+function proven(id, extra = {}) {
+  return {
+    id, finding: { id: `f-${id}`, manifest_rel_path: 'composer.lock', ecosystem: 'Packagist', package: 'lib', osv_id: 'GHSA-aaaa-bbbb-cccc', severity: 'high', installed_version: '1.2.0', fixed_versions: ['1.2.1'], summary: '', status: 'gone' },
+    project: 'demo', origin: 'user', state: 'proven_fixed', cause: '', cause_detail: '', approved_by: 'web', branch: 'michel/fix-1',
+    created_at: '2026-10-30T08:00:00Z', updated_at: '2026-11-02T09:30:00Z',
+    proposal: { id: 'p', summary: '', files: [], tests_status: 'passed', rescan_clean: true, risk: 1, hash: 'h', steps_server: [], commands: [], from_version: '1.2.0', to_version: '1.2.1', created_at: '2026-10-31T00:00:00Z' },
+    messages: null, ...extra,
+  }
+}
+
+/** The server part of an attempt (ServerAttemptView, the fields the page reads). */
+function onServer(extra = {}) {
+  return { project: 'srv-demo', proposal: null, server: { target: { id: 'srv1', name: 'srv-demo' }, executor: 'michel' }, ...extra }
+}
+
+describe('resolvedLines', () => {
+  test('only verified attempts are listed as verified', () => {
+    const lines = resolvedLines([
+      proven('a'),
+      proven('b', { proposal: { rescan_clean: false } }),
+      proven('c', { state: 'inconclusive' }),
+      proven('d', { state: 'applied' }),
+      proven('e', onServer()),
+      proven('f', onServer({ state: 'inconclusive' })),
+    ], [], 'fr')
+    const byId = Object.fromEntries(lines.map((l) => [l.href, l]))
+    expect(lines).toHaveLength(3)
+    expect(lines.filter((l) => l.verified)).toHaveLength(2)
+    expect(byId['#/fix/b'].verified).toBe(false)
+    expect(byId['#/fix/a'].verified).toBe(true)
+    expect(isVerified(proven('c', { state: 'proven_fixed', proposal: null }))).toBe(false)
+  })
+
+  test('date from updated_at, newest first', () => {
+    const lines = resolvedLines([
+      proven('a', { updated_at: '2026-10-01T10:00:00Z' }),
+      proven('b', { updated_at: '2026-11-02T09:30:00Z', created_at: '2026-01-01T00:00:00Z' }),
+    ], [], 'fr')
+    expect(lines.map((l) => l.href)).toEqual(['#/fix/b', '#/fix/a'])
+    expect(lines[0].at).toBe('02/11/2026')
+    expect(resolvedLines([proven('a')], [], 'en')[0].at).toBe('2026-11-02')
+  })
+
+  test('a project says to deploy, a server does not', () => {
+    const [p] = resolvedLines([proven('a')], [], 'fr')
+    const [s] = resolvedLines([proven('e', onServer())], [], 'fr')
+    expect(p.where).toBe('Projet demo.')
+    expect(p.deploy).toBe(true)
+    expect(s.where).toBe('Serveur srv-demo.')
+    expect(s.deploy).toBe(false)
+    expect(s.href).toBe('#/servers/srv1?finding=f-e')
+  })
+
+  test('a gone exposure is a verified line', () => {
+    const lines = resolvedLines([], [{ id: 'x1', server: { id: 'srv1', name: 'srv-demo' }, rule: 'exposed_cache', at: '2026-11-01T00:00:00Z' }], 'fr')
+    expect(lines).toHaveLength(1)
+    expect(lines[0].verified).toBe(true)
+    expect(lines[0].title).toContain('toutes les adresses')
+  })
+
+  test('empty list says what it means', () => {
+    expect(resolvedLines([], [], 'fr')).toEqual([])
+    expect(resolvedLines(null, null, 'fr')).toEqual([])
+    expect(fr['empty.resolved']).toMatch(/confirmé sa correction/)
+    expect(en['empty.resolved']).toBeTruthy()
+    expect(fr['resolved.deploy']).toMatch(/déployer/)
   })
 })

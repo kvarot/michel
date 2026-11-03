@@ -2,9 +2,10 @@
 // projects and servers mixed. No DOM, no fetch, no storage. Vitest covers them
 // (todoView.test.js).
 import { translate } from '../i18n/index.js'
-import { groupAttention, severityOf, severityRank } from './digestView.js'
+import { formatDate, groupAttention, severityOf, severityRank } from './digestView.js'
 import { fixHash, isOpen } from './fixView.js'
 import { stripTechnicalIds } from './modeView.js'
+import { isVerified } from './pathView.js'
 import { findingTitle, mergeFindings, restoreNeeded, serversHash, touchedServers } from './serversView.js'
 
 /** The most servers whose detail the page reads (ruling R15); the rest makes one line. */
@@ -390,4 +391,55 @@ function seenNot(d, servers, attempts, active, details, now, t) {
   if (servers === null) note('servers_unread', 'todo.unseen.servers_unread')
   if (attempts === null) note('fixes_unread', 'todo.unseen.fixes_unread')
   return out
+}
+
+/**
+ * resolvedLines makes the lines of the Resolved page, the newest on top. An
+ * attempt is listed only when the proof ran (state proven_fixed); it is
+ * verified only under ruling R2 (isVerified): a project's fix with no clean
+ * new scan of the copy is listed apart, as fixed and not confirmed. The date is
+ * the attempt's updated_at, which the proof sets last. exposures are the
+ * exposed services that a full reading no longer sees: {id, server: {id, name},
+ * rule, at}.
+ * @param {object[]|null} attempts GET /fixes?state=proven_fixed
+ * @param {{id: string, server: {id: string, name: string}, rule: string, at: string}[]|null} exposures
+ * @param {string} lang
+ * @returns {{at: string, title: string, where: string, verified: boolean, href: string, deploy: boolean, kind: string, sort: number}[]}
+ */
+export function resolvedLines(attempts, exposures, lang) {
+  const t = (key, params) => translate(lang, key, params)
+  const out = []
+  const stamp = (iso) => {
+    const ms = Date.parse(iso)
+    return Number.isNaN(ms) ? 0 : ms
+  }
+  for (const a of attempts || []) {
+    if (!a || a.state !== 'proven_fixed') continue
+    const s = a.server
+    const pkg = a.finding?.package || a.finding?.osv_id || ''
+    out.push({
+      at: formatDate(a.updated_at, lang),
+      title: t('resolved.line', { package: pkg }),
+      where: s ? t('todo.where.server', { name: s.target?.name || a.project }) : t('todo.where.project', { name: a.project }),
+      verified: isVerified(a),
+      href: s ? serversHash(s.target?.id, a.finding?.id) : fixHash({ attempt: a.id }),
+      deploy: !s,
+      kind: s ? 'server' : 'project',
+      sort: stamp(a.updated_at),
+    })
+  }
+  for (const e of exposures || []) {
+    if (!e) continue
+    out.push({
+      at: formatDate(e.at, lang),
+      title: t(e.rule === 'exposed_cache' ? 'resolved.exposure_cache' : 'resolved.exposure'),
+      where: t('todo.where.server', { name: e.server?.name || '' }),
+      verified: true,
+      href: serversHash(e.server?.id, e.id),
+      deploy: false,
+      kind: 'exposure',
+      sort: stamp(e.at),
+    })
+  }
+  return out.sort((a, b) => b.sort - a.sort).map(({ sort, ...line }) => line)
 }
