@@ -675,6 +675,7 @@
   "collect.unseen.directives": "Michel could not read the PHP settings of this PHP. The versions are known, the settings are not.",
   "collect.unseen.fpm": "Michel saw only the command line PHP, not the PHP that runs the site (PHP-FPM). The site may use another version or other settings.",
   "collect.unseen.kernel": "Michel could not read the version of the system kernel.",
+  "collect.unseen.listeners": "Michel could not list the services listening on this server: the ss command is missing or failed. So it does not know what is open.",
   "collect.unseen.missing": "This file does not exist on the server.",
   "collect.unseen.not_read": "Michel could not read this file.",
   "collect.unseen.os": "Michel could not tell which system runs on this server (the file /etc/os-release is missing or unreadable).",

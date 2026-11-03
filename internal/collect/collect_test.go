@@ -52,6 +52,8 @@ type host struct {
 	dpkg     string            // dpkg-query output; "" = no dpkg
 	rpm      string
 	apk      string
+	ss       string // ss -tln output; "" = no ss in the PATH
+	ssSbin   string // the same, for /usr/sbin/ss
 	nginx    string
 	apache2  string
 	kernel   string
@@ -202,6 +204,12 @@ func (h *host) commands() map[string]sshtest.Handler {
 	if h.apk != "" {
 		out["apk"] = func(e sshtest.Exec) int { io.WriteString(e.Stdout, h.apk); return 0 }
 	}
+	if h.ss != "" {
+		out["ss"] = func(e sshtest.Exec) int { io.WriteString(e.Stdout, h.ss); return 0 }
+	}
+	if h.ssSbin != "" {
+		out["/usr/sbin/ss"] = func(e sshtest.Exec) int { io.WriteString(e.Stdout, h.ssSbin); return 0 }
+	}
 	if h.nginx != "" {
 		nginx := func(e sshtest.Exec) int { io.WriteString(e.Stderr, h.nginx); return 0 }
 		out["nginx"] = nginx
@@ -212,7 +220,7 @@ func (h *host) commands() map[string]sshtest.Handler {
 		out["apache2"] = ap
 		out["/usr/sbin/apache2"] = ap
 	}
-	for _, name := range []string{"php", "dpkg-query", "dpkg", "rpm", "apk", "nginx", "apache2", "httpd"} {
+	for _, name := range []string{"php", "dpkg-query", "dpkg", "rpm", "apk", "nginx", "apache2", "httpd", "ss", "/usr/sbin/ss"} {
 		if _, ok := out[name]; !ok {
 			out[name] = notFound
 		}
@@ -280,6 +288,7 @@ func debian(t *testing.T) *host {
 		nginx:  fixtureText["nginx-v"],
 		kernel: "6.1.0-21-amd64",
 		osRel:  fixtureText["os-release-debian12"],
+		ss:     fixture(t, "ss-debian.txt"),
 	}
 }
 
@@ -665,6 +674,7 @@ var allowedShapes = []*regexp.Regexp{
 	regexp.MustCompile(`^` + envC + `'dpkg-query' '-W' '-f' '[^']+'$`),
 	regexp.MustCompile(`^` + envC + `'rpm' '-qa' '--qf' '[^']+'$`),
 	regexp.MustCompile(`^` + envC + `'apk' 'info' '-v'$`),
+	regexp.MustCompile(`^` + envC + `'(/usr/sbin/)?ss' '-tln'$`),
 	regexp.MustCompile(`^` + envC + `'readlink' '-f' '/[^']+'$`),
 	regexp.MustCompile(`^` + envC + `'dpkg' '-S' '/[^']+'$`),
 	regexp.MustCompile(`^` + envC + `'rpm' '-qf' '--qf' '[^']+' '/[^']+'$`),

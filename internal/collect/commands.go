@@ -44,6 +44,8 @@ var (
 	cmdDpkg      = []string{"dpkg-query", "-W", "-f", dpkgFormat}
 	cmdRPM       = []string{"rpm", "-qa", "--qf", rpmFormat}
 	cmdAPK       = []string{"apk", "info", "-v"}
+	cmdSS        = []string{"ss", "-tln"}
+	cmdSSSbin    = []string{sbin + "ss", "-tln"}
 )
 
 // sentinel is the name cmdFind asks first: every POSIX system has it, so a
@@ -72,7 +74,9 @@ func cmdFindSbin() []string {
 }
 
 // Commands returns the fixed part of the closed list for t, in the order a
-// collection runs them, as they are sent (with the env LC_ALL=C prefix). The rest is built from what these print, through
+// collection runs them, as they are sent (with the env LC_ALL=C prefix).
+// `/usr/sbin/ss -tln` runs only when `ss -tln` answers 127, command not
+// found. The rest is built from what these print, through
 // the same closed shapes: `<fpm> -v|-m|-i|-tt` for each FPM binary found,
 // `<web> -v` for each web server found, `readlink -f`, `dpkg -S` or
 // `rpm -qf` on a PHP binary, and `head -c 262145 <file>` for each allowed
@@ -93,6 +97,7 @@ func fixedCommands() [][]string {
 		cmdDpkg, cmdRPM, cmdAPK,
 		cmdPHPV, cmdPHPM, cmdPHPIni, cmdPHPR,
 		{"nginx", "-v"}, {"apache2", "-v"}, {"httpd", "-v"},
+		cmdSS, cmdSSSbin,
 	}
 }
 

@@ -1090,3 +1090,23 @@ func TestCheckStopsQuietlyWhenTheServerLeftWhileItWaited(t *testing.T) {
 		t.Errorf("the removed server was reached %d times", n)
 	}
 }
+
+// A server without ss is not "clean", but a fix on it can still be proven: the
+// services that listen say nothing about PHP or the packages.
+func TestMissingSsBlocksNoProof(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	h.set("8.3.36", `{"allow_url_include":"0","display_errors":"0"}`)
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	inv, ok, err := e.deps.Repo.LatestInventory(context.Background(), tg.ID)
+	if err != nil || !ok || inv.ListenersRead || res.Clean() {
+		t.Fatalf("inventory %v %v, read %v, result %+v", ok, err, inv.ListenersRead, res)
+	}
+	fs := e.findings(tg.ID)
+	if res.Gone != 2 || fs["PHP2SHELL"].Status != scan.StatusGone {
+		t.Fatalf("result %+v, findings %+v", res, fs)
+	}
+}

@@ -57,6 +57,10 @@ func demoCommands() map[string]sshtest.Handler {
 			io.WriteString(e.Stdout, "openssl\topenssl\t3.0.11-1~deb12u1\tamd64\n")
 			return 0
 		},
+		"ss": func(e sshtest.Exec) int {
+			io.WriteString(e.Stdout, "State Recv-Q Send-Q Local Address:Port Peer Address:Port\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 200 127.0.0.1:5432 0.0.0.0:*\n")
+			return 0
+		},
 	}
 	// The collection runs its commands through env.
 	out["env"] = func(e sshtest.Exec) int {

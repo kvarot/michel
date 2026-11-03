@@ -675,6 +675,7 @@
   "collect.unseen.directives": "Michel n'a pas pu lire la configuration de ce PHP. Il en connaît la version, mais pas les réglages.",
   "collect.unseen.fpm": "Michel n'a pu examiner que le PHP utilisé en ligne de commande, pas celui qui fait fonctionner ton site (PHP-FPM). Ton site peut donc tourner avec une autre version ou d'autres réglages.",
   "collect.unseen.kernel": "Michel n'a pas pu lire la version du système de base (le noyau) de ce serveur.",
+  "collect.unseen.listeners": "Michel n'a pas pu lister les services qui écoutent sur ce serveur : la commande ss manque ou a échoué. Il ne sait donc pas ce qui est ouvert.",
   "collect.unseen.missing": "Ce fichier n'existe pas sur le serveur.",
   "collect.unseen.not_read": "Michel n'a pas pu lire ce fichier.",
   "collect.unseen.os": "Michel n'a pas pu savoir quel système fonctionne sur ce serveur (le fichier /etc/os-release est absent ou illisible).",

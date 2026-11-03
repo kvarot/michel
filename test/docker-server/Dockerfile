@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # The apt lists stay in the image: Michel simulates package upgrades with apt-get -s.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     systemd systemd-sysv dbus openssh-server nginx php-fpm php-cli php-pgsql php-monolog \
-    postgresql logrotate sudo ca-certificates
+    postgresql logrotate sudo ca-certificates iproute2
 
 # Containers have no consoles to serve.
 RUN systemctl mask getty@tty1.service console-getty.service systemd-firstboot.service
@@ -33,7 +33,9 @@ RUN install -d -m 2750 -o www-data -g adm /var/log/php \
 
 # PostgreSQL writes the error code (%e) last in the prefix, right before the severity. Its log is
 # readable by adm on Debian. The site signs in as www-data, without a password.
-RUN printf "log_line_prefix = '%%m [%%p] %%q%%u@%%d %%e '\n" > "$(ls -d /etc/postgresql/*/main)/conf.d/michel-test.conf" \
+# It listens on every address, so ss shows a database to close. Only ports 22 and 80
+# leave the container, on 127.0.0.1: nothing outside can reach this database.
+RUN printf "log_line_prefix = '%%m [%%p] %%q%%u@%%d %%e '\nlisten_addresses = '*'\n" > "$(ls -d /etc/postgresql/*/main)/conf.d/michel-test.conf" \
     && service postgresql start \
     && su postgres -c "psql -c 'CREATE ROLE \"www-data\" LOGIN'" \
     && service postgresql stop
