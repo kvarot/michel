@@ -1,6 +1,6 @@
 <template>
   <v-app>
-    <a class="m-skip" href="#main">{{ $t('app.skip') }}</a>
+    <a class="m-skip" href="#main" @click.prevent="focusMain">{{ $t('app.skip') }}</a>
     <AppNav v-if="state === 'ready'" :page="page" :assistant="assistant" />
 
     <v-main>
@@ -159,10 +159,14 @@ export default {
     window.removeEventListener('hashchange', this.onHash)
   },
   methods: {
+    focusMain() {
+      document.getElementById('main')?.focus()
+    },
     onHash() {
       this.page = pageOf(window.location.hash)
       this.fixRoute = routeOf(window.location.hash)
       this.serversRoute = serversOf(window.location.hash)
+      this.$nextTick(this.focusMain)
       if ((this.page === 'todo' || this.page === 'projects') && this.stale && this.state === 'ready') {
         this.stale = false
         this.loadToday(false)
