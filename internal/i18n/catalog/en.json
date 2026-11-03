@@ -30,6 +30,7 @@
   "api.discover.bad_action": "Choose add or ignore.",
   "api.exposure.firewall.reason": "Michel reads this list from inside the server. It does not see the firewall of the host (the filter that decides who may connect), so it cannot say whether a service can be reached from outside.",
   "api.exposure.firewall.what": "The firewall of the host",
+  "api.exposure.listeners.what": "The services that listen",
   "api.exposure.udp.reason": "Michel lists only the services that wait in TCP, the most common way to connect. A service that waits in UDP, the other way, does not appear.",
   "api.exposure.udp.what": "Services in UDP",
   "api.finding_not_found": "No finding has this id.",

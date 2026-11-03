@@ -30,6 +30,7 @@
   "api.discover.bad_action": "Choisis add ou ignore.",
   "api.exposure.firewall.reason": "Michel lit cette liste depuis l'intérieur du serveur. Il ne voit pas le pare-feu de l'hébergeur (le filtre qui décide qui peut se connecter) : il ne peut donc pas dire si un service est joignable de l'extérieur.",
   "api.exposure.firewall.what": "Le pare-feu de l'hébergeur",
+  "api.exposure.listeners.what": "Les services qui écoutent",
   "api.exposure.udp.reason": "Michel ne liste que les services en TCP, la façon la plus courante de se connecter. Un service en UDP, l'autre façon, n'apparaît pas.",
   "api.exposure.udp.what": "Les services en UDP",
   "api.finding_not_found": "Aucune faille ne porte cet identifiant.",

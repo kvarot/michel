@@ -23,8 +23,9 @@ import (
 // this reading, or a list with no row at all. Then Services is empty and says
 // nothing: an empty list that was read is not possible, since Michel has just
 // come in through a service that listens. Closed holds the services that were
-// open and that a complete read no longer shows open; At is the last time
-// Michel saw each one open, not the time it was closed.
+// open and that a complete read no longer shows open to all; LastSeenOpen is
+// the last time Michel saw each one open, not the time it was closed. A port
+// the stored read shows open to all again is not listed as closed.
 type ExposureView struct {
 	Read      bool               `json:"read"`
 	CheckedAt string             `json:"checked_at"`
@@ -50,9 +51,9 @@ type ExposureService struct {
 
 // ExposureClosed is a service Michel no longer sees open to all.
 type ExposureClosed struct {
-	Port    int    `json:"port"`
-	Service string `json:"service"`
-	At      string `json:"at"`
+	Port         int    `json:"port"`
+	Service      string `json:"service"`
+	LastSeenOpen string `json:"last_seen_open"`
 }
 
 // ExposureDecisionRequest is the body of the decision route: the reason. The
@@ -95,7 +96,7 @@ func (s *server) exposureView(ctx context.Context, t target.Target, lang i18n.La
 			continue
 		}
 		if f.Status == scan.StatusGone {
-			v.Closed = append(v.Closed, ExposureClosed{Port: port, Service: service[f.OSVID], At: f.LastSeenAt})
+			v.Closed = append(v.Closed, ExposureClosed{Port: port, Service: service[f.OSVID], LastSeenOpen: f.LastSeenAt})
 			continue
 		}
 		byPort[port] = f
@@ -107,6 +108,10 @@ func (s *server) exposureView(ctx context.Context, t target.Target, lang i18n.La
 		v.Read = serverrules.ListenersKnown(inv)
 	}
 	if v.Read {
+		// The stored read is the newer fact: a port open to all again is not closed.
+		v.Closed = slices.DeleteFunc(v.Closed, func(c ExposureClosed) bool {
+			return slices.ContainsFunc(inv.Listeners, func(l target.Listener) bool { return l.Port == c.Port && l.Scope == target.ScopeOpen })
+		})
 		type key struct {
 			port  int
 			scope target.ListenScope
@@ -143,13 +148,13 @@ func (s *server) exposureView(ctx context.Context, t target.Target, lang i18n.La
 		said := false
 		for _, u := range inv.Unseen {
 			if u.Reason == collect.ReasonListeners {
-				v.Unseen = append(v.Unseen, TargetUnseenView{What: srvText(t.User, u.What), Reason: reasonText(lang, t.User, u.Reason)})
+				v.Unseen = append(v.Unseen, TargetUnseenView{What: i18n.T(lang, "api.exposure.listeners.what"), Reason: reasonText(lang, t.User, u.Reason)})
 				said = true
 			}
 		}
 		if !said {
 			// Stored before this reading existed, or a list with no row.
-			v.Unseen = append(v.Unseen, TargetUnseenView{What: "listeners", Reason: i18n.T(lang, collect.ReasonListeners)})
+			v.Unseen = append(v.Unseen, TargetUnseenView{What: i18n.T(lang, "api.exposure.listeners.what"), Reason: i18n.T(lang, collect.ReasonListeners)})
 		}
 	}
 	// What Michel never reads, whatever the check saw.

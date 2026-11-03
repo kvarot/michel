@@ -92,16 +92,16 @@ The **Exposure** part of the server sheet lists the services that wait for a con
 
 - **Open to all**: the service listens on every address of the server (or on an address that is not private). Whoever can reach the server could connect, **if** nothing blocks the way.
 - **Reserved**: the service listens only for the server itself (loopback), or only for a private network. It is not meant to be reached from outside.
-- **Not verified**: what Michel did not or could not check. Two lines are always there: **the firewall of the host**, and **the services in UDP** (only TCP is read).
+- **Not verified**: what Michel did not or could not check. Two lines are always there: **the firewall of the host**, and **the services in UDP** (Michel reads only the services in TCP, the most common way to connect to a service; a service in UDP, the other way, does not appear).
 
 How to read it:
 
 - **The list is read from inside the server. It does not prove that the service can be reached from outside**: Michel does not check the firewall of the host, and says so in the third column. A service "open to all" is reachable only if no firewall stands in front of it.
 - Michel judges a service by its **port number alone**; it never connects to it. A well-known database or cache port open to all opens a finding of medium severity, "to close", in the To do list, and never an alert. Any other port that is open is shown as "service not recognized, to check", without a finding. The port Michel uses to connect to the server counts as administration.
 - On a server of kind `shared`, the services may be the host's or another customer's: they are shown, with a sentence that says so, and open no finding. On a server in a container or on shared infrastructure, the list can also show services that are not yours.
-- **"I know, it is blocked or wanted"** (on the finding) records your reason, which is required, and the audit log keeps it. The service stays in its column, with "You said: …. Michel did not check it". To undo it, use `michel decide`.
+- **"I know, it is blocked or wanted"** (on the finding) records your reason, which is required, and the audit log keeps it. The service stays in its column, with "You said: …. Michel did not check it". To change your mind, decide again with `michel decide` (for example `defer`, which gives it back to you on the date you choose).
 - **When a service is no longer seen open**, Michel says exactly that: it **does not see it open to all any more**, and the date is the last time it saw it open. This is not a fix and not a verification: the service may have moved to another port, or stopped, and Michel does not know whether it was closed. A finding of this kind is never counted as "fixed". Michel does not start a fix for it either: closing a service is your job.
-- A service that stays open to all keeps its finding, even on a server where Michel would not open one today (a shared server, or a port that became the connection port), until you decide.
+- A service that stays open to all keeps its finding, even on a server where Michel would not open one today (a shared server, or a port that became the connection port), until it is no longer seen open, or you have marked it as blocked or wanted.
 - **Not read is not "nothing is open".** If `ss` is missing from the server, fails, gives an answer Michel cannot read, or lists no service at all (which cannot be: Michel has just come in through one), the list is **not read**. The sheet says "not read" and keeps a note that stays as long as it stays so. A server without `ss` is never "clean": the note is permanent. Nothing is opened or closed from a list that was not read. "No service seen" and "not read" are two different answers.
 - **The AI agent never receives this list** (nor the addresses and ports): the inventory sent to an agent has no listening service, and an exposure finding starts no agent.
 

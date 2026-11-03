@@ -685,3 +685,22 @@ func TestProjectViewSaysIfInGit(t *testing.T) {
 		t.Error("a folder with .git says it is not a Git repository")
 	}
 }
+
+// The shared answers of the decision route stay those of the project route:
+// a finding no longer seen is a conflict, and nothing is audited.
+func TestPostDecisionOnGoneFindingIsConflict(t *testing.T) {
+	f := newFixture(t, nil)
+	id := f.ids["ACME-2026-0002"]
+	if _, err := f.st.DB().Exec(`UPDATE finding SET status = 'gone' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	resp, b := f.do("POST", "/api/v1/findings/"+id+"/decision", testToken, `{"action":"ignore","why":"known"}`)
+	var eb ErrorBody
+	_ = json.Unmarshal([]byte(b), &eb)
+	if resp.StatusCode != http.StatusConflict || eb.Error != i18n.T(i18n.EN, "api.decision.gone") {
+		t.Errorf("%d %s", resp.StatusCode, b)
+	}
+	if rows := f.auditRows("decision.set"); len(rows) != 0 {
+		t.Errorf("audited: %+v", rows)
+	}
+}

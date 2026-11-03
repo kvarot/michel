@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/collect"
+	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/target"
@@ -171,7 +172,7 @@ func TestExposureClosedCarriesTheLastDateSeenOpen(t *testing.T) {
 	last := ts(now.Add(-48 * time.Hour))
 	tf.seedExposure(v.ID, "fexpo000000000002", "6379", "exposed_cache", "gone", last)
 	got, _ := tf.exposure(v.ID)
-	if len(got.Closed) != 1 || got.Closed[0] != (ExposureClosed{Port: 6379, Service: "cache", At: last}) {
+	if len(got.Closed) != 1 || got.Closed[0] != (ExposureClosed{Port: 6379, Service: "cache", LastSeenOpen: last}) {
 		t.Errorf("closed = %+v", got.Closed)
 	}
 }
@@ -289,5 +290,97 @@ func TestExposureRoutesNeedTheToken(t *testing.T) {
 	_ = tf.st.DB().QueryRow(`SELECT status FROM finding WHERE id = 'fexpo000000000001'`).Scan(&st)
 	if st != scan.StatusNew {
 		t.Errorf("status = %s after unauthorized calls", st)
+	}
+}
+
+func TestExposureClosedJSONNameSaysLastSeenOpen(t *testing.T) {
+	tf := newTargetFixture(t)
+	v := tf.addNamed("srv-demo", "192.0.2.60")
+	tf.storeListeners(v.ID, true, listener("0.0.0.0", 443))
+	tf.seedExposure(v.ID, "fexpo000000000002", "6379", "exposed_cache", "gone", ts(now.Add(-48*time.Hour)))
+	_, body := tf.exposure(v.ID)
+	if !strings.Contains(body, `"last_seen_open":`) || strings.Contains(body, `"at":`) {
+		t.Errorf("body = %s", body)
+	}
+}
+
+// A closed line next to the same port listening open would be a false
+// sentence: the stored inventory is the newer fact.
+func TestExposureClosedDropsAPortSeenOpenAgain(t *testing.T) {
+	tf := newTargetFixture(t)
+	v := tf.addNamed("srv-demo", "192.0.2.60")
+	tf.storeListeners(v.ID, true, listener("0.0.0.0", 5432), listener("127.0.0.1", 6379))
+	tf.seedExposure(v.ID, "fexpo000000000002", "5432", "exposed_database", "gone", ts(now.Add(-48*time.Hour)))
+	tf.seedExposure(v.ID, "fexpo000000000003", "6379", "exposed_cache", "gone", ts(now.Add(-48*time.Hour)))
+	got, _ := tf.exposure(v.ID)
+	// 5432 is open again: no closed line. 6379 only listens for the server: still closed to all.
+	if len(got.Closed) != 1 || got.Closed[0].Port != 6379 {
+		t.Errorf("closed = %+v", got.Closed)
+	}
+}
+
+func TestExposureUnseenListenersIsTranslated(t *testing.T) {
+	for name, set := range map[string]func(tf *targetFixture, id string){
+		"stored unseen": func(tf *targetFixture, id string) { tf.storeListeners(id, false) },
+		"old inventory": func(tf *targetFixture, id string) {
+			if err := target.NewRepo(tf.st).SaveInventory(context.Background(), target.Inventory{TargetID: id, At: now}); err != nil {
+				tf.t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tf := newTargetFixture(t)
+			v := tf.addNamed("srv-demo", "192.0.2.60")
+			set(tf, v.ID)
+			for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
+				var got ExposureView
+				tf.get("/api/v1/targets/"+v.ID+"/exposure?lang="+string(lang), &got)
+				want := i18n.T(lang, "api.exposure.listeners.what")
+				if want == "api.exposure.listeners.what" || want == "listeners" {
+					t.Fatalf("%s: catalog key missing: %q", lang, want)
+				}
+				found := false
+				for _, u := range got.Unseen {
+					found = found || u.What == want
+					if u.What == "listeners" {
+						t.Errorf("%s: raw word in %+v", lang, got.Unseen)
+					}
+				}
+				if !found {
+					t.Errorf("%s: %q not in %+v", lang, want, got.Unseen)
+				}
+			}
+		})
+	}
+}
+
+func TestExposureDecisionWhyTooLong(t *testing.T) {
+	tf := newTargetFixture(t)
+	v := tf.addNamed("srv-demo", "192.0.2.60")
+	tf.seedExposure(v.ID, "fexpo000000000001", "5432", "exposed_database", "new", ts(now))
+	code, b := tf.decideExposure(v.ID, "fexpo000000000001", `{"why":"`+strings.Repeat("é", decide.MaxJustification+1)+`"}`)
+	var eb ErrorBody
+	_ = json.Unmarshal([]byte(b), &eb)
+	if code != http.StatusBadRequest || eb.Error != i18n.T(i18n.EN, "api.decision.refused") ||
+		!strings.HasPrefix(eb.Hint, strings.SplitN(i18n.T(i18n.EN, "api.decision.why_too_long", decide.MaxJustification), "%", 2)[0]) {
+		t.Errorf("%d %s", code, b)
+	}
+	if rows := tf.auditRows("decision.set"); len(rows) != 0 {
+		t.Errorf("audited: %+v", rows)
+	}
+}
+
+func TestExposureDecisionOnGoneIsConflict(t *testing.T) {
+	tf := newTargetFixture(t)
+	v := tf.addNamed("srv-demo", "192.0.2.60")
+	tf.seedExposure(v.ID, "fexpo000000000001", "5432", "exposed_database", "gone", ts(now))
+	code, b := tf.decideExposure(v.ID, "fexpo000000000001", `{"why":"blocked by the host"}`)
+	var eb ErrorBody
+	_ = json.Unmarshal([]byte(b), &eb)
+	if code != http.StatusConflict || eb.Error != i18n.T(i18n.EN, "api.decision.gone") || eb.Hint != i18n.T(i18n.EN, "api.decision.gone_hint") {
+		t.Errorf("%d %s", code, b)
+	}
+	if rows := tf.auditRows("decision.set"); len(rows) != 0 {
+		t.Errorf("audited: %+v", rows)
 	}
 }
