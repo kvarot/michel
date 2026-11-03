@@ -17,6 +17,7 @@ const (
 	KindPrivateKey  Kind = "private_key"
 	KindAWSKey      Kind = "aws_key"
 	KindGitHubToken Kind = "github_token"
+	KindKnownToken  Kind = "known_token"
 	KindEnvValue    Kind = "env_value"
 	KindAssignment  Kind = "assignment"
 	KindURLPassword Kind = "url_password"
@@ -31,6 +32,9 @@ type detector struct {
 	kind Kind
 	re   *regexp.Regexp
 	skip int
+	// quotedOnly keeps only a value written in quotes: a wide shape must not
+	// hide the code around it. A name in the skipped group is read too.
+	quotedOnly bool
 }
 
 const (
@@ -45,21 +49,28 @@ const (
 )
 
 var detectors = []detector{
-	{KindPrivateKey, regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|.*$)`), 0},
-	{KindAWSKey, regexp.MustCompile(`AKIA[0-9A-Z]{16}`), 0},
-	{KindGitHubToken, regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}`), 0},
+	{KindPrivateKey, regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|.*$)`), 0, false},
+	{KindAWSKey, regexp.MustCompile(`AKIA[0-9A-Z]{16}`), 0, false},
+	{KindGitHubToken, regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}`), 0, false},
+	// Stripe secret keys, JSON Web Tokens, Slack tokens.
+	{KindKnownToken, regexp.MustCompile(`[sr]k_live_[A-Za-z0-9]{16,}|eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+|xox[abprs]-[A-Za-z0-9-]{8,}`), 0, false},
 	// The name holds a keyword, followed only by "_..." (SECRET_KEY_BASE) or
 	// nothing; the keyword may stick to what precedes it (DBPASSWORD).
-	{KindEnvValue, regexp.MustCompile(`(?im)^[ 	]*(?:export[ 	]+)?([A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)(?:_[A-Z0-9_]*)?)[ 	]*=[ 	]*` + valueExpr), 1},
-	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?[ 	]*(?:=>|:|=)[ 	]*` + valueExpr), 0},
+	{KindEnvValue, regexp.MustCompile(`(?im)^[ 	]*(?:export[ 	]+)?([A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)(?:_[A-Z0-9_]*)?)[ 	]*=[ 	]*` + valueExpr), 1, false},
+	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?[ 	]*(?:=>|:|=)[ 	]*` + valueExpr), 0, false},
+	// PHP: define('DB_PASSWORD', '...'), Laravel's 'key' => 'base64:...', and
+	// the password, third argument of new PDO.
+	{KindAssignment, regexp.MustCompile(`\bdefine\([ 	]*['"]([^'"\n]*(?:PASSWORD|KEY|SECRET|SALT|TOKEN)[^'"\n]*)['"][ 	]*,[ 	]*` + valueExpr), 1, true},
+	{KindAssignment, regexp.MustCompile(`['"]key['"][ 	]*=>[ 	]*['"](base64:[A-Za-z0-9+/=]{16,})['"]`), 0, false},
+	{KindAssignment, regexp.MustCompile(`\bnew[ 	]+\\?PDO\([^,\n]+,[^,\n]+,[ 	]*` + valueExpr), 0, true},
 	// scheme://user:password@host: only the password.
-	{KindURLPassword, regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'<>]*:([^\s/@"'<>]+)@`), 0},
+	{KindURLPassword, regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'<>]*:([^\s/@"'<>]+)@`), 0, false},
 	{KindAbsPath, regexp.MustCompile(
 		// Windows: directories may hold spaces, the last segment may not.
 		`(?m)(?:^|[^A-Za-z0-9])([A-Za-z]:[\\/](?:[^\\/\r\n"'<>|*?:]+[\\/])*[^\s\\/"'<>|*?:]*)` +
 			// POSIX: at least two segments, after a separator, so URLs stay out;
 			// a ":" separates the entries of a list.
-			`|(?:^|[\s"'(=:])(/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._@+-]+)+)`), 0},
+			`|(?:^|[\s"'(=:])(/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._@+-]+)+)`), 0, false},
 }
 
 // notSecretNames are variable names that hold a keyword by accident or hold a
@@ -155,7 +166,10 @@ func find(s, tokenPrefix string) []match {
 			if a < 0 || b <= a || isPlaceholder(s[a:b], tokenPrefix) {
 				continue
 			}
-			if d.kind == KindEnvValue && notSecretNames.MatchString(s[loc[2]:loc[3]]) {
+			if d.quotedOnly && unquoted {
+				continue
+			}
+			if d.skip > 0 && notSecretNames.MatchString(s[loc[2]:loc[3]]) {
 				continue
 			}
 			if (d.kind == KindEnvValue || d.kind == KindAssignment) && isNonValue(s[a:b]) {
