@@ -55,3 +55,6 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 1: a9e6064, review clean, 3 minors deferred (high not tested on tag fills, main.js registration not tested, .m-tag padding left to the screens).
 - Task 1: complete.
 - Task 2: dispatched, BASE a9e6064.
+- Task 2: 85dc2f4, FR 2 important 4 minor, review 2 minor, fix e31d0ee, controller fix e28b5cb (focus only on a page change; a route change inside a page kept stealing focus). Not seen: light theme, English, real data. Deferred: nav.help unchanged, header logo green.
+- Task 2: complete.
+- Task 3: dispatched, BASE e28b5cb.
