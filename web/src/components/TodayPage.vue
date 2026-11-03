@@ -73,7 +73,7 @@ import ExploitedBanner from './ExploitedBanner.vue'
 import OsvBanner from './OsvBanner.vue'
 import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
-import { buildTodo, serversToRead, unseenBelow } from '../lib/todoView.js'
+import { buildTodo, projectsToRead, serversToRead, unseenBelow } from '../lib/todoView.js'
 
 export default {
   name: 'TodayPage',
@@ -89,9 +89,13 @@ export default {
       // loaded stays false until the first reading ended: an empty list is
       // never said before Michel has looked at the fixes and the servers.
       loaded: false,
+      // readDigest is the digest the reads below go with: a newer one would
+      // call « not read » what is still being read.
+      readDigest: null,
       attempts: [],
       servers: [],
       details: {},
+      findings: {},
       now: new Date(),
       // seq drops the answers of a reading that a newer one replaced.
       seq: 0,
@@ -100,10 +104,11 @@ export default {
   computed: {
     todo() {
       return buildTodo({
-        digest: this.digest,
+        digest: this.readDigest,
         attempts: this.attempts,
         servers: this.servers,
         details: this.details,
+        findings: this.findings,
         lang: this.$ui.lang,
         now: this.now,
         advanced: this.$ui.advanced,
@@ -131,26 +136,37 @@ export default {
   },
   methods: {
     /**
-     * load reads the fixes, the servers and the detail of the servers with
-     * open flaws. What cannot be read stays null or missing: the list then
-     * says so instead of leaving it out in silence.
+     * load reads the fixes, the servers, their detail and the findings of the
+     * projects with something open. What cannot be read stays null or missing:
+     * the list then says so instead of leaving it out in silence.
      */
     async load() {
       const seq = ++this.seq
       const lang = `lang=${encodeURIComponent(this.$ui.lang)}`
       const read = (path) => api.get(path).then((r) => r || []).catch(() => null)
+      const digest = this.digest
       const [attempts, servers] = await Promise.all([read(`/fixes?${lang}`), read(`/targets?${lang}`)])
       if (seq !== this.seq) return
       const wanted = serversToRead(servers)
-      const answers = await Promise.all(wanted.map((s) => read(`/targets/${encodeURIComponent(s.id)}?${lang}`)))
+      const toRead = projectsToRead(digest, attempts)
+      const [answers, lists] = await Promise.all([
+        Promise.all(wanted.map((s) => read(`/targets/${encodeURIComponent(s.id)}?${lang}`))),
+        Promise.all(toRead.map((p) => read(`/projects/${encodeURIComponent(p.name)}/findings?${lang}`))),
+      ])
       if (seq !== this.seq) return
       const details = {}
       wanted.forEach((s, i) => {
         if (answers[i]) details[s.id] = answers[i]
       })
+      const findings = {}
+      toRead.forEach((p, i) => {
+        findings[p.name] = lists[i]
+      })
+      this.readDigest = digest
       this.attempts = attempts
       this.servers = servers
       this.details = details
+      this.findings = findings
       this.now = new Date()
       this.loaded = true
     },

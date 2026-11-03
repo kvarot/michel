@@ -2,10 +2,10 @@
 // projects and servers mixed. No DOM, no fetch, no storage. Vitest covers them
 // (todoView.test.js).
 import { translate } from '../i18n/index.js'
-import { groupAttention, severityOf } from './digestView.js'
-import { fixHash } from './fixView.js'
+import { groupAttention, severityOf, severityRank } from './digestView.js'
+import { fixHash, isOpen } from './fixView.js'
 import { stripTechnicalIds } from './modeView.js'
-import { findingTitle, mergeFindings, serversHash, touchedServers } from './serversView.js'
+import { findingTitle, mergeFindings, restoreNeeded, serversHash, touchedServers } from './serversView.js'
 
 /** The most servers whose detail the page reads (ruling R15); the rest makes one line. */
 export const maxServerDetails = 20
@@ -35,13 +35,54 @@ const bySeverity = {
 const exploitedRank = { rank: 0, word: 'urgent', action: 'solution' }
 
 /**
- * serversToRead are the servers whose detail the page asks for: those with
- * open flaws, the urgent ones first, at most maxServerDetails.
+ * serversToRead are the servers whose detail the page asks for, at most
+ * maxServerDetails: those with open flaws, the urgent ones first, then those
+ * checked with none. Only its detail tells what a clean server could not judge.
  * @param {object[]|null} servers GET /targets
  * @returns {object[]}
  */
 export function serversToRead(servers) {
-  return touchedServers(servers).slice(0, maxServerDetails)
+  return [...touchedServers(servers), ...cleanServers(servers)].slice(0, maxServerDetails)
+}
+
+/** cleanServers are the active servers checked, with no open flaw. */
+function cleanServers(servers) {
+  return (Array.isArray(servers) ? servers : []).filter((s) => s && s.active !== false && s.state?.code === 'clean' && !(Number(s.open_findings) > 0))
+}
+
+/** openCount is what the digest counts as open in a project, without what is deferred. */
+function openCount(p) {
+  const open = Object.values(p.open || {}).reduce((sum, n) => sum + (Number(n) || 0), 0)
+  return open - (Number(p.decided?.defer) || 0)
+}
+
+/**
+ * projectsToRead are the projects whose findings the page asks for: the digest
+ * names only what is new in its window, and only the list says what else is
+ * open. A project whose fix went nowhere on a decided flaw is read too: only
+ * the list says what was decided.
+ * @param {object|null} digest GET /today
+ * @param {object[]|null} attempts GET /fixes
+ * @returns {object[]}
+ */
+export function projectsToRead(digest, attempts) {
+  const tried = new Set((attempts || [])
+    .filter((a) => a && !a.server && a.finding?.status === 'decided' && ['failed', 'inconclusive'].includes(a.state))
+    .map((a) => a.project))
+  return (digest?.projects || []).filter((p) => openCount(p) > 0 || tried.has(p.name))
+}
+
+/** findingName is what a finding's line calls it: its package, or the tool for a tool's finding (scan.Ref). */
+function findingName(f) {
+  if (f.kind && f.kind !== 'dependency') return String(f.source_key || '').replace(/^plugin\./, '') || f.rule_id || f.package
+  return f.package || f.osv_id
+}
+
+const isHot = (f) => !!(f.kev || f.malicious)
+
+/** worstOf is the most severe severity of findings. */
+function worstOf(list) {
+  return list.map((f) => severityOf(f.severity)).sort((a, b) => severityRank(a) - severityRank(b))[0]
 }
 
 /**
@@ -51,13 +92,6 @@ export function serversToRead(servers) {
  */
 export function unseenBelow(unseen) {
   return (unseen || []).filter((u) => u.key !== 'failed_scans' && u.key !== 'osv_stale')
-}
-
-/** restoreNeeded mirrors ServerProposal.restoreNow: a package upgrade failed, or the site went down after it. */
-function restoreNeeded(a) {
-  const s = a.server
-  if (!s || !s.needs_snapshot || a.state !== 'failed') return false
-  return (s.steps || []).some((x) => (x.op === 'package_upgrade' || x.op === 'check_site') && !x.ok && x.detail !== 'not run')
 }
 
 /** newestByFinding keeps a finding's newest attempt; GET /fixes lists the newest first. */
@@ -84,12 +118,14 @@ function noDate(t) {
  * only says « as far as Michel could see », followed by what he could not.
  * attempts or servers null means the page could not read them. details maps a
  * server id to GET /targets/{id}; a touched server missing from it could not be
- * read, and says so. Lines of equal rank keep their order of arrival: projects,
- * servers, then fixes.
- * @param {{digest: object, attempts: object[]|null, servers: object[]|null, details: Object<string, object>, lang: string, now: Date, advanced: boolean}} input
+ * read, and says so. findings maps a project's name to GET
+ * /projects/{name}/findings, null when it could not be read; a project with
+ * something open and no list says so too, with a count that may be too high.
+ * Lines of equal rank keep their order of arrival: projects, servers, then fixes.
+ * @param {{digest: object, attempts: object[]|null, servers: object[]|null, details: Object<string, object>, findings: Object<string, object[]|null>, lang: string, now: Date, advanced: boolean}} input
  * @returns {{head: string, sub: string, lines: {id: string, tone: string, word: string, title: string, where: string, action: {label: string, href: string}|null, rank: number}[], unseen: {key: string, text: string}[]}}
  */
-export function buildTodo({ digest, attempts, servers, details, lang, now, advanced }) {
+export function buildTodo({ digest, attempts, servers, details, findings, lang, now, advanced }) {
   const t = (key, params) => translate(lang, key, params)
   const d = digest || {}
   const active = (servers || []).filter((s) => s && s.active !== false)
@@ -116,30 +152,33 @@ export function buildTodo({ digest, attempts, servers, details, lang, now, advan
 
   const newest = newestByFinding(attempts)
   const groups = groupAttention(d)
+  const known = new Map()
   ;(d.projects || []).forEach((p, i) => {
     const scope = `project:${p.name}`
     const where = inProject(p.name)
-    const named = new Set(exploited.filter((e) => e.project === p.name).map((e) => e.finding_id))
-    const rest = { ...(p.open || {}) }
+    const list = Array.isArray(findings?.[p.name]) ? findings[p.name].filter(Boolean) : null
+    for (const f of list || []) known.set(f.id, f)
+    const closed = (id) => known.has(id) && !isOpen(known.get(id))
     for (const item of groups[i]?.items || []) {
       if (item.kind === 'new') {
         // A decision to defer or ignore keeps it off the list until it is due.
         if (item.decided === 'ignore' || item.decided === 'defer') continue
-        const ids = item.findingIds.filter((id) => !exploitedIds.has(id))
-        const covered = item.findingIds.length > ids.length
-        if (covered && !ids.length) continue
-        const hot = !covered && (item.kev || item.malicious)
-        const how = hot ? exploitedRank : bySeverity[severityOf(item.severity)]
-        const title = item.text || t('todo.flaw', { package: item.package })
-        const line = add(`new:${p.name}:${item.package}:${ids[0] || ''}`, how, title, item.kev && hot ? attacked(where) : where, how.action, fixHash({ finding: ids[0] || '' }), scope, ids)
-        for (const id of line.ids) named.add(id)
-        const sev = severityOf(item.severity)
-        rest[sev] = Math.max(0, (rest[sev] || 0) - ids.length)
+        const covered = item.findingIds.some((id) => exploitedIds.has(id))
+        // A row may hold a flaw already decided: the list says which are left.
+        const ids = item.findingIds.filter((id) => !exploitedIds.has(id) && !closed(id))
+        if (item.findingIds.length && !ids.length) continue
+        const seen = ids.every((id) => known.has(id)) ? ids.map((id) => known.get(id)) : []
+        const hot = !covered && (seen.length ? seen.some(isHot) : item.kev || item.malicious)
+        const kev = seen.length ? seen.some((f) => f.kev) : item.kev
+        const how = hot ? exploitedRank : bySeverity[seen.length ? worstOf(seen) : severityOf(item.severity)]
+        // The explanation names a version and a file: for the advanced mode.
+        const title = advanced && item.text ? item.text : t('todo.flaw', { package: item.package })
+        add(`new:${p.name}:${item.package}:${ids[0] || ''}`, how, title, kev && hot ? attacked(where) : where, how.action, fixHash({ finding: ids[0] || '' }), scope, ids)
       } else if (item.kind === 'superseded') {
-        const how = bySeverity[severityOf(item.severity)]
         const id = item.findingIds[0] || ''
+        if (exploitedIds.has(id)) continue
+        const how = bySeverity[severityOf(item.severity)]
         add(`superseded:${id}`, how, t('todo.superseded', { package: item.package }), where, how.action, fixHash({ finding: id }), scope, item.findingIds)
-        named.add(id)
       } else if (item.kind === 'due' && (item.overdue || Date.parse(item.text) <= now.getTime())) {
         const how = bySeverity[severityOf(item.severity)]
         const id = item.findingIds[0] || ''
@@ -151,26 +190,33 @@ export function buildTodo({ digest, attempts, servers, details, lang, now, advan
     }
 
     // The digest names only what is new in its window: an older flaw still
-    // open has no row of its own, and must not vanish from the list.
-    for (const a of newest) {
-      if (a.server || a.project !== p.name || ['refused', 'superseded', 'proven_fixed'].includes(a.state) || a.finding?.status === 'gone') continue
-      if (a.finding?.id && !named.has(a.finding.id)) {
-        named.add(a.finding.id)
-        const sev = severityOf(a.finding.severity)
-        rest[sev] = Math.max(0, (rest[sev] || 0) - 1)
+    // open has no row of its own. The list names it, by package and severity.
+    if (list) {
+      const carried = new Set(lines.flatMap((l) => l.ids))
+      const rows = new Map()
+      for (const f of list) {
+        if (!isOpen(f) || carried.has(f.id)) continue
+        const key = [f.ecosystem, f.source_key, findingName(f), severityOf(f.severity)].join('|')
+        if (!rows.has(key)) rows.set(key, [])
+        rows.get(key).push(f)
       }
-    }
-    const open = Object.values(p.open || {}).reduce((sum, n) => sum + (Number(n) || 0), 0)
-    const remaining = open - (Number(p.decided?.defer) || 0) - named.size
-    if (remaining > 0) {
-      const worst = ['critical', 'high', 'medium', 'low'].find((s) => (Number(rest[s]) || 0) > 0) || 'unknown'
-      add(`remaining:${p.name}`, bySeverity[worst], t('todo.remaining', { n: remaining }), where, 'see_all', fixHash(), scope)
+      for (const row of rows.values()) {
+        const hot = row.some(isHot)
+        const how = hot ? exploitedRank : bySeverity[severityOf(row[0].severity)]
+        const said = row.some((f) => f.kev) ? attacked(where) : where
+        add(`open:${p.name}:${row[0].id}`, how, t('todo.flaw', { package: findingName(row[0]) }), said, how.action, fixHash({ finding: row[0].id }), scope, row.map((f) => f.id))
+      }
+    } else if (openCount(p) > 0) {
+      // The count may name what a line already says: too high rather than too low.
+      const worst = ['critical', 'high', 'medium', 'low'].find((s) => Number(p.open?.[s]) > 0) || 'unknown'
+      add(`unread:${p.name}`, bySeverity[worst], t('todo.project_unread', { n: openCount(p) }), where, 'see_project', '#/projects', scope)
     }
   })
 
   // Servers. A flaw counts only while it is new or pending, as openStatus in Go.
   const moreServers = []
-  const readable = new Set(serversToRead(active).map((s) => s.id))
+  // A clean server is read too, but has no flaw to say: a failed read is only a note.
+  const readable = new Set(touchedServers(active).slice(0, maxServerDetails).map((s) => s.id))
   for (const s of active) {
     const scope = `server:${s.id}`
     const where = onServer(s.name)
@@ -223,16 +269,18 @@ export function buildTodo({ digest, attempts, servers, details, lang, now, advan
   // Fixes. A flaw with a line keeps one line: the most urgent of the two says
   // it, and the action opens the fix.
   for (const a of newest) {
-    const line = attemptLine(a, t)
+    const line = attemptLine(a, t, known)
     const fid = a.finding?.id || ''
     const hit = fid ? lines.find((l) => l.ids.includes(fid)) : null
-    if (hit && !['refused', 'superseded'].includes(a.state) && !hit.linked) {
+    const taken = !!hit?.linked
+    if (hit && !['refused', 'superseded'].includes(a.state) && !taken) {
       hit.linked = true
       hit.action.href = line ? line.action.href : fixHash({ attempt: a.id })
     }
     if (!line) continue
     const made = { id: `fix:${a.id}`, ...line, ids: fid ? [fid] : [] }
-    if (!hit) lines.push(made)
+    // A line that opens another fix keeps it: this one is said on its own.
+    if (!hit || taken) lines.push(made)
     else if (made.rank <= hit.rank) Object.assign(hit, { rank: made.rank, word: made.word, title: made.title, where: made.where, action: made.action, scope: made.scope })
   }
 
@@ -248,7 +296,8 @@ export function buildTodo({ digest, attempts, servers, details, lang, now, advan
   const touched = [...scopes].filter((s) => s.startsWith('server:')).length + moreServers.length
   if (!out.length) {
     const looked = counted((d.projects || []).length, active.length, t)
-    return { head: t('todo.head.none'), sub: !unseen.length && looked ? t('todo.sub.looked', { what: looked }) : '', lines: out, unseen }
+    const busy = unseen.some((u) => u.key === 'in_progress')
+    return { head: t(busy ? 'todo.head.checking' : 'todo.head.none'), sub: !unseen.length && looked ? t('todo.sub.looked', { what: looked }) : '', lines: out, unseen }
   }
   return { head: t('todo.head', { n: out.length }), sub: t('todo.sub.lines', { what: counted(projects, touched, t) }), lines: out, unseen }
 }
@@ -260,13 +309,15 @@ function counted(projects, servers, t) {
   return p && s ? t('todo.sub.both', { projects: p, servers: s }) : p || s
 }
 
-/** attemptLine is what a fix asks of the user, null when it asks nothing. */
-function attemptLine(a, t) {
+/** attemptLine is what a fix asks of the user, null when it asks nothing. known maps a project's finding id to its FindingView. */
+function attemptLine(a, t, known) {
   const pkg = a.finding?.package || a.finding?.osv_id || ''
   const s = a.server
   const where = s ? t('todo.where.server', { name: s.target?.name || a.project }) : t('todo.where.project', { name: a.project })
   const scope = s ? `server:${s.target?.id || a.project}` : `project:${a.project}`
   const fix = fixHash({ attempt: a.id })
+  // A flaw decided since: a server has no other word for it, a project says which decision.
+  const settled = s ? a.finding?.status === 'decided' : ['ignore', 'defer'].includes(known.get(a.finding?.id)?.decision?.action)
   const make = (rank, word, title, actionKey, href = fix) => ({ rank, word, title, where, action: { label: t(`todo.action.${actionKey}`), href }, scope })
   switch (a.state) {
     case 'proposed':
@@ -282,11 +333,11 @@ function attemptLine(a, t) {
       return make(2, 'finish', t('todo.applied'), 'finish')
     case 'inconclusive':
       // A project's flaw that is gone leaves nothing to do; on a server, the site may be down.
-      if (!s && a.finding?.status === 'gone') return null
+      if ((!s && a.finding?.status === 'gone') || settled) return null
       return make(4, 'look', t('todo.inconclusive', { package: pkg }), 'understand')
     case 'failed':
       if (restoreNeeded(a)) return make(0, 'urgent', t('todo.restore', { server: s?.target?.name || a.project }), 'check_server')
-      if (a.finding?.status === 'gone') return null
+      if (a.finding?.status === 'gone' || settled) return null
       return make(4, 'look', t('todo.failed', { package: pkg }), 'understand')
     default:
       return null
@@ -313,6 +364,8 @@ function seenNot(d, servers, attempts, active, details, now, t) {
   else if (noDate(d.osv_fetched_at)) note('no_db', 'todo.unseen.no_db')
 
   const code = (s) => s.state?.code
+  const running = [...byStatus('running'), ...active.filter((s) => code(s) === 'checking')]
+  if (running.length) note('in_progress', 'todo.unseen.in_progress', { names: names(running) })
   const notYet = active.filter((s) => code(s) === 'never_checked' || code(s) === 'key_unconfirmed')
   if (notYet.length) note('server_never', 'todo.unseen.server_never', { n: notYet.length, names: names(notYet) })
   const failed = active.filter((s) => code(s) === 'check_failed')
@@ -323,6 +376,8 @@ function seenNot(d, servers, attempts, active, details, now, t) {
     return code(s) === 'unread' || (detail && ((detail.unseen || []).length > 0 || !!detail.source_to_enable))
   })
   if (unread.length) note('server_unread', 'todo.unseen.server_unread', { n: unread.length, names: names(unread) })
+  const notRead = cleanServers(active).filter((s) => !details?.[s.id])
+  if (notRead.length) note('server_not_read', 'todo.unseen.server_not_read', { names: names(notRead) })
   const old = active.filter((s) => {
     if (notYet.includes(s) || failed.includes(s) || !s.last_check_at) return false
     const at = Date.parse(s.last_check_at)
