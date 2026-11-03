@@ -203,3 +203,39 @@ Final: FR review of docs + 21 keys — 16 rewordings (final-fr-review.md) → fi
 Final: whole-branch review — Ready after fixes (no Critical; I1 two server fixes can run at once (busyStates/Claim); I2 classifyExit reads failing command code before rollback line → re-proposal loop; I3 command -v sentinel (Task 7 deferred); 15 minors) → ONE final fix dispatch (fresh opus): I1-I3, T13 n2, T13 F1, FR 16, webhook marker, M6 regression test, cheap minors
 Final: fix wave done (commit e804754: I1 one server fix at a time incl. Claim NOT EXISTS; I2 rollback exit 9 + line-moved re-propose once then alert; I3 sh sentinel; n2 unreadable scripts refused; F1; FR 16; webhook marker; M6 test; skipped minors 11-14 with reasons) → scoped re-review
 Final: re-review — Ready to merge (e804754). Open minors: PostgreSQL-only Claim race on two approved attempts (lock target row on PG port); exit 6 link check after trap can give false urgent exit 8; F1 first sentence still says "without an agent"; skipped 11-14 accepted. Kévin's real test-server run still to do.
+
+## Real run, 2026-11-03
+
+Docker container from test/docker-server: Debian 13, PHP 8.4, systemd, sshd, PHP-FPM, nginx. Not a hosting provider, not shared hosting, not a real network.
+
+| Step | Result |
+|---|---|
+| 4 Fingerprint | Pass: same as the server's; refused before confirmation; wrong fingerprint refused, nothing saved |
+| 5 Read-only check | Pass after fixes. 5 to 9 s. PHP, nginx and 139 packages match the server; CLI and FPM both seen; 0 unseen; 0 files written by the check; canary 0 hits on this PC, value masked |
+| 6A You run the script | Pass: exit 0, proven_fixed, one line differs, undo restores the same hash |
+| 6B File changed | Failed, then fixed and replayed: exit 5, file untouched, no backup made |
+| 6C Michel, no sudo | Pass: proposes only, runs nothing |
+| 6D Michel, sudo | Pass, replayed after the fixes: 6 steps followed, proven_fixed, no script left |
+| 6E Site down | Pass, replayed after the fixes: failed, cause rolled back, same hash |
+| 6F Connection cut | Pass, provoked once: unknown, no guessed undo, closed by "I checked the server" |
+| 7 PHP2Shell | Not applicable: PHP not affected. Mitigation and snapshot gate not exercised on this run |
+| 8 Audit | Pass: exit 0, 206 events, target.connect present; canary 0 hits |
+
+Findings before the fixes: 154 (153 packages, 1 configuration), 3 critical. After: 103 (102 packages, 1 configuration), 2 critical.
+
+Independent check of the 153 against the raw OSV archive and dpkg: 153 of 153 present for this release with no fix; 0 false negatives in 1526 version comparisons; the 8 not reported are all withdrawn. False alerts: 51, marked `unimportant` by Debian (1 shown as critical). The other 102 have no Debian verdict and no fix: not counted as false, not audited one by one.
+
+Failures fixed:
+
+- Check repeated "enable the source" when the source was on and only its database was missing: now says `michel db update`.
+- Debian `unimportant` records were findings: now dropped in Debian's ecosystem only.
+- Package finding titles were raw English on the French page: now follow the language.
+- A value changed by hand was overwritten instead of exit 5: the script now compares the file's SHA-256 with the check's before any change.
+
+Rulings:
+
+- Ruling 1: fingerprint and check used a test agent through `ssh.agent_pipe`, not the Windows OpenSSH agent — its service stayed disabled and needs admin rights — costs an untested agent path, still named in the guides.
+- Ruling 2: the guide line is reworded, not only removed — the checklist asks for that after a Docker run, and the limits remain true — costs one more sentence.
+- Ruling 3: `--cgroupns=private` without mounting `/sys/fs/cgroup`, against the checklist's flags — keeps the container off the distribution's cgroups — costs nothing observed.
+
+Open minors: the server page does not say a database is missing when its source is on; Today shows "all calm" for about 2 s while servers load; `target trust` shows "unreachable" for any unclassified error and hides the cause; other uses of the stored English summary not reviewed. Corriger on a flaw with no ready fix stays: it answers plainly and offers the agent.

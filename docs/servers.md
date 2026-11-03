@@ -227,6 +227,7 @@ Michel shows these messages in your language; here is what to do.
 - nginx and Apache are reported and explained, never changed.
 - BSD systems are not supported.
 - A Pageant agent is untested.
-- The authors have not yet run this on a real server of their own: the tests use an in-memory SSH server. Try it first on a test server.
+- Debian records marked `unimportant` (no security impact in Debian, by its own security team) are not reported. Records with no verdict from Debian yet are.
+- The authors ran this once from end to end on a throwaway Debian 13 container with systemd, sshd, PHP-FPM and nginx. Not tried yet: a hosting provider's real settings, shared hosting, a real network, and the Windows OpenSSH agent (that run used a test agent through `ssh.agent_pipe`). Try it first on a test server.
 
 Network destinations: [security/network-egress.md](security/network-egress.md) (`target.ssh`, `target.http`, `notify.sms`). Fix levels for code: [fix.md](fix.md).

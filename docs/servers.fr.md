@@ -240,6 +240,7 @@ Michel affiche ces messages dans ta langue ; voici quoi faire.
 - nginx et Apache sont signalés et expliqués, jamais modifiés.
 - Les systèmes BSD ne sont pas pris en charge.
 - Un agent Pageant n'est pas testé.
-- Les auteurs n'ont pas encore essayé ceci sur un vrai serveur à eux : les tests utilisent un serveur SSH en mémoire. Essaie d'abord sur un serveur de test.
+- Les fiches Debian marquées `unimportant` (sans effet sur la sécurité dans Debian, d'après son équipe de sécurité) ne sont pas signalées. Celles que Debian n'a pas encore jugées le sont.
+- Les auteurs ont fait un essai complet sur un conteneur Debian 13 jetable, avec systemd, sshd, PHP-FPM et nginx. Pas encore essayés : les réglages d'un vrai hébergeur, le mutualisé, un vrai réseau et l'agent OpenSSH de Windows (cet essai passait par un agent de test, avec `ssh.agent_pipe`). Essaie d'abord sur un serveur de test.
 
 Destinations réseau : [security/network-egress.fr.md](security/network-egress.fr.md) (`target.ssh`, `target.http`, `notify.sms`). Niveaux de correction du code : [fix.fr.md](fix.fr.md).
