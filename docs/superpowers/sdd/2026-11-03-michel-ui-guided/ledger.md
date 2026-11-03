@@ -70,3 +70,16 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 4: French reader 8 important 4 minor, applied aaf5831. `help.settings.token` left: `michel serve` is never introduced, for Task 15. Task 4: complete.
 - Task 5: 46f399d, review 3 minor; backticks fixed ecac929; parked: load() order not pinned by a test, refreshView can overwrite an action error. Real clipboard content not observed. Task 5: complete.
 - Task 6: dispatched, BASE ecac929.
+- Task 6: 431960b, review 5 important 4 medium 3 low. Fix round dispatched.
+- Ruling R38: open project flaws are read from `GET /projects/{name}/findings`, one line per package and severity, overstated line only if that read fails — the digest's `new` holds only the window — costs one request per project.
+- Ruling R39: R15 widened, À faire reads the detail of up to 20 servers even with 0 flaws — a clean server without its distribution database must not read "Rien à faire" — costs up to 20 requests on each load; above 20, the unseen note stays.
+- Ruling R40: `DecisionPanel` joins the flaw view of `FixPage` in both modes — a novice must be able to defer or ignore what À faire names, above all when no fix is possible — costs one more block on that page, Task 8 places it under the path.
+- Task 6 fix: f4f2c8a, e3f07db, 69feb4b. For Task 8: panel far down on a phone, `applied` project fix has no panel, simple-mode sheet shows `file:line`.
+- Task 7: dispatched, BASE 69feb4b.
+- Task 6 re-review not approved: N1 head "Rien à faire" over known blind spots, N2 `canDecide` looks at the attempt shown, N3 `applied` no panel, 3 French. Fix round 2 after Task 7 commits.
+- Ruling R41: "Rien à faire" only when nothing is unseen, overriding the brief's older line — R39 and the anti-objective — costs a less calm head when a minor thing was not seen.
+- Noted N4: a project scanned long ago has no age note; needs a date from Go; for Task 14 or later.
+- Task 7: b70da74, review running. For Task 13: `resolvedLines` takes exposures but the page passes []; server detail drops `gone` findings and needs a real "gone" date.
+- Task 6 fix 2: 635dac4. Task 6: complete. Browser not re-looked after fix 2.
+- Task 7 fix: d1769d8: verified needs the flaw still gone, a third group "Revenues". F6 left for Task 13, F7 (empty package and osv id title) parked. Controller read the stat; no scoped re-review, final review covers. Task 7: complete.
+- Task 8: dispatched, BASE d1769d8.
