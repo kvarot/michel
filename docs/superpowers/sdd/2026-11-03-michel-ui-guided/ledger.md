@@ -58,3 +58,12 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 2: 85dc2f4, FR 2 important 4 minor, review 2 minor, fix e31d0ee, controller fix e28b5cb (focus only on a page change; a route change inside a page kept stealing focus). Not seen: light theme, English, real data. Deferred: nav.help unchanged, header logo green.
 - Task 2: complete.
 - Task 3: dispatched, BASE e28b5cb.
+- Task 3: 1b76996, review 4 important 4 minor, fix efec47d.
+- Ruling R36: 27 keys with jargon visible in simple mode (`servers.*` 23, `srvfix.*` 4, listed in the Task 3 fix report) get rewritten in Task 15, and the jargon test then covers the whole catalog minus advanced-only families — a task per key would scatter the work, Tasks 9 and 13 touch some anyway — costs jargon on those screens until Task 15.
+- Task 3: complete, scoped re-review running with Task 4.
+- Task 4: dispatched, BASE efec47d.
+- Task 3 re-review approved. Parked minor: `stripTechnicalIds` edge cleanup runs even when no id was removed ("Et voilà" loses "Et"), to fix with the next web fix round. Task 6 must not hide `ExploitedBanner` until its Urgent lines exist.
+- Task 4: 4739542, review 2 critical 7 important 16 minor, fix 6fc5ab4, 6ee0867, c4cde86. 38 help ids.
+- Ruling R37: the words on sudo and on automatic undo change, not the code — plan 6 behaviour is merged and reviewed; the help must be true — costs nothing on behaviour; to show Kévin: sudo also reads backups and simulates updates, a root script runs without a click at level 3 with auto_config, a server without site address has no outage detection, a software update is never undone.
+- Noted: plan 6 spec line 89 still says "Jamais pour lire", historic, left. Dialog closing by Escape drops focus on body, to fix in Task 15. Non-specialist French pass running beside Task 5.
+- Task 5: dispatched, BASE c4cde86.
