@@ -164,14 +164,46 @@ func (m *hourlyMemo) due(key string, now time.Time) bool {
 	return true
 }
 
+// hourlySlots counts the messages sent over the last hour, for a cap on them. It
+// lives in memory: a restart gives the hour back.
+type hourlySlots struct {
+	sync.Mutex
+	at map[string][]time.Time
+}
+
+// take says whether fewer than limit messages of key went in the last hour, and
+// then counts one more.
+func (m *hourlySlots) take(key string, now time.Time, limit int) bool {
+	m.Lock()
+	defer m.Unlock()
+	if m.at == nil {
+		m.at = map[string][]time.Time{}
+	}
+	kept := m.at[key][:0]
+	for _, at := range m.at[key] {
+		if now.Sub(at) < capWindow && !now.Before(at) {
+			kept = append(kept, at)
+		}
+	}
+	ok := len(kept) < limit
+	if ok {
+		kept = append(kept, now)
+	}
+	m.at[key] = kept
+	return ok
+}
+
 var (
+	// alertSlots: the messages that tell errors, by server (spec § 8.2). The cap
+	// counts these messages, not the errors they hold.
+	alertSlots hourlySlots
 	// capSent: the "cap reached" message, by server (spec § 8.2).
 	capSent hourlyMemo
 	// volumeSent: the volume alert, by source.
 	volumeSent hourlyMemo
 )
 
-// capWindow is the hour the cap is counted over.
+// capWindow is the hour the caps are counted over.
 const capWindow = time.Hour
 
 // gapFloor is the shortest silence that counts as a gap in the reading.
@@ -458,9 +490,10 @@ func (p *onePass) queue(ctx context.Context, src Source, fresh, reopened, spiked
 }
 
 // alert hands the queued errors to Deps.Alert: one alert for all of them, the
-// most severe first, within the hourly cap of the server; what the cap leaves
-// out waits for the digest, with one message saying so. The volume alert goes
-// apart, at most once an hour per source.
+// most severe first, if the hourly cap of the server leaves room for a message.
+// If not, they all wait for the digest, with one message saying so, at most
+// once an hour. The volume alert goes apart, at most once an hour per source;
+// neither it nor the "cap reached" message counts against the cap.
 func (p *onePass) alert(ctx context.Context, res *PassResult) error {
 	if p.d.Alert == nil || (len(p.cands) == 0 && len(p.volumes) == 0) {
 		return nil
@@ -472,23 +505,18 @@ func (p *onePass) alert(ctx context.Context, res *PassResult) error {
 		}
 		return a.Count > b.Count
 	})
-	used, err := p.d.Repo.AlertedSince(ctx, p.t.ID, p.now.Add(-capWindow))
-	if err != nil {
-		return err
-	}
-	room := p.st.MaxAlertsPerHour - used
-	if room < 0 {
-		room = 0
-	}
-	send, held := p.cands, false
-	if len(send) > room {
-		send, held = send[:room], true
-	}
-	told := make([]string, 0, len(send))
-	items := make([]AlertItem, 0, len(send))
-	for _, c := range send {
-		told = append(told, c.id)
-		items = append(items, c.item)
+	held := false
+	var told []string
+	var items []AlertItem
+	if len(p.cands) > 0 {
+		if alertSlots.take(p.t.ID, p.now, p.st.MaxAlertsPerHour) {
+			for _, c := range p.cands {
+				told = append(told, c.id)
+				items = append(items, c.item)
+			}
+		} else {
+			held = true
+		}
 	}
 	if len(items) > 0 {
 		p.d.Alert(ctx, AlertInput{Target: p.t, Kind: groupKind(items), Items: items})

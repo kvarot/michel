@@ -124,14 +124,15 @@ type Note struct {
 
 // Settings are the log settings of one server.
 type Settings struct {
-	TargetID         string
-	Interval         time.Duration
-	StoreText        bool
-	AlertText        bool
-	RetentionDays    int
-	ResolveAfter     time.Duration
-	ReadCap          int64
-	ReadTimeout      time.Duration
+	TargetID      string
+	Interval      time.Duration
+	StoreText     bool
+	AlertText     bool
+	RetentionDays int
+	ResolveAfter  time.Duration
+	ReadCap       int64
+	ReadTimeout   time.Duration
+	// MaxAlertsPerHour caps the messages that tell errors, not the errors they hold.
 	MaxAlertsPerHour int
 	// SpikeFactor and SpikeMin: an hour spikes when it holds at least SpikeMin
 	// occurrences and SpikeFactor times the hour before.

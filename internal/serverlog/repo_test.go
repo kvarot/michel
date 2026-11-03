@@ -476,30 +476,18 @@ func TestApplyKeepsAnErrorWithoutAType(t *testing.T) {
 	}
 }
 
-func TestMarkAlertedAndAlertedSince(t *testing.T) {
+func TestMarkAlerted(t *testing.T) {
 	e := setup(t, target.EnvProd)
 	ctx := context.Background()
 	fresh, _, _, err := e.r.Apply(ctx, e.src, []Record{rec(1, t0), {Level: LevelError, Type: "Other", Hour: t0, Count: 1}}, t0)
 	if err != nil || len(fresh) != 2 {
 		t.Fatal(fresh, err)
 	}
-	if n, _ := e.r.AlertedSince(ctx, e.tgt.ID, t0.Add(-time.Hour)); n != 0 {
-		t.Fatalf("nothing is told yet: %d", n)
-	}
 	if err := e.r.MarkAlerted(ctx, []string{fresh[0].ID}, t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.r.MarkAlerted(ctx, nil, t0); err != nil {
 		t.Fatal(err)
-	}
-	if n, _ := e.r.AlertedSince(ctx, e.tgt.ID, t0.Add(-time.Hour)); n != 1 {
-		t.Errorf("told in the last hour: %d", n)
-	}
-	if n, _ := e.r.AlertedSince(ctx, e.tgt.ID, t0); n != 0 {
-		t.Errorf("told after t0 itself: %d", n)
-	}
-	if n, _ := e.r.AlertedSince(ctx, "other-server", t0.Add(-time.Hour)); n != 0 {
-		t.Errorf("another server: %d", n)
 	}
 	got, _ := e.r.Signatures(ctx, e.tgt.ID)
 	told := 0

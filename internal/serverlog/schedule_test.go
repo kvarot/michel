@@ -477,22 +477,15 @@ func TestNotReadingRouteByEnv(t *testing.T) {
 
 func TestNotReadingIgnoresHourlyCap(t *testing.T) {
 	e := newSchedEnv(t)
-	tg, src := e.server("srv-demo", target.EnvProd, true)
+	tg, _ := e.server("srv-demo", target.EnvProd, true)
 	st, _ := e.repo.Settings(context.Background(), tg.ID)
 	st.MaxAlertsPerHour, st.Interval = 1, 10*time.Minute
 	if err := e.repo.SaveSettings(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
-	// The cap is used up by an error told a moment ago.
-	if _, _, _, err := e.repo.Apply(context.Background(), src, []Record{rec(1, readNow)}, readNow); err != nil {
-		t.Fatal(err)
-	}
-	sigs, _ := e.repo.Signatures(context.Background(), tg.ID)
-	if err := e.repo.MarkAlerted(context.Background(), []string{sigs[0].ID}, readNow); err != nil {
-		t.Fatal(err)
-	}
-	if n, _ := e.repo.AlertedSince(context.Background(), tg.ID, readNow.Add(-time.Hour)); n != 1 {
-		t.Fatalf("setup: %d", n)
+	// The cap is used up by a message sent a moment ago.
+	if !alertSlots.take(tg.ID, readNow, st.MaxAlertsPerHour) {
+		t.Fatal("setup: the cap was already used")
 	}
 	f := &fakePass{fn: failing(ReasonError)}
 	s := e.scheduler(f)
@@ -503,8 +496,8 @@ func TestNotReadingIgnoresHourlyCap(t *testing.T) {
 	if got := e.alerts.ofKind(AlertNotReading); len(got) != 1 {
 		t.Fatalf("alerts = %v", e.alerts.kinds())
 	}
-	if n, _ := e.repo.AlertedSince(context.Background(), tg.ID, readNow.Add(-time.Hour)); n != 1 {
-		t.Errorf("the not reading alert used the cap of errors: %d", n)
+	if !alertSlots.take(tg.ID, readNow.Add(40*time.Minute), 2) {
+		t.Error("the not reading alert used the cap of errors")
 	}
 }
 

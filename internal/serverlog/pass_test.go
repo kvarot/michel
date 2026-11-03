@@ -353,24 +353,65 @@ func TestSpikeRealerts(t *testing.T) {
 	}
 }
 
-func TestHourlyCapThenOneMessage(t *testing.T) {
+// The cap counts messages: a read with many errors is one message, all told.
+func TestHourlyCapCountsMessagesNotErrors(t *testing.T) {
 	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
 	pe.activate()
 	var lines []string
-	for i := 1; i <= 12; i++ {
+	for i := 1; i <= 30; i++ {
 		lines = append(lines, mono("CRITICAL", "PDOException", fmt.Sprintf("F%d.php", i), i))
 	}
 	pe.write(lines...)
 	res := pe.run()
-	news, caps := pe.alerts.ofKind(AlertNew), pe.alerts.ofKind(AlertCapReached)
-	if len(news) != 1 || len(news[0].Items) != 10 || len(caps) != 1 || res.Alerts != 2 {
-		t.Fatalf("want 10 errors then one cap message, got %v with %d items", pe.alerts.kinds(), len(news[0].Items))
+	news := pe.alerts.ofKind(AlertNew)
+	if len(news) != 1 || len(news[0].Items) != 30 || len(pe.alerts.ofKind(AlertCapReached)) != 0 || res.Alerts != 1 {
+		t.Fatalf("want one message with the 30 errors, got %v", pe.alerts.kinds())
+	}
+	for _, g := range pe.signatures() {
+		if g.LastAlertAt.IsZero() {
+			t.Errorf("%s is in the message but not marked as told", g.Location)
+		}
+	}
+}
+
+// 10 new criticals in a read do not silence the next reads of the hour: each
+// gets its message, until the hour's messages are used. Then one "more errors"
+// message, then silence, with what is held left to the digest.
+func TestHourlyCapThenOneMessage(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	pe.activate()
+	var lines []string
+	for i := 1; i <= 10; i++ {
+		lines = append(lines, mono("CRITICAL", "PDOException", fmt.Sprintf("F%d.php", i), i))
+	}
+	pe.write(lines...)
+	pe.run()
+	// Nine more reads in the same hour, each with a new critical: nine messages.
+	for i := 1; i <= 9; i++ {
+		pe.clock.Advance(time.Minute)
+		loc := fmt.Sprintf("G%d.php", i)
+		pe.write(mono("CRITICAL", "PDOException", loc, 1))
+		pe.run()
+		news := pe.alerts.ofKind(AlertNew)
+		if len(news) != i+1 || len(news[i].Items) != 1 || news[i].Items[0].Location != loc+":1" {
+			t.Fatalf("read %d of the hour: alerts = %v", i+1, pe.alerts.kinds())
+		}
+	}
+	if n := len(pe.alerts.ofKind(AlertCapReached)); n != 0 {
+		t.Fatalf("cap message before the cap: %d", n)
+	}
+	// The hour's messages are used: the whole next read is held, one message says so.
+	pe.clock.Advance(time.Minute)
+	pe.write(mono("CRITICAL", "PDOException", "H1.php", 1), mono("CRITICAL", "PDOException", "H2.php", 1))
+	res := pe.run()
+	if len(pe.alerts.ofKind(AlertNew)) != 10 || len(pe.alerts.ofKind(AlertCapReached)) != 1 || res.Alerts != 1 {
+		t.Fatalf("after the cap: %v", pe.alerts.kinds())
 	}
 	// More errors in the same hour: nothing more, not even a second message.
-	pe.clock.Advance(5 * time.Minute)
-	pe.write(mono("CRITICAL", "PDOException", "G1.php", 1), mono("CRITICAL", "PDOException", "G2.php", 2))
+	pe.clock.Advance(time.Minute)
+	pe.write(mono("CRITICAL", "PDOException", "H3.php", 1))
 	pe.run()
-	if len(pe.alerts.all()) != 2 {
+	if len(pe.alerts.all()) != 11 {
 		t.Fatalf("alerts after the cap: %v", pe.alerts.kinds())
 	}
 	held := 0
@@ -379,14 +420,15 @@ func TestHourlyCapThenOneMessage(t *testing.T) {
 			held++
 		}
 	}
-	if held != 4 {
+	if held != 3 {
 		t.Errorf("the held errors stay for the digest, unmarked: %d", held)
 	}
 	// An hour later the room is back.
 	pe.clock.Advance(time.Hour)
-	pe.write(mono("CRITICAL", "PDOException", "H1.php", 1))
+	pe.write(mono("CRITICAL", "PDOException", "J1.php", 1))
 	pe.run()
-	if got := pe.alerts.ofKind(AlertNew); len(got) != 2 || got[1].Items[0].Location != "H1.php:1" {
+	news := pe.alerts.ofKind(AlertNew)
+	if len(news) != 11 || news[10].Items[0].Location != "J1.php:1" {
 		t.Fatalf("after the hour: %v", pe.alerts.kinds())
 	}
 }
@@ -399,8 +441,17 @@ func TestCapIsTheSettingOfTheServer(t *testing.T) {
 	pe.activate()
 	pe.write(mono("CRITICAL", "A", "A.php", 1), mono("CRITICAL", "B", "B.php", 1), mono("CRITICAL", "C", "C.php", 1))
 	pe.run()
-	if news := pe.alerts.ofKind(AlertNew); len(news) != 1 || len(news[0].Items) != 2 || len(pe.alerts.ofKind(AlertCapReached)) != 1 {
-		t.Fatalf("alerts = %v", pe.alerts.kinds())
+	if news := pe.alerts.ofKind(AlertNew); len(news) != 1 || len(news[0].Items) != 3 || len(pe.alerts.ofKind(AlertCapReached)) != 0 {
+		t.Fatalf("first read: %v", pe.alerts.kinds())
+	}
+	pe.clock.Advance(time.Minute)
+	pe.write(mono("CRITICAL", "D", "D.php", 1))
+	pe.run()
+	pe.clock.Advance(time.Minute)
+	pe.write(mono("CRITICAL", "E", "E.php", 1))
+	pe.run()
+	if len(pe.alerts.ofKind(AlertNew)) != 2 || len(pe.alerts.ofKind(AlertCapReached)) != 1 {
+		t.Fatalf("after two messages: %v", pe.alerts.kinds())
 	}
 }
 

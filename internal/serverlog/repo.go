@@ -801,16 +801,6 @@ func (r *Repo) MarkAlerted(ctx context.Context, ids []string, at time.Time) erro
 	return tx.Commit()
 }
 
-// AlertedSince counts the errors of a server told to the user after since: the
-// hourly cap counts errors, not messages (spec § 8.2: one alert per signature).
-func (r *Repo) AlertedSince(ctx context.Context, targetID string, since time.Time) (int, error) {
-	var n int
-	if err := r.s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM log_signature WHERE target_id = ? AND last_alert_at > ?`, targetID, ts(since)).Scan(&n); err != nil {
-		return 0, fmt.Errorf("cannot count the log alerts: %w", err)
-	}
-	return n, nil
-}
-
 // HourCount returns how many times an error was read in an hour.
 func (r *Repo) HourCount(ctx context.Context, signatureID string, hour time.Time) (int64, error) {
 	var n int64
