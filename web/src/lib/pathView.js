@@ -82,7 +82,28 @@ export function cameBack(attempt) {
  */
 export function canRestart(attempt, gone = false) {
   if (gone) return false
-  return !attempt || ['failed', 'refused', 'superseded'].includes(attempt.state) || cameBack(attempt)
+  return !attempt || ['failed', 'refused', 'superseded', 'withdrawn'].includes(attempt.state) || cameBack(attempt)
+}
+
+/**
+ * holdView is the question of a held attempt: possible keys found in the copy,
+ * no agent started (internal/fix/hold.go). Files and lines only: the API never
+ * has a value. A flaw that left keeps its question but not its yes: ContinueHeld
+ * would refuse it.
+ * @param {object|null|undefined} attempt
+ * @param {boolean} [gone] isGone()
+ * @returns {{count: number, files: {file: string, linesKey: string, lines: string}[], more: number, hash: string, canContinue: boolean}|null}
+ */
+export function holdView(attempt, gone = false) {
+  if (attempt?.state !== 'held' || !attempt.hold) return null
+  const { count, files, more, hash } = attempt.hold
+  return {
+    count,
+    more,
+    hash,
+    canContinue: !gone,
+    files: (files || []).map((f) => ({ file: f.file, linesKey: f.lines.length > 1 ? 'path.hold.lines' : 'path.hold.line', lines: f.lines.join(', ') })),
+  }
 }
 
 /**
@@ -159,6 +180,13 @@ function attemptPath(attempt, gone, vanished, target) {
   switch (attempt.state) {
     case 'preparing':
       return out(1, 'now', true, { key: server ? 'preparing_server' : 'preparing' })
+    case 'held': {
+      const p = out(1, 'now', true, { key: 'held', params: { n: attempt.hold?.count ?? 0 } })
+      p.steps[1] = { ...p.steps[1], label: 'held' }
+      return p
+    }
+    case 'withdrawn':
+      return out(1, 'todo', true, { key: 'withdrawn' })
     case 'superseded':
       return out(1, 'now', true, { key: 'superseded' })
     case 'proposed':

@@ -79,8 +79,11 @@
           :target="isServer ? target : null"
           :can-start="isServer || canStart"
           :starting="isServer ? acting === 'again' : starting"
+          :hold-busy="holdBusy"
           @start="isServer ? again() : start()"
           @to-proposal="toProposal"
+          @hold-continue="holdContinue"
+          @hold-withdraw="holdWithdraw"
         />
         <!-- Here in the template as on the screen: it is read and tabbed to before what follows. -->
         <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
@@ -247,6 +250,8 @@ export default {
       focusGuide: false,
       approving: false,
       refusing: false,
+      // holdBusy is the answer to a held attempt running: withdraw, continue, or ''.
+      holdBusy: '',
       // acting is the server fix action running: snapshot, applied, resolve, again.
       acting: '',
       // target is the sheet of the server of the attempt shown (a server fix).
@@ -700,6 +705,8 @@ export default {
           const was = this.current.state
           this.current = { ...this.current, state: d.state, cause: d.cause, approved_by: d.approved_by, branch: d.branch || '', updated_at: d.updated_at }
           this.patchList(this.current)
+          // The state event has no list of keys: only the attempt read in full has it.
+          if (d.state === 'held' && !this.current.hold) this.openAttempt(id)
           if (isFinal(d.state)) {
             this.closeStream()
             this.activity = ''
@@ -815,6 +822,56 @@ export default {
         }
       } finally {
         this.approving = false
+        this.guardFocus()
+      }
+    },
+    /**
+     * holdContinue is the person's yes for the list on screen (its hash). When the
+     * code changed since, nothing starts: the attempt is read again with its refusal.
+     */
+    async holdContinue(hash) {
+      if (!this.current || this.holdBusy) return
+      const id = this.current.id
+      this.holdBusy = 'continue'
+      this.actionError = null
+      this.focusGuide = true
+      try {
+        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/continue`), { hash })
+        if (!this.alive || this.current?.id !== id) return
+        this.closeStream()
+        this.show(v)
+        if (!isFinal(v.state)) this.follow(id)
+        this.$emit('changed')
+      } catch (err) {
+        if (err?.status === 401) return
+        this.actionError = err
+        if (this.alive && err?.status === 409) {
+          await this.openAttempt(id)
+          if (this.alive) this.actionError = err
+          this.$emit('changed')
+        }
+      } finally {
+        this.holdBusy = ''
+        this.guardFocus()
+      }
+    },
+    /** holdWithdraw is the person's no: the attempt ends, no agent. */
+    async holdWithdraw() {
+      if (!this.current || this.holdBusy) return
+      const id = this.current.id
+      this.holdBusy = 'withdraw'
+      this.actionError = null
+      this.focusGuide = true
+      try {
+        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/withdraw`))
+        if (!this.alive || this.current?.id !== id) return
+        this.closeStream()
+        this.show(v)
+        this.$emit('changed')
+      } catch (err) {
+        if (err?.status !== 401) this.actionError = err
+      } finally {
+        this.holdBusy = ''
         this.guardFocus()
       }
     },

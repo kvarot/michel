@@ -201,6 +201,7 @@ export default {
         case 'refused':
         case 'failed':
         case 'superseded':
+        case 'withdrawn':
           return this.$t(`fix.done.${a.state}`)
         default:
           return ''

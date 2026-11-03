@@ -30,6 +30,36 @@
       <a href="#/projects" class="m-guide__link">{{ $t('git.manual.projects') }}</a>
     </section>
 
+    <section v-if="hold" class="m-guide__hold m-panel" aria-labelledby="fix-hold-title">
+      <component :is="subHeading" id="fix-hold-title" class="m-guide__sub" tabindex="-1">{{ $t('path.hold.title', { n: hold.count }) }}</component>
+      <p>{{ $t('path.hold.stopped') }}</p>
+      <ul class="m-guide__keys">
+        <li v-for="f in hold.files" :key="f.file">
+          <span class="m-code m-guide__file"><MaskedText :text="f.file" /></span>
+          <span class="m-small">{{ $t(f.linesKey, { lines: f.lines }) }}</span>
+        </li>
+      </ul>
+      <p v-if="hold.more" class="m-small">{{ $t('path.hold.more', { more: hold.more }) }}</p>
+      <p class="m-guide__warn">{{ $t('path.hold.if_continue', { n: hold.count }) }}</p>
+      <p>{{ $t('path.hold.how', { n: hold.count }) }}</p>
+      <div class="m-guide__answers">
+        <v-btn color="primary" variant="flat" :loading="holdBusy === 'withdraw'" :disabled="!!holdBusy" @click="$emit('hold-withdraw')">{{ $t('path.hold.withdraw') }}</v-btn>
+        <v-btn
+          v-if="hold.canContinue"
+          color="warning"
+          variant="outlined"
+          :loading="holdBusy === 'continue'"
+          :disabled="!!holdBusy || !canStart"
+          @click="$emit('hold-continue', hold.hash)"
+        >
+          {{ $t('path.hold.continue') }}
+        </v-btn>
+      </div>
+      <p v-if="!hold.canContinue" class="m-small">{{ $t('path.hold.gone') }}</p>
+      <p v-else-if="holdBusy === 'continue'" class="m-voice m-guide__busy" role="status">{{ $t('path.hold.continuing') }}</p>
+      <p v-else class="m-small m-muted">{{ $t('path.hold.once') }}</p>
+    </section>
+
     <v-btn v-if="proposed && !card" class="m-guide__go" color="primary" variant="flat" block @click="$emit('to-proposal')">{{ $t('path.to_proposal') }}</v-btn>
 
     <div class="m-guide__two">
@@ -60,7 +90,7 @@ import FailurePath from './FailurePath.vue'
 import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
 import { causeSentence } from '../lib/fixView.js'
-import { canPrepareServer, canRestart, failurePath, isGone, mergeStep, pathSteps, plainRisk, projectPlan, serverPlan, showsPlan } from '../lib/pathView.js'
+import { canPrepareServer, canRestart, failurePath, holdView, isGone, mergeStep, pathSteps, plainRisk, projectPlan, serverPlan, showsPlan } from '../lib/pathView.js'
 import { guideServerTitle } from '../lib/serversView.js'
 import { guideTitle } from '../lib/todoView.js'
 
@@ -94,8 +124,10 @@ export default {
     preprodHealth: { type: Boolean, default: false },
     // preprodTarget: the preprod's TargetView, whose settings the first script follows.
     preprodTarget: { type: Object, default: null },
+    // holdBusy: the answer to a held attempt running: withdraw, continue, or ''.
+    holdBusy: { type: String, default: '' },
   },
-  emits: ['start', 'to-proposal'],
+  emits: ['start', 'to-proposal', 'hold-continue', 'hold-withdraw'],
   data() {
     return { copied: false, copyFailed: false }
   },
@@ -105,6 +137,9 @@ export default {
       // On a server the attempt is read again and again, the server's sheet is not.
       if (this.server && this.attempt) return isGone(this.attempt.finding || this.finding, null)
       return isGone(this.finding, this.sheet)
+    },
+    hold() {
+      return holdView(this.attempt, this.gone)
     },
     path() {
       return failurePath({ attempt: this.attempt, vanished: this.gone, target: this.target })
@@ -218,6 +253,12 @@ export default {
   overflow-wrap: anywhere;
   user-select: all;
 }
+.m-guide__hold { padding: 0.75rem 0.9rem; display: grid; gap: 0.6rem; line-height: 1.5; min-width: 0; }
+.m-guide__keys { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
+.m-guide__keys li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.6rem; min-width: 0; }
+.m-guide__file { min-width: 0; overflow-wrap: anywhere; }
+.m-guide__answers { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.m-guide__answers :deep(.v-btn) { max-width: 100%; }
 .m-guide__link { justify-self: start; color: rgb(var(--v-theme-primary)); font-weight: 600; }
 .m-guide__hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .m-guide__go { display: none; }

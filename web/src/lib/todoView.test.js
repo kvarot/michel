@@ -655,7 +655,7 @@ describe('texts', () => {
     expect(p.lines[0]).toMatchObject({ rank: 2, word: 'À finir', tone: 'info', title: 'La correction est prête : à toi de la fusionner', action: { label: 'Voir comment finir', href: '#/fix/p' } })
   })
   test('every word has a tone', () => {
-    expect(Object.fromEntries(todoWords.map((w) => [w, toneOf(w)]))).toEqual({ urgent: 'urgent', important: 'look', look: 'look', validate: 'info', finish: 'info' })
+    expect(Object.fromEntries(todoWords.map((w) => [w, toneOf(w)]))).toEqual({ urgent: 'urgent', important: 'look', look: 'look', validate: 'info', finish: 'info', yours: 'info' })
     for (const w of todoWords) {
       expect(fr[`todo.word.${w}`]).toBeTruthy()
       expect(en[`todo.word.${w}`]).toBeTruthy()

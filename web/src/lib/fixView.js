@@ -10,7 +10,7 @@ export const fixGroups = ['todo', 'running', 'review', 'done']
 export const levels = [0, 1, 2, 3]
 
 /** The states after which nothing more happens to an attempt. */
-const finals = ['refused', 'applied', 'proven_fixed', 'inconclusive', 'failed', 'superseded']
+const finals = ['refused', 'applied', 'proven_fixed', 'inconclusive', 'failed', 'superseded', 'withdrawn']
 
 /** @param {string} state @returns {boolean} whether the attempt is over (the stream can stop). */
 export function isFinal(state) {
@@ -32,7 +32,7 @@ export function isOpen(f) {
 export function canDecide(attempt) {
   if (!attempt) return true
   if (attempt.server) return false
-  return ['refused', 'failed', 'inconclusive', 'superseded', 'applied'].includes(attempt.state) || (!!attempt.finding && cameBack(attempt))
+  return ['refused', 'failed', 'inconclusive', 'superseded', 'applied', 'withdrawn'].includes(attempt.state) || (!!attempt.finding && cameBack(attempt))
 }
 
 /**
@@ -65,6 +65,7 @@ export function groupOf(state) {
     case 'approved':
     case 'running':
       return 'running'
+    case 'held':
     case 'proposed':
     case 'unknown':
       return 'review'
@@ -277,7 +278,7 @@ export function stateLine(item, lang) {
   const a = item.attempt || {}
   if (a.state === 'inconclusive') return [translate(lang, 'fix.line.inconclusive'), causeSentence(a.cause)].filter(Boolean).join(' ')
   if (a.finding && cameBack(a)) return translate(lang, 'fix.line.came_back')
-  const known = ['preparing', 'proposed', 'approved', 'running', 'refused', 'applied', 'proven_fixed', 'failed', 'superseded', 'unknown']
+  const known = ['preparing', 'held', 'proposed', 'approved', 'running', 'refused', 'applied', 'proven_fixed', 'failed', 'withdrawn', 'superseded', 'unknown']
   return translate(lang, `fix.line.${known.includes(a.state) ? a.state : 'failed'}`, { branch: a.branch || '' })
 }
 

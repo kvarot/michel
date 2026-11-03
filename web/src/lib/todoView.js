@@ -14,7 +14,7 @@ export const maxServerDetails = 20
 /** A server not checked for this long is old news, whatever its state says. */
 const staleCheckMs = 7 * 24 * 3600 * 1000
 
-const tones = { urgent: 'urgent', important: 'look', look: 'look', validate: 'info', finish: 'info' }
+const tones = { urgent: 'urgent', important: 'look', look: 'look', validate: 'info', finish: 'info', yours: 'info' }
 
 /** The words a line can carry. */
 export const todoWords = Object.keys(tones)
@@ -348,6 +348,9 @@ function attemptLine(a, t, known) {
   const settled = s ? a.finding?.status === 'decided' : ['ignore', 'defer'].includes(known.get(a.finding?.id)?.decision?.action)
   const make = (rank, word, title, actionKey, href = fix) => ({ rank, word, title, where, action: { label: t(`todo.action.${actionKey}`), href }, scope })
   switch (a.state) {
+    case 'held':
+      // The agent does not start and the project is taken until the person answers.
+      return make(2, 'yours', t('todo.held', { n: a.hold?.count ?? 0 }), 'answer')
     case 'proposed':
       return make(2, 'validate', t('todo.proposed', { package: pkg }), 'validate')
     case 'approved':
