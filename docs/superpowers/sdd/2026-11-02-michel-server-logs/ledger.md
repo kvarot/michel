@@ -187,3 +187,4 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Task 9: minor (deferred to Task 10): manual interval promises "when you ask" with no button on the page, only `michel target logs read`; say so in the docs.
 - Task 9: minor (deferred): candKey in ids breaks aria-describedby on a path with a space; `now` set only at load, "il y a X min" goes stale on an open sheet; `load()` has no sequencing; `refreshView` swallows its error; interval warning recomputed locally, API's `interval_note` unused; `c.strong` computed and unread; no component test of the 409 flow; dark theme not rechecked after the last commit. Redesign to pick these up.
 - Task 9: complete (commits d625b9a..a2e505e, review clean)
+- Task 10: dispatched, BASE ac427c0.
