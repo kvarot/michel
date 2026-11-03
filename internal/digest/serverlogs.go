@@ -133,10 +133,10 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 				sl.Reopened++
 			case w.Spiked:
 				kind = serverlog.AlertSpike
-			case w.Count >= serverlog.FrequentMin:
-				kind = serverlog.AlertFrequent
 			default:
-				continue
+				// No floor: after the new and back ones, the most frequent of the
+				// period fill the list, which the cap bounds.
+				kind = serverlog.AlertFrequent
 			}
 			list = append(list, entry{id: w.ID, level: levelRank(w.Level), news: kind == serverlog.AlertNew || kind == serverlog.AlertReopened, item: serverlog.AlertItem{Kind: kind, Level: w.Level,
 				Type: scan.SanitizeText(w.Type), Location: scan.SanitizeText(w.Location), Count: w.Count}})
@@ -146,7 +146,8 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 			if a.news != b.news {
 				return a.news
 			}
-			if a.level != b.level {
+			// New and back: the most severe first. The others: the most frequent first.
+			if a.news && a.level != b.level {
 				return a.level < b.level
 			}
 			if a.item.Count != b.item.Count {
@@ -245,6 +246,10 @@ func serverLogItem(lang i18n.Lang, it serverlog.AlertItem) string {
 	line := label
 	if it.Count > 0 {
 		line = i18n.N(lang, "notify.log.times", int(it.Count), label)
+	}
+	if it.Kind == serverlog.AlertFrequent {
+		// Neither new nor back: the count says enough.
+		return line
 	}
 	return line + " (" + i18n.T(lang, "notify.log.why."+string(it.Kind)) + ")"
 }

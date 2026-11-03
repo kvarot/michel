@@ -50,8 +50,10 @@ type digestSend struct {
 // claims the window in the record of the last digest before it sends, so that
 // two senders at once cannot both send. The run is kept only when a channel
 // got the digest; else the claim is given back and the window does not move.
+// skip names the channels that already received this digest on an earlier try
+// (the loop keeps them for the day): they get no copy.
 // Each channel's result is audited either way (notify.send, never the body).
-func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.Options, once bool) (digestSend, error) {
+func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.Options, once bool, skip map[string]bool) (digestSend, error) {
 	now := deps.Now().UTC()
 	repo := digest.NewRepo(deps.Store)
 	var seen string
@@ -117,7 +119,7 @@ func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.
 	}
 	// A stop of serve in the middle of a send must not leave the claim behind.
 	settle := context.WithoutCancel(ctx)
-	deliveries, err := sendChannels(ctx, cmd, deps, d)
+	deliveries, err := sendChannels(ctx, cmd, deps, d, skip)
 	if err != nil {
 		if once {
 			if rerr := repo.Release(settle, run.ID); rerr != nil {
@@ -174,9 +176,15 @@ func sendDigest(ctx context.Context, cmd *cobra.Command, deps *Deps, opt digest.
 
 // heldMessage is the sentence that says a digest was not recorded as sent: no
 // channel at all, or channels that all failed.
-func heldMessage(deps *Deps, deliveries int) string {
-	if deliveries == 0 {
+func heldMessage(deps *Deps, deliveries []notify.Delivery) string {
+	if len(deliveries) == 0 {
 		return deps.T("cli.digest.no_channel")
+	}
+	for _, dl := range deliveries {
+		if dl.Result == notify.ResultOK {
+			// Some channels got it, none of those that carry the server sections.
+			return deps.T("cli.digest.partly_delivered")
+		}
 	}
 	return deps.T("cli.digest.not_delivered")
 }

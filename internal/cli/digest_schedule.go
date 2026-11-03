@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/digest"
+	"github.com/kvarot/michel/internal/notify"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/spf13/cobra"
 )
@@ -82,10 +83,20 @@ func digestChannels(deps *Deps) int {
 func runDigestLoop(ctx context.Context, cmd *cobra.Command, deps *Deps, every time.Duration) {
 	var retryAt time.Time
 	warned := false
+	// The channels that got a digest that stayed held, for the local day it was
+	// sent: a retry the same day does not send them a second copy. In memory: a
+	// restart of serve can repeat one.
+	served, servedDay := map[string]bool{}, ""
 	tick := func() {
 		digestTickHook()
 		now := deps.Now()
-		if digestChannels(deps) == 0 || now.Before(retryAt) {
+		if digestChannels(deps) == 0 {
+			// Nobody to send to: the window must still start here, not slide with
+			// the clock until a channel is added.
+			holdFirstWindow(ctx, deps, now)
+			return
+		}
+		if now.Before(retryAt) {
 			return
 		}
 		repo := digest.NewRepo(deps.Store)
@@ -110,16 +121,30 @@ func runDigestLoop(ctx context.Context, cmd *cobra.Command, deps *Deps, every ti
 			slog.Warn("serve: cannot prepare the digest", "err", err)
 			return
 		}
-		res, err := sendDigest(ctx, cmd, deps, opt, true)
+		if day := now.Format("2006-01-02"); day != servedDay {
+			served, servedDay = map[string]bool{}, day
+		}
+		res, err := sendDigest(ctx, cmd, deps, opt, true, served)
 		switch {
 		case ctx.Err() != nil:
 		case err != nil:
 			slog.Warn("serve: cannot send the digest", "err", err)
 			retryAt = now.Add(digestRetry)
 		case res.State == digestHeld:
+			partly := false
+			for _, dl := range res.Deliveries {
+				if dl.Result == notify.ResultOK {
+					served[dl.Name] = true
+					partly = true
+				}
+			}
 			// Said once per incident, not at each retry; nothing of the digest in it.
 			if !warned {
-				slog.Warn("serve: the digest reached nobody, it is tried again later and nothing is lost")
+				if partly {
+					slog.Warn("serve: the digest reached some channels but not those that carry the server sections, it is tried again later on the others and nothing is lost")
+				} else {
+					slog.Warn("serve: the digest reached nobody, it is tried again later and nothing is lost")
+				}
 				warned = true
 			}
 			retryAt = now.Add(digestRetry)
@@ -147,5 +172,17 @@ func runDigestLoop(ctx context.Context, cmd *cobra.Command, deps *Deps, every ti
 		case <-t.C:
 			tick()
 		}
+	}
+}
+
+// holdFirstWindow keeps the start of the first window (24 hours before now)
+// when no digest was sent yet, so that it does not move while nobody can get one.
+func holdFirstWindow(ctx context.Context, deps *Deps, now time.Time) {
+	repo := digest.NewRepo(deps.Store)
+	if _, has, err := repo.Last(ctx); err != nil || has {
+		return
+	}
+	if err := repo.HoldStart(ctx, now.UTC().Add(-digest.DefaultWindow)); err != nil && ctx.Err() == nil {
+		slog.Warn("serve: cannot keep the start of the first digest", "err", err)
 	}
 }

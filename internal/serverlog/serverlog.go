@@ -185,10 +185,6 @@ func SignatureID(sourceID string, level Level, typ, location, channel string) st
 
 // Spike thresholds: an error spikes when an hour holds at least spikeMin
 // occurrences and spikeFactor times the hour before.
-// FrequentMin is how many times an error must be read in the period of a digest
-// to be told as frequent when it is neither new nor back.
-const FrequentMin = 100
-
 const (
 	spikeMin    = 100
 	spikeFactor = 10

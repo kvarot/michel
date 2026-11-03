@@ -39,7 +39,7 @@ func newDigestCmd(deps *Deps) *cobra.Command {
 				}
 				return printDigest(deps, d, asJSON, asHTML)
 			}
-			res, err := sendDigest(cmd.Context(), cmd, deps, opt, false)
+			res, err := sendDigest(cmd.Context(), cmd, deps, opt, false, nil)
 			if err != nil {
 				return err
 			}

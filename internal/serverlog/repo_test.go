@@ -330,6 +330,7 @@ func TestEraseTargetRemovesEverything(t *testing.T) {
 	for _, q := range []string{
 		`SELECT COUNT(*) FROM log_signature WHERE target_id = '` + e.tgt.ID + `'`,
 		`SELECT COUNT(*) FROM log_bucket WHERE signature_id NOT IN (SELECT id FROM log_signature)`,
+		`SELECT COUNT(*) FROM log_read WHERE signature_id NOT IN (SELECT id FROM log_signature)`,
 		`SELECT COUNT(*) FROM log_cursor WHERE source_id = '` + e.src.ID + `'`,
 		`SELECT COUNT(*) FROM log_note WHERE target_id = '` + e.tgt.ID + `'`,
 	} {
@@ -414,6 +415,9 @@ func TestSourcesAndCursors(t *testing.T) {
 	}
 	if got, _ := e.r.Cursors(ctx, src.ID); len(got) != 0 {
 		t.Fatalf("cursors kept: %+v", got)
+	}
+	if n := count(t, e, `SELECT COUNT(*) FROM log_read`); n != 0 {
+		t.Fatalf("read counts of a deleted source kept: %d", n)
 	}
 }
 

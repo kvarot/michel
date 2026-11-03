@@ -910,3 +910,42 @@ func auditRowsFor(t *testing.T, s *store.Store, action string) []string {
 	}
 	return out
 }
+
+// The first round is announced once it is over: not before the servers due
+// were read.
+func TestSchedulerAnnouncesTheFirstRoundOnceItIsOver(t *testing.T) {
+	e := newSchedEnv(t)
+	e.server("srv-demo", target.EnvProd, true)
+	entered, release := make(chan struct{}, 10), make(chan struct{})
+	old := schedulerPass
+	schedulerPass = func(ctx context.Context, d Deps, id string) (PassResult, error) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return PassResult{}, nil
+	}
+	t.Cleanup(func() { schedulerPass = old })
+	var announced atomic.Int32
+	announcedCh := make(chan struct{}, 10)
+	e.deps.FirstRound = func() { announced.Add(1); announcedCh <- struct{}{} }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Scheduler(ctx, e.deps, 5*time.Millisecond); close(done) }()
+	<-entered // the first round is reading the server
+	if n := announced.Load(); n != 0 {
+		t.Fatalf("announced %d times while the first round is still reading", n)
+	}
+	close(release)
+	select {
+	case <-announcedCh:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the first round was not announced")
+	}
+	cancel()
+	<-done
+	if n := announced.Load(); n != 1 {
+		t.Errorf("announced %d times", n)
+	}
+}

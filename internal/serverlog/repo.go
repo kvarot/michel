@@ -177,6 +177,7 @@ func (r *Repo) DeleteSource(ctx context.Context, id string) error {
 	defer tx.Rollback()
 	for _, q := range []string{
 		`DELETE FROM log_bucket WHERE signature_id IN (SELECT id FROM log_signature WHERE source_id = ?)`,
+		`DELETE FROM log_read WHERE signature_id IN (SELECT id FROM log_signature WHERE source_id = ?)`,
 		`DELETE FROM log_signature WHERE source_id = ?`,
 		`DELETE FROM log_cursor WHERE source_id = ?`,
 		`DELETE FROM log_note WHERE source_id = ?`,
@@ -495,7 +496,7 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 		}
 		// What the digest counts: by the time Michel read it, once.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO log_read (signature_id, read_at, count) VALUES (?,?,?)
-			ON CONFLICT (signature_id, read_at) DO UPDATE SET count = count + excluded.count`, id, ts(now), rc.Count); err != nil {
+			ON CONFLICT (signature_id, read_at) DO UPDATE SET count = log_read.count + excluded.count`, id, ts(now), rc.Count); err != nil {
 			return nil, nil, nil, fmt.Errorf("cannot save the log counts: %w", err)
 		}
 		var before, prev int64
@@ -506,7 +507,7 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 			return nil, nil, nil, fmt.Errorf("cannot read the log counts: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO log_bucket (signature_id, hour, count) VALUES (?,?,?)
-			ON CONFLICT (signature_id, hour) DO UPDATE SET count = count + excluded.count`, id, ts(hour), rc.Count); err != nil {
+			ON CONFLICT (signature_id, hour) DO UPDATE SET count = log_bucket.count + excluded.count`, id, ts(hour), rc.Count); err != nil {
 			return nil, nil, nil, fmt.Errorf("cannot save the log counts: %w", err)
 		}
 		if !spikes(before, prev) && spikes(before+rc.Count, prev) && !has(freshIDs, id) && !has(reopenedIDs, id) {

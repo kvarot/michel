@@ -90,9 +90,12 @@ type incident struct {
 	carrier  bool
 }
 
+// schedulerPass is the read of one server; replaced in tests.
+var schedulerPass = Pass
+
 func newScheduler(d Deps) *scheduler {
 	return &scheduler{
-		d: d, pass: Pass, sem: make(chan struct{}, maxParallel),
+		d: d, pass: schedulerPass, sem: make(chan struct{}, maxParallel),
 		inflight: map[string]bool{}, lastTry: map[string]time.Time{}, lastGood: map[string]time.Time{}, incidents: map[string]*incident{},
 	}
 }

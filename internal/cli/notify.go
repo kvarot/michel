@@ -149,8 +149,9 @@ func newNotifyTestCmd(deps *Deps) *cobra.Command {
 	}
 }
 
-// sendChannels sends d on every enabled channel of the policy.
-func sendChannels(ctx context.Context, cmd *cobra.Command, deps *Deps, d digest.Digest) ([]notify.Delivery, error) {
+// sendChannels sends d on every enabled channel of the policy, except the ones
+// named in skip (they already got this digest).
+func sendChannels(ctx context.Context, cmd *cobra.Command, deps *Deps, d digest.Digest, skip map[string]bool) ([]notify.Delivery, error) {
 	cfg := deps.Policy.Notify
 	needSecrets := false
 	for _, c := range cfg.Channels {
@@ -172,6 +173,15 @@ func sendChannels(ctx context.Context, cmd *cobra.Command, deps *Deps, d digest.
 	ns, err := notify.Build(cfg, nd)
 	if err != nil {
 		return nil, deps.Wrapf("cli.notify.channels_invalid", err)
+	}
+	if len(skip) > 0 {
+		left := ns[:0:0]
+		for _, n := range ns {
+			if !skip[n.Name()] {
+				left = append(left, n)
+			}
+		}
+		ns = left
 	}
 	return notify.Deliver(ctx, ns, d), nil
 }

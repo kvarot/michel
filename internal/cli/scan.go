@@ -243,7 +243,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				// One digest a day, shared with michel serve: one already sent
 				// today is not sent again, and a digest nobody received is not
 				// recorded, so the next one covers the same period.
-				res, err := sendDigest(ctx, cmd, deps, opt, true)
+				res, err := sendDigest(ctx, cmd, deps, opt, true, nil)
 				if err != nil {
 					return err
 				}
@@ -265,7 +265,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 						if reportChannelLines(deps, res.Deliveries) > 0 {
 							problems = true
 						}
-						fmt.Fprintln(deps.Stderr, heldMessage(deps, len(res.Deliveries)))
+						fmt.Fprintln(deps.Stderr, heldMessage(deps, res.Deliveries))
 					} else if reportChannels(deps, res.Deliveries) > 0 {
 						problems = true
 					}

@@ -28,8 +28,9 @@ const (
 	// AlertSpike: errors that jumped to ten times the hour before (and at least
 	// 100 occurrences). Count is the occurrences of that hour.
 	AlertSpike AlertKind = "spike"
-	// AlertFrequent: an error read very often in the period of a digest (it
-	// is not new, and did not spike). Only the digest uses it.
+	// AlertFrequent: an error among the most frequent of the period of a digest
+	// (it is not new, back or spiking). Only the digest uses it, and it has no
+	// label: its count says it.
 	AlertFrequent AlertKind = "frequent"
 	// AlertVolume: a log so big that the read cap was reached. One item per
 	// source, named by SourceID; Count is the bytes left unread. It follows the

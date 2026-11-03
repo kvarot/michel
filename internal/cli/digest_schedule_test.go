@@ -68,8 +68,14 @@ var loopReady <-chan struct{}
 // so or 20 seconds pass; it then stops the loop and waits for it to end.
 func loopRun(t *testing.T, dir string, now time.Time, done func() bool) {
 	t.Helper()
+	loopRunClock(t, dir, func() time.Time { return now }, done)
+}
+
+// loopRunClock is loopRun with a clock the test can move.
+func loopRunClock(t *testing.T, dir string, clock func() time.Time, done func() bool) {
+	t.Helper()
 	var out, errOut bytes.Buffer
-	deps := &Deps{Stdout: &out, Stderr: &errOut, Now: func() time.Time { return now }}
+	deps := &Deps{Stdout: &out, Stderr: &errOut, Now: clock}
 	deps.LogsReady = loopReady
 	t.Cleanup(func() { deps.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
@@ -625,4 +631,66 @@ func demoWithDB(t *testing.T) (dir, db string) {
 		t.Fatal(err)
 	}
 	return dir, db
+}
+
+// Ruling R29 (finding N2): a digest held because the channels that carry the
+// server sections failed is retried, but the channel that already got it gets
+// no second copy the same day; the next day every channel gets it again.
+func TestHeldDigestIsNotSentAgainToTheChannelsThatGotIt(t *testing.T) {
+	dir, _ := scannedDemo(t, false)
+	h := newHookRecorder(t)
+	writeCfgText(t, dir, "sovereignty:\n  network:\n    default_egress: deny\n    allow:\n      - {host: 127.0.0.1, purpose: notify.webhook}\n      - {host: smtp.example.org, purpose: notify.email}\n"+
+		"notify:\n  digest_at: \"00:00\"\n  channels:\n    - name: hook\n      type: webhook\n      url: "+h.URL+"/michel\n      projects: [demo]\n"+
+		"    - name: mail-perso\n      type: email\n      host: smtp.example.org\n      port: 587\n      from: michel@example.org\n      to: [me@example.org]\n      username: me\n      password_secret: smtp-perso\n")
+	base := time.Now()
+	var offset atomic.Int64
+	clock := func() time.Time { return base.Add(time.Duration(offset.Load())) }
+	mailTries := func() int {
+		n := 0
+		for _, r := range auditRows(t, dir, "notify.send") {
+			if r.target == "mail-perso" {
+				n++
+			}
+		}
+		return n
+	}
+	// Four tries the first day (the clock moves 16 minutes after each), then the next day.
+	moved, nextDay := 0, false
+	loopRunClock(t, dir, clock, func() bool {
+		n := mailTries()
+		if n > moved && n < 4 {
+			moved = n
+			offset.Add(int64(16 * time.Minute))
+		}
+		if n >= 4 && !nextDay {
+			nextDay = true
+			offset.Add(int64(26 * time.Hour))
+		}
+		return n >= 5
+	})
+	if n := mailTries(); n < 5 {
+		t.Fatalf("mail tries = %d", n)
+	}
+	if h.count() != 2 {
+		t.Errorf("the scoped channel got %d copies: want one the first day and one the next", h.count())
+	}
+	if runs := digestRuns(t, dir); len(runs) != 0 {
+		t.Errorf("a held digest was recorded: %+v", runs)
+	}
+}
+
+// Serve with no channel: the first window starts when serve first looked, it
+// does not slide with the clock.
+func TestServeWithoutChannelKeepsTheFirstWindow(t *testing.T) {
+	dir, _ := scannedDemo(t, false)
+	writeCfgText(t, dir, "notify:\n  digest_at: \"00:00\"\n  channels: []\n")
+	ticks := countTicks(t)
+	loopRun(t, dir, time.Now(), func() bool { return ticks.Load() >= 2 })
+	h := newHookRecorder(t)
+	writeHookCfg(t, dir, h.URL, "00:00")
+	loopRun(t, dir, time.Now().Add(30*time.Hour), runsAudited(t, dir, 1))
+	var doc map[string]any
+	if h.count() != 1 || json.Unmarshal(h.bodies[0], &doc) != nil || doc["new_total"] != float64(3) {
+		t.Errorf("sends %d, body %s", h.count(), h.bodies)
+	}
 }

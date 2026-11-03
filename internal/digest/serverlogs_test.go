@@ -3,6 +3,7 @@ package digest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -133,11 +134,11 @@ func TestDigestListsNewAndFrequentErrors(t *testing.T) {
 		}
 	}
 	// The most severe first, then the most frequent.
-	want := []string{"reopened:BackException", "new:FreshException", "spike:SpikeException"}
+	want := []string{"reopened:BackException", "new:FreshException", "spike:SpikeException", "frequent:SeenException"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("top = %v, want %v", got, want)
 	}
-	if s.Top[0].Count != 4 || s.Top[1].Count != 37 || s.Top[2].Count != 305 {
+	if s.Top[0].Count != 4 || s.Top[1].Count != 37 || s.Top[2].Count != 305 || s.Top[3].Count != 3 {
 		t.Errorf("counts = %+v", s.Top)
 	}
 	text, err := RenderText(d)
@@ -150,7 +151,7 @@ func TestDigestListsNewAndFrequentErrors(t *testing.T) {
 			t.Errorf("text lacks %q:\n%s", want, text)
 		}
 	}
-	for _, not := range []string{"QuietException", "SeenException", "WarnException", "IgnoredException"} {
+	for _, not := range []string{"QuietException", "WarnException", "IgnoredException"} {
 		if strings.Contains(text, not) {
 			t.Errorf("text lists %s:\n%s", not, text)
 		}
@@ -485,7 +486,7 @@ func TestReopenedIsToldOnceInTheWindowItReturned(t *testing.T) {
 	l.apply("BackException", serverlog.LevelError, 4, now.Add(-3*24*time.Hour), "")
 	l.apply("BackException", serverlog.LevelError, 4, now.Add(-time.Hour), "")
 	d := l.compute(i18n.EN, Options{})
-	if len(d.ServerLogs) != 0 || d.NewTotal != 0 || !strings.Contains(d.Title, "nothing new") {
+	if len(d.ServerLogs) != 1 || d.ServerLogs[0].Reopened != 0 || d.NewTotal != 0 || strings.Contains(d.Title, "nothing new") {
 		t.Fatalf("told again: %+v total %d title %q", d.ServerLogs, d.NewTotal, d.Title)
 	}
 	// In the window it came back, it is told.
@@ -521,14 +522,14 @@ func TestDigestListsSteadyFrequentErrors(t *testing.T) {
 	for _, it := range s.Top {
 		got = append(got, string(it.Kind)+":"+it.Type)
 	}
-	if strings.Join(got, ",") != "new:NewException,frequent:SteadyException" {
+	if strings.Join(got, ",") != "new:NewException,frequent:SteadyException,frequent:QuietException" {
 		t.Fatalf("top = %v", got)
 	}
 	if s.Top[1].Count != 270 || d.NewTotal != 1 || s.New != 1 {
 		t.Errorf("count %d, new total %d, new %d", s.Top[1].Count, d.NewTotal, s.New)
 	}
 	text, _ := RenderText(d)
-	if !strings.Contains(text, "- SteadyException, Demo.php:42, 270 times (often)") {
+	if !strings.Contains(text, "- SteadyException, Demo.php:42, 270 times\n") || strings.Contains(text, "(often)") {
 		t.Errorf("text:\n%s", text)
 	}
 	// Only a frequent error: not "nothing new".
@@ -542,5 +543,24 @@ func TestDigestListsSteadyFrequentErrors(t *testing.T) {
 	page, _ := RenderHTML(d)
 	if strings.Contains(page, "<li>- ") {
 		t.Errorf("html has a text bullet:\n%s", page)
+	}
+}
+
+// Ruling R27b: no floor. An error read a few times is listed when a slot is
+// free, the cap drops the least frequent, and a frequent item has no label.
+func TestDigestFrequentListIsCappedWithoutAFloor(t *testing.T) {
+	l := newLogFixture(t, target.EnvProd)
+	for i := 1; i <= 7; i++ {
+		typ := fmt.Sprintf("Old%dException", i)
+		l.apply(typ, serverlog.LevelError, 1, now.Add(-10*24*time.Hour), "")
+		l.apply(typ, serverlog.LevelError, int64(i), now.Add(-time.Hour), "")
+	}
+	d, s := l.logSection(i18n.EN)
+	if len(s.Top) != MaxLogTop || s.Top[0].Type != "Old7Exception" || s.Top[4].Type != "Old3Exception" || s.Top[4].Count != 3 {
+		t.Fatalf("top = %+v", s.Top)
+	}
+	text, _ := RenderText(d)
+	if !strings.Contains(text, "- Old7Exception, Demo.php:42, 7 times\n") || strings.Contains(text, "Old2Exception") || strings.Contains(text, "(often)") {
+		t.Errorf("text:\n%s", text)
 	}
 }
