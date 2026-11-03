@@ -115,3 +115,10 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 12 fix: 313567e. Task 12: complete.
 - Task 8b fix: a88f917, 4a9c1b5, 1d8bbc5; re-review running. Task 8b: complete if approved.
 - Task 13: dispatched, BASE 1d8bbc5.
+- Task 13: afd9e22; review running. TestHeldDigestIsNotSentAgainToTheChannelsThatGotIt fails at about 23:20 on 963b4f5 alone: diagnosis running.
+- Task 8b re-review not approved: strength rule N1-N8 (ordinary code on a bare name strong; PHP define, Stripe clients, JWT not seen at all; random letters weak). Masking not narrowed, expiry correct. Reviewer also ran the rule read-only on the 7 private projects, counts only, unasked: to tell Kévin. 5 of 7 hold at that point; lower bounds.
+- Ruling R52: detectors widen for `define(...)`, `sk_live_`, `rk_live_`, JWT, `xox?-` — it only adds to masking, and a tracked wp-config reaching Anthropic unmasked is the worse risk — costs more chips in the diff. R50 stands for weak hits; the automated security note asking every hit to hold on automatic starts is declined for the reason of R50, stated in the final report.
+- Task 13 review: 2 high 7 medium 8 low. Fix after Task 8b fix 2 ends, both edit fr.json.
+- Ruling R53: in simple mode an explained "numéro d'accès" shows only inside "Que faire ?" and the dialog — two identical "Base de données" rows cannot be told apart otherwise — costs one small piece of jargon, explained.
+- Test digest: 8a176d8, the test's clock only; production fine. `digest_at: "00:00"` can give two copies within an hour across midnight, allowed by R29.
+- Task 8b fix 2: 14c42e8, cbca0c7. Task 8b: complete. Next to close, with final fixes: `$config['password'] = '…'` and `new mysqli(...)` unmasked. Noise rate on real code not measured.
