@@ -46,6 +46,14 @@ failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevée
 {{serversTitle}} :
 {{range .Servers}}  {{serverLine .}}
 {{end}}{{end}}
+{{- if .ServerLogs}}
+{{serverLogsTitle}} :
+{{range .ServerLogs}}  {{serverLogHead .}}
+{{range .Top}}    {{serverLogItem .}}
+{{if .Text}}      {{.Text}}
+{{end}}{{end}}{{range .Gaps}}    {{serverLogGap .}}
+{{end}}{{if .Deviations}}    {{serverLogDeviations .}}
+{{end}}{{end}}{{end}}
 {{- if .Reading}}
 À lire, sur les technologies que tu utilises :
 {{range .Reading}}  {{.Source}} : {{.Title}}{{if .PublishedAt}} ({{day .PublishedAt}}){{end}}

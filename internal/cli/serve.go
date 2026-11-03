@@ -191,6 +191,13 @@ func newServeCmd(deps *Deps) *cobra.Command {
 				runLogScheduler(schedCtx, serverlog.Deps{Repo: logRepo, Targets: cd.Repo, Audit: deps.Audit,
 					SSH: cd.SSH, Alert: serverLogAlert(cmd, deps, logRepo), Now: deps.Now}, serverLogTick)
 			}()
+			// The daily digest (08:00 by default) goes out from here too, on the same
+			// record as the scheduled task: one digest a day, whoever sends it.
+			digestDone := make(chan struct{})
+			go func() {
+				defer close(digestDone)
+				digestLoop(schedCtx, cmd, deps, digestTick)
+			}()
 			// Server fixes left running by a process that stopped end
 			// unknown, with an urgent alert, once past their own bound.
 			sweepDone := make(chan struct{})
@@ -217,6 +224,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			stopSched()
 			<-schedDone
 			<-logDone
+			<-digestDone
 			<-sweepDone
 			// The plugin runs the page started, the fix queue and the agents
 			// are stopped and waited for.

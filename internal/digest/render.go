@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/serverlog"
 )
 
 // The templates are hand-written per language with the same structure; the
@@ -55,13 +56,18 @@ func funcs(d Digest) map[string]any {
 		"exploitedDecided": func() string {
 			return i18n.N(lang, "digest.exploited_decided", d.ExploitedDecided)
 		},
-		"fixWaiting":   func(n int) string { return i18n.N(lang, "digest.fix.waiting", n) },
-		"fixProven":    func(l FixLine) string { return i18n.T(lang, "digest.fix.proven", l.Package, l.OSVID, l.Branch) },
-		"serversTitle": func() string { return i18n.T(lang, "digest.servers.title") },
-		"serverLine":   func(s ServerDigest) string { return serverLine(lang, s) },
-		"fixQueued":    func(n int) string { return i18n.N(lang, "digest.fix.queued", n) },
-		"catalogLine":  func() string { return CatalogLine(lang, d.Catalog) },
-		"previousData": func() string { return i18n.T(lang, "digest.catalog.previous_data") },
+		"fixWaiting":          func(n int) string { return i18n.N(lang, "digest.fix.waiting", n) },
+		"fixProven":           func(l FixLine) string { return i18n.T(lang, "digest.fix.proven", l.Package, l.OSVID, l.Branch) },
+		"serversTitle":        func() string { return i18n.T(lang, "digest.servers.title") },
+		"serverLine":          func(s ServerDigest) string { return serverLine(lang, s) },
+		"serverLogsTitle":     func() string { return i18n.T(lang, "digest.serverlogs.title") },
+		"serverLogHead":       func(s ServerLogDigest) string { return serverLogHead(lang, s) },
+		"serverLogItem":       func(it serverlog.AlertItem) string { return serverLogItem(lang, it) },
+		"serverLogGap":        func(g serverlog.Note) string { return serverLogGap(lang, g) },
+		"serverLogDeviations": func(s ServerLogDigest) string { return serverLogDeviations(lang, s) },
+		"fixQueued":           func(n int) string { return i18n.N(lang, "digest.fix.queued", n) },
+		"catalogLine":         func() string { return CatalogLine(lang, d.Catalog) },
+		"previousData":        func() string { return i18n.T(lang, "digest.catalog.previous_data") },
 		"stale": func() string {
 			days := int(d.Until.Sub(d.OSVFetchedAt) / (24 * time.Hour))
 			return i18n.T(lang, "digest.osv_stale", days)

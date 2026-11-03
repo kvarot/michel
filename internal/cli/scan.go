@@ -240,18 +240,35 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				d, deliveries, err := sendDigest(ctx, cmd, deps, opt)
+				// One digest a day, shared with michel serve: one already sent
+				// today is not sent again, and a digest nobody received is not
+				// recorded, so the next one covers the same period.
+				res, err := sendDigest(ctx, cmd, deps, opt, true)
 				if err != nil {
 					return err
 				}
-				if !asJSON {
-					fmt.Fprintln(deps.Stdout)
-					if err := printDigest(deps, d, false, false); err != nil {
-						return err
+				if res.State == digestSkipped {
+					if !asJSON {
+						fmt.Fprintln(deps.Stdout)
+						fmt.Fprintln(deps.Stdout, deps.T("cli.digest.already_sent"))
 					}
-				}
-				if reportChannels(deps, deliveries) > 0 {
-					problems = true
+				} else {
+					if !asJSON {
+						fmt.Fprintln(deps.Stdout)
+						if err := printDigest(deps, res.Digest, false, false); err != nil {
+							return err
+						}
+					}
+					if res.State == digestHeld {
+						// Nobody got it: the count of the failed channels would say it
+						// is recorded, which it is not.
+						if reportChannelLines(deps, res.Deliveries) > 0 {
+							problems = true
+						}
+						fmt.Fprintln(deps.Stderr, heldMessage(deps, len(res.Deliveries)))
+					} else if reportChannels(deps, res.Deliveries) > 0 {
+						problems = true
+					}
 				}
 			}
 			if problems {

@@ -115,6 +115,11 @@ func ValidateNotify(n NotifyConfig, rules []AllowRule) error {
 	if n.SMSPerDay < 0 {
 		return fmt.Errorf("notify.sms_per_day is %d: use 0 (default %d) or a positive number", n.SMSPerDay, DefaultSMSPerDay)
 	}
+	if n.DigestAt != "" && n.DigestAt != DigestOff {
+		if _, _, ok := parseHourMinute(n.DigestAt); !ok {
+			return fmt.Errorf("notify.digest_at %q must be a time of day as HH:MM (for example 08:00) or off", n.DigestAt)
+		}
+	}
 	if n.PageURL != "" {
 		u, err := url.Parse(n.PageURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -290,4 +295,18 @@ func ruleAllows(rules []AllowRule, host, purpose string) bool {
 		}
 	}
 	return false
+}
+
+// parseHourMinute reads HH:MM, two digits each, 00:00 to 23:59.
+func parseHourMinute(s string) (hour, minute int, ok bool) {
+	if len(s) != 5 || s[2] != ':' {
+		return 0, 0, false
+	}
+	for _, i := range []int{0, 1, 3, 4} {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, 0, false
+		}
+	}
+	hour, minute = int(s[0]-'0')*10+int(s[1]-'0'), int(s[3]-'0')*10+int(s[4]-'0')
+	return hour, minute, hour < 24 && minute < 60
 }

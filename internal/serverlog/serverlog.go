@@ -111,9 +111,13 @@ const (
 
 // Note says what Michel could not read, or left out, between From and To.
 type Note struct {
-	TargetID, SourceID, Kind string
-	From, To                 time.Time
-	Amount                   int64
+	// The ids never leave the process (the digest carries notes).
+	TargetID string    `json:"-"`
+	SourceID string    `json:"-"`
+	Kind     string    `json:"kind"`
+	From     time.Time `json:"from"`
+	To       time.Time `json:"to"`
+	Amount   int64     `json:"amount,omitempty"`
 }
 
 // Settings are the log settings of one server.

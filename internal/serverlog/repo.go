@@ -887,3 +887,105 @@ func (r *Repo) RecordState(ctx context.Context, n Note) error {
 	}
 	return tx.Commit()
 }
+
+// WindowError is an error that occurred since a date, for the digest.
+type WindowError struct {
+	Signature
+	// Count is how many times it was read since then.
+	Count int64
+	// Spiked says that an hour since then reached the spike threshold.
+	Spiked bool
+}
+
+// Window lists the errors of a server with occurrences since since, ignored
+// ones left out, the latest first. last_alert_at plays no part: an error
+// already told by an alert is still in the digest.
+func (r *Repo) Window(ctx context.Context, targetID string, since time.Time) ([]WindowError, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+sigCols+` FROM log_signature WHERE target_id = ? AND status <> ? ORDER BY last_at DESC, id`,
+		targetID, string(StatusIgnored))
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log errors: %w", err)
+	}
+	var sigs []Signature
+	for rows.Next() {
+		g, err := scanSignature(rows)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("cannot read the log errors: %w", err)
+		}
+		sigs = append(sigs, g)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("cannot read the log errors: %w", err)
+	}
+	rows.Close()
+	// One hour before the window is read too: it is what the first hour of the
+	// window is compared with.
+	from := since.UTC().Truncate(time.Hour)
+	var out []WindowError
+	for _, g := range sigs {
+		buckets, err := r.s.DB().QueryContext(ctx, `SELECT hour, count FROM log_bucket WHERE signature_id = ? AND hour >= ? ORDER BY hour`,
+			g.ID, ts(from.Add(-time.Hour)))
+		if err != nil {
+			return nil, fmt.Errorf("cannot read the log counts: %w", err)
+		}
+		w := WindowError{Signature: g}
+		counts := map[time.Time]int64{}
+		for buckets.Next() {
+			var hour string
+			var n int64
+			if err := buckets.Scan(&hour, &n); err != nil {
+				buckets.Close()
+				return nil, fmt.Errorf("cannot read the log counts: %w", err)
+			}
+			h, err := parseTime(hour)
+			if err != nil {
+				buckets.Close()
+				return nil, err
+			}
+			counts[h] = n
+		}
+		err = buckets.Err()
+		buckets.Close()
+		if err != nil {
+			return nil, fmt.Errorf("cannot read the log counts: %w", err)
+		}
+		for h, n := range counts {
+			if h.Before(from) {
+				continue
+			}
+			w.Count += n
+			if spikes(n, counts[h.Add(-time.Hour)]) {
+				w.Spiked = true
+			}
+		}
+		if w.Count > 0 {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
+// Text returns the cleaned text kept for an error; ok is false when none is.
+// It goes through the same check as the text of an alert, so that what the
+// digest says is what an alert would say.
+func (r *Repo) Text(ctx context.Context, id string) (string, bool, error) {
+	var enc []byte
+	err := r.s.DB().QueryRowContext(ctx, `SELECT text_enc FROM log_signature WHERE id = ?`, id).Scan(&enc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("cannot read the log text: %w", err)
+	}
+	if len(enc) == 0 {
+		return "", false, nil
+	}
+	txt, err := OpenText(enc)
+	if err != nil {
+		return "", false, err
+	}
+	txt, ok := cleanedText(txt)
+	return txt, ok, nil
+}

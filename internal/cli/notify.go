@@ -188,9 +188,19 @@ func (u unavailableSecrets) fail() error {
 	return fmt.Errorf("the secret store cannot be opened: %w", u.err)
 }
 
-// reportChannels prints one line per channel on stderr and returns how many
-// failed.
+// reportChannels prints one line per channel on stderr, then how many did not
+// get the digest (the digest is recorded anyway), and returns that number.
 func reportChannels(deps *Deps, deliveries []notify.Delivery) int {
+	failed := reportChannelLines(deps, deliveries)
+	if failed > 0 {
+		fmt.Fprintln(deps.Stderr, deps.N("cli.digest.channels_failed", failed))
+	}
+	return failed
+}
+
+// reportChannelLines prints one line per channel on stderr and returns how many
+// failed.
+func reportChannelLines(deps *Deps, deliveries []notify.Delivery) int {
 	failed := 0
 	for _, dl := range deliveries {
 		switch dl.Result {
@@ -202,9 +212,6 @@ func reportChannels(deps *Deps, deliveries []notify.Delivery) int {
 			failed++
 			fmt.Fprintln(deps.Stderr, channelMessage(deps, dl))
 		}
-	}
-	if failed > 0 {
-		fmt.Fprintln(deps.Stderr, deps.N("cli.digest.channels_failed", failed))
 	}
 	return failed
 }

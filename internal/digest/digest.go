@@ -221,6 +221,9 @@ type Digest struct {
 	PageURL       string `json:"page_url,omitempty"`
 	// Servers lists the servers touched in the window (see ServerDigest).
 	Servers []ServerDigest `json:"servers,omitempty"`
+	// ServerLogs lists, per server, the errors read in its logs, the holes in
+	// the reading and the reminder about its settings (see ServerLogDigest).
+	ServerLogs []ServerLogDigest `json:"server_logs,omitempty"`
 	// Catalog is the state of the sources after the last source update.
 	Catalog Catalog `json:"catalog"`
 	// Reading lists the feed items to read: unread, published in the
@@ -361,6 +364,16 @@ func Compute(ctx context.Context, s *store.Store, now time.Time, lang i18n.Lang,
 	if d.Servers, err = c.servers(ctx); err != nil {
 		return Digest{}, err
 	}
+	remind, err := deviationDue(ctx, s, now)
+	if err != nil {
+		return Digest{}, err
+	}
+	if d.ServerLogs, err = c.serverLogs(ctx, remind); err != nil {
+		return Digest{}, err
+	}
+	for _, sl := range d.ServerLogs {
+		d.NewTotal += sl.New + sl.Reopened
+	}
 	if d.Catalog, err = catalogOf(ctx, s, opt.Allowed); err != nil {
 		return Digest{}, err
 	}
@@ -414,7 +427,7 @@ func retitle(d *Digest) {
 		d.Title += i18n.N(lang, "digest.title.exploited", len(d.Exploited))
 	case d.AttentionTotal > 0:
 		d.Title += i18n.N(lang, "digest.title.attention", d.AttentionTotal)
-	case d.NewTotal == 0:
+	case d.NewTotal == 0 && len(d.ServerLogs) == 0:
 		d.Word = i18n.T(lang, "digest.word.calm")
 	}
 }
@@ -433,7 +446,7 @@ func Filter(d Digest, names []string) Digest {
 	out := d
 	// A server is not a project: a channel restricted to some projects
 	// does not get the servers.
-	out.Servers = nil
+	out.Servers, out.ServerLogs = nil, nil
 	out.Projects = []ProjectDigest{}
 	out.NewTotal, out.AttentionTotal, out.FailedScans, out.EmptyProjects = 0, 0, 0, 0
 	out.Exploited, out.ExploitedDecided = []Exploited{}, 0

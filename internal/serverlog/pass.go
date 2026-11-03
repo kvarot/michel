@@ -63,11 +63,14 @@ const (
 // project relative `file:line` (never a server path). SourceID is set on volume
 // items only: it is an id, never the path of the log.
 type AlertItem struct {
-	Kind                 AlertKind
-	Level                Level
-	Type, Location, Text string
-	Count                int64
-	SourceID             string
+	Kind     AlertKind `json:"kind"`
+	Level    Level     `json:"level"`
+	Type     string    `json:"type"`
+	Location string    `json:"location,omitempty"`
+	Text     string    `json:"text,omitempty"`
+	Count    int64     `json:"count"`
+	// SourceID never leaves the process: an id means nothing in a message.
+	SourceID string `json:"-"`
 }
 
 // AlertInput is one alert, to be sent on the channels of the user. Channels
