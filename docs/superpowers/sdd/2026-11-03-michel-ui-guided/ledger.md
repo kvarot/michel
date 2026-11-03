@@ -107,3 +107,11 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Ruling R49: when `SecretHits` is not empty, the agent does not start: the attempt waits for an explicit yes, no automatic start at any level; new Task 8b — R42's question, recommended, authorised in general terms — costs one more click and a waiting attempt at levels 2 and 3 until answered.
 - Task 11 fix: 58c03a0. Task 11: complete. For Task 13: `resolved.exposure` wording.
 - Task 8b: dispatched, BASE 58c03a0.
+- Task 8b: 6480179, e86b7b5; review running. Task 12: dispatched, BASE e86b7b5.
+- Task 8b review: 1 critical 4 important 6 minor; no path starts an agent without a yes.
+- Ruling R50: only strong hits hold the agent: a known key format, or a literal value that looks like a secret on a sensitive name; weak hits such as `password: string` or a sentence on a sensitive name do not hold and appear as one sentence — a hold on ordinary code teaches people to click yes and kills levels 2 and 3 — costs a real key of an unusual shape not holding, stated in the text.
+- Ruling R51: an unanswered hold ends as a no after 14 days; `michel fix continue` needs a terminal and a typed word; no requeue after a no on the same commit — I1, I3, I4 — costs a retry to do by hand after 14 days.
+- Task 12: 8e87a65; review running. To tell Kévin: go editing scripts left in the temp folder by the implementer, delete denied.
+- Task 12 fix: 313567e. Task 12: complete.
+- Task 8b fix: a88f917, 4a9c1b5, 1d8bbc5; re-review running. Task 8b: complete if approved.
+- Task 13: dispatched, BASE 1d8bbc5.
