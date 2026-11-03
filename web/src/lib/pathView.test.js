@@ -66,10 +66,10 @@ describe('failurePath', () => {
     expect(failurePath({ attempt: attempt('failed') }).note.key).toBe('failed')
     expect(failurePath({ attempt: attempt('inconclusive') }).note.key).toBe('inconclusive')
   })
-  test('an exposure that is gone is verified, and closed', () => {
+  test('an exposure that is gone is finished, and never verified', () => {
     const p = failurePath({ attempt: null, gone: true })
-    expect(states(p)).toEqual(['done', 'done', 'done', 'done', 'done'])
-    expect(p.verified).toBe(true)
+    expect(states(p)).toEqual(['done', 'todo', 'done'])
+    expect(p.verified).toBe(false)
     expect(p.open).toBe(false)
   })
   test('a project flaw gone without any fix lights nothing Michel did not do', () => {
@@ -89,10 +89,10 @@ describe('verified table', () => {
   const verifiedOf = (a, gone = false) => failurePath({ attempt: a, gone }).verified
   const goneF = finding({ status: 'gone' })
   const clean = { rescan_clean: true }
-  test('true only for the three cases of R2', () => {
+  test('true only for the two proofs of R2, an exposure gone is none (R47)', () => {
     expect(verifiedOf(attempt('proven_fixed', { proposal: clean, finding: goneF }))).toBe(true)
     expect(verifiedOf(attempt('proven_fixed', { finding: goneF, server: { target: { id: 't' } } }))).toBe(true)
-    expect(verifiedOf(null, true)).toBe(true)
+    expect(verifiedOf(null, true)).toBe(false)
   })
   test('nothing else, not even with a clean copy or a gone finding', () => {
     for (const state of ['preparing', 'proposed', 'approved', 'running', 'applied', 'inconclusive', 'refused', 'failed', 'unknown', 'superseded']) {

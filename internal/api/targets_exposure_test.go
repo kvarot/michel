@@ -235,6 +235,15 @@ func TestExposureDecisionAudited(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("decision.set = %+v", rows)
 	}
+	var answer ExposureView
+	if err := json.Unmarshal([]byte(body), &answer); err != nil {
+		t.Fatal(err)
+	}
+	var evID string
+	_ = tf.st.DB().QueryRow(`SELECT id FROM audit_event WHERE action = 'decision.set'`).Scan(&evID)
+	if evID == "" || answer.AuditEventID != evID {
+		t.Errorf("audit event id %q, want %q", answer.AuditEventID, evID)
+	}
 	r := rows[0]
 	if r.actor != "web" || r.target != "fexpo000000000001" || r.evidence["action"] != "ignore" || r.evidence["author"] != "web" ||
 		r.evidence["justification"] != "the host firewall blocks it" || r.evidence["osv_id"] != "exposed_database" || r.evidence["project_id"] != v.ID {

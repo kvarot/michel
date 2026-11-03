@@ -33,6 +33,8 @@ type ExposureView struct {
 	Services  []ExposureService  `json:"services"`
 	Unseen    []TargetUnseenView `json:"unseen"`
 	Closed    []ExposureClosed   `json:"closed"`
+	// AuditEventID is the decision.set event, in the answer to a decision only.
+	AuditEventID string `json:"audit_event_id,omitempty"`
 }
 
 // ExposureService is one port seen listening, for one scope (open, private,
@@ -215,7 +217,8 @@ func (s *server) targetExposureDecision(w http.ResponseWriter, r *http.Request) 
 	if !validateDecision(refuse, &d, now) {
 		return
 	}
-	if _, ok := s.applyDecision(w, r, d, f, now); !ok {
+	evID, ok := s.applyDecision(w, r, d, f, now)
+	if !ok {
 		return
 	}
 	v, err := s.exposureView(r.Context(), t, lang)
@@ -223,5 +226,6 @@ func (s *server) targetExposureDecision(w http.ResponseWriter, r *http.Request) 
 		s.internal(w, r)
 		return
 	}
+	v.AuditEventID = evID
 	writeJSON(w, http.StatusOK, v)
 }

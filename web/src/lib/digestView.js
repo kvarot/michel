@@ -99,6 +99,21 @@ export function formatDate(iso, lang) {
 }
 
 /**
+ * localDay writes the calendar day of a time on the user's clock: the API sends
+ * UTC, and the day a person remembers is their own. A date alone stays as it is.
+ * @param {string} iso @param {string} lang @returns {string}
+ */
+export function localDay(iso, lang) {
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(String(iso || ''))) return formatDate(iso, lang)
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const y = String(d.getFullYear()).padStart(4, '0')
+  const mo = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return lang === 'fr' ? `${day}/${mo}/${y}` : `${y}-${mo}-${day}`
+}
+
+/**
  * formatPercent writes a share (0 to 1) as a percentage in lang, with one
  * decimal at most: "42,5 %" in French (decimal comma, a space before the
  * sign, as the French texts write it), "42.5%" in English. whole rounds

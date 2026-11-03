@@ -15,26 +15,28 @@
       <v-btn variant="outlined" color="primary" @click="load">{{ $t('app.retry') }}</v-btn>
     </div>
 
-    <div v-else-if="!lines.length" class="m-panel m-resolved__empty">
+    <p v-if="loaded && !failed && exposuresPartial" class="m-small m-resolved__partial" role="status">{{ $t('resolved.exposure_unread') }}</p>
+
+    <div v-if="loaded && !failed && !lines.length" class="m-panel m-resolved__empty">
       <p>{{ $t('empty.resolved') }}</p>
       <v-btn variant="flat" color="primary" href="#/">{{ $t('empty.resolved_action') }}</v-btn>
     </div>
 
-    <template v-else>
+    <template v-else-if="loaded && !failed">
       <section v-for="g in groups" :key="g.key" class="m-resolved__group" :aria-labelledby="`resolved-${g.key}`">
         <h2 :id="`resolved-${g.key}`" class="m-resolved__group-title">{{ $t(`resolved.${g.key}.title`) }}</h2>
         <p class="m-muted m-small m-resolved__group-hint">{{ $t(`resolved.${g.key}.hint`) }}</p>
         <p v-if="g.deploy" class="m-small m-resolved__deploy">{{ $t('resolved.deploy') }}</p>
         <ul class="m-panel m-resolved__list">
           <li v-for="(line, i) in g.lines" :key="`${line.href}-${i}`" class="m-resolved__row">
-            <span class="m-small m-resolved__word" :class="line.verified ? 'm-tag--done' : 'm-tag--look'">
-              {{ $t(line.back ? 'resolved.word.back' : line.verified ? 'resolved.word.verified' : 'resolved.word.unconfirmed') }}
+            <span class="m-small m-resolved__word" :class="`m-tag--${line.tone}`">
+              {{ $t(`resolved.word.${line.word}`) }}
             </span>
             <div class="m-resolved__text">
               <p class="m-resolved__title">{{ line.title }}</p>
               <p class="m-muted m-small m-resolved__where">
                 {{ line.where }}
-                <span v-if="line.at">{{ $t('resolved.date', { date: line.at }) }}</span>
+                <span v-if="line.at">{{ $t(line.dateKey, { date: line.at }) }}</span>
               </p>
             </div>
             <v-btn class="m-resolved__action" variant="outlined" color="primary" :href="line.href">{{ $t('resolved.open') }}</v-btn>
@@ -47,7 +49,8 @@
 
 <script>
 import { api } from '../api.js'
-import { resolvedLines } from '../lib/todoView.js'
+import { closedExposures } from '../lib/exposureView.js'
+import { maxServerDetails, resolvedLines } from '../lib/todoView.js'
 
 export default {
   name: 'ResolvedPage',
@@ -58,9 +61,10 @@ export default {
       // list would claim that nothing is resolved.
       failed: false,
       attempts: [],
-      // No route sends the exposures a reading no longer sees yet: none are
-      // listed, and none are claimed.
+      // exposures: the services a server read now no longer shows open to all.
       exposures: [],
+      // exposuresPartial: a server could not be read, or is past the limit (R15).
+      exposuresPartial: false,
       seq: 0,
     }
   },
@@ -72,9 +76,11 @@ export default {
       // The deploy sentence is said once, under the verified group only: it
       // speaks of a fix Michel confirmed, so it never sits under the others.
       const verified = this.lines.filter((l) => l.verified)
+      const seen = (l) => l.kind === 'exposure'
       return [
         { key: 'verified', lines: verified, deploy: verified.some((l) => l.deploy) },
-        { key: 'unconfirmed', lines: this.lines.filter((l) => !l.verified && !l.back), deploy: false },
+        { key: 'unconfirmed', lines: this.lines.filter((l) => !l.verified && !l.back && !seen(l)), deploy: false },
+        { key: 'no_longer_open', lines: this.lines.filter(seen), deploy: false },
         { key: 'back', lines: this.lines.filter((l) => l.back), deploy: false },
       ].filter((g) => g.lines.length)
     },
@@ -86,17 +92,38 @@ export default {
     async load() {
       const seq = ++this.seq
       this.loaded = false
-      try {
-        const attempts = await api.get(`/fixes?state=proven_fixed&lang=${encodeURIComponent(this.$ui.lang)}`)
-        if (seq !== this.seq) return
-        this.attempts = Array.isArray(attempts) ? attempts : []
-        this.failed = false
-      } catch {
-        if (seq !== this.seq) return
-        this.attempts = []
-        this.failed = true
-      }
+      const lang = `lang=${encodeURIComponent(this.$ui.lang)}`
+      const [fixes, exposures] = await Promise.all([
+        api.get(`/fixes?state=proven_fixed&${lang}`).then((a) => ({ attempts: a }), () => null),
+        this.readExposures(lang),
+      ])
+      if (seq !== this.seq) return
+      this.attempts = Array.isArray(fixes?.attempts) ? fixes.attempts : []
+      this.failed = !fixes
+      this.exposures = exposures.list
+      this.exposuresPartial = exposures.partial
       this.loaded = true
+    },
+    /** readExposures asks each server what it no longer sees open to all. A read that fails is said, not taken for « nothing ». */
+    async readExposures(lang) {
+      let servers
+      try {
+        servers = await api.get(`/targets?${lang}`)
+      } catch {
+        return { list: [], partial: true }
+      }
+      const all = (Array.isArray(servers) ? servers : []).filter((s) => s && s.active !== false)
+      const read = all.slice(0, maxServerDetails)
+      const views = {}
+      let partial = read.length < all.length
+      await Promise.all(read.map(async (s) => {
+        try {
+          views[s.id] = await api.get(`/targets/${encodeURIComponent(s.id)}/exposure?${lang}`)
+        } catch {
+          partial = true
+        }
+      }))
+      return { list: closedExposures(read, views), partial }
     },
   },
 }
@@ -108,6 +135,7 @@ export default {
 .m-resolved__sub { margin-top: 0.5rem; }
 .m-resolved__loading { display: grid; gap: 0.9rem; justify-items: start; }
 .m-resolved__error, .m-resolved__empty { display: grid; gap: 0.9rem; justify-items: start; padding: 1rem 0.9rem; }
+.m-resolved__partial { padding: 0.4rem 0.7rem; border-radius: 8px; background: rgb(var(--v-theme-tag-look)); }
 .m-resolved__group-title { font-size: 1.05rem; font-weight: 600; margin: 0; }
 .m-resolved__group-hint { margin: 0.2rem 0 0.6rem; }
 .m-resolved__list { list-style: none; margin: 0; padding: 0; }

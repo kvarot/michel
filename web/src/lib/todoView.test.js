@@ -642,6 +642,23 @@ describe('texts', () => {
     expect(r.lines[0].title).toBe("Une base de données semble ouverte à tous : joignable si aucun pare-feu (le filtre qui décide qui peut s'y connecter) ne la bloque")
     expect(r.lines[0]).toMatchObject({ rank: 4, word: 'À regarder', action: { label: 'Comprendre', href: '#/servers/a?finding=e' } })
   })
+  test('the line holds with the true shape of GET /targets/{id} and scan.KindServerExposure', () => {
+    // TargetFindingView (internal/api/targets.go): rule is the rule's id, package the port.
+    const real = (id, port, rule, status = 'new') => ({
+      id, kind: 'server_exposure', rule, package: port, installed_version: '', fixed_versions: null, ecosystem: '', severity: 'medium',
+      title: 'Une base de données semble ouverte à tous sur ce serveur', status, mitigation: false, kev: false, urgent: false, first_seen_at: '2026-11-01T00:00:00Z', last_seen_at: '2026-11-03T00:00:00Z',
+    })
+    const r = build({
+      servers: [server('a', { open_findings: 2 })],
+      details: { a: { findings: [real('e1', '3306', 'exposed_database'), real('e2', '6379', 'exposed_cache'), real('e3', '5432', 'exposed_database', 'decided')] } },
+    })
+    expect(r.lines.map((l) => l.id)).toEqual(['server:a:e1', 'server:a:e2'])
+    expect(r.lines[0]).toMatchObject({ word: 'À regarder', rank: 4, title: fr['todo.exposure'], action: { label: 'Comprendre', href: '#/servers/a?finding=e1' } })
+    expect(r.lines[1]).toMatchObject({ title: fr['todo.exposure_cache'], action: { href: '#/servers/a?finding=e2' } })
+    // Two databases open are two lines, each with its own place on the sheet.
+    const two = build({ servers: [server('a', { open_findings: 2 })], details: { a: { findings: [real('e1', '3306', 'exposed_database'), real('e3', '5432', 'exposed_database')] } } })
+    expect(two.lines.map((l) => l.id)).toEqual(['server:a:e1', 'server:a:e3'])
+  })
   test('an open cache is not called a database', () => {
     const r = build({ servers: [server('a', { open_findings: 1 })], details: { a: { findings: [flaw('e', { kind: 'server_exposure', rule: 'exposed_cache' })] } } })
     expect(r.lines[0].title).toBe("Un cache (une mémoire rapide qu'utilisent souvent les sites) semble ouvert à tous : joignable si aucun pare-feu (le filtre qui décide qui peut s'y connecter) ne le bloque")
@@ -749,11 +766,30 @@ describe('resolvedLines', () => {
     expect(s.href).toBe('#/servers/srv1?finding=f-e')
   })
 
-  test('a gone exposure is a verified line', () => {
-    const lines = resolvedLines([], [{ id: 'x1', server: { id: 'srv1', name: 'srv-demo' }, rule: 'exposed_cache', at: '2026-11-01T00:00:00Z' }], 'fr')
-    expect(lines).toHaveLength(1)
-    expect(lines[0].verified).toBe(true)
-    expect(lines[0].title).toContain('toutes les adresses')
+  test('a service no longer seen open is never a fix nor verified', () => {
+    const gone = (service) => ({ server: { id: 'srv1', name: 'srv-demo' }, service, at: '2026-11-01T12:00:00Z' })
+    const lines = resolvedLines([], [gone('cache'), gone('database'), gone('')], 'fr')
+    expect(lines).toHaveLength(3)
+    expect(lines.map((l) => l.title)).toEqual([
+      'Michel ne voit plus ce cache ouvert à tous',
+      'Michel ne voit plus cette base de données ouverte à tous',
+      'Michel ne voit plus ce service ouvert à tous',
+    ])
+    for (const l of lines) {
+      expect(l).toMatchObject({ verified: false, back: false, kind: 'exposure', word: 'no_longer_open', tone: 'info', deploy: false, href: '#/servers/srv1', at: '01/11/2026' })
+      expect(fr[l.dateKey].replace('{date}', l.at)).toBe('vu ouvert pour la dernière fois le 01/11/2026')
+      expect(JSON.stringify(l)).not.toMatch(/fermé|corrig|vérifi/i)
+    }
+    for (const k of ['title', 'hint']) {
+      expect(fr[`resolved.no_longer_open.${k}`]).not.toMatch(/fermé le|corrigé|vérifié/i)
+      expect(en[`resolved.no_longer_open.${k}`]).toBeTruthy()
+    }
+    expect(fr['resolved.word.no_longer_open']).toBe('Plus vu ouvert')
+  })
+  test('the date of a service no longer seen open is the local day', () => {
+    const d = new Date(2026, 10, 2, 0, 30)
+    const lines = resolvedLines([], [{ server: { id: 's', name: 'srv-demo' }, service: 'cache', at: d.toISOString() }], 'fr')
+    expect(lines[0].at).toBe('02/11/2026')
   })
 
   test('empty list says what it means', () => {

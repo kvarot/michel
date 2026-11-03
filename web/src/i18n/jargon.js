@@ -8,5 +8,6 @@ export function findJargon(text, allowed = false) {
   const found = []
   if (/\b(CVE|CVSS|GHSA|EPSS|KEV)\b/.test(text)) found.push('identifier word')
   if (!allowed && /\b(ports?|paquets?|SSH)\b/i.test(text)) found.push('port, paquet or SSH')
+  if (!allowed && /\b(TCP|UDP|loopback|netstat)\b/.test(text)) found.push('network word')
   return found
 }

@@ -143,11 +143,34 @@ function causeNote(attempt, key) {
 }
 
 /**
+ * exposurePath is the path of a service open to all, which has no fix: Michel
+ * cannot close it, and from inside the server he only sees whether it is still
+ * open. So it has neither « Corrigée » nor « Vérifiée »: the service may have
+ * moved or stopped, and the last step says only what he sees (R47). Gone leaves
+ * the person's step unlit: nothing says who did what.
+ * @param {{gone?: boolean, decided?: boolean}} [args]
+ * @returns {{steps: {key: string, state: 'done'|'now'|'todo'}[], verified: false, open: boolean, note: null}}
+ */
+export function exposurePath({ gone = false, decided = false } = {}) {
+  const middle = gone ? 'todo' : decided ? 'done' : 'now'
+  return {
+    steps: [
+      { key: 'found', state: 'done' },
+      { key: decided ? 'expo_decided' : 'expo_yours', state: middle },
+      { key: 'expo_gone', state: gone ? 'done' : 'todo' },
+    ],
+    verified: false,
+    open: !gone,
+    note: null,
+  }
+}
+
+/**
  * failurePath is where a flaw stands on its five steps.
  * note is {key, params} (under path.note.) or {cause} (Michel's own sentence),
  * null when the steps say it all.
  * @param {{attempt?: object|null, gone?: boolean, vanished?: boolean, target?: object|null}} args
- *   gone: an exposure without attempt that a full reading no longer sees (R2).
+ *   gone: an exposure without attempt that a full reading no longer sees (R47).
  *   vanished: a flaw gone without any fix of Michel's: nothing he did.
  *   target: the server's TargetView (the attempt's has neither site_url nor
  *   settings): a proof with no site address says the site was not looked at.
@@ -172,7 +195,7 @@ export function failurePath({ attempt = null, gone = false, vanished = false, ta
 function attemptPath(attempt, gone, vanished, target) {
   const out = (index, state, open, note = null, verified = false) => ({ steps: steps(index, state), verified, open, note })
   if (!attempt) {
-    if (gone) return { steps: stepKeys.map((key) => ({ key, state: 'done' })), verified: true, open: false, note: null }
+    if (gone) return exposurePath({ gone: true })
     if (vanished) return out(1, 'todo', false, { key: target ? 'vanished_server' : 'vanished' })
     return out(1, 'now', true)
   }

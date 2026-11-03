@@ -91,7 +91,7 @@ import FailurePath from './FailurePath.vue'
 import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
 import { causeSentence } from '../lib/fixView.js'
-import { canPrepareServer, canRestart, failurePath, holdView, isGone, mergeStep, pathSteps, plainRisk, projectPlan, serverPlan, showsPlan } from '../lib/pathView.js'
+import { canPrepareServer, canRestart, exposurePath, failurePath, holdView, isGone, mergeStep, pathSteps, plainRisk, projectPlan, serverPlan, showsPlan } from '../lib/pathView.js'
 import { guideServerTitle } from '../lib/serversView.js'
 import { guideTitle } from '../lib/todoView.js'
 
@@ -142,7 +142,12 @@ export default {
     hold() {
       return holdView(this.attempt, this.gone)
     },
+    // exposure: a service open to all has no fix, so neither « Corrigée » nor « Vérifiée » (R47).
+    exposure() {
+      return !this.attempt && (this.sheet?.kind || this.finding.kind) === 'server_exposure'
+    },
     path() {
+      if (this.exposure) return exposurePath({ gone: this.gone, decided: (this.sheet?.status || this.finding.status) === 'decided' })
       return failurePath({ attempt: this.attempt, vanished: this.gone, target: this.target })
     },
     // nested: the page already has its h1 (the advanced mode).
@@ -190,7 +195,8 @@ export default {
       return projectPlan({ finding: this.sheet || this.finding, project: this.projectView, attempt: this.attempt })
     },
     steps() {
-      return pathSteps(this.path, this.plan, this.attempt)
+      // « À toi d'agir » is the person's step: it stays lit, though Michel prepares nothing.
+      return this.exposure ? this.path.steps : pathSteps(this.path, this.plan, this.attempt)
     },
     showStart() {
       if (this.server) return this.plan?.action === 'prepare' && canPrepareServer(this.attempt, this.gone)

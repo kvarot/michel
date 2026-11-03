@@ -59,9 +59,21 @@
         </v-alert>
       </header>
 
+      <ServerExposure
+        class="m-sheet__block"
+        :exposure="exposure"
+        :failure="exposureFailure"
+        :target="view"
+        :finding="finding"
+        :checking="!!view.checking || checking"
+        @check="check"
+        @decided="onExposureDecided"
+        @retry="loadExposure"
+      />
+
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-flaws`">
         <h3 :id="`srv-${id}-flaws`" class="m-sheet__title" tabindex="-1">{{ $t('servers.sheet.flaws') }}</h3>
-        <p v-if="!cards.length" class="m-muted">{{ view.last_check_at ? $t('servers.sheet.no_flaws') : $t('servers.sheet.no_flaws_unchecked') }}</p>
+        <p v-if="!cards.length" class="m-muted">{{ noFlawsText }}</p>
         <ul v-else class="m-sheet__flaws">
           <li v-for="c in cards" :id="`srv-flaw-${c.finding.id}`" :key="c.key" class="m-sheet__flaw" tabindex="-1">
             <div class="m-sheet__flaw-top">
@@ -315,9 +327,11 @@ import FieldHelp from './FieldHelp.vue'
 import AiConsentDialog from './AiConsentDialog.vue'
 import FailureGuide from './FailureGuide.vue'
 import HostKeyDialog from './HostKeyDialog.vue'
+import ServerExposure from './ServerExposure.vue'
 import ServerLogs from './ServerLogs.vue'
 import { api } from '../api.js'
 import { formatDate, severityOf } from '../lib/digestView.js'
+import { exposureFindingIds } from '../lib/exposureView.js'
 import { fixHash } from '../lib/fixView.js'
 import { plainRisk, showsPlan } from '../lib/pathView.js'
 import { logBadges } from '../lib/serverLogsView.js'
@@ -329,14 +343,14 @@ import {
 // checkEvery is how often the sheet reads the server again while a check runs.
 const checkEvery = 3000
 
-// ServerSheet is a server's sheet: where it stands in one sentence, its
-// flaws, each on its path, what Michel saw and could not see, the history of
+// ServerSheet is a server's sheet: where it stands in one sentence, what is
+// exposed, its flaws, each on its path, what Michel saw and could not see, the history of
 // checks and fixes, the settings in sentences, the AI consent (of the
 // preprod when one is linked: its inventory is what leaves) and "Retirer de
 // Michel".
 export default {
   name: 'ServerSheet',
-  components: { AiConsentDialog, FailureGuide, FieldHelp, HostKeyDialog, ServerLogs },
+  components: { AiConsentDialog, FailureGuide, FieldHelp, HostKeyDialog, ServerExposure, ServerLogs },
   props: {
     id: { type: String, required: true },
     // finding is the flaw the address names: its card comes into view with the focus.
@@ -349,6 +363,9 @@ export default {
       failure: null,
       view: null,
       inv: null,
+      // exposure: GET /targets/{id}/exposure, null when the page could not read it.
+      exposure: null,
+      exposureFailure: null,
       fixes: [],
       // preprodFixes: a server with a preprod starts there first.
       preprodFixes: [],
@@ -404,8 +421,17 @@ export default {
       const lc = this.view?.last_check
       return lc && !lc.ok ? lc : null
     },
+    // exposureIds: the flaws the exposure part shows, with their path and their decision.
+    exposureIds() {
+      return exposureFindingIds(this.exposure)
+    },
     flaws() {
-      return (this.view?.findings || []).filter((f) => f.status === 'new' || f.status === 'pending' || f.status === 'decided')
+      return (this.view?.findings || []).filter((f) => (f.status === 'new' || f.status === 'pending' || f.status === 'decided') && !this.exposureIds.has(f.id))
+    },
+    // noFlawsText: no card here does not mean no flaw when the exposure part holds them.
+    noFlawsText() {
+      if (this.exposureIds.size) return this.$t('expo.flaws_above')
+      return this.view?.last_check_at ? this.$t('servers.sheet.no_flaws') : this.$t('servers.sheet.no_flaws_unchecked')
     },
     // unknownAttempt is a fix of this server whose outcome Michel cannot tell.
     unknownAttempt() {
@@ -493,6 +519,8 @@ export default {
       this.pollErrors = 0
       this.clearError()
       this.view = null
+      this.exposure = null
+      this.exposureFailure = null
       this.load()
     },
     lang() {
@@ -558,10 +586,12 @@ export default {
       const want = `${this.id}|${this.finding}`
       if (!this.finding || this.focusedFor === want || !this.view) return
       const c = cardOfFinding(this.cards, this.finding)
-      if (!c) return
+      // A flaw of the exposure part has its row there, under the same name.
+      if (!c && !this.exposureIds.has(this.finding)) return
+      const target = c ? c.finding.id : this.finding
       this.focusedFor = want
       this.$nextTick(() => {
-        const el = document.getElementById(`srv-flaw-${c.finding.id}`)
+        const el = document.getElementById(`srv-flaw-${target}`)
         if (!el) return
         el.focus({ preventScroll: true })
         el.scrollIntoView({ block: 'start' })
@@ -602,7 +632,7 @@ export default {
         if (!this.alive) return
         this.view = v
         this.site = v.site_url || ''
-        await Promise.all([this.loadInventory(), this.loadFixes(), this.loadOthers(), this.loadConsent()])
+        await Promise.all([this.loadInventory(), this.loadExposure(), this.loadFixes(), this.loadOthers(), this.loadConsent()])
         if (v.checking) this.follow()
       } catch (err) {
         if (err?.status !== 401) this.failure = err
@@ -631,6 +661,26 @@ export default {
         // Never checked: the sheet says so.
         this.inv = null
       }
+    },
+    async loadExposure() {
+      const id = this.id
+      try {
+        const v = await api.get(this.q(`/targets/${this.enc(id)}/exposure`))
+        if (!this.alive || id !== this.id) return
+        this.exposure = v
+        this.exposureFailure = null
+      } catch (err) {
+        if (!this.alive || id !== this.id || err?.status === 401) return
+        // Not read by the page: the part says so, and the flaws stay in their list.
+        this.exposure = null
+        this.exposureFailure = err
+      }
+    },
+    /** onExposureDecided takes the view the decision answered, and reads the flaws again: this one has left the To-do list. */
+    onExposureDecided(v) {
+      this.exposure = v
+      this.exposureFailure = null
+      this.refreshView()
     },
     async loadFixes() {
       try {
@@ -680,7 +730,7 @@ export default {
           }
           this.checking = false
           this.pollErrors = 0
-          await Promise.all([this.loadInventory(), this.loadFixes()])
+          await Promise.all([this.loadInventory(), this.loadExposure(), this.loadFixes()])
           this.$emit('changed')
         } catch (err) {
           this.pollErrors += 1
@@ -809,6 +859,7 @@ export default {
         this.site = v.site_url || ''
         this.saved = true
         if (field === 'preprod' || field === 'kind') this.loadConsent()
+        if (field === 'kind') this.loadExposure()
         this.$emit('changed')
       } catch (err) {
         if (err?.status === 401) return

@@ -2,7 +2,7 @@
 // projects and servers mixed. No DOM, no fetch, no storage. Vitest covers them
 // (todoView.test.js).
 import { translate } from '../i18n/index.js'
-import { formatDate, groupAttention, severityOf, severityRank } from './digestView.js'
+import { groupAttention, localDay, severityOf, severityRank } from './digestView.js'
 import { fixHash, isOpen } from './fixView.js'
 import { stripTechnicalIds } from './modeView.js'
 import { isVerified } from './pathView.js'
@@ -430,26 +430,17 @@ function seenNot(d, servers, attempts, active, details, now, t) {
  * new scan of the copy is listed apart, as fixed and not confirmed, and a flaw
  * that is no longer gone is listed as back (back), never as verified. The date
  * is the local day of the attempt's updated_at, which the proof sets last. exposures are the
- * exposed services that a full reading no longer sees: {id, server: {id, name},
- * rule, at}.
+ * services that a full reading no longer sees open to all (closedExposures):
+ * never a fix and never verified, the service may have moved or stopped (R47),
+ * and their date is the last time Michel saw them open.
  * @param {object[]|null} attempts GET /fixes?state=proven_fixed
- * @param {{id: string, server: {id: string, name: string}, rule: string, at: string}[]|null} exposures
+ * @param {{server: {id: string, name: string}, service: string, at: string}[]|null} exposures
  * @param {string} lang
- * @returns {{at: string, title: string, where: string, verified: boolean, back: boolean, href: string, deploy: boolean, kind: string, sort: number}[]}
+ * @returns {{at: string, dateKey: string, word: string, tone: string, title: string, where: string, verified: boolean, back: boolean, href: string, deploy: boolean, kind: string}[]}
  */
 export function resolvedLines(attempts, exposures, lang) {
   const t = (key, params) => translate(lang, key, params)
   const out = []
-  // localDay is the calendar day on the user's clock, as GET /fixes sends UTC.
-  const localDay = (iso) => {
-    if (!/^\d{4}-\d{2}-\d{2}T/.test(String(iso || ''))) return formatDate(iso, lang)
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return ''
-    const y = String(d.getFullYear()).padStart(4, '0')
-    const mo = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    return lang === 'fr' ? `${day}/${mo}/${y}` : `${y}-${mo}-${day}`
-  }
   const stamp = (iso) => {
     const ms = Date.parse(iso)
     return Number.isNaN(ms) ? 0 : ms
@@ -460,12 +451,16 @@ export function resolvedLines(attempts, exposures, lang) {
     const pkg = a.finding?.package || a.finding?.osv_id || ''
     // back: the flaw is seen again although the proof once ran.
     const back = !!a.finding?.status && a.finding.status !== 'gone'
+    const verified = isVerified(a)
     out.push({
-      at: localDay(a.updated_at),
+      at: localDay(a.updated_at, lang),
+      dateKey: 'resolved.date',
+      word: back ? 'back' : verified ? 'verified' : 'unconfirmed',
+      tone: verified ? 'done' : 'look',
       title: t(back ? 'resolved.line_back' : 'resolved.line', { package: pkg }),
       back,
       where: s ? t('todo.where.server', { name: s.target?.name || a.project }) : t('todo.where.project', { name: a.project }),
-      verified: isVerified(a),
+      verified,
       href: s ? serversHash(s.target?.id, a.finding?.id) : fixHash({ attempt: a.id }),
       deploy: !s,
       kind: s ? 'server' : 'project',
@@ -474,13 +469,17 @@ export function resolvedLines(attempts, exposures, lang) {
   }
   for (const e of exposures || []) {
     if (!e) continue
+    const named = e.service === 'database' || e.service === 'cache'
     out.push({
-      at: localDay(e.at),
+      at: localDay(e.at, lang),
+      dateKey: 'resolved.exposure_date',
+      word: 'no_longer_open',
+      tone: 'info',
       back: false,
-      title: t(e.rule === 'exposed_cache' ? 'resolved.exposure_cache' : 'resolved.exposure'),
+      title: t(named ? `resolved.exposure_${e.service}` : 'resolved.exposure'),
       where: t('todo.where.server', { name: e.server?.name || '' }),
-      verified: true,
-      href: serversHash(e.server?.id, e.id),
+      verified: false,
+      href: serversHash(e.server?.id),
       deploy: false,
       kind: 'exposure',
       sort: stamp(e.at),

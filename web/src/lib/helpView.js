@@ -10,7 +10,7 @@ export const helpIds = [
   'server.level', 'server.auto', 'server.executor', 'server.sudo', 'server.interval', 'server.preprod',
   'server.active', 'server.fingerprint', 'server.check', 'server.snapshot',
   'project.level', 'project.auto', 'project.ai',
-  'decision.action', 'decision.until', 'decision.why',
+  'decision.action', 'decision.until', 'decision.why', 'exposure.decision',
   'logs.path', 'logs.format', 'logs.try', 'logs.interval', 'logs.store_text', 'logs.alert_text', 'logs.retention', 'logs.sms',
   'fix.approve', 'fix.approve_server', 'fix.refuse',
   'settings.token', 'settings.advanced', 'settings.theme', 'settings.lang',
