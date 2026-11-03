@@ -467,7 +467,7 @@ func shortID(attemptID string) string {
 
 // Branch is the branch Apply creates in the user's repository for the
 // attempt.
-func Branch(attemptID string) string { return "michel/fix-" + shortID(attemptID) }
+func Branch(attemptID string) string { return "michel/fix-" + strings.ToLower(attemptID) }
 
 // Start begins an attempt on the finding: it refuses a project that is not
 // in git (ErrNotGit), a health project (ErrHealthForbidden), a strict_local
