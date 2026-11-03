@@ -33,7 +33,8 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			"The scan itself never uses the network; run 'michel db update' to refresh the databases, or add --update to read every " +
 			"enabled source first (as 'michel source update'; a source that cannot be read does not stop the scan). A folder without any lockfile " +
 			"is reported as having nothing to scan: an error with --project, not with --all. After the scan and the analysis of a project, every enabled plugin " +
-			"set to run (michel source list --kind plugin) runs on it, as michel source run does; a plugin that fails is a warning.",
+			"set to run (michel source list --kind plugin) runs on it, as michel source run does; a plugin that fails is a warning. " +
+			"Then the applied fixes are settled: only the tool that reported a flaw, if it looked in this scan, can prove its fix.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -122,7 +123,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			}
 			plugins := []pluginRunView{}
 			pluginLines := []string{}
-			runPlugins := func(p project.Project) {
+			// runPlugins returns the plugins that ran without any failure: the
+			// only ones whose word settles a fix (fix.Prove).
+			runPlugins := func(p project.Project) map[string]bool {
+				looked := map[string]bool{}
 				for _, e := range scanPlugins(pluginEntries, deps.allowed, p.Name) {
 					res, err := plugin.RunPlugin(ctx, pluginDeps(cmd, deps), e, p, "")
 					if err != nil {
@@ -130,9 +134,19 @@ func newScanCmd(deps *Deps) *cobra.Command {
 						if !errors.Is(err, plugin.ErrAudit) {
 							continue
 						}
+					} else {
+						looked[e.Key] = true
 					}
 					plugins = append(plugins, pluginRunView{Project: p.Name, Key: e.Key, RunResult: res})
 					pluginLines = append(pluginLines, pluginSummary(deps, e, p.Name, res))
+				}
+				return looked
+			}
+			// prove settles the applied fixes of the project, once every tool
+			// of this pass has run: a plugin's findings change in runPlugins.
+			prove := func(fd fix.Deps, p project.Project, pass fix.Pass) {
+				if _, err := fix.Prove(ctx, fd, p.ID, pass); err != nil {
+					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
 				}
 			}
 			for _, p := range targets {
@@ -157,7 +171,8 @@ func newScanCmd(deps *Deps) *cobra.Command {
 						problems = true
 					}
 					// A folder without lockfile still has code and settings to check.
-					runPlugins(p)
+					// The scan read nothing: it settles no fix of a dependency.
+					prove(scanFixDeps(cmd, deps), p, fix.Pass{Sources: runPlugins(p)})
 					continue
 				}
 				// A lockfile left out because its ecosystem is disabled is the
@@ -167,18 +182,6 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					problems = true
 				}
 				analysis[p.Name] = deps.T("cli.scan.summary.analysis_skipped")
-				// The applied fixes of the project are settled by this scan
-				// (proven when merged and gone), and its eligible findings
-				// queued for michel serve at level 2.
-				fd := scanFixDeps(cmd, deps)
-				if _, err := fix.Prove(ctx, fd, p.ID); err != nil {
-					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
-				}
-				if all {
-					if _, err := fix.QueueEligible(ctx, fd, p.ID); err != nil {
-						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
-					}
-				}
 				if !noAnalyze && (r.Status == scan.ScanOK || r.Status == scan.ScanPartial) {
 					// Analysis problems are warnings: they never change the scan's exit code.
 					ar, aerr := analyzeProject(cmd, deps, p, false)
@@ -191,7 +194,17 @@ func newScanCmd(deps *Deps) *cobra.Command {
 						analysis[p.Name] = deps.N("cli.scan.summary.analyzed", ar.Analyzed+ar.Skipped)
 					}
 				}
-				runPlugins(p)
+				looked := runPlugins(p)
+				// The applied fixes of the project are settled by this pass
+				// (proven when merged and gone), and its eligible findings
+				// queued for michel serve at level 2.
+				fd := scanFixDeps(cmd, deps)
+				prove(fd, p, fix.Pass{Scanned: true, Sources: looked})
+				if all {
+					if _, err := fix.QueueEligible(ctx, fd, p.ID); err != nil {
+						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
+					}
+				}
 			}
 			if asJSON {
 				if err := json.NewEncoder(deps.Stdout).Encode(struct {

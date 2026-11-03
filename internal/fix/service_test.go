@@ -880,7 +880,7 @@ func TestProveNeedsMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Still seen by the scan: nothing to prove.
-	if n, err := Prove(context.Background(), f.d, f.proj.ID); err != nil || n != 0 {
+	if n, err := Prove(context.Background(), f.d, f.proj.ID, Pass{Scanned: true}); err != nil || n != 0 {
 		t.Fatalf("Prove while the finding is still open: %d, %v", n, err)
 	}
 	if got := f.attempt(a.ID); got.State != StateApplied {
@@ -888,7 +888,7 @@ func TestProveNeedsMerge(t *testing.T) {
 	}
 	// Gone without the merge: inconclusive, the finding stays gone.
 	f.setFindingStatus(f.finding.ID, scan.StatusGone)
-	if n, err := Prove(context.Background(), f.d, f.proj.ID); err != nil || n != 0 {
+	if n, err := Prove(context.Background(), f.d, f.proj.ID, Pass{Scanned: true}); err != nil || n != 0 {
 		t.Fatalf("Prove without the merge: %d, %v", n, err)
 	}
 	if got := f.attempt(a.ID); got.State != StateInconclusive {
@@ -911,7 +911,7 @@ func TestProveNeedsMerge(t *testing.T) {
 	}
 	gitT(t, f.env, f.proj.Path, "merge", "-q", "--no-edit", Branch(b.ID))
 	f.setFindingStatus(f.finding.ID, scan.StatusGone)
-	if n, err := Prove(context.Background(), f.d, f.proj.ID); err != nil || n != 1 {
+	if n, err := Prove(context.Background(), f.d, f.proj.ID, Pass{Scanned: true}); err != nil || n != 1 {
 		t.Fatalf("Prove after the merge: %d, %v", n, err)
 	}
 	if got := f.attempt(b.ID); got.State != StateProvenFixed {

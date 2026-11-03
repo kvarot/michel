@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -18,6 +19,8 @@ const report = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"fake","rul
 {"ruleId":"fake.rule","message":{"text":"Fake problem."},
 "locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/app.php"},"region":{"startLine":3}}}],
 "partialFingerprints":{"primaryLocationLineHash":"feedface:1"}}]}]}`
+
+const cleanReport = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"fake","rules":[]}},"results":[]}]}`
 
 func main() {
 	args := os.Args[1:]
@@ -49,7 +52,23 @@ func main() {
 		os.Exit(3)
 	}
 	fmt.Println("home=" + os.Getenv("HOME"))
-	if err := os.WriteFile(out, []byte(report), 0o600); err != nil {
+	result := report
+	// Like a real tool, it reads the project it is pointed at: a test decides
+	// what it sees through src/app.php.
+	for _, a := range args {
+		code, err := os.ReadFile(filepath.Join(a, "src", "app.php"))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(code), "FAKE-TOOL-FAILS") {
+			fmt.Fprintln(os.Stderr, "the tool failed")
+			os.Exit(5)
+		}
+		if strings.Contains(string(code), "FAKE-FLAW-FIXED") {
+			result = cleanReport
+		}
+	}
+	if err := os.WriteFile(out, []byte(result), 0o600); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(4)
 	}

@@ -1632,13 +1632,35 @@ func Refuse(ctx context.Context, d Deps, attemptID, reason string) error {
 	})
 }
 
-// Prove settles the applied attempts of the project after a scan: an
-// attempt is proven_fixed when the scan no longer sees the finding and the
-// fix commit is in the current branch of the user's repository
-// (workcopy.IsMerged); gone without the merge, or merged but still seen, it
-// is inconclusive (the finding keeps the status the scan gave it). It
-// returns the number proven.
-func Prove(ctx context.Context, d Deps, projectID string) (int, error) {
+// Pass tells which tools looked at a project in one pass of michel scan. Only
+// a tool that looked can settle a fix of what it reports.
+type Pass struct {
+	// Scanned: the OSV scan read the lockfiles of the project. A scan that
+	// found none leaves the findings as they were and proves nothing.
+	Scanned bool
+	// Sources are the plugin sources that ran and stored their results in
+	// this pass. A plugin turned off, not meant to run, or failed is not one.
+	Sources map[string]bool
+}
+
+// looked tells whether the source of a finding looked in this pass ("" is the
+// OSV scan).
+func (p Pass) looked(sourceKey string) bool {
+	if sourceKey == "" {
+		return p.Scanned
+	}
+	return p.Sources[sourceKey]
+}
+
+// Prove settles the applied attempts of the project at the end of a pass,
+// once every tool of the pass has run: an attempt is proven_fixed when the
+// tool that reported the finding no longer sees it and the fix commit is in
+// the current branch of the user's repository (workcopy.IsMerged); gone
+// without the merge, or merged but still seen, it is inconclusive (the
+// finding keeps the status the tool gave it). When that tool did not look in
+// this pass (see Pass), the attempt stays applied, whatever the status says:
+// the status is older than this pass. It returns the number proven.
+func Prove(ctx context.Context, d Deps, projectID string, pass Pass) (int, error) {
 	repo := d.repo()
 	lang := d.lang()
 	applied, err := repo.ListAttempts(ctx, projectID, string(StateApplied))
@@ -1656,12 +1678,15 @@ func Prove(ctx context.Context, d Deps, projectID string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	status := map[string]string{}
+	status, sourceOf := map[string]string{}, map[string]string{}
 	for _, f := range findings {
-		status[f.ID] = f.Status
+		status[f.ID], sourceOf[f.ID] = f.Status, f.SourceKey
 	}
 	proven := 0
 	for _, a := range applied {
+		if !pass.looked(sourceOf[a.FindingID]) {
+			continue
+		}
 		prop, ok, err := repo.CurrentProposal(ctx, a.ID)
 		if err != nil {
 			return proven, err
