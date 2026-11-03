@@ -2,11 +2,11 @@
 
 But : vérifier sur de vrais `sh`, `awk`, PHP, PostgreSQL et Monolog ce que les tests automatiques ne prouvent pas. Compte une heure et demie, dont des attentes.
 
-Règles du run :
+Règles de l'essai :
 
 - **Le conteneur seulement.** Jamais de production, jamais de serveur `hds`.
 - **Tout jetable** : conteneur, image, clé, configuration et dossier de données, hors du dépôt, supprimés à la fin.
-- **Dans le ledger, seulement des chiffres et des résultats** : ni nom d'hôte, ni adresse, ni empreinte, ni chemin de ton poste.
+- **Dans le journal de suivi (ledger), seulement des chiffres et des résultats** : ni nom d'hôte, ni adresse, ni empreinte, ni chemin de ton poste.
 
 ## 1. Préparer
 
@@ -15,7 +15,7 @@ Suis la section « Sans serveur jetable » de [la checklist du plan 6](../2026-1
 - Avec le Docker de WSL, garde une session ouverte pendant tout le test.
 - Choisis des ports libres sur ta machine, et garde `127.0.0.1` dans les `-p`.
 - Ajoute le serveur avec `--env prod`, pour que les erreurs critiques partent tout de suite.
-- Dans le fichier de configuration jetable, ajoute un canal webhook vers un récepteur local qui écrit l'heure et le corps de chaque message dans un fichier, et sa règle `notify.webhook`. Mets `notify.digest_at` à `off` : le résumé partira à l'étape 5.
+- Dans le fichier de configuration jetable, ajoute un canal webhook vers un petit programme local qui reçoit les messages et écrit l'heure et le corps de chacun dans un fichier, et sa règle `notify.webhook`. Mets `notify.digest_at` à `off` : le résumé partira à l'étape 5.
 
 Le conteneur contient déjà PostgreSQL (avec `%e` à la fin de `log_line_prefix`), `logrotate`, Monolog, l'utilisateur `michel` dans le groupe `adm`, et la page `errors.php`.
 
@@ -31,7 +31,7 @@ Lance `michel serve` avec ton dossier de données jetable, puis déclare ces sou
 
 ## 2. Journal piégé et vraies erreurs
 
-Après la première lecture (elle ne fait que repérer la fin des fichiers), écris le corpus `internal/serverlog/testdata/trap.log` dans chaque fichier piégé, puis provoque de vraies erreurs avec tes marqueurs :
+Après la première lecture (elle ne fait que repérer la fin des fichiers), écris le jeu de lignes piégées `internal/serverlog/testdata/trap.log` dans chaque fichier piégé, puis provoque de vraies erreurs avec tes marqueurs :
 
 ```sh
 curl "http://127.0.0.1:<port>/errors.php?kind=php&m=<marqueurs>"
@@ -49,10 +49,11 @@ curl "http://127.0.0.1:<port>/errors.php?kind=app&m=<marqueurs>"
 | Marqueurs dans les messages reçus | **0** |
 | Marqueurs dans `michel target logs list --json` et le journal de `serve` | **0** |
 | `michel audit verify` | code `0` |
+| Fichiers écrits sur le serveur : avant la première lecture, crée un fichier repère en root (`touch /root/repere`), puis à la fin de l'étape `find / -xdev -type f -user michel -newer /root/repere` | aucun fichier hors des dossiers temporaires |
 
 ## 3. Délai réel
 
-Provoque une erreur critique juste après une lecture : c'est le pire cas. Note l'heure d'écriture et l'heure d'arrivée au récepteur, sur plusieurs essais.
+Provoque une erreur critique juste après une lecture : c'est le pire cas. Note l'heure d'écriture et l'heure d'arrivée au programme de réception, sur plusieurs essais.
 
 Attendu : **moins de 10 min** à l'intervalle par défaut de 5 min.
 
@@ -98,8 +99,8 @@ Attendu : **une seule** alerte, après 3 échecs et 30 minutes, puis le retour �
 
 ## 8. Nettoyage
 
-Arrête `serve`, l'agent de test et le récepteur. Puis `docker rm -f` du conteneur, `docker rmi` de son image, et supprime le dossier jetable. Ne touche pas aux autres conteneurs de la machine. Vérifie qu'il ne reste rien, et que `git status` ne montre aucune trace du run.
+Arrête `serve`, l'agent de test et le programme de réception. Puis `docker rm -f` du conteneur, `docker rmi` de son image, et supprime le dossier jetable. Ne touche pas aux autres conteneurs de la machine. Vérifie qu'il ne reste rien, et que `git status` ne montre aucune trace de l'essai.
 
 ## Ce que ce test ne prouve pas
 
-Ni l'agent OpenSSH de Windows s'il passe par un agent de test, ni un vrai réseau, ni le réglage d'un hébergeur, ni un mutualisé, ni un serveur à l'heure locale.
+Ni l'agent OpenSSH de Windows s'il passe par un agent de test, ni un vrai réseau, ni le réglage d'un hébergeur, ni un hébergement mutualisé, ni un serveur à l'heure locale.
