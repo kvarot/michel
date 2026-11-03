@@ -94,7 +94,7 @@ describe('the line in À faire', () => {
 
 describe('the words of a hold', () => {
   const keys = ['path.step.held', 'path.note.held.one', 'path.note.held.other', 'path.note.withdrawn', 'path.hold.title.one', 'path.hold.title.other',
-    'path.hold.stopped', 'path.hold.line', 'path.hold.lines', 'path.hold.more', 'path.hold.if_continue.one', 'path.hold.if_continue.other',
+    'path.hold.stopped', 'path.hold.check', 'path.hold.line', 'path.hold.lines', 'path.hold.more.one', 'path.hold.more.other', 'path.hold.if_continue.one', 'path.hold.if_continue.other',
     'path.hold.how.one', 'path.hold.how.other', 'path.hold.once', 'path.hold.gone', 'path.hold.withdraw', 'path.hold.continue',
     'todo.word.yours', 'todo.held.one', 'todo.held.other', 'todo.action.answer', 'fix.line.held', 'fix.line.withdrawn', 'fix.done.withdrawn', 'fix.chat.not_started']
   test('both languages have them', () => {
@@ -118,6 +118,32 @@ describe('the words of a hold', () => {
     expect(en['plan.project.copy']).toContain('the agent does not start')
     expect(fr['plan.project.self_start']).toContain('attend ta réponse')
     expect(en['plan.project.self_start']).toContain('waits for your answer')
+  })
+  test('one more file and several more files read right', () => {
+    expect(translate('fr', 'path.hold.more', { n: 1, more: 1 })).toBe('Et dans 1 autre fichier.')
+    expect(translate('fr', 'path.hold.more', { n: 3, more: 3 })).toBe('Et dans 3 autres fichiers.')
+    expect(translate('en', 'path.hold.more', { n: 1, more: 1 })).toBe('And in 1 other file.')
+    expect(translate('en', 'path.hold.more', { n: 3, more: 3 })).toBe('And in 3 other files.')
+  })
+  test('the page says the shape decides, and that a real key may not stop the agent', () => {
+    for (const k of ['plan.project.copy', 'path.hold.check']) {
+      expect(fr[k], k).toContain('forme inhabituelle')
+      expect(en[k], k).toContain('unusual shape')
+    }
+    expect(fr['plan.project.copy']).toContain("n'arrête pas l'agent")
+    expect(en['plan.project.copy']).toContain('does not stop the agent')
+  })
+  test('the page says what an unanswered hold blocks, and how it ends', () => {
+    expect(fr['path.hold.once']).toContain('aucune autre correction de ce projet')
+    expect(fr['path.hold.once']).toContain('14 jours')
+    expect(en['path.hold.once']).toContain('no other fix of this project')
+    expect(en['path.hold.once']).toContain('14 days')
+  })
+  test('the end of a hold does not say the person chose: nobody may have answered', () => {
+    for (const k of ['path.note.withdrawn', 'fix.line.withdrawn']) {
+      expect(fr[k], k).not.toContain('Tu as choisi')
+      expect(en[k], k).not.toContain('You chose')
+    }
   })
   test('no jargon', () => {
     for (const k of keys.filter((x) => /^(path|todo)\./.test(x))) expect(findJargon(fr[k]), k).toEqual([])

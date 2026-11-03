@@ -42,10 +42,14 @@ func (e *ExitError) Unwrap() error { return e.Err }
 type Deps struct {
 	// Stdin feeds commands that read a value (michel secret set). Nil means
 	// os.Stdin; a reader that is not an *os.File is never a terminal.
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
-	Now    func() time.Time
+	Stdin io.Reader
+	// TypedLine replaces the terminal in tests of the answers Michel takes only
+	// from a person: what was typed, and whether a terminal is there. Nil reads
+	// the line from Stdin when it is a terminal.
+	TypedLine func() (string, bool)
+	Stdout    io.Writer
+	Stderr    io.Writer
+	Now       func() time.Time
 
 	// Policy and PolicySource are set by the root command before any
 	// subcommand runs.

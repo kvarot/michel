@@ -70,10 +70,35 @@ func fixWaitingMessage(lang i18n.Lang, n int, pageURL string) (title, body strin
 	return title, body
 }
 
+// fixHeldMessage is the text of SendFixHeld: how many fixes stopped before the
+// agent started, and the page link, nothing else.
+func fixHeldMessage(lang i18n.Lang, n int, pageURL string) (title, body string) {
+	if !lang.Valid() {
+		lang = i18n.EN
+	}
+	title = i18n.T(lang, "notify.fix_held.title", digest.DefaultAssistant)
+	body = i18n.N(lang, "notify.fix_held.body", n)
+	if pageURL != "" {
+		body += "\n" + pageURL
+	}
+	return title, body
+}
+
 // SendFixWaiting tells every channel that n fix proposals wait for the
 // user's decision, with the page link: a short text without any detail (no
 // project, package, diff or path). It never stops at the first failure.
 func SendFixWaiting(ctx context.Context, ns []Notifier, n int, pageURL string) []Delivery {
+	return sendFixMessage(ctx, ns, func(lang i18n.Lang) (string, string) { return fixWaitingMessage(lang, n, pageURL) })
+}
+
+// SendFixHeld tells every channel that n fixes stopped on a possible key in the
+// code and wait for an answer: no proposal exists yet, so it is not
+// SendFixWaiting's text. No detail either, and no key.
+func SendFixHeld(ctx context.Context, ns []Notifier, n int, pageURL string) []Delivery {
+	return sendFixMessage(ctx, ns, func(lang i18n.Lang) (string, string) { return fixHeldMessage(lang, n, pageURL) })
+}
+
+func sendFixMessage(ctx context.Context, ns []Notifier, text func(i18n.Lang) (title, body string)) []Delivery {
 	out := make([]Delivery, 0, len(ns))
 	for _, nf := range ns {
 		host, purpose := Target(nf)
@@ -86,7 +111,7 @@ func SendFixWaiting(ctx context.Context, ns []Notifier, n int, pageURL string) [
 		if b, ok := nf.(interface{ lang() i18n.Lang }); ok {
 			lang = b.lang()
 		}
-		title, body := fixWaitingMessage(lang, n, pageURL)
+		title, body := text(lang)
 		size, err := m.message(ctx, title, body)
 		out = append(out, deliver(nf, host, purpose, size, err))
 	}

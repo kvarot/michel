@@ -33,13 +33,14 @@
     <section v-if="hold" class="m-guide__hold m-panel" aria-labelledby="fix-hold-title">
       <component :is="subHeading" id="fix-hold-title" class="m-guide__sub" tabindex="-1">{{ $t('path.hold.title', { n: hold.count }) }}</component>
       <p>{{ $t('path.hold.stopped') }}</p>
+      <p>{{ $t('path.hold.check') }}</p>
       <ul class="m-guide__keys">
         <li v-for="f in hold.files" :key="f.file">
           <span class="m-code m-guide__file"><MaskedText :text="f.file" /></span>
           <span class="m-small">{{ $t(f.linesKey, { lines: f.lines }) }}</span>
         </li>
       </ul>
-      <p v-if="hold.more" class="m-small">{{ $t('path.hold.more', { more: hold.more }) }}</p>
+      <p v-if="hold.more" class="m-small">{{ $t('path.hold.more', { n: hold.more, more: hold.more }) }}</p>
       <p class="m-guide__warn">{{ $t('path.hold.if_continue', { n: hold.count }) }}</p>
       <p>{{ $t('path.hold.how', { n: hold.count }) }}</p>
       <div class="m-guide__answers">

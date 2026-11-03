@@ -104,7 +104,10 @@ type Deps struct {
 	// Notify is called when a proposal waits for the user, with the number
 	// of proposals waiting over every project. Nil sends nothing.
 	Notify func(ctx context.Context, waiting int)
-	Now    func() time.Time
+	// NotifyHeld is called when a start Michel made alone stopped on a key and
+	// waits for a person's answer. Nil sends nothing.
+	NotifyHeld func(ctx context.Context, n int)
+	Now        func() time.Time
 	// Actor is the audit actor of the calls (cli, web, serve).
 	Actor string
 	// Sessions holds the running agents of this process; nil means a
@@ -516,7 +519,7 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		}
 		return d.failStart(ctx, a, c, "fix.cause.prepare_failed", err)
 	}
-	if len(c.SecretHits) > 0 {
+	if len(strongHits(c.SecretHits)) > 0 {
 		return d.hold(ctx, a, c)
 	}
 	return d.launch(ctx, a, fi, p, c)
@@ -588,6 +591,9 @@ func (d Deps) launch(ctx context.Context, a Attempt, fi scan.Finding, p project.
 	var err error
 	fail := func(key string, cause error) (Attempt, error) {
 		return d.failStart(ctx, a, c, key, cause)
+	}
+	if text := weakHitsMessage(lang, weakHits(c.SecretHits)); text != "" {
+		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: text})
 	}
 	m := mask.New()
 	b, err := brief.Build(ctx, brief.Deps{Store: d.Store, DataDir: d.DataDir, Policy: d.Policy, Lang: lang}, fi.ID, m)
@@ -705,9 +711,30 @@ func secretHitsMessage(lang i18n.Lang, hits []mask.Hit) string {
 	if n == 0 {
 		return ""
 	}
-	files, folders := []string{}, []string{}
+	files, folders := hitPlaces(hits)
+	if len(folders) == 0 {
+		return i18n.N(lang, "fix.msg.secret_hits", n, strings.Join(files, ", "))
+	}
+	return i18n.N(lang, "fix.msg.secret_hits_folder", n, strings.Join(files, ", "), strings.Join(folders, ", "))
+}
+
+// weakHitsMessage is the warning about lines that talk about a key without one
+// that looks real: they do not stop the agent, and it can read them.
+func weakHitsMessage(lang i18n.Lang, hits []mask.Hit) string {
+	if len(hits) == 0 {
+		return ""
+	}
+	files, _ := hitPlaces(hits)
+	return i18n.N(lang, "fix.msg.weak_hits", len(hits), strings.Join(files, ", "))
+}
+
+// hitPlaces names the first files of hits and their folders, masked: a file
+// can be named like a key.
+func hitPlaces(hits []mask.Hit) (files, folders []string) {
+	m := mask.New()
+	files, folders = []string{}, []string{}
 	for _, h := range hits {
-		f := scan.SanitizeText(h.File)
+		f := m.Mask(scan.SanitizeText(h.File))
 		if !slices.Contains(files, f) && len(files) < 5 {
 			files = append(files, f)
 			if dir := path.Dir(f); dir != "." {
@@ -717,10 +744,7 @@ func secretHitsMessage(lang i18n.Lang, hits []mask.Hit) string {
 			}
 		}
 	}
-	if len(folders) == 0 {
-		return i18n.N(lang, "fix.msg.secret_hits", n, strings.Join(files, ", "))
-	}
-	return i18n.N(lang, "fix.msg.secret_hits_folder", n, strings.Join(files, ", "), strings.Join(folders, ", "))
+	return files, folders
 }
 
 // causeKey maps an error event of the agent to a catalog key.
@@ -1812,6 +1836,9 @@ func Sweep(ctx context.Context, d Deps) error {
 	repo := d.repo()
 	lang := d.lang()
 	if err := d.purge(ctx); err != nil {
+		return err
+	}
+	if err := d.expireHeld(ctx); err != nil {
 		return err
 	}
 	preparing, err := repo.ListAttempts(ctx, "", string(StatePreparing))

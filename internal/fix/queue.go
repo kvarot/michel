@@ -3,11 +3,13 @@ package fix
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/workcopy"
 )
 
 // Eligible reports whether a finding is one Michel prepares a fix for by
@@ -106,6 +108,33 @@ func (d Deps) alreadyTried(ctx context.Context, f scan.Finding) (bool, error) {
 			if a.Work.Plan.Target == target {
 				return true, nil
 			}
+		}
+	}
+	return d.saidNoToThisCode(ctx, f.ProjectID)
+}
+
+// saidNoToThisCode reports whether a hold of the project ended with a no on the
+// code it has now: same commit, same exclusions. The copy comes from the
+// commit, so the same keys would be found and the same question asked, whichever
+// flaw starts it. A person's own start does not read this.
+func (d Deps) saidNoToThisCode(ctx context.Context, projectID string) (bool, error) {
+	noes, err := d.repo().ListAttempts(ctx, projectID, string(StateWithdrawn))
+	if err != nil || len(noes) == 0 {
+		return false, err
+	}
+	p, err := project.NewRepo(d.Store).Get(ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	head, err := workcopy.Head(ctx, d.work(), p)
+	if err != nil {
+		// Without the commit, Start says what is wrong.
+		return false, nil
+	}
+	exclude := sortedStrings(p.Exclude)
+	for _, a := range noes {
+		if a.Work.Copy.Base == head && slices.Equal(exclude, sortedStrings(a.Work.Copy.Exclude)) {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -239,6 +268,7 @@ func Worker(ctx context.Context, d Deps) {
 		}
 		if d.now().Sub(lastPurge) >= 24*time.Hour {
 			_ = d.purge(ctx)
+			_ = d.expireHeld(ctx)
 			lastPurge = d.now()
 		}
 		select {

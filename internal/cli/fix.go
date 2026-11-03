@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/fix"
+	"github.com/kvarot/michel/internal/mask"
 	"github.com/kvarot/michel/internal/notify"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
@@ -79,7 +80,74 @@ func fixDeps(cmd *cobra.Command, deps *Deps, secrets secret.Store, actor string)
 		}
 		notify.SendFixWaiting(ctx, ns, waiting, deps.Policy.Notify.PageURL)
 	}
+	d.NotifyHeld = func(ctx context.Context, n int) {
+		nd, err := notifyDeps(cmd, deps, false)
+		if err != nil {
+			return
+		}
+		nd.Secrets = secrets
+		ns, err := notify.Build(deps.Policy.Notify, nd)
+		if err != nil {
+			return
+		}
+		notify.SendFixHeld(ctx, ns, n, deps.Policy.Notify.PageURL)
+	}
 	return d
+}
+
+// maskedHold is what a hold shows at the command line: a file can be named like
+// a key, and a key is never shown.
+func maskedHold(hold fix.HoldInfo) fix.HoldInfo {
+	m := mask.New()
+	files := make([]fix.HoldFile, len(hold.Files))
+	for i, f := range hold.Files {
+		files[i] = fix.HoldFile{File: m.Mask(f.File), Lines: f.Lines}
+	}
+	hold.Files = files
+	return hold
+}
+
+// printHold writes how many possible keys, in which files and at which lines.
+func printHold(deps *Deps, hold fix.HoldInfo) {
+	w := deps.Stdout
+	fmt.Fprintln(w, deps.T("cli.fix.hold.head", hold.Count))
+	for _, f := range hold.Files {
+		lines := make([]string, 0, len(f.Lines))
+		for _, n := range f.Lines {
+			lines = append(lines, strconv.Itoa(n))
+		}
+		fmt.Fprintln(w, deps.T("cli.fix.hold.file", f.File, strings.Join(lines, ", ")))
+	}
+	if hold.More > 0 {
+		fmt.Fprintln(w, deps.T("cli.fix.hold.more", hold.More))
+	}
+}
+
+// hasTerminal says a person can type here. It says nothing of who is typing.
+func hasTerminal(deps *Deps) bool {
+	if deps.TypedLine != nil {
+		_, ok := deps.TypedLine()
+		return ok
+	}
+	_, terminal := stdinTerminal(deps)
+	return terminal
+}
+
+// typedLine reads one line a person types; ok is false without a terminal.
+func typedLine(deps *Deps) (line string, ok bool, err error) {
+	if deps.TypedLine != nil {
+		line, ok = deps.TypedLine()
+		return line, ok, nil
+	}
+	r, terminal := stdinTerminal(deps)
+	if !terminal {
+		return "", false, nil
+	}
+	line, err = r.ReadString('\n')
+	if err != nil && line == "" {
+		return "", true, err
+	}
+	return line, true, nil
 }
 
 func newFixCmd(deps *Deps) *cobra.Command {
@@ -210,6 +278,7 @@ func printAttempt(cmd *cobra.Command, deps *Deps, a fix.Attempt, withDiff bool) 
 		if err := writeFileAtomic(shownFile(cmd, a.ID), []byte(hold.Hash+"\n")); err != nil {
 			return err
 		}
+		hold = maskedHold(hold)
 	}
 	if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
 		out := map[string]any{"attempt": a, "proposal": nil, "messages": msgs}
@@ -235,17 +304,7 @@ func printAttempt(cmd *cobra.Command, deps *Deps, a fix.Attempt, withDiff bool) 
 		fmt.Fprintln(w, deps.T("cli.fix.status.cause", scan.SanitizeText(a.Cause)))
 	}
 	if held {
-		fmt.Fprintln(w, deps.T("cli.fix.hold.head", hold.Count))
-		for _, f := range hold.Files {
-			lines := make([]string, 0, len(f.Lines))
-			for _, n := range f.Lines {
-				lines = append(lines, strconv.Itoa(n))
-			}
-			fmt.Fprintln(w, deps.T("cli.fix.hold.file", f.File, strings.Join(lines, ", ")))
-		}
-		if hold.More > 0 {
-			fmt.Fprintln(w, deps.T("cli.fix.hold.more", hold.More))
-		}
+		printHold(deps, hold)
 		fmt.Fprintln(w, deps.T("cli.fix.hold.how", a.ID))
 	}
 	if hasProp {
@@ -364,7 +423,8 @@ func newFixContinueCmd(deps *Deps) *cobra.Command {
 		Short: "Start the agent although Michel found possible keys in the code, for this attempt only",
 		Long: "Continue is your yes to a fix attempt that waits (state held) because Michel found possible keys in the code: the " +
 			"agent starts, can read them, and they reach Anthropic. It answers the list michel fix status or michel fix prepare " +
-			"last showed, for this attempt only. Michel refuses when the code changed since: start the fix again, Michel searches again.",
+			"last showed, for this attempt only. It needs a terminal: Michel shows the list again and you type the word it asks; " +
+			"it does not take this answer from a script. Michel refuses when the code changed since: start the fix again, Michel searches again.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
@@ -373,9 +433,24 @@ func newFixContinueCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !hasTerminal(deps) {
+				return deps.Errorf("cli.fix.continue.need_terminal")
+			}
 			b, err := os.ReadFile(shownFile(cmd, a.ID))
 			if err != nil {
 				return deps.Errorf("cli.fix.continue.status_first", a.ID)
+			}
+			if hold, held := fix.HoldOf(a); held {
+				word := deps.T("cli.fix.continue.word")
+				printHold(deps, maskedHold(hold))
+				fmt.Fprint(deps.Stderr, deps.T("cli.fix.continue.ask", word))
+				line, terminal, err := typedLine(deps)
+				if err != nil || !terminal {
+					return deps.Errorf("cli.fix.continue.need_terminal")
+				}
+				if !strings.EqualFold(strings.TrimSpace(line), word) {
+					return deps.Errorf("cli.fix.continue.not_confirmed", word)
+				}
 			}
 			d, err := fixService(cmd, deps)
 			if err != nil {

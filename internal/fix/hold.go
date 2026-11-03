@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/mask"
@@ -14,6 +15,10 @@ import (
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/workcopy"
 )
+
+// HeldExpiry is how long a held attempt waits for an answer before it ends as
+// a no. While it waits, the project takes no other fix and the copy stays.
+const HeldExpiry = 14 * 24 * time.Hour
 
 // maxHoldFiles and maxHoldLines bound what a hold lists: the count stays whole.
 const (
@@ -63,7 +68,7 @@ func HoldOf(a Attempt) (HoldInfo, bool) {
 	if a.State != StateHeld {
 		return HoldInfo{}, false
 	}
-	hits := sortedHits(a.Work.Copy.SecretHits)
+	hits := sortedHits(strongHits(a.Work.Copy.SecretHits))
 	info := HoldInfo{Count: len(hits), Files: []HoldFile{}, Hash: holdFingerprint(a.Work)}
 	last, listed := "", false
 	for _, hit := range hits {
@@ -90,12 +95,24 @@ func HoldOf(a Attempt) (HoldInfo, bool) {
 
 // holdEvidence is the audit of a hold: counts only, never a file nor a value.
 func holdEvidence(a Attempt) map[string]any {
+	strong := strongHits(a.Work.Copy.SecretHits)
 	files := map[string]bool{}
-	for _, h := range a.Work.Copy.SecretHits {
+	for _, h := range strong {
 		files[h.File] = true
 	}
 	return map[string]any{"attempt_id": a.ID, "finding_id": a.FindingID, "project_id": a.ProjectID, "origin": a.Origin,
-		"secret_hits": len(a.Work.Copy.SecretHits), "files": len(files)}
+		"secret_hits": len(strong), "weak_hits": len(a.Work.Copy.SecretHits) - len(strong), "files": len(files)}
+}
+
+// strongHits are the hits that stop an agent. The others are only told.
+func strongHits(hits []mask.Hit) []mask.Hit {
+	return slices.DeleteFunc(slices.Clone(hits), func(h mask.Hit) bool { return !h.Strong })
+}
+
+// weakHits are the hits that do not stop an agent: a type, a variable, a call
+// or a sentence on a sensitive name.
+func weakHits(hits []mask.Hit) []mask.Hit {
+	return slices.DeleteFunc(slices.Clone(hits), func(h mask.Hit) bool { return h.Strong })
 }
 
 // hold stops the attempt before anything leaves the computer: no agent, no
@@ -113,27 +130,27 @@ func (d Deps) hold(ctx context.Context, a Attempt, c workcopy.Copy) (Attempt, er
 	if err := d.record(ctx, "fix.hold", a.FindingID, "ok", holdEvidence(a)); err != nil {
 		return d.failStart(ctx, a, c, "fix.cause.prepare_failed", err)
 	}
-	if text := secretHitsMessage(d.lang(), c.SecretHits); text != "" {
+	if text := secretHitsMessage(d.lang(), strongHits(c.SecretHits)); text != "" {
 		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: text})
 	}
 	if err := repo.SetState(ctx, a.ID, []State{StatePreparing}, StateHeld, ""); err != nil {
 		return d.failStart(ctx, a, c, "fix.cause.prepare_failed", err)
 	}
 	// Nobody is looking at a start Michel made alone.
-	if d.Notify != nil && a.Origin == OriginAgentAuto {
-		d.Notify(ctx, 1)
+	if d.NotifyHeld != nil && a.Origin == OriginAgentAuto {
+		d.NotifyHeld(ctx, 1)
 	}
 	return repo.GetAttempt(ctx, a.ID)
 }
 
 // actorAnswers says the actor is a person's way in: the page or the command
-// line. The worker, a level 3 rule and michel mcp never answer a hold.
+// line, and nothing else. It names the door used, not who is behind it.
 func actorAnswers(actor string) bool {
 	switch actor {
-	case "", "michel", "serve", ActorAuto, "mcp":
-		return false
+	case "cli", "web":
+		return true
 	}
-	return true
+	return false
 }
 
 // holdChanged says what was searched is no longer what the agent would read,
@@ -224,8 +241,36 @@ func ContinueHeld(ctx context.Context, d Deps, attemptID, hash string) (Attempt,
 	if err != nil {
 		return d.failStart(ctx, a, a.Work.Copy, "fix.cause.prepare_failed", err)
 	}
-	_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: i18n.N(d.lang(), "fix.msg.hold_continued", len(a.Work.Copy.SecretHits))})
+	_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: i18n.N(d.lang(), "fix.msg.hold_continued", len(strongHits(a.Work.Copy.SecretHits)))})
 	return d.launch(ctx, a, fi, p, a.Work.Copy)
+}
+
+// expireHeld ends the attempts nobody answered for HeldExpiry, as a no: only a
+// no, never a yes. The copy is removed and the project takes fixes again;
+// alreadyTried keeps the queue from asking again before a new commit.
+func (d Deps) expireHeld(ctx context.Context) error {
+	repo := d.repo()
+	held, err := repo.ListAttempts(ctx, "", string(StateHeld))
+	if err != nil {
+		return err
+	}
+	days := int(HeldExpiry / (24 * time.Hour))
+	for _, a := range held {
+		if d.now().Sub(a.UpdatedAt) < HeldExpiry {
+			continue
+		}
+		lock := d.sessions().attemptLock(a.ID)
+		lock.Lock()
+		err := repo.SetState(ctx, a.ID, []State{StateHeld}, StateWithdrawn, i18n.T(d.lang(), "fix.cause.hold_expired", days))
+		if err == nil {
+			d.cleanup(ctx, a, true)
+			ev := holdEvidence(a)
+			ev["author"] = "expired"
+			_ = d.record(ctx, "fix.hold.withdraw", a.FindingID, "ok", ev)
+		}
+		lock.Unlock()
+	}
+	return nil
 }
 
 // WithdrawHeld ends a held attempt on the person's word: no agent started,

@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
@@ -103,6 +105,58 @@ func TestFixApproveRefusesChangedProposal(t *testing.T) {
 	}
 }
 
+// runTyped is run with a terminal where a person types answer.
+func runTyped(t *testing.T, dir, answer string, args ...string) (*Deps, string, string, error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	deps := &Deps{Stdout: &out, Stderr: &errOut, Now: time.Now, TypedLine: func() (string, bool) { return answer, true }}
+	t.Cleanup(func() { deps.Close() })
+	cmd := NewRootCmd(deps)
+	cmd.SetArgs(append([]string{"--config", filepath.Join(dir, "config.yaml"), "--data-dir", dir, "--lang", "en"}, args...))
+	err := cmd.Execute()
+	deps.Close()
+	return deps, out.String(), errOut.String(), err
+}
+
+func TestFixStatusMasksAFileNamedLikeAKey(t *testing.T) {
+	dir, list := scannedDemo(t, false)
+	ctx := context.Background()
+	key := "AKIA" + "ABCDEFGHIJKLMNOP"
+	var id string
+	withStore(t, dir, func(st *store.Store) {
+		p, err := project.NewRepo(st).Get(ctx, "demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := fix.NewRepo(st)
+		a, err := repo.CreateAttempt(ctx, fix.Attempt{FindingID: list[0].ID, ProjectID: p.ID, Origin: fix.OriginAgent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id = a.ID
+		w := fix.Work{HoldSum: "sum", Copy: workcopy.Copy{SecretHits: []mask.Hit{{File: "src/" + key + ".php", Line: 2, Kind: mask.KindAWSKey, Strong: true}}}}
+		if err := repo.SetWork(ctx, id, w); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SetState(ctx, id, []fix.State{fix.StatePreparing}, fix.StateHeld, ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, args := range [][]string{{"fix", "status", id}, {"fix", "status", id, "--json"}} {
+		_, out, _, err := run(t, dir, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, key) {
+			t.Errorf("%v shows the name:\n%s", args, out)
+		}
+	}
+	_, out, _, _ := runTyped(t, dir, "no", "fix", "continue", id)
+	if strings.Contains(out, key) {
+		t.Errorf("continue shows the name:\n%s", out)
+	}
+}
+
 func TestFixHeldAttemptIsAnsweredByItsCommands(t *testing.T) {
 	dir, list := scannedDemo(t, false)
 	ctx := context.Background()
@@ -119,7 +173,7 @@ func TestFixHeldAttemptIsAnsweredByItsCommands(t *testing.T) {
 			t.Fatal(err)
 		}
 		id = a.ID
-		w := fix.Work{HoldSum: "sum", Copy: workcopy.Copy{SecretHits: []mask.Hit{{File: "src/config.php", Line: 2, Kind: mask.KindAWSKey}}}}
+		w := fix.Work{HoldSum: "sum", Copy: workcopy.Copy{SecretHits: []mask.Hit{{File: "src/config.php", Line: 2, Kind: mask.KindAWSKey, Strong: true}}}}
 		if err := repo.SetWork(ctx, id, w); err != nil {
 			t.Fatal(err)
 		}
@@ -127,8 +181,12 @@ func TestFixHeldAttemptIsAnsweredByItsCommands(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	// No terminal: refused whatever was shown, and the attempt waits.
+	if _, _, _, err := run(t, dir, "fix", "continue", id); err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("continue without a terminal: %v", err)
+	}
 	// Nothing shown yet: continue asks for status first.
-	if _, _, _, err := run(t, dir, "fix", "continue", id); err == nil || !strings.Contains(err.Error(), "michel fix status") {
+	if _, _, _, err := runTyped(t, dir, "yes", "fix", "continue", id); err == nil || !strings.Contains(err.Error(), "michel fix status") {
 		t.Fatalf("continue before status: %v", err)
 	}
 	_, out, _, err := run(t, dir, "fix", "status", id)
@@ -143,8 +201,16 @@ func TestFixHeldAttemptIsAnsweredByItsCommands(t *testing.T) {
 	if strings.Contains(out, key) {
 		t.Errorf("status shows the value:\n%s", out)
 	}
+	// Another word is not a yes; the list is shown again first.
+	_, out, _, err = runTyped(t, dir, "ok", "fix", "continue", id)
+	if err == nil || !strings.Contains(err.Error(), "yes") {
+		t.Fatalf("continue with another word: %v", err)
+	}
+	if !strings.Contains(out, "src/config.php") {
+		t.Errorf("the list is not shown again:\n%s", out)
+	}
 	// The project has no consent: the yes is refused and the attempt waits.
-	if _, _, _, err := run(t, dir, "fix", "continue", id); err == nil {
+	if _, _, _, err := runTyped(t, dir, "yes", "fix", "continue", id); err == nil {
 		t.Error("continue without consent succeeded")
 	}
 	withStore(t, dir, func(st *store.Store) {

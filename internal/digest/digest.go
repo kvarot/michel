@@ -151,6 +151,9 @@ type ProjectDigest struct {
 	// FixQueued counts the automatic fixes queued that wait for michel
 	// serve to run.
 	FixWaiting []FixLine `json:"fix_waiting,omitempty"`
+	// FixHeld lists the attempts stopped on a possible key in the code, waiting
+	// for a yes or a no (whatever the window). Package and flaw only: no file.
+	FixHeld    []FixLine `json:"fix_held,omitempty"`
 	FixApplied []FixLine `json:"fix_applied,omitempty"`
 	FixQueued  int       `json:"fix_queued"`
 	// FixUnreadable counts the attempts whose stored record could not be
@@ -663,7 +666,7 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 	if err := c.fixes(ctx, p, &pd, byID); err != nil {
 		return ProjectDigest{}, 0, 0, nil, err
 	}
-	attention += len(pd.Superseded) + len(pd.Due) + len(pd.FixWaiting)
+	attention += len(pd.Superseded) + len(pd.Due) + len(pd.FixWaiting) + len(pd.FixHeld)
 	pd.Attention = attention
 
 	first, status, err := c.scans(ctx, p.ID)
@@ -715,6 +718,17 @@ func (c computer) fixes(ctx context.Context, p project.Project, pd *ProjectDiges
 		}
 		pd.FixWaiting = append(pd.FixWaiting, line(a))
 	}
+	held, err := repo.ListAttempts(ctx, p.ID, string(fix.StateHeld))
+	if err != nil {
+		return err
+	}
+	for _, a := range held {
+		if a.WorkError != "" {
+			pd.FixUnreadable++
+			continue
+		}
+		pd.FixHeld = append(pd.FixHeld, line(a))
+	}
 	proven, err := repo.ListAttempts(ctx, p.ID, string(fix.StateProvenFixed))
 	if err != nil {
 		return err
@@ -731,7 +745,7 @@ func (c computer) fixes(ctx context.Context, p project.Project, pd *ProjectDiges
 		l.Branch = fix.Branch(a.ID)
 		pd.FixApplied = append(pd.FixApplied, l)
 	}
-	for _, list := range []*[]FixLine{&pd.FixWaiting, &pd.FixApplied} {
+	for _, list := range []*[]FixLine{&pd.FixWaiting, &pd.FixHeld, &pd.FixApplied} {
 		sort.SliceStable(*list, func(i, j int) bool {
 			a, b := (*list)[i], (*list)[j]
 			if a.Package != b.Package {

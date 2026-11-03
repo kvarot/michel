@@ -921,7 +921,7 @@ func TestNoLogDataReachesAnAgent(t *testing.T) {
 	// formats the log alerts, so it depends on the log packages, but nothing flows
 	// from them to the agent: internal/fix does not import notify (checked below),
 	// and these are the only functions of notify that file may call.
-	notifyAllowed := map[string]bool{"Build": true, "SendFixWaiting": true}
+	notifyAllowed := map[string]bool{"Build": true, "SendFixWaiting": true, "SendFixHeld": true}
 	roots := map[string]string{} // package to check -> the file that needs it
 	err := filepath.WalkDir(filepath.Join(".."), func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {

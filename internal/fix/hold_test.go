@@ -43,6 +43,8 @@ func (f *fixture) startedCount() int {
 // held starts an attempt on the planted key and checks that it waits.
 func (f *fixture) held() Attempt {
 	f.t.Helper()
+	// The answers that follow are given at the command line.
+	f.d.Actor = "cli"
 	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
 	if err != nil {
 		f.t.Fatalf("Start: %v", err)
@@ -477,5 +479,5 @@ func TestHeldAndWithdrawnStatesAreKnown(t *testing.T) {
 }
 
 func secretHit(file string, line int) mask.Hit {
-	return mask.Hit{File: file, Line: line, Kind: mask.KindAWSKey}
+	return mask.Hit{File: file, Line: line, Kind: mask.KindAWSKey, Strong: true}
 }

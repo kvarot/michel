@@ -42,6 +42,11 @@
 {{range .FixWaiting}}<li><strong>{{.Package}}</strong> {{.OSVID}}{{if .Target}} → {{.Target}}{{end}}</li>
 {{end}}</ul>
 {{end}}
+{{- if .FixHeld}}<h3>{{fixHeld (len .FixHeld)}}</h3>
+<ul>
+{{range .FixHeld}}<li><strong>{{.Package}}</strong> {{.OSVID}}</li>
+{{end}}</ul>
+{{end}}
 {{- if .FixApplied}}<h3>Corrigées dans ton code</h3>
 <ul>
 {{range .FixApplied}}<li>{{fixProven .}}</li>
