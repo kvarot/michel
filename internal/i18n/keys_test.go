@@ -33,6 +33,9 @@ var dynamicPrefixes = []string{
 	// api.target.* are named by the refusals of the server routes (servererr.Key),
 	// their hints (the key and _hint) and the state of a server.
 	"api.target.",
+	// notify.log.reason.* and notify.log.why.* are named by serverlog.Reason*
+	// and serverlog.Alert* (the cause of a failed read, why an error is told).
+	"notify.log.reason.", "notify.log.why.",
 }
 
 // family says how a call names a catalog key: the prefix added to the

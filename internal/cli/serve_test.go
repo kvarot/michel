@@ -204,7 +204,7 @@ func TestServeStartsAndStopsLogScheduler(t *testing.T) {
 		if started.Load() != 1 || stopped.Load() != 0 {
 			t.Errorf("while serving: started %d, stopped %d", started.Load(), stopped.Load())
 		}
-		if d := gotDeps.Load(); d == nil || d.Repo == nil || d.Targets == nil || d.Audit == nil || d.Now == nil {
+		if d := gotDeps.Load(); d == nil || d.Repo == nil || d.Targets == nil || d.Audit == nil || d.Now == nil || d.Alert == nil {
 			t.Errorf("deps = %+v", d)
 		}
 	})

@@ -183,13 +183,13 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			}()
 			// The logs of the servers are read in the background, at the interval of
 			// each server, and the retention of the log data is applied from there.
-			// Alert stays nil until the channels are wired: nothing is then marked as
-			// told, so the digest still carries what an alert would have said.
+			// Alerts go out on the notify channels; the digest carries the same errors.
+			logRepo := serverlog.NewRepo(deps.Store)
 			logDone := make(chan struct{})
 			go func() {
 				defer close(logDone)
-				runLogScheduler(schedCtx, serverlog.Deps{Repo: serverlog.NewRepo(deps.Store), Targets: cd.Repo, Audit: deps.Audit,
-					SSH: cd.SSH, Now: deps.Now}, serverLogTick)
+				runLogScheduler(schedCtx, serverlog.Deps{Repo: logRepo, Targets: cd.Repo, Audit: deps.Audit,
+					SSH: cd.SSH, Alert: serverLogAlert(cmd, deps, logRepo), Now: deps.Now}, serverLogTick)
 			}()
 			// Server fixes left running by a process that stopped end
 			// unknown, with an urgent alert, once past their own bound.
