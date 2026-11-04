@@ -1,7 +1,4 @@
-<li v-for="l in plan.lines" :key="l.key">
-            {{ $t(l.key, l.params || {}) }}
-            <a v-if="l.link" :href="l.link.href">{{ $t(l.link.key) }}</a>
-          </li><template>
+<template>
   <section class="m-guide" :aria-label="card ? $t('path.label') : undefined" :aria-labelledby="card ? undefined : 'fix-guide-title'">
     <template v-if="!card">
       <component :is="nested ? 'h2' : 'h1'" id="fix-guide-title" class="m-guide__title" tabindex="-1">
