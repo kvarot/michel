@@ -473,3 +473,28 @@ func TestDigestCountsEmptyApartFromFailed(t *testing.T) {
 		t.Errorf("count changed: empty %d show %t", d.EmptyProjects, d.ShowEmpty)
 	}
 }
+
+// I9: the row knows how many flaws must not stay folded (urgent or critical),
+// and the urgent one comes first.
+func TestPackageCountsWhatMustShow(t *testing.T) {
+	f := newFixture(t)
+	recent := now.Add(-2 * time.Hour)
+	seed := func(osv, sev string) string {
+		return f.seed(finding{pkg: "acme/lib", osv: osv, severity: sev, firstSeen: recent, fixed: []string{"1.3.0"}})
+	}
+	seed("ACME-1", "low")
+	seed("ACME-2", "critical")
+	seed("ACME-3", "high")
+	kev := seed("ACME-4", "medium")
+	seed("ACME-5", "critical")
+	if _, err := f.st.DB().Exec(`UPDATE finding SET kev = 1 WHERE id = ?`, kev); err != nil {
+		t.Fatal(err)
+	}
+	p := projectNamed(t, f.compute(i18n.EN, Options{}), "demo")
+	if len(p.New) != 1 || p.New[0].MustShow != 3 {
+		t.Fatalf("new = %+v", p.New)
+	}
+	if ids := p.New[0].FindingIDs; len(ids) != 5 || ids[0] != kev {
+		t.Errorf("the urgent one is not first: %v", ids)
+	}
+}

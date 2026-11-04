@@ -55,7 +55,7 @@ export function groupAttention(digest) {
         kind: 'new', package: pkg.name, severity: severityOf(pkg.worst_severity), text: pkg.what || '',
         findingIds: pkg.finding_ids || [], osvIds: pkg.osv_ids || [], installed: pkg.installed || '', target: pkg.target || '',
         decided: pkg.decided || '', kev: !!pkg.kev, malicious: !!pkg.malicious, epss: pkg.epss || 0,
-        findingKind: pkg.kind || 'dependency',
+        findingKind: pkg.kind || 'dependency', mustShow: pkg.must_show || 0,
       })
     }
     for (const s of p.superseded || []) {

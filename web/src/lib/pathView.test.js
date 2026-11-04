@@ -469,8 +469,13 @@ describe('plainRisk', () => {
   })
   test('falls back on the summary, then says it has nothing', () => {
     // B10: the summary is the advisory's own title, often English: the simple mode says so.
-    expect(plainRisk(finding({ summary: 'Cross-domain cookie leakage' }), null, 'fr', false)).toBe("Titre de l'avis, tel que ses auteurs l'ont écrit : « Cross-domain cookie leakage »")
-    expect(plainRisk(finding({ summary: 'Cross-domain cookie leakage' }), null, 'en', false)).toBe("The advisory's own title: \"Cross-domain cookie leakage\"")
+    expect(plainRisk(finding({ summary: 'Cross-domain cookie leakage' }), null, 'fr', false)).toBe("Le texte d'origine, souvent en anglais, dit : « Cross-domain cookie leakage »")
+    expect(plainRisk(finding({ summary: 'Cross-domain cookie leakage' }), null, 'en', false)).toBe('The original text says: "Cross-domain cookie leakage"')
+    // I10: no technical id in the simple mode, even in the original text.
+    const withId = plainRisk(finding({ summary: 'CVE-2024-1234: cookie leak' }), null, 'fr', false)
+    expect(withId).not.toContain('CVE-2024-1234')
+    expect(withId).toMatch(/cookie leak/i)
+    expect(plainRisk(finding({ summary: 'CVE-2024-1234' }), null, 'fr', false)).toBe(fr['path.means_none'])
     expect(plainRisk(finding({ summary: 'Cross-domain cookie leakage' }), null, 'fr', true)).toBe('Cross-domain cookie leakage')
     expect(plainRisk(finding(), null, 'fr', false)).toBe("Michel n'a pas encore d'explication pour cette faille.")
     expect(plainRisk(finding(), null, 'en', false)).toBe('Michel has no explanation for this flaw yet.')

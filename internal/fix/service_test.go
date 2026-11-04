@@ -434,7 +434,7 @@ func TestStartNeedsConsent(t *testing.T) {
 			t.Errorf("%s has no French text", k)
 		}
 	}
-	if fr := i18n.T(i18n.FR, "fix.consent.runs_code"); !strings.Contains(fr, "composer/npm") || !strings.Contains(fr, "droits Windows") || !strings.Contains(fr, "s'exécute") {
+	if fr := i18n.T(i18n.FR, "fix.consent.runs_code"); !strings.Contains(fr, "composer, npm") || !strings.Contains(fr, "droits Windows") || !strings.Contains(fr, "s'y exécute") {
 		t.Errorf("ruling 30 sentence missing: %q", fr)
 	}
 }

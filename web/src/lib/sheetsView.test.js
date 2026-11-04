@@ -15,6 +15,11 @@ describe('visibleSheets (B9)', () => {
     expect(visibleSheets(['a', 'b', 'c'], false)).toEqual({ shown: ['a', 'b', 'c'], hidden: 0 })
     expect(visibleSheets([], false)).toEqual({ shown: [], hidden: 0 })
   })
+  test('every flaw that must show is unfolded, however many: 5 critical of 14 hide none (I9)', () => {
+    expect(visibleSheets(ids, false, 5)).toEqual({ shown: ids.slice(0, 5), hidden: 9 })
+    expect(visibleSheets(ids, false, 1)).toEqual({ shown: ids.slice(0, 3), hidden: 11 })
+    expect(visibleSheets(ids, false, 20)).toEqual({ shown: ids, hidden: 0 })
+  })
   test('one more than the limit is still folded, as « et 1 autre »', () => {
     expect(visibleSheets(['a', 'b', 'c', 'd'], false).hidden).toBe(1)
   })

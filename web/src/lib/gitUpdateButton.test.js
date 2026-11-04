@@ -18,15 +18,15 @@ describe('GitUpdateButton while it runs', () => {
     expect(source).not.toMatch(/m-gitup__hidden/)
     expect(source).toMatch(/v-if="running"[^>]*class="m-gitup__wait/)
   })
-  test('the wait sentence says it can take a moment and to wait here', () => {
-    for (const cat of [fr, en]) expect(cat['git.update.wait']).toBeTruthy()
-    expect(fr['git.update.wait']).toContain('attends ici')
+  test('the wait sentence says it can take a moment and to stay, and no button is promised away', () => {
+    expect(fr['git.update.wait']).toContain('reste sur cette page')
+    expect(en['git.update.wait']).toContain('stay on this page')
   })
 })
 
 describe('MergeStep while it sends', () => {
   const merge = readFileSync(new URL('../components/MergeStep.vue', import.meta.url), 'utf8')
-  test('the send button does not swap to tonal while it runs', () => {
-    expect(merge).not.toMatch(/pushing \|\| step\.push\.pushed \? 'tonal'/)
+  test('the send button keeps one look, sent or not', () => {
+    expect(merge).not.toMatch(/:variant=/)
   })
 })

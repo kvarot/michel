@@ -446,8 +446,10 @@ export function plainRisk(finding, sheet, lang, advanced) {
   const text = impact || sheet?.summary || finding?.summary
   if (!text) return translate(lang, 'path.means_none')
   if (advanced) return text
-  // Without Michel's own sentence, the summary is the advisory's title, often English (B10).
-  return impact ? plainSentence(text, sheet || finding) : translate(lang, 'path.means_title', { title: text })
+  // Without Michel's own sentence, the text is the original one, often English (B10); the simple mode shows no id.
+  const plain = plainSentence(text, sheet || finding)
+  if (impact) return plain
+  return plain ? translate(lang, 'path.means_title', { title: plain }) : translate(lang, 'path.means_none')
 }
 
 /**

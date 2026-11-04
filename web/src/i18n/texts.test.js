@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import en from './en.json'
 import fr from './fr.json'
@@ -34,10 +35,12 @@ describe('the source a server check needs (B6)', () => {
   test('says what it gives, in plain words, and what turning it on allows', () => {
     const t = fr['servers.sheet.source']
     expect(t).toContain('{key}')
-    expect(t).toContain('liste publique de failles connues')
-    expect(t).toContain('télécharger')
+    expect(t).toContain('failles connues')
+    expect(t).toContain('liste publique')
+    expect(t).toContain('télécharge')
+    expect(t).not.toContain('à jour')
     expect(t).not.toContain('Active-la sur la page Sources')
-    expect(en['servers.sheet.source']).toContain('public list of known flaws')
+    expect(en['servers.sheet.source']).toContain('public list')
     expect(fr['servers.sheet.source_open']).toContain('Sources')
   })
 })
@@ -74,5 +77,32 @@ describe('the words of the novice’s list are explained where they appear (T16)
   test('the English counterparts say as much', () => {
     expect(en['servers.settings.sudo']).toContain('administrator')
     expect(en['fix.proposal.approve_hint']).toContain('a version apart from your code')
+  })
+})
+
+describe('the hand over says what the code does (I5, I11)', () => {
+  test('the site is checked only if its address was given; the attempt ends if the script would change', () => {
+    for (const k of ['srvfix.handover.body', 'srvfix.handover.body_plain']) {
+      expect(fr[k]).toContain('si tu as donné l\'adresse du site')
+      expect(fr[k]).toContain('cette correction s\'arrête')
+      expect(fr[k]).toContain('Je l\'ai appliqué')
+      expect(en[k]).toContain('if you gave the site\'s address')
+      expect(en[k]).toContain('this fix stops')
+    }
+    expect(fr['srvfix.handover.body_plain']).toContain('le compte que Michel utilise')
+    expect(fr['srvfix.handover.body_plain']).not.toContain('de ta connexion')
+    expect(fr['srvfix.handover.ready']).not.toContain('Tu as changé')
+    expect(en['srvfix.handover.ready']).not.toContain('You changed')
+  })
+  test('a software update: it does not undo, the date of the snapshot is the only way back', () => {
+    for (const cat of [fr, en]) expect(cat['srvfix.handover.snapshot']).toContain('{date}')
+    expect(fr['srvfix.handover.snapshot']).toContain('ne s\'annule pas')
+    expect(en['srvfix.handover.snapshot']).toContain('cannot be undone')
+    const c = readFileSync(new URL('../components/ServerProposal.vue', import.meta.url), 'utf8')
+    expect(c).toMatch(/v-if="needsSnap"[^>]*>\{\{ \$t\('srvfix\.handover\.snapshot'/)
+  })
+  test('a server set to report only: the sentence that explains the missing button says so', () => {
+    expect(fr['srvfix.handover.settings']).toContain('Signaler')
+    expect(en['srvfix.handover.settings']).toContain('Report')
   })
 })

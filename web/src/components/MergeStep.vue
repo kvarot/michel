@@ -33,7 +33,7 @@
       <v-btn
         class="m-merge__push"
         color="primary"
-        :variant="step.push.pushed ? 'tonal' : 'flat'"
+        variant="flat"
         :aria-disabled="pushing ? 'true' : undefined"
         @click="push"
       >

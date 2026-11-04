@@ -39,7 +39,7 @@ func has(t *testing.T, label, got string, wants ...string) {
 
 func TestRenderEnglishThreeSentences(t *testing.T) {
 	e := mustRender(t, EN, sampleFacts())
-	has(t, "what", e.What, "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12.", `The advisory's own title: "Path traversal in acme/lib"`)
+	has(t, "what", e.What, "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12.", `The original text says: "Path traversal in acme/lib"`)
 	has(t, "impact", e.Impact, "This flaw is serious.", "Michel is fairly sure it matters to you.")
 	has(t, "cost", e.Cost, "A small patch update (1.2.0 → 1.2.5).", "No breaking change found in the changelog.",
 		"1 test file covers the code that uses it.", "Michel can try this fix for you (level 2: automatic fix, to be approved).", "Constraint allows it")
@@ -47,7 +47,7 @@ func TestRenderEnglishThreeSentences(t *testing.T) {
 
 func TestRenderFrenchThreeSentences(t *testing.T) {
 	e := mustRender(t, FR, sampleFacts())
-	has(t, "what", e.What, "2 endroits de ton code", "par exemple src/Foo.php:12", "Titre de l'avis, tel que ses auteurs l'ont écrit")
+	has(t, "what", e.What, "2 endroits de ton code", "par exemple src/Foo.php:12", "Le texte d'origine, souvent en anglais, dit")
 	has(t, "impact", e.Impact, "Cette faille est grave.", "Michel est plutôt sûr")
 	has(t, "cost", e.Cost, "petite mise à jour corrective", "Aucun changement incompatible", "1 fichier de test couvre",
 		"Michel peut tenter cette correction", "Ta contrainte l'autorise")

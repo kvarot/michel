@@ -57,6 +57,9 @@ type Package struct {
 	WorstSeverity string   `json:"worst_severity"`
 	OSVIDs        []string `json:"osv_ids"`
 	FindingIDs    []string `json:"finding_ids"`
+	// MustShow counts the findings urgent or critical: they come first in
+	// FindingIDs, and a page does not fold them away.
+	MustShow int `json:"must_show,omitempty"`
 	// What is the "what" sentence of the most severe finding, in the
 	// digest's language (new findings only).
 	What string `json:"what,omitempty"`
@@ -79,6 +82,9 @@ type Package struct {
 
 // mark adds the exploitation facts of f to the line.
 func (p *Package) mark(f scan.Finding) {
+	if label, _ := scan.EffectiveSeverity(f); scan.Urgent(f) || label == "critical" {
+		p.MustShow++
+	}
 	p.KEV = p.KEV || f.KEV
 	p.Malicious = p.Malicious || f.Malicious
 	if f.EPSS > p.EPSS {

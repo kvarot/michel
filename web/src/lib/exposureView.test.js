@@ -283,9 +283,8 @@ describe('the connection port', () => {
     // The trial: the server listens on 22, Michel connects by 2222 (a port redirection). The one
     // administration listener is where the connection ends, so it is not to check.
     const r = cols(read([service(22, 'open', 'admin', 'normal')]), target({ port: 2222 })).open[0]
-    expect(r).toMatchObject({ tag: 'normal', note: fr['expo.service.admin_mapped_note'] })
+    expect(r).toMatchObject({ tag: 'normal', note: fr['expo.service.admin_mapped_note'].replace('{number}', '2222') })
     expect(r.advice).toEqual([])
-    expect(en['expo.service.admin_mapped_note']).toBeTruthy()
   })
   test('two administration ports and none is Michel’s: still to check, Michel cannot tell which he uses', () => {
     const r = cols(read([service(22, 'open', 'admin', 'normal'), service(2200, 'open', 'admin', 'normal')]), target({ port: 2222 })).open
@@ -424,5 +423,30 @@ describe('what the exposure component decides', () => {
     expect(exposureShowsFlaw({ open: [{ findingId: 'f' }], reserved: [] })).toBe(true)
     expect(exposureShowsFlaw({ open: [], reserved: [{ findingId: 'f' }] })).toBe(true)
     expect(exposureShowsFlaw(null)).toBe(false)
+  })
+})
+
+describe('the administration number Michel does not come in by (I8)', () => {
+  const rows = (services) => exposureColumns(read(services), target({ port: 2222 }), 'fr', false).open
+  const admin = (list) => list.find((r) => r.port === 22)
+  test('one service on another number: normal only if that is where he arrives, and said so', () => {
+    const r = admin(rows([service(22, 'open', 'admin', 'normal')]))
+    expect(r.tag).toBe('normal')
+    expect(r.note).toContain('Normal si')
+    expect(r.note).toContain('2222')
+    expect(r.note).toContain('sans doute')
+  })
+  test('another listener Michel cannot name: he may come in there, so 22 stays to check', () => {
+    const r = admin(rows([service(22, 'open', 'admin', 'normal'), service(22222, 'open', 'other', 'unknown')]))
+    expect(r.tag).toBe('check')
+  })
+  test('the same port in two scopes is one port: not two listeners', () => {
+    const list = exposureColumns(read([service(22, 'open', 'admin', 'normal'), service(22, 'private', 'admin', 'normal')]), target({ port: 2222 }), 'fr', false)
+    expect(admin(list.open).tag).toBe('normal')
+    const again = rows([service(22, 'open', 'admin', 'normal'), { ...service(22, 'open', 'admin', 'normal'), addresses: ['203.0.113.5'] }])
+    for (const r of again) expect(r.tag).toBe('normal')
+  })
+  test('two administration numbers, none of them his: to check', () => {
+    expect(admin(rows([service(22, 'open', 'admin', 'normal'), service(2200, 'open', 'admin', 'normal')])).tag).toBe('check')
   })
 })

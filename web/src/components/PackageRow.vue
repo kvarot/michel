@@ -49,8 +49,8 @@
     </div>
     <div v-if="open" :id="sheetId" class="m-row__sheets">
       <FindingSheet v-for="id in sheets.shown" :key="id" :finding-id="id" @decided="$emit('decided')" />
-      <v-btn v-if="sheets.hidden" variant="text" size="small" class="m-row__more" @click="all = true">{{ $t('item.more', { n: sheets.hidden }) }}</v-btn>
-      <v-btn v-else-if="all && item.findingIds.length > 3" variant="text" size="small" class="m-row__more" @click="all = false">{{ $t('item.less') }}</v-btn>
+      <!-- One button, so the keyboard stays on it when it changes its words. -->
+      <v-btn v-if="foldable" variant="text" size="small" class="m-row__more" @click="all = !all">{{ all ? $t('item.less') : $t('item.more', { n: sheets.hidden }) }}</v-btn>
     </div>
   </li>
 </template>
@@ -77,7 +77,10 @@ export default {
   computed: {
     // sheets: the first few flaw sheets, the rest on a click (B9).
     sheets() {
-      return visibleSheets(this.item.findingIds, this.all)
+      return visibleSheets(this.item.findingIds, this.all, this.item.mustShow)
+    },
+    foldable() {
+      return visibleSheets(this.item.findingIds, false, this.item.mustShow).hidden > 0
     },
     // fixable: an open finding (not gone, not ignored) can go to the Fix page.
     fixable() {
