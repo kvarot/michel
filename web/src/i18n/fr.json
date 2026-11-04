@@ -1327,6 +1327,7 @@
   "expo.service.admin": "Connexion d'administration",
   "expo.service.admin_note": "Normal. C'est par là que Michel se connecte. À protéger par une clé.",
   "expo.service.admin_other_note": "C'est souvent par là qu'on administre un serveur, mais Michel ne se connecte pas par là. Regarde s'il doit rester ouvert à tous.",
+  "expo.service.admin_mapped_note": "Normal. C'est par là que Michel se connecte, même si tu y arrives par un autre numéro (une redirection). À protéger par une clé.",
   "expo.service.database": "Base de données",
   "expo.service.database_note": "Personne dehors n'a besoin d'y accéder.",
   "expo.service.cache": "Cache",

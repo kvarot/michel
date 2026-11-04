@@ -279,6 +279,18 @@ describe('the connection port', () => {
     expect(r[0].advice).toEqual([fr['expo.check_how'].replace('{number}', 22)])
     expect(r[1]).toMatchObject({ tag: 'normal', note: fr['expo.service.admin_note'] })
   })
+  test('a single administration port, reached by Michel through another number, is normal and says so (B8)', () => {
+    // The trial: the server listens on 22, Michel connects by 2222 (a port redirection). The one
+    // administration listener is where the connection ends, so it is not to check.
+    const r = cols(read([service(22, 'open', 'admin', 'normal')]), target({ port: 2222 })).open[0]
+    expect(r).toMatchObject({ tag: 'normal', note: fr['expo.service.admin_mapped_note'] })
+    expect(r.advice).toEqual([])
+    expect(en['expo.service.admin_mapped_note']).toBeTruthy()
+  })
+  test('two administration ports and none is Michel’s: still to check, Michel cannot tell which he uses', () => {
+    const r = cols(read([service(22, 'open', 'admin', 'normal'), service(2200, 'open', 'admin', 'normal')]), target({ port: 2222 })).open
+    expect(r.map((x) => x.tag)).toEqual(['check', 'check'])
+  })
   test('with no target, Michel does not guess', () => {
     expect(exposureColumns(read([service(22, 'open', 'admin', 'normal')]), null, 'fr', false).open[0].tag).toBe('normal')
   })

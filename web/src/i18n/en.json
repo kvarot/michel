@@ -1327,6 +1327,7 @@
   "expo.service.admin": "Administration connection",
   "expo.service.admin_note": "Normal. This is how Michel connects. Protect it with a key.",
   "expo.service.admin_other_note": "This is often how a server is administered, but Michel does not connect this way. See whether it should stay open to all.",
+  "expo.service.admin_mapped_note": "Normal. This is where Michel connects, even if you reach it through another number (a redirection). It should only accept a key to log in.",
   "expo.service.database": "Database",
   "expo.service.database_note": "Nobody outside needs to reach it.",
   "expo.service.cache": "Cache",

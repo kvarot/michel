@@ -47,6 +47,11 @@ export function exposureColumns(view, target, lang, advanced, failed = false) {
   const read = !!view?.read && services.length > 0
   const shared = (target?.kind || view?.kind) === 'shared'
   const server = target?.name || ''
+  // The administration listeners Michel reads. When there is only one and it is not on the number
+  // Michel connects by, the connection ends there through a redirection (a mapped port, a router):
+  // it is the connection one. With several, Michel cannot tell which he uses.
+  const adminPorts = services.filter((s) => serviceKey(s.service) === 'admin' && s.verdict === 'normal').map((s) => s.port)
+  const mappedAdmin = adminPorts.length === 1 && !!target?.port && adminPorts[0] !== target.port
 
   // adviceOf: a flaw has the whole advice, a service to close too even before
   // its flaw exists; a service only to check has one line.
@@ -93,6 +98,9 @@ export function exposureColumns(view, target, lang, advanced, failed = false) {
     } else if (close) {
       out.tag = 'check'
       out.note = t('expo.shared_note')
+    } else if (s.verdict === 'normal' && key === 'admin' && mappedAdmin) {
+      out.tag = 'normal'
+      out.note = t('expo.service.admin_mapped_note')
     } else if (s.verdict === 'normal' && key === 'admin' && target?.port && s.port !== target.port) {
       // The usual administration number, and not the one Michel comes in by.
       out.tag = 'check'
