@@ -214,3 +214,11 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Ruling R43: N2 (Resolve blocked for the server while one source fails) deferred with M2 — being conservative hides "back" alerts only for a source left broken, and that outage is itself told — costs missed "back" alerts on the other sources while it lasts.
 - Ruling R44: N4 (wildcard, rights lost on new files while an older one stays readable, stays on the sheet) deferred — ruling R39 covers no file read at all; a digest line for unseen files is the natural next step — costs silence outside the sheet in that case.
 - Final review clean after adjudication. Plan 7 complete.
+
+## Deferred items closed (2026-11-04)
+- Dispatched, BASE df596b5.
+- First pass: 3dcb47d..2867311. Review: 5 important, 10 minor, refused connection sound.
+- Ruling R70: no declared path in an alert or digest: rank and format instead — the docs and spec §6, §8 promise it, webhooks and SMS go to third parties — costs a less direct name, the sheet shows the path.
+- Fix round 1 dispatched.
+- Fix round 1: dfa20ee, ebdd40f. Re-review: all addressed bar told on recovery; new 1 important (the sheet shows no number) 4 minor. Fix round 2 dispatched.
+- Fix round 2: 25b51eb. Re-review: all addressed, 2 cosmetic left (comments say "sheet"; advanced row shows short and long format). Not seen in a browser: number on the sheet, marked health warning. No real server.
