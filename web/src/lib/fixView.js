@@ -36,6 +36,17 @@ export function canDecide(attempt) {
 }
 
 /**
+ * consentProjectOf is the project a flaw's AI consent is for: the attempt shown, the sheet
+ * of this very flaw (never a sheet left from another one), the flaw itself. '' while nothing
+ * loaded says it yet: the page loads the sheet before it answers (B2).
+ * @param {{current?: object|null, sheet?: object|null, finding?: object|null}} args
+ */
+export function consentProjectOf({ current, sheet, finding }) {
+  const own = sheet && sheet.id === finding?.id ? sheet : null
+  return current?.project || own?.project || finding?.project || ''
+}
+
+/**
  * decidingAttempt is the newest attempt of a flaw (by created_at, whatever the
  * list order), else the one shown, else null.
  * @param {object[]} attempts

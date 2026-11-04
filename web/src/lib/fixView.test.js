@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  acceptResult, activityLine, canApprove, canDecide, decidingAttempt, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
+  acceptResult, consentProjectOf, activityLine, canApprove, canDecide, decidingAttempt, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
   proposalFacts, proposalSentence, splitMasked, stateLine,
 } from './fixView.js'
 
@@ -276,5 +276,22 @@ describe('canDecide after the flaw came back', () => {
     expect(canDecide({ state: 'proven_fixed', finding: { status: 'new' } })).toBe(true)
     expect(canDecide({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe(false)
     expect(canDecide({ state: 'proven_fixed', finding: { status: 'new' }, server: { target: { id: 'a' } } })).toBe(false)
+  })
+})
+
+describe('consentProjectOf (B2)', () => {
+  const finding = { id: 'f1', project: '' }
+  test('nothing loaded yet: no name, the page must load the sheet before it answers', () => {
+    expect(consentProjectOf({ finding })).toBe('')
+  })
+  test('the sheet of this flaw names the project', () => {
+    expect(consentProjectOf({ sheet: { id: 'f1', project: 'demo' }, finding })).toBe('demo')
+  })
+  test('the sheet of another flaw never names the consent', () => {
+    expect(consentProjectOf({ sheet: { id: 'f2', project: 'other' }, finding })).toBe('')
+  })
+  test('the attempt shown comes first, then the flaw itself', () => {
+    expect(consentProjectOf({ current: { project: 'a' }, sheet: { id: 'f1', project: 'b' }, finding })).toBe('a')
+    expect(consentProjectOf({ finding: { id: 'f1', project: 'c' } })).toBe('c')
   })
 })

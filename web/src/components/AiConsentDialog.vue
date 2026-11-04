@@ -3,11 +3,14 @@
     <v-card-title id="ai-consent-title" class="m-consent__title">{{ $t('fix.consent.title', { project }) }}</v-card-title>
     <v-card-text>
       <p v-for="k in view.plain" :key="k" class="m-voice m-consent__strict">{{ $t(k) }}</p>
-      <!-- Michel's technical wording about the protection setting only: the lines below are the consent. -->
-      <details v-if="switchMode" class="m-consent__detail" :open="view.detailOpen || undefined">
-        <summary v-if="view.detailButton">{{ $t('fix.consent.detail') }}</summary>
+      <!-- The advanced mode reads the whole text; the simple mode folds nothing but names: the plain paragraph above decides. -->
+      <div v-if="switchMode && view.detailOpen" class="m-consent__detail">
         <p class="m-voice m-consent__strict">{{ $t('fix.consent.strict_intro') }}</p>
         <p class="m-consent__strict">{{ $t('fix.consent.strict_change') }}</p>
+      </div>
+      <details v-else-if="view.detailButton" class="m-consent__detail">
+        <summary>{{ $t('fix.consent.detail') }}</summary>
+        <p class="m-consent__strict">{{ $t('fix.consent.detail_names') }}</p>
       </details>
       <p class="m-consent__intro">{{ $t('fix.consent.intro') }}</p>
       <ul class="m-consent__lines">
@@ -28,9 +31,9 @@
 // AiConsentDialog shows the lines of a project's AI consent exactly as the
 // server wrote them (ruling 30: what leaves the computer, the hosts, and
 // that the agent's code runs on a copy with the user's rights), with
-// Accept and Cancel. Under strict_local it first says what that mode
-// protects and the accept button reads « Autoriser les IA externes (mode
-// standard) ». The parent sends the consent.
+// Accept and Cancel. Under strict_local it first says what that protection
+// guarantees and that accepting loses it, for all of Michel, and the accept
+// button says so. The parent sends the consent.
 import { consentView } from '../lib/consentView.js'
 
 export default {
@@ -50,7 +53,7 @@ export default {
   emits: ['accept', 'cancel'],
   computed: {
     view() {
-      return consentView({ kind: this.kind, switchMode: this.switchMode, advanced: !!this.$ui.advanced, lines: this.lines })
+      return consentView({ kind: this.kind, switchMode: this.switchMode, advanced: !!this.$ui.advanced })
     },
   },
 }

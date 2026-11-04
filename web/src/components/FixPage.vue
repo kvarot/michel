@@ -205,7 +205,7 @@ import FixProposal from './FixProposal.vue'
 import ServerProposal from './ServerProposal.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
-import { acceptResult, activityLine, canDecide, decidingAttempt, fixHash, groupAttempts, isFinal, isOpen, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
+import { acceptResult, activityLine, canDecide, consentProjectOf, decidingAttempt, fixHash, groupAttempts, isFinal, isOpen, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
 import { chatNoStart, isGone } from '../lib/pathView.js'
 import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../lib/serversView.js'
 
@@ -762,7 +762,7 @@ export default {
       if (!f || this.startingFor) return
       this.startingFor = f.id
       this.actionError = null
-      const project = this.current?.project || this.sheet?.project || f.project || ''
+      let project = consentProjectOf({ current: this.current, sheet: this.sheetOfSelected, finding: f })
       try {
         const r = await api.post(this.q(`/findings/${encodeURIComponent(f.id)}/fix`))
         const a = r?.attempt
@@ -779,7 +779,13 @@ export default {
       } catch (err) {
         if (!this.alive || err?.status === 401) return
         const code = err?.data?.code
-        if (err?.status === 409 && code === 'fix.err.consent_required') {
+        // A click while the flaw's sheet loads (B2): the project's name is in it, and the consent needs it.
+        if (!project && ((err?.status === 409 && code === 'fix.err.consent_required') || (err?.status === 403 && code === 'fix.err.strict_local'))) {
+          await this.loadSheet(f.id)
+          if (!this.alive) return
+          project = consentProjectOf({ current: this.current, sheet: this.sheetOfSelected, finding: f })
+        }
+        if (err?.status === 409 && code === 'fix.err.consent_required' && project) {
           this.consent = { open: true, project, lines: err.data.consent || [], switchMode: false, busy: false, error: '', findingId: f.id }
           return
         }
