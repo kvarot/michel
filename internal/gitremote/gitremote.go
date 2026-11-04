@@ -64,11 +64,12 @@ const (
 )
 
 var (
-	hostRe   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
-	userRe   = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._-]{0,63}$`)
-	partRe   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
-	portRe   = regexp.MustCompile(`^[1-9][0-9]{0,4}$`)
-	branchRe = regexp.MustCompile(`^michel/fix-[0-9a-z]{8,26}$`)
+	hostRe     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
+	userRe     = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._-]{0,63}$`)
+	partRe     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$`)
+	hexLabelRe = regexp.MustCompile(`^0x[0-9a-f]*$`) // 0x7f000001: curl reads it as IPv4
+	portRe     = regexp.MustCompile(`^[1-9][0-9]{0,4}$`)
+	branchRe   = regexp.MustCompile(`^michel/fix-[0-9a-z]{8,26}$`)
 )
 
 // providers is the whole recognition: strict equality on the host, never a
@@ -133,6 +134,7 @@ func parseHTTPS(rest string) (Remote, error) {
 	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
 		authority, credential = authority[at+1:], true
 	}
+	path = strings.TrimSuffix(path, "/") // one only: a//b and a/b// stay refused
 	host, port, ok := hostPort(authority)
 	if !ok || (port != 0 && port != httpsPort) || !validPath(path) {
 		return Remote{}, ErrUnsupported
@@ -162,6 +164,7 @@ func parseSSH(rest string) (Remote, error) {
 			return Remote{}, ErrUnsupported
 		}
 	}
+	path = strings.TrimSuffix(path, "/") // one only
 	host, port, ok := hostPort(authority)
 	if !ok || !validPath(path) {
 		return Remote{}, ErrUnsupported
@@ -197,7 +200,10 @@ func parseSCP(raw string) (Remote, error) {
 		}
 	}
 	host = strings.ToLower(host)
-	if len(host) == 1 || !validHost(host) || (!hasUser && uriSchemes[host]) || !validPath(path) {
+	path = strings.TrimSuffix(path, "/") // one only
+	// host:/a and host:a are different paths: Clean keeps the slash, Path does not.
+	rest := strings.TrimPrefix(path, "/") // one only: //a stays refused
+	if len(host) == 1 || !validHost(host) || (!hasUser && uriSchemes[host]) || !validPath(rest) {
 		return Remote{}, ErrUnsupported
 	}
 	clean := host + ":" + path
@@ -208,7 +214,7 @@ func parseSCP(raw string) (Remote, error) {
 		Clean:    clean,
 		Host:     host,
 		Scheme:   schemeSCP,
-		Path:     path,
+		Path:     rest,
 		Provider: providerOf(host),
 	}, nil
 }
@@ -232,6 +238,10 @@ func hasDrive(raw string) bool {
 // parseLocal keeps the address as read. Only tests and the trial build get
 // here, so the parts stay free, within what a path may safely hold.
 func parseLocal(raw string) (Remote, error) {
+	// A network share runs hooks from another machine (R28).
+	if norm := strings.ReplaceAll(raw, `\`, "/"); strings.HasPrefix(norm, "//") || strings.HasPrefix(norm, "file:////") {
+		return Remote{}, ErrUnsupported
+	}
 	rest := strings.TrimPrefix(raw, "file:///")
 	if strings.HasPrefix(rest, "//") || strings.ContainsAny(rest, "?#%") {
 		return Remote{}, ErrUnsupported
@@ -279,7 +289,7 @@ func validHost(host string) bool {
 		return false
 	}
 	last := host[strings.LastIndexByte(host, '.')+1:]
-	if strings.Trim(last, "0123456789") != "" {
+	if strings.Trim(last, "0123456789") != "" && !hexLabelRe.MatchString(last) {
 		return true
 	}
 	addr, err := netip.ParseAddr(host)
@@ -335,9 +345,26 @@ func ascii(s string) bool {
 	return true
 }
 
-// ID identifies the address, without its secret, for comparison and storage.
+// Address is Clean without the SSH user: what is stored and compared (R54).
+// It is never given back to Parse or to git. Paths and hosts hold no @.
+func (r Remote) Address() string {
+	switch r.Scheme {
+	case schemeSCP:
+		if _, rest, ok := strings.Cut(r.Clean, "@"); ok {
+			return rest
+		}
+	case schemeSSH:
+		if _, rest, ok := strings.Cut(strings.TrimPrefix(r.Clean, "ssh://"), "@"); ok {
+			return "ssh://" + rest
+		}
+	}
+	return r.Clean
+}
+
+// ID identifies the address, without its secret nor its SSH user, for
+// comparison and storage.
 func (r Remote) ID() string {
-	sum := sha256.Sum256([]byte(r.Clean))
+	sum := sha256.Sum256([]byte(r.Address()))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -353,7 +380,7 @@ func (r Remote) Display() string {
 // of three fixed origins. It is empty for a site it does not know, and when a
 // part is not valid. Every part is checked again here: the link goes into a page.
 func MergeURL(r Remote, branch string) string {
-	if !branchRe.MatchString(branch) || !validPath(r.Path) {
+	if !branchRe.MatchString(branch) || !validPath(r.Path) || providerOf(r.Host) != r.Provider {
 		return ""
 	}
 	repo := strings.TrimSuffix(r.Path, gitSuffix)

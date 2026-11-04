@@ -50,6 +50,14 @@ var accepted = []struct {
 	{raw: "https://github.com.example.test/demo/app", provider: Other, scheme: "https", host: "github.com.example.test", path: "demo/app"},
 	{raw: "https://examplegithub.com/demo/app", provider: Other, scheme: "https", host: "examplegithub.com", path: "demo/app"},
 	{raw: "https://github.com:443@example.test/demo/app", clean: "https://example.test/demo/app", provider: Other, scheme: "https", host: "example.test", path: "demo/app", credential: true},
+	// One final slash is dropped, as pasted from a browser; the link is the same.
+	{raw: "https://github.com/demo/app/", clean: "https://github.com/demo/app", provider: GitHub, scheme: "https", host: "github.com", path: "demo/app",
+		link: "https://github.com/demo/app/pull/new/" + branch},
+	{raw: "git@github.com:demo/app.git/", clean: "git@github.com:demo/app.git", provider: GitHub, scheme: "scp", host: "github.com", path: "demo/app.git",
+		link: "https://github.com/demo/app/pull/new/" + branch},
+	{raw: "ssh://git@h.example.test/a/b/", clean: "ssh://git@h.example.test/a/b", provider: Other, scheme: "ssh", host: "h.example.test", path: "a/b"},
+	// The absolute scp path of a self-hosted server: Clean keeps the slash.
+	{raw: "git@server.example.test:/srv/git/app.git", provider: Other, scheme: "scp", host: "server.example.test", path: "srv/git/app.git"},
 	{raw: "https://github.com/demo", provider: GitHub, scheme: "https", host: "github.com", path: "demo"},
 	{raw: "https://github.com/a/b/c", provider: GitHub, scheme: "https", host: "github.com", path: "a/b/c"},
 	{raw: "https://bitbucket.org/a/b/c", provider: Bitbucket, scheme: "https", host: "bitbucket.org", path: "a/b/c"},
@@ -107,8 +115,22 @@ var refused = []string{
 	"https://github.com/demo/../app",
 	"https://github.com/demo/a..b",
 	"https://github.com/demo/./app",
-	"https://github.com/demo/app/",
+	"https://github.com/a/b//",
+	"ssh://git@h.example.test/a/b//",
+	"git@h.example.test:a/b//",
+	"git@h.example.test://a/b",
+	"git@h.example.test:/",
 	"https://github.com//demo/app",
+	// Option or transport look-alikes stay refused.
+	"--upload-pack=x:demo/app",
+	"git@github.com:--upload-pack=x/app",
+	"https://github.com/--upload-pack=x/app",
+	"foo::bar/baz",
+	"hg::https://x/y",
+	"git-remote-foo::x",
+	// A hexadecimal IPv4 address is not a name.
+	"https://0x7f000001/a/b",
+	"https://127.0.0.0x1/a/b",
 	"https://github.com/.git",
 	"https://github.com/-x/app",
 	"https://github.com/demo/a b",
@@ -248,7 +270,67 @@ func TestSameRemoteWithOrWithoutSecretHasOneID(t *testing.T) {
 	}
 	sum := sha256.Sum256([]byte("https://github.com/demo/app.git"))
 	if b.ID() != hex.EncodeToString(sum[:]) {
-		t.Errorf("ID = %s, not the SHA-256 of Clean", b.ID())
+		t.Errorf("ID = %s, not the SHA-256 of Address", b.ID())
+	}
+}
+
+func TestIDIgnoresTheSSHUser(t *testing.T) {
+	a, _ := Parse("git@example.test:demo/app.git", false)
+	b, _ := Parse("deploy@example.test:demo/app.git", false)
+	if a.ID() != b.ID() {
+		t.Errorf("scp IDs differ: %s, %s", a.ID(), b.ID())
+	}
+	c, _ := Parse("ssh://git@example.test:2222/demo/app.git", false)
+	d, _ := Parse("ssh://deploy@example.test:2222/demo/app.git", false)
+	if c.ID() != d.ID() {
+		t.Errorf("ssh IDs differ: %s, %s", c.ID(), d.ID())
+	}
+	e, _ := Parse("ssh://example.test:2222/demo/app.git", false)
+	if c.ID() != e.ID() {
+		t.Errorf("a missing user changes the ID")
+	}
+	if got := c.Address(); got != "ssh://example.test:2222/demo/app.git" {
+		t.Errorf("Address = %q: the port must stay", got)
+	}
+	f, _ := Parse("ssh://example.test:2223/demo/app.git", false)
+	if c.ID() == f.ID() {
+		t.Errorf("another port gives the same ID")
+	}
+	sum := sha256.Sum256([]byte(c.Address()))
+	if c.ID() != hex.EncodeToString(sum[:]) {
+		t.Errorf("ID is not the SHA-256 of Address")
+	}
+}
+
+func TestAddressHoldsNoUser(t *testing.T) {
+	for raw, want := range map[string]string{
+		"ssh://" + canary + "@example.test/demo/app":       "ssh://example.test/demo/app",
+		canary + "@example.test:demo/app":                  "example.test:demo/app",
+		canary + "@example.test:/srv/app.git":              "example.test:/srv/app.git",
+		"ssh://" + canary + ":pw@example.test:22/demo/app": "ssh://example.test:22/demo/app",
+		"https://github.com/demo/app":                      "https://github.com/demo/app",
+		"example.test:demo/app":                            "example.test:demo/app",
+	} {
+		r, err := Parse(raw, false)
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if got := r.Address(); got != want || strings.Contains(got, canary) {
+			t.Errorf("%s: Address = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestMergeURLNeedsHostOfProvider(t *testing.T) {
+	for _, r := range []Remote{
+		{Provider: GitHub, Host: "evil.example.test", Path: "demo/app"},
+		{Provider: GitHub, Host: "", Path: "demo/app"},
+		{Provider: GitHub, Host: "gitlab.com", Path: "demo/app"},
+		{Provider: GitHub, Scheme: "file", Path: "demo/app"},
+	} {
+		if got := MergeURL(r, branch); got != "" {
+			t.Errorf("%+v: MergeURL = %q, want none", r, got)
+		}
 	}
 }
 
@@ -427,7 +509,7 @@ func TestLocalNeedsAllowLocal(t *testing.T) {
 			t.Errorf("%s: MergeURL = %q", raw, got)
 		}
 	}
-	for _, raw := range []string{"/srv/../demo.git", "file:///srv/../demo.git", `C:\srv\..\demo.git`, "/srv/a b.git", "/srv/a\nb.git", "/srv/a?b.git", "/srv/a#b.git", "file:///srv/%2e%2e/demo.git"} {
+	for _, raw := range []string{"/srv/../demo.git", "file:///srv/../demo.git", `C:\srv\..\demo.git`, "/srv/a b.git", "/srv/a\nb.git", "/srv/a?b.git", "/srv/a#b.git", "file:///srv/%2e%2e/demo.git", "file:////server/share/a.git", `/\server\share\a.git`} {
 		if _, err := Parse(raw, true); !errors.Is(err, ErrUnsupported) {
 			t.Errorf("%q, allowLocal true: err = %v, want ErrUnsupported", raw, err)
 		}
@@ -454,6 +536,15 @@ func FuzzParse(f *testing.F) {
 					t.Fatalf("refused with a value: %+v", r)
 				}
 				continue
+			}
+			if strings.HasPrefix(r.Clean, "-") {
+				t.Fatalf("%q gave Clean %q", raw, r.Clean)
+			}
+			if r.Scheme == "https" && strings.Contains(r.Clean, "@") {
+				t.Fatalf("%q gave Clean %q", raw, r.Clean)
+			}
+			if r.Provider != Local && (!validPath(r.Path) || r.Provider != providerOf(r.Host)) {
+				t.Fatalf("%q gave %+v", raw, r)
 			}
 			clean := strings.ToLower(r.Clean)
 			for _, bad := range []string{"javascript:", "data:", "vbscript:"} {
