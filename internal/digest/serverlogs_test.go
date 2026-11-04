@@ -230,6 +230,14 @@ func TestDigestShowsReadGap(t *testing.T) {
 	if page, _ := RenderHTML(d); !strings.Contains(page, "<li>Michel could not read the logs between 2026-10-22 22:30 UTC") {
 		t.Errorf("html:\n%s", page)
 	}
+	// A gap stores two dates and nothing about why: the line says so, and names
+	// no cause it does not know.
+	if !strings.Contains(text, "Errors that happened then may be missing. The cause is not known.") {
+		t.Errorf("no word on the cause:\n%s", text)
+	}
+	if !strings.Contains(fr, "peuvent manquer. La cause n'est pas connue.") {
+		t.Errorf("no word on the cause (fr):\n%s", fr)
+	}
 	// Past the window it is gone.
 	d2, err := Compute(ctx, l.st, now.Add(30*time.Hour), i18n.EN, Options{Since: now})
 	if err != nil || len(d2.ServerLogs) != 0 {

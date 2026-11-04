@@ -833,7 +833,7 @@
   "digest.serverlogs.deviation.retention": "The log data is not kept for 90 days, the recommended time.",
   "digest.serverlogs.deviation.store_text": "Michel keeps the text of the errors, after replacing quoted strings, numbers, addresses, emails and web addresses.",
   "digest.serverlogs.deviations": "Reminder, once a week: the log settings of this server are not the recommended ones. %s You can go back to the recommended choice on the server page in Michel.",
-  "digest.serverlogs.gap": "Michel could not read the logs between %[1]s and %[2]s. Errors that happened then may be missing.",
+  "digest.serverlogs.gap": "Michel could not read the logs between %[1]s and %[2]s. Errors that happened then may be missing. The cause is not known.",
   "digest.serverlogs.moment_layout": "2006-01-02 15:04 UTC",
   "digest.serverlogs.new.one": "%d new error",
   "digest.serverlogs.new.other": "%d new errors",
