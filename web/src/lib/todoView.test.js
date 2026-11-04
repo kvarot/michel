@@ -279,10 +279,10 @@ describe('decisions', () => {
     expect(keys(null)).not.toContain('project_stale')
     expect(keys(undefined)).not.toContain('project_stale')
   })
-  test('a held attempt whose flaw is gone asks nothing', () => {
+  test('a held attempt whose flaw is gone stays listed: the project waits and its page offers the way out', () => {
     const held = (status) => attempt('h', 'held', { finding: { id: 'f-h', package: 'lib', severity: 'high', status }, hold: { count: 2 } })
     expect(build({ attempts: [held('pending')] }).lines.length).toBe(1)
-    expect(build({ attempts: [held('gone')] }).lines.length).toBe(0)
+    expect(build({ attempts: [held('gone')] }).lines.length).toBe(1)
   })
   test('a decided server finding has no line', () => {
     const r = build({

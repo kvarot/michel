@@ -351,8 +351,6 @@ function attemptLine(a, t, known) {
   const make = (rank, word, title, actionKey, href = fix) => ({ rank, word, title, where, action: { label: t(`todo.action.${actionKey}`), href }, scope })
   switch (a.state) {
     case 'held':
-      // A flaw gone since can no longer be continued: the hold only waits to end.
-      if (a.finding?.status === 'gone') return null
       // The agent does not start and the project is taken until the person answers.
       return make(2, 'yours', t('todo.held', { n: a.hold?.count ?? 0 }), 'answer')
     case 'proposed':
