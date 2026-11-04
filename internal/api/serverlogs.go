@@ -419,13 +419,17 @@ func LogUnseenReasonFor(lang i18n.Lang, cause string, folder bool) string {
 }
 
 // LogFailureText is the sentence for why a read failed, by the key the pass kept
-// (serverlog.Reason*). A key this page does not know reads as the general
-// cause, which says what can be tried.
-func LogFailureText(lang i18n.Lang, reason string) string {
+// (serverlog.Reason*). own says the cause is the source's own: the server was
+// reached, so the general cause does not send to the check of the connection. A
+// key this page does not know reads as the general cause.
+func LogFailureText(lang i18n.Lang, reason string, own bool) string {
 	switch reason {
 	case serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
 		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonPolicy, serverlog.ReasonOutputCut, serverlog.ReasonTools:
 		return i18n.T(lang, "api.logs.failure."+reason)
+	}
+	if own {
+		return i18n.T(lang, "api.logs.failure.error_source")
 	}
 	return i18n.T(lang, "api.logs.failure."+serverlog.ReasonError)
 }
@@ -511,13 +515,14 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 		for _, u := range unseen[src.ID] {
 			v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u.File), Reason: LogUnseenReasonFor(lang, u.Cause, UnseenIsFolder(src, u.File))})
 		}
-		if src.Active {
-			reason, failed := failures[src.ID]
-			if !failed {
+		if src.Active && t.Active {
+			reason, own := failures[src.ID]
+			failed := own
+			if !own {
 				reason, failed = failures[""]
 			}
 			if failed {
-				v.Failure = LogFailureText(lang, reason)
+				v.Failure = LogFailureText(lang, reason, own)
 			}
 		}
 		if src.Active && !hears {

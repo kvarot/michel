@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"html"
+	"strings"
 
 	"github.com/kvarot/michel/internal/digest"
 	"github.com/kvarot/michel/internal/i18n"
@@ -17,7 +18,7 @@ type messenger interface {
 }
 
 func (e *email) message(ctx context.Context, title, body string) (int, error) {
-	page := "<!DOCTYPE html>\n<html><body><p>" + html.EscapeString(body) + "</p></body></html>\n"
+	page := "<!DOCTYPE html>\n<html><body><p>" + strings.ReplaceAll(html.EscapeString(body), "\n", "<br>\n") + "</p></body></html>\n"
 	return e.deliver(ctx, title, body+"\n", page)
 }
 

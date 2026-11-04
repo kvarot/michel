@@ -279,7 +279,7 @@ describe('readState failure', () => {
     const r = readState({ active: true, last_read_at: '', failure: why }, now, 'fr')
     expect(r.line).toBe("Michel n'a pas encore réussi à lire ce journal.")
     expect(r.failure).toBe(`Cause : ${why}`)
-    expect(readState({ active: true, last_read_at: '2026-11-01T11:30:00Z', failure: 'The server refused the connection.' }, now, 'en').failure).toBe('Reason: The server refused the connection.')
+    expect(readState({ active: true, last_read_at: '2026-11-01T11:30:00Z', failure: 'The server refused the connection.' }, now, 'en').failure).toBe('Cause: The server refused the connection.')
   })
 
   test('nothing to say when the last read did not fail, or the log is turned off', () => {
@@ -312,5 +312,12 @@ describe('noteLine', () => {
     expect(noteLine({ kind: 'rotated', text: 'Le journal a été remplacé.' }, 'fr')).toBe('Le journal a été remplacé.')
     expect(noteLine({ kind: 'gap', text: 'La phrase de l’API.', from: '', to }, 'fr')).toBe('La phrase de l’API.')
     expect(noteLine(null, 'fr')).toBe('')
+  })
+})
+
+describe('noteLine with a bad date', () => {
+  test('a date that is not one leaves the API sentence', () => {
+    expect(noteLine({ kind: 'gap', text: 'x', from: 'nope', to: '2026-11-02T05:15:00Z' }, 'fr')).toBe('x')
+    expect(noteLine({ kind: 'gap', text: 'x', from: '2026-11-02T05:15:00Z', to: 'nope' }, 'en')).toBe('x')
   })
 })

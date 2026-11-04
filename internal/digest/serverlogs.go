@@ -333,10 +333,6 @@ type LogGap struct {
 	Reason  string                `json:"reason,omitempty"`
 }
 
-// failureSlack is how far from the end of a gap the date of a kept failure may
-// be and still explain it: the note and the failure come from the same pass.
-const failureSlack = time.Minute
-
 // gapsSince joins the gap notes that reach into the window: periods of
 // several sources that overlap are one period of the server, which names the
 // sources that were behind (or says all of them were). The cause comes from the
@@ -383,13 +379,26 @@ func gapsSince(notes []serverlog.Note, since time.Time, srcs []serverlog.Source,
 		if gap.All = all && len(gap.Sources) > 0; gap.All {
 			gap.Sources = nil
 		}
-		reasons := map[string]bool{}
+		// The cause kept is the one of the last try. It counts for the gap only when it
+		// falls inside it, and for every log of it: a cause of the whole server covers
+		// them all, a cause of one log covers that log, and the gap has one cause only
+		// if all its logs have the same.
+		reasons, covered := map[string]bool{}, map[string]bool{}
 		for _, f := range kept {
-			if (f.SourceID == "" || g.ids[f.SourceID]) && !f.At.Before(g.from) && !f.At.After(g.to.Add(failureSlack)) {
+			if f.At.Before(g.from) || f.At.After(g.to) {
+				continue
+			}
+			if f.SourceID == "" {
 				reasons[f.Reason] = true
+				for id := range g.ids {
+					covered[id] = true
+				}
+			} else if g.ids[f.SourceID] {
+				reasons[f.Reason] = true
+				covered[f.SourceID] = true
 			}
 		}
-		if len(reasons) == 1 {
+		if len(reasons) == 1 && len(covered) == len(g.ids) {
 			for r := range reasons {
 				if r != serverlog.ReasonError {
 					gap.Reason = r
@@ -480,7 +489,7 @@ func serverLogGap(lang i18n.Lang, g LogGap) string {
 	}
 	why := i18n.T(lang, "digest.serverlogs.gap_unknown")
 	if g.Reason != "" && g.Reason != serverlog.ReasonError {
-		why = i18n.T(lang, "notify.log.reason."+g.Reason)
+		why = i18n.T(lang, "digest.serverlogs.gap_last", i18n.T(lang, "notify.log.reason."+g.Reason))
 	}
 	return i18n.T(lang, "digest.serverlogs.gap", g.From.In(time.Local).Format(layout), g.To.In(time.Local).Format(layout), what, why)
 }

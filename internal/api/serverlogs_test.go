@@ -1021,18 +1021,28 @@ func TestSourcesSayWhyTheLastReadFailed(t *testing.T) {
 	if f := list().Failure; !strings.Contains(f, "awk") {
 		t.Errorf("source failure = %q", f)
 	}
-	// A turned off source says nothing; a good read clears the rest.
+	// A turned off source says nothing.
 	if code, out := lf.send("PATCH", lf.url("/sources/"+src.ID), `{"active":false}`); code != http.StatusOK {
 		t.Fatalf("patch = %d %s", code, out)
 	}
 	if f := list().Failure; f != "" {
 		t.Errorf("a turned off source says %q", f)
 	}
+	// A good read clears the rest.
+	if err := lf.repo().SetFailures(ctx, lf.id, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := lf.send("PATCH", lf.url("/sources/"+src.ID), `{"active":true}`); code != http.StatusOK {
+		t.Fatalf("patch = %d %s", code, out)
+	}
+	if f := list().Failure; f != "" {
+		t.Errorf("a good read left %q", f)
+	}
 	// A reason this page does not know reads as the general one, which says what to try.
-	if got := LogFailureText(i18n.FR, "weird"); !strings.Contains(got, "Vérifier maintenant") {
+	if got := LogFailureText(i18n.FR, "weird", false); !strings.Contains(got, "Vérifier maintenant") {
 		t.Errorf("unknown reason = %q", got)
 	}
-	if got := LogFailureText(i18n.EN, serverlog.ReasonError); !strings.Contains(got, "Check now") {
+	if got := LogFailureText(i18n.EN, serverlog.ReasonError, false); !strings.Contains(got, "Check now") {
 		t.Errorf("general reason = %q", got)
 	}
 }
