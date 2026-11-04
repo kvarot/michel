@@ -62,7 +62,7 @@
 <script>
 import FieldHelp from './FieldHelp.vue'
 import { api } from '../api.js'
-import { gitQuestion, gitState, refusalLines } from '../lib/gitView.js'
+import { canChangeAnswer, gitQuestion, gitState, questionOpen, refusalLines, showsGitState } from '../lib/gitView.js'
 
 let seq = 0
 
@@ -79,11 +79,13 @@ export default {
     // view is the GitView, or refusedView() of a refused look.
     view: { type: Object, required: true },
     heading: { type: String, default: 'h3' },
+    // startOpen: the person came by "Rattacher ce projet", so the question opens at once, whatever was answered. Read at creation.
+    startOpen: { type: Boolean, default: false },
   },
   emits: ['answered', 'reload'],
   data() {
     seq += 1
-    return { titleId: `git-question-${seq}`, changing: false, confirming: false, busy: '', failure: null, options: {} }
+    return { titleId: `git-question-${seq}`, changing: this.startOpen, confirming: false, busy: '', failure: null, options: {} }
   },
   computed: {
     question() {
@@ -93,15 +95,13 @@ export default {
       return gitState(this.view)
     },
     open() {
-      return this.question.ask || this.changing
+      return questionOpen(this.view, this.changing)
     },
-    // A refusal already says the folder cannot be read: without an answer nothing is left to say.
     showsState() {
-      return !this.question.ask && !(this.view.refusal && !this.view.answer)
+      return showsGitState(this.view)
     },
-    // Without a repository and without an answer there is nothing to answer about (R30).
     canChange() {
-      return !this.question.ask && (!!this.view.answer || this.view.repo === 'unreadable')
+      return canChangeAnswer(this.view)
     },
   },
   methods: {

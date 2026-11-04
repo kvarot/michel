@@ -164,3 +164,79 @@ export function pushSentence(step, outcome) {
   if (step.push.params.provider) return { key: 'git.push.done.known', params: { provider: step.push.params.provider } }
   return { key: 'git.push.done.other', params: { branch: step.branch } }
 }
+
+/**
+ * mergeAsks says whether the merge step shows the Git question: the person asked
+ * for it, the address changed, or a yes that no longer holds.
+ * @param {object|null} git GitView
+ * @param {boolean} asking
+ * @returns {boolean}
+ */
+export function mergeAsks(git, asking) {
+  if (!git) return false
+  return asking || git.changed || (!!git.refusal && git.answer === 'yes')
+}
+
+/**
+ * cardNeedsGit says whether a project card reads the Git view: there is a question
+ * to ask or a button to show.
+ * @param {{git_answer?: string, git_attached?: boolean}} project element of GET /projects
+ * @returns {boolean}
+ */
+export function cardNeedsGit(project) {
+  return project.git_answer === '' || project.git_attached === true
+}
+
+/**
+ * cardShowsQuestion says whether a project card shows the question: not yet
+ * answered, answered just here, or an answer that no longer holds.
+ * @param {object|null} git GitView
+ * @param {boolean} answeredHere
+ * @returns {boolean}
+ */
+export function cardShowsQuestion(git, answeredHere) {
+  if (!git) return false
+  return answeredHere || !git.answer || git.changed || (!!git.refusal && git.answer === 'yes')
+}
+
+/**
+ * canChangeAnswer says whether "Changer ma réponse" shows. Without a repository and
+ * without an answer there is nothing to answer about (R30).
+ * @param {object} view GitView
+ * @returns {boolean}
+ */
+export function canChangeAnswer(view) {
+  return !gitQuestion(view).ask && (!!view.answer || view.repo === 'unreadable')
+}
+
+/**
+ * showsGitState says whether the sentence of the state shows. A refusal already says
+ * the folder cannot be read: without an answer nothing is left to say.
+ * @param {object} view GitView
+ * @returns {boolean}
+ */
+export function showsGitState(view) {
+  return !gitQuestion(view).ask && !(view.refusal && !view.answer)
+}
+
+/**
+ * questionOpen says whether the question itself is on screen: unanswered, or opened
+ * by the person (changing), which includes "Rattacher ce projet" whatever was
+ * answered before.
+ * @param {object} view GitView
+ * @param {boolean} changing
+ * @returns {boolean}
+ */
+export function questionOpen(view, changing) {
+  return gitQuestion(view).ask || changing
+}
+
+/**
+ * scanAlreadyRunning is the refusal of a check started while one runs: the check
+ * the person wants is there, so it is followed and not told as a failure.
+ * @param {*} err the ApiError
+ * @returns {boolean}
+ */
+export function scanAlreadyRunning(err) {
+  return err?.data?.code === 'api.project.scan_running'
+}

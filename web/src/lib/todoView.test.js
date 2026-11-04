@@ -669,7 +669,7 @@ describe('texts', () => {
     expect(allText(r)).not.toMatch(/fusionn/i)
     expect(r.lines[0]).toMatchObject({ rank: 5, word: 'À regarder', title: 'La correction de srv-a est lancée : Michel vérifie le résultat.', action: { label: 'Voir le serveur', href: '#/servers/a?finding=f-s' } })
     const p = build({ attempts: [attempt('p', 'applied')] })
-    expect(p.lines[0]).toMatchObject({ rank: 2, word: 'À finir', tone: 'info', title: 'La correction est prête : à toi de la fusionner', action: { label: 'Voir comment finir', href: '#/fix/p' } })
+    expect(p.lines[0]).toMatchObject({ rank: 2, word: 'À finir', tone: 'info', title: 'La correction est prête : il te reste à la faire entrer dans ton code', action: { label: 'Voir comment finir', href: '#/fix/p' } })
   })
   test('every word has a tone', () => {
     expect(Object.fromEntries(todoWords.map((w) => [w, toneOf(w)]))).toEqual({ urgent: 'urgent', important: 'look', look: 'look', validate: 'info', finish: 'info', yours: 'info' })

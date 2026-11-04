@@ -653,7 +653,7 @@ export default {
      * or during the check. final: the check ended, the flaw may have left: its sheet and
      * the lists are read again too.
      */
-    async refreshAttempt({ final = false } = {}) {
+    async refreshAttempt({ final = false, done } = {}) {
       const id = this.current?.id
       if (!id) return
       try {
@@ -666,8 +666,10 @@ export default {
         const was = this.current.state
         this.show(v)
         if (was !== v.state) this.$emit('changed')
+        done?.(true)
       } catch {
         // Tried again at the next look; the page keeps what it holds.
+        done?.(false)
       }
     },
     /** guardFocus: when the button in focus went away with what it did, the keyboard goes to the flaw's heading. */

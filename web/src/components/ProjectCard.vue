@@ -84,7 +84,7 @@ import GitUpdateButton from './GitUpdateButton.vue'
 import PackageRow from './PackageRow.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
-import { readGit } from '../lib/gitView.js'
+import { cardNeedsGit, cardShowsQuestion, readGit } from '../lib/gitView.js'
 import { checkedWell, runsHere, scanHintKey, scanPath, scanSentence, showsFailure } from '../lib/projectsView.js'
 
 const checkPath = 'M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z'
@@ -139,11 +139,10 @@ export default {
     },
     // The card reads the Git view of a project with a question to ask or a button to show.
     needsGit() {
-      return this.project.git_answer === '' || this.project.git_attached === true
+      return cardNeedsGit(this.project)
     },
     showsQuestion() {
-      if (!this.git) return false
-      return this.answeredHere || !this.git.answer || this.git.changed || (!!this.git.refusal && this.git.answer === 'yes')
+      return cardShowsQuestion(this.git, this.answeredHere)
     },
     gone() {
       return (this.project.gone || []).map((pkg) => ({
@@ -164,7 +163,11 @@ export default {
   watch: {
     running(now) {
       // "Already running" is over once the check ends.
-      if (!now) this.refusal = null
+      if (!now) {
+        this.refusal = null
+        // "Michel travaille déjà sur ce dossier" was read during the check.
+        if (this.git) this.loadGit()
+      }
     },
     needsGit: {
       immediate: true,

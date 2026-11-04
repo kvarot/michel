@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
-import { afterPush, gitQuestion, gitState, providerName, pushSentence, readGit, refusalLines, refusedView, safeMergeUrl, updateFollowUp } from './gitView.js'
+import { afterPush, canChangeAnswer, cardNeedsGit, cardShowsQuestion, gitQuestion, gitState, mergeAsks, providerName, pushSentence, questionOpen, readGit, refusalLines, refusedView, safeMergeUrl, scanAlreadyRunning, showsGitState, updateFollowUp } from './gitView.js'
 
 // As GET /projects/{name}/git answers (GitView, internal/api/projects_git.go).
 const view = (extra = {}) => ({
@@ -184,6 +184,55 @@ describe('the texts', () => {
     for (const cat of [fr, en]) {
       expect(cat['git.manual.next']).toContain(cat['project.check'])
       expect(cat['git.after']).toContain(cat['git.update.button'])
+      expect(cat['git.update.check_self']).toContain(cat['project.check'])
+      expect(cat['git.update.check_self']).toContain(cat['nav.projects'])
     }
+  })
+})
+
+describe('what the components decide', () => {
+  test('mergeAsks: the question shows when asked, changed, refused after a yes, and nothing without a view', () => {
+    expect(mergeAsks(null, true)).toBe(false)
+    expect(mergeAsks(view(), false)).toBe(false)
+    expect(mergeAsks(view(), true)).toBe(true)
+    expect(mergeAsks(view({ changed: true }), false)).toBe(true)
+    expect(mergeAsks(view({ answer: 'yes', refusal: { error: 'x', hint: '' } }), false)).toBe(true)
+    expect(mergeAsks(view({ answer: 'no', refusal: { error: 'x', hint: '' } }), false)).toBe(false)
+  })
+  test('cardNeedsGit: only a project with no answer or an attached one', () => {
+    expect(cardNeedsGit({ git_answer: '', git_attached: false })).toBe(true)
+    expect(cardNeedsGit({ git_answer: 'yes', git_attached: true })).toBe(true)
+    expect(cardNeedsGit({ git_answer: 'no', git_attached: false })).toBe(false)
+  })
+  test('cardShowsQuestion', () => {
+    expect(cardShowsQuestion(null, true)).toBe(false)
+    expect(cardShowsQuestion(view(), false)).toBe(true)
+    expect(cardShowsQuestion(view({ answer: 'no' }), false)).toBe(false)
+    expect(cardShowsQuestion(view({ answer: 'no' }), true)).toBe(true)
+    expect(cardShowsQuestion(view({ answer: 'yes', attached: true, changed: true }), false)).toBe(true)
+    expect(cardShowsQuestion(view({ answer: 'yes', refusal: { error: 'x', hint: '' } }), false)).toBe(true)
+  })
+  test('canChangeAnswer and showsGitState', () => {
+    expect(canChangeAnswer(view())).toBe(false)
+    expect(canChangeAnswer(view({ answer: 'no' }))).toBe(true)
+    expect(canChangeAnswer(view({ repo: 'unreadable' }))).toBe(true)
+    expect(canChangeAnswer(view({ repo: 'none' }))).toBe(false)
+    expect(showsGitState(view())).toBe(false)
+    expect(showsGitState(view({ answer: 'no' }))).toBe(true)
+    expect(showsGitState(view({ repo: 'unreadable', answer: '', refusal: { error: 'x', hint: '' } }))).toBe(false)
+    expect(showsGitState(view({ repo: 'unreadable', answer: 'yes', refusal: { error: 'x', hint: '' } }))).toBe(true)
+  })
+  test('questionOpen: attach opens the question whatever was answered', () => {
+    for (const answer of ['', 'no', 'unknown', 'yes']) {
+      expect(questionOpen(view({ answer }), true), answer).toBe(true)
+    }
+    expect(questionOpen(view({ answer: 'no' }), false)).toBe(false)
+    expect(questionOpen(view(), false)).toBe(true)
+  })
+  test('scanAlreadyRunning knows only the refusal of a running check', () => {
+    expect(scanAlreadyRunning({ status: 409, data: { code: 'api.project.scan_running' } })).toBe(true)
+    expect(scanAlreadyRunning({ status: 409, data: { code: 'api.other' } })).toBe(false)
+    expect(scanAlreadyRunning(null)).toBe(false)
+    expect(scanAlreadyRunning({ status: 500 })).toBe(false)
   })
 })

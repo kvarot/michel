@@ -27,7 +27,7 @@
 
 <script>
 import { api } from '../api.js'
-import { refusalLines, updateFollowUp } from '../lib/gitView.js'
+import { refusalLines, scanAlreadyRunning, updateFollowUp } from '../lib/gitView.js'
 import { scanPath } from '../lib/projectsView.js'
 
 // GitUpdateButton is « Mettre à jour mon dossier »: one click, one update (R29), and
@@ -73,6 +73,12 @@ export default {
         this.result = 'done'
         this.$emit('scan-started')
       } catch (err) {
+        // A check already runs: it is the one wanted, and it is followed.
+        if (scanAlreadyRunning(err)) {
+          this.result = 'done'
+          this.$emit('scan-started')
+          return
+        }
         this.result = 'done_no_check'
         if (err?.status !== 401) this.failure = refusalLines(err)
       }

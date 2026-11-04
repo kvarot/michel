@@ -20,7 +20,7 @@
       <p>{{ $t('git.manual.next') }}</p>
       <a href="#/projects" class="m-merge__projects">{{ $t('git.manual.projects') }}</a>
 
-      <GitQuestion v-if="asks" class="m-merge__git" :name="project" :view="git" :heading="heading" @answered="onAnswered" @reload="$emit('reload-git')" />
+      <GitQuestion v-if="asks" class="m-merge__git" :name="project" :view="git" :heading="heading" :start-open="attaching" @answered="onAnswered" @reload="$emit('reload-git')" />
       <div v-else-if="step.attach" class="m-merge__git">
         <p>{{ $t('git.manual.attach') }}</p>
         <v-btn size="small" variant="tonal" color="primary" class="m-merge__attach" @click="onAttach">{{ $t('git.attach') }}</v-btn>
@@ -41,6 +41,10 @@
         {{ pushing ? $t('git.push.running') : $t(step.push.label, step.push.params) }}
       </v-btn>
       <p v-if="pushing" class="m-merge__hidden" role="status">{{ $t('git.push.running') }}</p>
+      <template v-if="pushFailure && git">
+        <p>{{ $t('git.push.way_out') }}</p>
+        <GitQuestion class="m-merge__git" :name="project" :view="git" :heading="heading" @answered="onAnswered" @reload="$emit('reload-git')" />
+      </template>
 
       <template v-if="step.push.pushed">
         <p role="status">{{ $t(sentence.key, sentence.params) }}</p>
@@ -52,6 +56,8 @@
         <p v-else-if="step.push.params.provider">{{ $t('git.merge.no_link', { branch: step.branch }) }}</p>
         <p>{{ $t('git.after') }}</p>
         <GitUpdateButton :name="project" :update="step.update" @scan-started="watchCheck" @finished="$emit('reload-git')" />
+        <p class="m-small">{{ $t('git.update.check_self') }}</p>
+        <a href="#/projects" class="m-merge__projects">{{ $t('git.manual.projects') }}</a>
         <p v-if="watching" class="m-merge__watch m-small" role="status">
           <v-progress-circular indeterminate size="14" width="2" color="primary" />
           {{ $t('git.update.checking') }}
@@ -71,7 +77,7 @@
 import GitQuestion from './GitQuestion.vue'
 import GitUpdateButton from './GitUpdateButton.vue'
 import { api } from '../api.js'
-import { afterPush, gitState, pushSentence, refusalLines } from '../lib/gitView.js'
+import { afterPush, gitState, mergeAsks, pushSentence, refusalLines } from '../lib/gitView.js'
 import { mergeStep } from '../lib/pathView.js'
 
 // Between two looks at a running check; how many failed looks in a row are told.
@@ -96,7 +102,7 @@ export default {
   },
   emits: ['git', 'reload-git', 'refresh'],
   data() {
-    return { copied: false, copyFailed: false, asking: false, pushing: false, pushFailure: null, sent: null, outcome: '', watching: false, checked: false, checkFailure: null, lost: false, misses: 0, timer: null, gone: false }
+    return { copied: false, copyFailed: false, asking: false, attaching: false, pushing: false, pushFailure: null, sent: null, outcome: '', watching: false, checked: false, checkFailure: null, lost: false, misses: 0, timer: null, gone: false }
   },
   computed: {
     step() {
@@ -104,8 +110,7 @@ export default {
     },
     // The person believes it attached and it no longer is: they read why, and can change it.
     asks() {
-      if (!this.git) return false
-      return this.asking || this.git.changed || (!!this.git.refusal && this.git.answer === 'yes')
+      return mergeAsks(this.git, this.asking)
     },
     state() {
       const p = this.attempt.push || {}
@@ -152,12 +157,15 @@ export default {
     },
     onAttach() {
       this.asking = true
+      this.attaching = true
       // The button goes with this click: the question takes the keyboard.
       this.$nextTick(() => document.querySelector('.m-merge__git .m-gitq__title')?.focus())
     },
     onAnswered(view) {
       // The sentence of the answer stays where the keyboard is, whatever it answered.
       this.asking = true
+      this.attaching = false
+      this.pushFailure = null
       this.$emit('git', view)
       this.$emit('refresh', { final: false })
     },
@@ -214,9 +222,9 @@ export default {
         return
       }
       this.watching = false
-      this.checked = true
       this.checkFailure = view?.last_failure ? { error: view.last_failure.error, hint: view.last_failure.hint } : null
-      this.$emit('refresh', { final: true })
+      // The sentence about the folder waits until the attempt is read again: it speaks of that reading.
+      this.$emit('refresh', { final: true, done: (ok) => { if (this.gone) return; this.checked = ok; this.lost = !ok } })
     },
   },
 }
