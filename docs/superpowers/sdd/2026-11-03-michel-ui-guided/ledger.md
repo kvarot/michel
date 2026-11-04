@@ -138,3 +138,10 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 14d review: 1 critical 4 high 2 medium 5 low. Critical: merge overwrites ignored files with result `updated`. Fix after the hardening round ends, same package.
 - Ruling R56: the patch id test stays, comment and R25's cost corrected: it ignores whitespace and position — a squash needs it — costs a rare false "merged" that the scan then contradicts.
 - Task 14c fix and hardening: a5dc896, 34d62f9. One git runner, witnesses on every command; holes found beyond 14c on `fetch` and in a scanner's env, all closed. Remaining for a hostile project: its tests run in the copy by design; a scanner's git partly covered, Semgrep and Trivy real commands not observed. Partial clones get `failed`: to state in 14f. Task 14c: complete; final review covers it.
+- Task 14d fix: d2a97fe. Task 14d: complete. `ignored`, `update_partial` classes for 14e. To do before merge: `internal/workcopy` tests at 440 s of go's 600 s limit: one prepared fixture copied per case. Stale `index.lock` gives update_failed each try.
+- Task 14e: dispatched.
+- Task 14e: 0784beb, with the 4 routes and R35; review running. 14f brief minus routes. Test speed-up running.
+- Task 14e fix: 58baf09. Task 14e: complete. Still untested: a real scan after an update, for Task 16.
+- Task 14f: dispatched, minus routes, plus R55 and partial clones in "Declared only".
+- Workcopy tests: 1c9872d, 414 s to about 100 s, same 273 names.
+- Task 14f: 212c542; review running. Task 14g: dispatched.

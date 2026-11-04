@@ -724,7 +724,7 @@ Textes exacts :
 | `push.other` | Envoyer la correction sur ton service Git | Send the fix to your Git service |
 | `push.lead` | Michel envoie seulement la branche {branch}, une version à part de ton code. Ta version principale reste telle quelle. | Michel sends only the branch {branch}, a separate version of your code. Your main version stays as it is. |
 | `push.running` | Envoi en cours… | Sending… |
-| `push.done.known` | Correction envoyée sur {provider}. Il te reste à l'accepter sur le site. | Fix sent to {provider}. You still have to accept it on the site. |
+| `push.done.known` | Correction envoyée sur {provider}. Si elle n'est pas encore acceptée, fais-le sur le site. | Fix sent to {provider}. You still have to accept it on the site. |
 | `push.done.other` | Correction envoyée. Sur ton service, demande la fusion de la branche {branch}. | Fix sent. On your service, ask to merge the branch {branch}. |
 | `push.already` | Cette correction est déjà sur le service : Michel n'a rien renvoyé. | This fix is already on the service: Michel sent nothing again. |
 | `merge.open` | Ouvrir la demande de fusion sur {provider} | Open the merge request on {provider} |
