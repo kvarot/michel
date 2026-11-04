@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -206,7 +207,7 @@ func TestNoSourceNoConnection(t *testing.T) {
 		t.Fatalf("a server without a source was contacted %d times", n)
 	}
 	// A direct call is just as quiet.
-	if res, err := Pass(ctx, pe.deps, pe.tgt.ID); err != nil || res != (PassResult{}) || pe.host.srv.Accepted() != 0 {
+	if res, err := Pass(ctx, pe.deps, pe.tgt.ID); err != nil || !reflect.DeepEqual(res, PassResult{}) || pe.host.srv.Accepted() != 0 {
 		t.Fatalf("Pass = %+v, %v, connections %d", res, err, pe.host.srv.Accepted())
 	}
 	// The control: with an active source the same scheduler does connect.
@@ -1039,5 +1040,66 @@ func TestLostRightsNoteAGapOnPreprod(t *testing.T) {
 	s.mu.Unlock()
 	if inc == nil || inc.reason != ReasonDenied {
 		t.Errorf("incident = %+v", inc)
+	}
+}
+
+// An incident of one source, the others of the server being read, is told as
+// that source's: it names the source and the cause, and the alert says the
+// others were read. A server whose connection fails keeps the whole wording.
+func TestNotReadingNamesTheSourceThatFails(t *testing.T) {
+	e := newSchedEnv(t)
+	tg, _ := e.server("srv-demo", target.EnvProd, true)
+	e.interval(tg, 10*time.Minute)
+	partial := PassResult{Reason: ReasonDenied, Read: 1, Failed: []FailedSource{{Label: "/var/log/demo/other.log", Reason: ReasonDenied}}}
+	f := &fakePass{fn: func(context.Context, string) (PassResult, error) { return partial, errors.New("the read failed") }}
+	s := e.scheduler(f)
+	ctx := context.Background()
+	for i := 0; i < 4; i++ {
+		s.tick(ctx)
+		e.clock.Advance(10 * time.Minute)
+	}
+	told := e.alerts.ofKind(AlertNotReading)
+	if len(told) != 1 {
+		t.Fatalf("alerts = %v", e.alerts.kinds())
+	}
+	if in := told[0]; in.Reason != ReasonDenied || len(in.Sources) != 1 || in.Sources[0] != "/var/log/demo/other.log" {
+		t.Errorf("alert = %+v", in)
+	}
+}
+
+// Every source failing, or the connection, is the server as a whole.
+func TestNotReadingNamesNoSourceWhenNoneWasRead(t *testing.T) {
+	e := newSchedEnv(t)
+	tg, _ := e.server("srv-demo", target.EnvProd, true)
+	e.interval(tg, 10*time.Minute)
+	all := PassResult{Reason: ReasonDenied, Failed: []FailedSource{{Label: "/var/log/demo/app.log", Reason: ReasonDenied}}}
+	f := &fakePass{fn: func(context.Context, string) (PassResult, error) { return all, errors.New("the read failed") }}
+	s := e.scheduler(f)
+	for i := 0; i < 4; i++ {
+		s.tick(context.Background())
+		e.clock.Advance(10 * time.Minute)
+	}
+	told := e.alerts.ofKind(AlertNotReading)
+	if len(told) != 1 || len(told[0].Sources) != 0 {
+		t.Fatalf("alerts = %+v", told)
+	}
+}
+
+// Sources failing for different causes: the cause is the general one, not the
+// first of them.
+func TestNotReadingMixedCausesAreGeneral(t *testing.T) {
+	e := newSchedEnv(t)
+	tg, _ := e.server("srv-demo", target.EnvProd, true)
+	e.interval(tg, 10*time.Minute)
+	mixed := PassResult{Reason: ReasonDenied, Read: 1, Failed: []FailedSource{{Label: "/var/log/demo/a.log", Reason: ReasonDenied}, {Label: "/var/log/demo/b.log", Reason: ReasonTools}}}
+	f := &fakePass{fn: func(context.Context, string) (PassResult, error) { return mixed, errors.New("the read failed") }}
+	s := e.scheduler(f)
+	for i := 0; i < 4; i++ {
+		s.tick(context.Background())
+		e.clock.Advance(10 * time.Minute)
+	}
+	told := e.alerts.ofKind(AlertNotReading)
+	if len(told) != 1 || told[0].Reason != ReasonError || len(told[0].Sources) != 2 {
+		t.Fatalf("alerts = %+v", told)
 	}
 }

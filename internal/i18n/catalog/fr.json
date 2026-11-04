@@ -1105,6 +1105,8 @@
   "notify.log.more.other": "… et %d autres erreurs, regarde la page du serveur dans Michel",
   "notify.log.not_reading.one": "Michel ne peut plus lire les journaux d'erreurs de ce serveur : %[2]s.",
   "notify.log.not_reading.other": "Michel ne peut plus lire les journaux d'erreurs de ces serveurs : %[2]s.",
+  "notify.log.not_reading_sources.one": "Michel ne peut plus lire un des journaux d'erreurs du serveur %[2]s : %[3]s. Les autres journaux de ce serveur ont bien été lus.",
+  "notify.log.not_reading_sources.other": "Michel ne peut plus lire %[1]d des journaux d'erreurs du serveur %[2]s : %[3]s. Les autres journaux de ce serveur ont bien été lus.",
   "notify.log.reason.busy": "Cause : Michel était déjà en train de lire ce serveur. Il réessaiera au prochain passage.",
   "notify.log.reason.denied": "Cause : le serveur a refusé à Michel l'accès aux journaux. Vérifie les droits du compte que Michel utilise pour s'y connecter.",
   "notify.log.reason.error": "Cause : la lecture a échoué. Regarde la page du serveur dans Michel.",

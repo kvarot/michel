@@ -17,6 +17,10 @@ const (
 	maxLogItems = 5
 	// maxLogTextRunes bounds the cleaned text of one error in a message.
 	maxLogTextRunes = 200
+	// maxLogSources bounds the sources named in one message, maxLogLabelRunes the
+	// length of the name of one.
+	maxLogSources    = 3
+	maxLogLabelRunes = 80
 )
 
 // shortName is the name of a server as an alert shows it: clean and short.
@@ -71,10 +75,30 @@ func logReason(lang i18n.Lang, reason string) string {
 	return i18n.T(lang, "notify.log.reason."+serverlog.ReasonError)
 }
 
+// sourceLabels are the sources an alert names, as the sheet of the server shows
+// them (the declared path), cleaned and bounded: at most maxLogSources, each cut
+// at maxLogLabelRunes. The rest is marked by an ellipsis, never listed.
+func sourceLabels(sources []string) []string {
+	var out []string
+	for i, s := range sources {
+		if i == maxLogSources {
+			out = append(out, "…")
+			break
+		}
+		label := scan.SanitizeText(s)
+		if r := []rune(label); len(r) > maxLogLabelRunes {
+			label = string(r[:maxLogLabelRunes-1]) + "…"
+		}
+		out = append(out, label)
+	}
+	return out
+}
+
 // logMessage is the text of a server log alert. By default: the type, the
 // place and the count of each error, the name of the server and the page link;
-// the cleaned text only when an item holds it. Never a host, a user, a path or
-// the id of a source.
+// the cleaned text only when an item holds it. Never a host, a user, the id of a
+// source or a line of a log; the only path is the one a source declares, as the
+// sheet shows it, when a not-reading alert says which source fails.
 func logMessage(lang i18n.Lang, in serverlog.AlertInput, pageURL string) (title, body string) {
 	if !lang.Valid() {
 		lang = i18n.EN
@@ -92,7 +116,12 @@ func logMessage(lang i18n.Lang, in serverlog.AlertInput, pageURL string) (title,
 		if len(names) == 0 {
 			names = []string{name}
 		}
-		body = i18n.N(lang, "notify.log.not_reading", len(names), strings.Join(names, ", ")) + "\n" + logReason(lang, in.Reason)
+		if labels := sourceLabels(in.Sources); len(labels) > 0 {
+			body = i18n.N(lang, "notify.log.not_reading_sources", len(in.Sources), name, strings.Join(labels, ", "))
+		} else {
+			body = i18n.N(lang, "notify.log.not_reading", len(names), strings.Join(names, ", "))
+		}
+		body += "\n" + logReason(lang, in.Reason)
 	case serverlog.AlertCapReached:
 		body = i18n.T(lang, "notify.log.cap_reached", name)
 	case serverlog.AlertVolume:

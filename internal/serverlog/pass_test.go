@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1445,5 +1446,57 @@ func TestPassReasonOfMixedCauses(t *testing.T) {
 				t.Fatalf("result %+v, err %v", res, err)
 			}
 		})
+	}
+}
+
+// twoSources adds a second source on its own file, whose reads the simulated
+// server refuses while deny is true. The other source is read for real.
+func twoSources(t *testing.T, pe *passEnv, deny *atomic.Bool) (Source, string) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "other.log")
+	appendTo(t, file, "")
+	src, err := pe.repo.AddSource(context.Background(), Source{TargetID: pe.tgt.ID, Path: shPath(file), Format: FormatMonolog, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := pe.host.realShell(os.Environ())
+	pe.setShell(func(s *sshtest.Server, script string, out, errw io.Writer) int {
+		if deny.Load() && strings.Contains(script, src.Path) {
+			return answer(unseenLine(src.Path, CauseDenied))(s, script, out, errw)
+		}
+		return real(s, script, out, errw)
+	})
+	return src, file
+}
+
+// One source that fails does not make the others unread: the pass says which
+// failed, and why, and that the others were read.
+func TestPassNamesTheSourcesThatFailed(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	var deny atomic.Bool
+	src2, _ := twoSources(t, pe, &deny)
+	pe.activate()
+	deny.Store(true)
+	res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
+	if err == nil {
+		t.Fatal("a source failed and the pass did not")
+	}
+	if res.Read != 1 || len(res.Failed) != 1 || res.Failed[0] != (FailedSource{Label: src2.Path, Reason: ReasonDenied}) {
+		t.Errorf("result %+v", res)
+	}
+	deny.Store(false)
+	res = pe.run()
+	if res.Read != 2 || len(res.Failed) != 0 {
+		t.Errorf("after the rights came back: %+v", res)
+	}
+}
+
+// A connection that fails has tried no source: none is named, none was read.
+func TestPassFailedConnectionNamesNoSource(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	pe.deps.SSH.Agent = func() (agent.ExtendedAgent, io.Closer, error) { return nil, nil, sshx.ErrNoAgent }
+	res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
+	if err == nil || res.Read != 0 || len(res.Failed) != 0 {
+		t.Fatalf("result %+v, err %v", res, err)
 	}
 }

@@ -266,3 +266,53 @@ func TestVolumeAndCapMessagesHideTheSource(t *testing.T) {
 		}
 	}
 }
+
+// One source failing is told as that source, by the path the sheet shows, with
+// the others said to be read: not as the server.
+func TestNotReadingNamesTheSourceAndSaysTheOthersWereRead(t *testing.T) {
+	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertNotReading, Reason: serverlog.ReasonDenied,
+		Items:   []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}},
+		Sources: []string{"/var/log/demo/other.log"}}
+	_, en := logMessage(i18n.EN, in, "")
+	want := "Michel can no longer read one error log of server srv-demo: /var/log/demo/other.log. The other logs of this server were read.\nCause: the server refused Michel access to the logs."
+	if !strings.HasPrefix(en, want) {
+		t.Errorf("en = %q, want it to start with %q", en, want)
+	}
+	_, fr := logMessage(i18n.FR, in, "")
+	for _, w := range []string{"srv-demo", "/var/log/demo/other.log", "Les autres journaux de ce serveur ont bien été lus", "Cause : le serveur a refusé"} {
+		if !strings.Contains(fr, w) {
+			t.Errorf("fr %q lacks %q", fr, w)
+		}
+	}
+	// Several, a path cleaned of control characters, never the line of a log.
+	in.Sources = []string{"/var/log/a.log", "/var/log/b\x1b[31m.log"}
+	for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
+		_, body := logMessage(lang, in, "")
+		for _, w := range []string{"/var/log/a.log", "/var/log/b[31m.log"} {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s: %q lacks %q", lang, body, w)
+			}
+		}
+		if strings.Contains(body, "\x1b") || strings.Contains(body, "!") {
+			t.Errorf("%s: %q", lang, body)
+		}
+	}
+	// Without a named source it is the server, as before.
+	in.Sources = nil
+	if _, body := logMessage(i18n.EN, in, ""); strings.Contains(body, "other logs") || !strings.Contains(body, "of this server: srv-demo.") {
+		t.Errorf("server wording = %q", body)
+	}
+}
+
+// A long list of sources is cut, and so is a long path.
+func TestNotReadingSourcesAreBounded(t *testing.T) {
+	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertNotReading, Reason: serverlog.ReasonDenied,
+		Items: []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}}}
+	for i := 0; i < 8; i++ {
+		in.Sources = append(in.Sources, "/var/log/demo/"+strings.Repeat("x", 300)+string(rune('a'+i))+".log")
+	}
+	_, body := logMessage(i18n.EN, in, "")
+	if len(body) > 900 || strings.Contains(body, strings.Repeat("x", 150)) || strings.Contains(body, "g.log") {
+		t.Errorf("not bounded (%d bytes): %q", len(body), body)
+	}
+}

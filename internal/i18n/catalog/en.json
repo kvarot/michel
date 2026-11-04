@@ -1105,6 +1105,8 @@
   "notify.log.more.other": "… and %d more errors, see the server page in Michel",
   "notify.log.not_reading.one": "Michel can no longer read the error logs of this server: %[2]s.",
   "notify.log.not_reading.other": "Michel can no longer read the error logs of these servers: %[2]s.",
+  "notify.log.not_reading_sources.one": "Michel can no longer read one error log of server %[2]s: %[3]s. The other logs of this server were read.",
+  "notify.log.not_reading_sources.other": "Michel can no longer read %[1]d error logs of server %[2]s: %[3]s. The other logs of this server were read.",
   "notify.log.reason.busy": "Cause: Michel was already reading this server. It will try again on the next pass.",
   "notify.log.reason.denied": "Cause: the server refused Michel access to the logs. Check the rights of the account used.",
   "notify.log.reason.error": "Cause: the read failed. See the server page in Michel.",

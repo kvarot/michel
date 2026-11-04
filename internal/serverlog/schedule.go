@@ -412,7 +412,30 @@ func (s *scheduler) send(ctx context.Context, group []passOutcome, reason string
 		}
 	}
 	s.mu.Unlock()
-	s.d.Alert(ctx, AlertInput{Target: group[0].t, Kind: AlertNotReading, Items: items, Reason: reason})
+	in := AlertInput{Target: group[0].t, Kind: AlertNotReading, Items: items, Reason: reason}
+	if len(group) == 1 {
+		in.Sources, in.Reason = failedSources(group[0].res, reason)
+	}
+	s.d.Alert(ctx, in)
+}
+
+// failedSources says which sources an alert is about when the server was reached
+// and some of its sources were read: the ones that failed, and the cause they
+// share (the general one if they differ). Nothing when no source was read, or
+// none is known to have failed: the alert is then about the server as a whole.
+func failedSources(res PassResult, reason string) ([]string, string) {
+	if res.Read == 0 || len(res.Failed) == 0 {
+		return nil, reason
+	}
+	labels := make([]string, 0, len(res.Failed))
+	shared := res.Failed[0].Reason
+	for _, f := range res.Failed {
+		labels = append(labels, f.Label)
+		if f.Reason != shared {
+			shared = ReasonError
+		}
+	}
+	return labels, shared
 }
 
 // noteGap puts the silence in the notes of each source that is behind: from its

@@ -90,6 +90,10 @@ type AlertInput struct {
 	Kind   AlertKind
 	Items  []AlertItem
 	Reason string
+	// Sources, on an AlertNotReading, are the declared paths of the sources that
+	// fail when the others of the server were read: the alert then speaks of
+	// these sources only. Empty: the server as a whole cannot be read.
+	Sources []string
 }
 
 // Deps are the services a pass needs.
@@ -124,6 +128,19 @@ type PassResult struct {
 	Records, Rejected, Alerts int
 	// Unseen counts the files that could not be opened (the page says which and why).
 	Unseen int
+	Reason string
+	// Read counts the sources read well in this pass, Failed names the ones whose
+	// read failed (a connection that fails names none: no source was tried).
+	Read   int            `json:"-"`
+	Failed []FailedSource `json:"-"`
+}
+
+// FailedSource is a source whose read failed in a pass. Label is the path the
+// source declares, as the sheet shows it (the caller cleans it before showing
+// it); Reason is the cause, a key of the Reason* constants. Never what the
+// server printed.
+type FailedSource struct {
+	Label  string
 	Reason string
 }
 
@@ -272,13 +289,17 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 			return res, ctx.Err()
 		}
 		if err := p.readSource(ctx, client, src, o, &res); err != nil {
+			reason := reasonOf(err)
 			if res.Reason == "" {
-				res.Reason = reasonOf(err)
+				res.Reason = reason
 			}
+			res.Failed = append(res.Failed, FailedSource{Label: src.Path, Reason: reason})
 			if firstErr == nil {
 				firstErr = err
 			}
+			continue
 		}
+		res.Read++
 	}
 	// The read happened whatever comes next: what fails from here on is said in
 	// the log, and does not count as "not reading".
