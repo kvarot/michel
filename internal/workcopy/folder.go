@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -74,35 +75,20 @@ func folderHome(d Deps, p project.Project, remote string) (home, *GitFailure) {
 
 // checkFolderConfig refuses a folder whose own configuration names a filter or
 // moves its working tree. It runs before any git status, which starts the clean
-// program of such a key on a file changed with the same size (R34). A
-// config.worktree can hold the same keys: --local does not read it, and
-// --worktree is an error with several working trees when that file is not on.
+// program of such a key on a file changed with the same size (R34). It also
+// refuses a folder that declares a remote fetching on its own, before any read of
+// an object. runGit checks the same keys and says no more than that it refuses:
+// here the person gets the reason.
 func (h home) checkFolderConfig(ctx context.Context, d Deps, p project.Project) *GitFailure {
-	read := func(scope string) ([]string, *GitFailure) {
-		out, _, err := h.git(ctx, d, d.DataDir, p.Path, nil, nil, "config", scope, "--includes", "--name-only", "--list")
-		if err != nil {
-			return nil, failure(classUpdateFailed)
-		}
-		return strings.Split(strings.ToLower(string(out)), "\n"), nil
+	keys, err := h.localConfigKeys(ctx, d, p.Path)
+	if err != nil {
+		return failure(classUpdateFailed)
 	}
-	keys, f := read("--local")
-	if f != nil {
-		return f
+	if slices.ContainsFunc(keys, isFolderKey) {
+		return failure(classFilter)
 	}
-	for _, k := range keys {
-		if k == "extensions.worktreeconfig" {
-			more, f := read("--worktree")
-			if f != nil {
-				return f
-			}
-			keys = append(keys, more...)
-			break
-		}
-	}
-	for _, k := range keys {
-		if strings.HasPrefix(k, "filter.") || k == "core.worktree" {
-			return failure(classFilter)
-		}
+	if slices.ContainsFunc(keys, isPromisorKey) {
+		return failure(classUpdateFailed)
 	}
 	return nil
 }
@@ -269,7 +255,7 @@ func filterSet(out []byte, paths []string) (bool, error) {
 // update brings would not be seen otherwise (R34). A git too old for --source
 // fails here, and nothing is written.
 func (h home) checkIncomingFilters(ctx context.Context, d Deps, p project.Project, head, sha string) *GitFailure {
-	out, _, err := h.git(ctx, d, d.DataDir, p.Path, nil, nil, "diff", "--name-only", "-z", head, sha)
+	out, _, err := h.git(ctx, d, d.DataDir, p.Path, nil, nil, "diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", head, sha)
 	if err != nil || len(out) >= maxGitOutput {
 		return failure(classUpdateFailed)
 	}

@@ -347,6 +347,7 @@ func TestPushArgvIsClosed(t *testing.T) {
 	want := []string{"--no-pager", "-C", tmp,
 		"-c", "core.hooksPath=" + filepath.Join(f.deps.DataDir, "fix-hooks"),
 		"-c", "core.fsmonitor=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "core.longpaths=true",
+		"-c", "core.askPass=", "-c", "safe.bareRepository=all",
 		"push", "--porcelain", "--no-follow-tags", "--no-recurse-submodules", "--no-signed", "--no-verify",
 		"--", demoSSH, ref}
 	if !slices.Equal(args, want) {
@@ -607,8 +608,8 @@ func TestPushEnvIsAllowlistedAndCannotPrompt(t *testing.T) {
 		if home, _ := envLookup(env, "HOME"); home != f.home {
 			t.Errorf("HOME = %q, want the person's", home)
 		}
-		read := rec.find("config")
-		if len(read) != 1 || !slices.Equal(read[0].args, []string{"config", "--global", "--get", "core.sshCommand"}) || read[0].dir != f.deps.DataDir {
+		read := slices.DeleteFunc(rec.find("config"), func(c gitCall) bool { return !slices.Contains(c.args, "--global") })
+		if len(read) != 1 || !slices.Equal(read[0].args, []string{"config", "--global", "--includes", "--get", "core.sshCommand"}) || read[0].dir != f.deps.DataDir {
 			t.Errorf("reading the person's setting: %+v", read)
 		}
 	})

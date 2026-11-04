@@ -20,6 +20,12 @@ import (
 // netTimeout bounds a command that talks to a Git host.
 const netTimeout = 2 * time.Minute
 
+// staleNetRepo is the age from which a temporary repository is a leftover.
+const staleNetRepo = time.Hour
+
+// removeRetries bounds the removal of a temporary repository.
+const removeRetries = 2 * time.Second
+
 // maxFailureName caps a branch name carried by a GitFailure.
 const maxFailureName = 100
 
@@ -119,9 +125,9 @@ func userEnv(ctx context.Context, d Deps) []string {
 		}
 	}
 	env = append(env, "LC_ALL=C", "LANGUAGE=C", "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never",
-		"SSH_ASKPASS_REQUIRE=never", "GIT_NO_REPLACE_OBJECTS=1")
+		"SSH_ASKPASS_REQUIRE=never", "GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1")
 	if !ownSSH {
-		_, _, err := d.exec()(ctx, "git", []string{"config", "--global", "--get", "core.sshCommand"}, env, d.DataDir)
+		_, _, err := readPersonGlobal(ctx, d, env, "core.sshCommand")
 		if err != nil { // code 1: absent; any other failure must not allow a prompt
 			env = append(env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
 		}
@@ -137,7 +143,7 @@ var netCommands = []string{"push", "fetch"}
 // netGit runs git push or fetch against address url, only from a temporary
 // repository of Michel's: never the project, whose configuration is not trusted
 // (core.sshCommand, credential.helper, url.*.insteadOf would run a program or
-// change the destination when git holds real access), and which home.safeConfig
+// change the destination when git holds real access), and which options alone
 // cannot make safe without emptying the person's credential.helper.
 //
 // An https address goes through the authorizing proxy: its token stays in the
@@ -163,17 +169,9 @@ func (h home) netGit(ctx context.Context, d Deps, repo, url, proxyURL, sub strin
 		env = append(env, "NO_PROXY=", "no_proxy=",
 			"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.proxy", "GIT_CONFIG_VALUE_0="+proxyURL)
 	}
-	argv := []string{"--no-pager", "-C", repo,
-		"-c", "core.hooksPath=" + h.hooks,
-		"-c", "core.fsmonitor=false",
-		"-c", "gc.auto=0",
-		"-c", "maintenance.auto=false",
-		"-c", "core.longpaths=true",
-		sub}
-	argv = append(argv, args...)
 	ctx, cancel := context.WithTimeout(ctx, netTimeout)
 	defer cancel()
-	stdout, stderr, err := d.exec()(ctx, "git", argv, env, d.DataDir)
+	stdout, stderr, err := h.runGit(ctx, d, gitCommand{profile: gitRemote, repo: repo, dir: d.DataDir, env: env, sub: sub, args: args})
 	switch {
 	case err == nil:
 		return stdout, nil
@@ -190,8 +188,9 @@ func (h home) netClone(ctx context.Context, d Deps, p project.Project, options .
 	if err := os.MkdirAll(netDir(d), 0o700); err != nil {
 		return "", nil, failure(classFailed)
 	}
+	removeStaleNetRepos(d, time.Now())
 	repo = filepath.Join(netDir(d), ulid.Make().String()+".git")
-	cleanup = func() { _ = os.RemoveAll(repo) }
+	cleanup = func() { removeRepo(repo) }
 	args := append([]string{"--bare", "--local", "--no-hardlinks", "--quiet", "--no-tags"}, options...)
 	args = append(args, "--", p.Path, repo)
 	if _, _, err := h.git(ctx, d, netDir(d), "", localTransport, nil, "clone", args...); err != nil {
@@ -204,15 +203,44 @@ func (h home) netClone(ctx context.Context, d Deps, p project.Project, options .
 	return repo, cleanup, nil
 }
 
+// removeRepo removes a temporary repository. Windows releases a killed process's
+// handles late, so it tries again for a moment.
+func removeRepo(repo string) {
+	deadline := time.Now().Add(removeRetries)
+	for os.RemoveAll(repo) != nil && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// removeStaleNetRepos removes what a crash left in netDir: each is a full copy of
+// a project's objects. Other projects' clicks run alongside, so only names that
+// are dates far older than a whole click go. A failure stays for the next time.
+func removeStaleNetRepos(d Deps, now time.Time) {
+	entries, err := os.ReadDir(netDir(d))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		id, err := ulid.ParseStrict(strings.TrimSuffix(e.Name(), ".git"))
+		if err == nil && now.Sub(ulid.Time(id.Time())) > staleNetRepo {
+			_ = os.RemoveAll(filepath.Join(netDir(d), e.Name()))
+		}
+	}
+}
+
 // RepoState tells what the folder of a project is: not a repository (only the
 // folder itself is looked at, not its parents), a repository without a commit,
-// or one Michel can work on.
+// or one Michel can work on. A project that declares a remote fetching on its own
+// has no state to show: the page reaches this with no click.
 func RepoState(ctx context.Context, d Deps, p project.Project) (string, error) {
 	if !filepath.IsAbs(p.Path) || !IsGitRepo(p.Path) {
 		return RepoNone, nil
 	}
 	h, err := ensureHome(d)
 	if err != nil {
+		return "", failure(classFailed)
+	}
+	if h.refusePromisor(ctx, d, p.Path) {
 		return "", failure(classFailed)
 	}
 	head, err := h.revParseCommit(ctx, d, p.Path, "HEAD")
@@ -303,6 +331,9 @@ func Push(ctx context.Context, d Deps, p project.Project, url, proxyURL, branch,
 	}
 	h, err := ensureHome(d)
 	if err != nil {
+		return PushResult{}, failure(classFailed)
+	}
+	if h.refusePromisor(ctx, d, p.Path) {
 		return PushResult{}, failure(classFailed)
 	}
 	ref := "refs/heads/" + branch
