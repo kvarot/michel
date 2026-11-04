@@ -203,3 +203,10 @@ To tell Kévin in the final report:
 - Task 16 fix round 2: df542ea..2aba366. D-1 fixed; hand over atomic, report-only refused, approve on such a server now refuses too. B2 not reproduced, not cured; B3's root cause not established.
 - Ruling R65: no separate re-review of round 2: the final whole-branch review comes right after and gets its findings list — same reader, same diff, better model — costs nothing if it is told to verdict them.
 - Novice run doc: 79b9b65. Final review dispatched, base e06ef2f9434ddbb94d2800f2de4fb36b675d8ffd.
+- Final review: with fixes, 0 critical 2 important 9 minor. Fix dispatched.
+- Task 16: complete. Cleanup done: serve and test agent stopped by PID, container and image removed, disposable folder deleted, leftover Vite on 5199 stopped by its PID.
+- Final fix: b326c35 (I1, I2, M2). Re-review running.
+- Ruling R66: final review's M3-M6, M8, M9 stay deferred, M7 parked: `strong` marker dropped on a health server's non-recommended privacy choice, the 409 confirmation stays — not a confirmation removed, and no second fix wave — costs one visual emphasis less; told to the owner.
+- Final re-review: I1, I2 addressed; M2 not: hiding the held line left the project taken with no way out from À faire. New minors N2 (a failed scan older than a week is reported as an old look), N3 (unreadable /projects is silent).
+- Ruling R67: M2 reverted by the controller, restores what the final review read, gates rerun, no re-review — no second fix wave, and the old line leads to the page that offers the withdraw — costs a line asking an answer `ContinueHeld` refuses on a gone flaw. N2, N3 deferred.
+- Final review did not read: most Vue components in full, en.json, most of fr.json, Go files listed in final-review.md; gates and the trial cover them only in part.
