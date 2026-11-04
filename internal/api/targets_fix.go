@@ -51,7 +51,8 @@ type ServerAttemptView struct {
 	// HandOver is set on a fix the user validated to run themselves, still
 	// waiting for them: "ready" when the server's settings now let Michel run
 	// the same scripts (the page offers one button for it), "settings" when
-	// they do not (the page says what to do).
+	// they do not (the page says what to do). "retry" is a fix a person approved
+	// for Michel whose run could not start: nothing runs unless they click again.
 	HandOver string `json:"hand_over,omitempty"`
 	// JudgeSource is the source to turn on so Michel can judge a fix the check
 	// could not judge (the page links to the Sources page); "" otherwise.
@@ -130,6 +131,9 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 			if fix.MichelRuns(t, prop.Scripts.RunAsRoot) {
 				sv.HandOver = "ready"
 			}
+		}
+		if a.State == fix.StateApproved && sv.Executor == string(target.ExecMichel) && a.ApprovedBy != fix.ActorAuto && prop.Scripts != nil && known {
+			sv.HandOver = "retry"
 		}
 		if a.State == fix.StateInconclusive && fix.CouldNotJudge(*prop) && known {
 			if inv, ok, err := repo.LatestInventory(ctx, t.ID); err != nil {

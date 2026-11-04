@@ -379,6 +379,30 @@ func TestHandOverView(t *testing.T) {
 	if code != http.StatusConflict || eb.Code != "fix.err.stale_proposal" {
 		t.Errorf("hand-over with a stale hash = %d %s", code, body)
 	}
+	// Set to report only: the button goes, the refusal says it.
+	if code, body := tf.send("PATCH", "/api/v1/targets/"+tg.ID, `{"fix_level":0}`); code != http.StatusOK {
+		t.Fatalf("settings = %d %s", code, body)
+	}
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server == nil || v.Server.HandOver != "settings" {
+		t.Errorf("hand over on report only = %+v", v.Server)
+	}
+}
+
+// I3: a fix a person approved for Michel that did not run offers to try again.
+func TestHandOverViewRetry(t *testing.T) {
+	tf := newTargetFixture(t)
+	tg := tf.addNamed("srv-retry", "192.0.2.63")
+	tf.seedServerFinding(tg.ID, "fsrv000000000004", scan.KindServerConfig, "expose_php")
+	a, p := tf.seedServerAttempt(tg, "fsrv000000000004", target.ExecMichel, false)
+	if err := fix.NewRepo(tf.st).Approve(context.Background(), a.ID, "user", p.ID, p.Hash); err != nil {
+		t.Fatal(err)
+	}
+	var v AttemptView
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server == nil || v.Server.HandOver != "retry" {
+		t.Errorf("hand over = %+v", v.Server)
+	}
 }
 
 // D-1: a fix the check could not judge names the source to turn on.

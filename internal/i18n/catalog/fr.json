@@ -1051,6 +1051,7 @@
   "fix.server.needs_agent": "Michel n'a pas de correction toute prête pour ce problème : il faut l'étudier au cas par cas.",
   "fix.server.no_inventory": "Michel n'a encore jamais vérifié ce serveur : vérifie-le d'abord, puis prépare la correction.",
   "fix.server.not_michel": "Michel ne lance pas lui-même cette correction sur le serveur : copie le script, lance-le toi-même, puis dis à Michel que tu l'as appliqué.",
+  "fix.server.off": "Ce serveur est désactivé dans Michel : rien n'y est lancé. Réactive-le dans ses réglages si tu veux que Michel lance ce script.",
   "fix.server.not_run": "Le script n'a pas pu démarrer sur le serveur : rien n'a changé.",
   "fix.server.not_server": "Ce problème ne concerne pas un serveur.",
   "fix.server.not_user": "Michel lance cette correction lui-même : tu n'as rien à lancer.",

@@ -8,8 +8,8 @@ import (
 	"github.com/kvarot/michel/internal/target"
 )
 
-// handOverFixture is a server whose settings say Michel, but whose sudo is
-// off: the fix prepared is for the user to run. Returns it approved.
+// handOverFixture is a server whose settings say the user runs the scripts:
+// the fix prepared is for them. Returns it approved.
 func handOverFixture(t *testing.T) (*serverFixture, *demoServer, Attempt, Proposal) {
 	t.Helper()
 	f := newServerFixture(t)
@@ -105,7 +105,9 @@ func TestHandOverRefusals(t *testing.T) {
 		s := f.addServer("srv-demo", "8.2", demoIni, target.ExecMichel, target.SudoNopasswd, nil)
 		f.mustCheck(s)
 		a, p := f.startApproved(s, "expose_php")
-		if err := HandOverToMichel(ctx, f.d, a.ID, p.Hash); !errors.Is(err, ErrNotUserExecutor) {
+		// Approved by a person for Michel: the click tries the run again
+		// (TestHandOverRetriesARunThatDidNotStart); here the hash is stale.
+		if err := HandOverToMichel(ctx, f.d, a.ID, p.Hash+"x"); !errors.Is(err, ErrStaleProposal) {
 			t.Errorf("michel's own: %v", err)
 		}
 		f2 := newServerFixture(t)

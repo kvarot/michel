@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1038,10 +1038,11 @@ func simulate(ctx context.Context, c *sshx.Client, v serverfix.Plan, t target.Ta
 }
 
 // MichelRuns says whether, with the server's settings as they are now,
-// Michel would run a script that needs root (rootNeeded) itself. It is the
-// rule of executorFor, for a page that offers the hand over.
+// Michel would run a script that needs root (rootNeeded) itself by hand over:
+// the rule of executorFor, on a server neither set to report only nor turned
+// off. For a page that offers the hand over.
 func MichelRuns(t target.Target, rootNeeded bool) bool {
-	return t.Executor == target.ExecMichel && (!rootNeeded || t.Sudo == target.SudoNopasswd)
+	return t.FixLevel != 0 && t.Active && t.Executor == target.ExecMichel && (!rootNeeded || t.Sudo == target.SudoNopasswd)
 }
 
 // HandOverToMichel is the user's click on « Michel lance ce script » for a
@@ -1050,15 +1051,22 @@ func MichelRuns(t target.Target, rootNeeded bool) bool {
 // ones, byte for byte (their hash is checked against the stored record and
 // against a new rendering from the current inventory: ErrScriptChanged, the
 // attempt ends, nothing is sent, when they differ). What changes is who
-// runs them, and that is part of what a user approves: the proposal is
-// written again with the same scripts and executor michel, approved by this
-// click with its own hash (approveServer, the path of a normal approval,
-// snapshot included), then applied as any fix Michel runs. hash is the
-// fingerprint the user approved (ErrStaleProposal otherwise). The server's
-// settings must now let Michel run it (ErrNotMichelExecutor otherwise, the
-// attempt stays approved). A rule never does this (ActorAuto). Audited as
-// server_fix.hand_over.
+// runs them, and that is part of what a user approves: in one transaction
+// (Repo.ReplaceApproved) the proposal is written again with the same scripts
+// and executor michel and approved by this click with its own hash, so the
+// attempt never leaves approved and a rule never sees it as proposed. Then it
+// is applied as any fix Michel runs. hash is the fingerprint the user approved
+// (ErrStaleProposal otherwise). The server must let Michel run it
+// (ErrNotMichelExecutor), not be set to report only (ErrReportOnly) nor turned
+// off (ErrServerOff), and answer (a connection is tried first): otherwise the
+// attempt stays approved and the person's. A rule never does this (ActorAuto).
+// Audited as server_fix.hand_over.
+//
+// The same click tries again a fix a person approved for Michel whose run
+// could not start (the server did not answer): nothing else ever would.
 func HandOverToMichel(ctx context.Context, d Deps, attemptID, hash string) error {
+	// As Apply: the agent is gone before a script runs.
+	d.sessions().Close(attemptID)
 	lock := d.sessions().attemptLock(attemptID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -1087,8 +1095,18 @@ func HandOverToMichel(ctx context.Context, d Deps, attemptID, hash string) error
 	if err != nil {
 		return err
 	}
-	if r.sf.Executor != target.ExecUser {
+	retry := r.sf.Executor == target.ExecMichel && a.ApprovedBy != ActorAuto
+	if r.sf.Executor != target.ExecUser && !retry {
 		return ErrNotUserExecutor
+	}
+	if r.t.FixLevel == 0 {
+		return refused("the server is set to report only", ErrReportOnly)
+	}
+	if !r.t.Active {
+		return refused("the server is turned off", ErrServerOff)
+	}
+	if retry {
+		return d.applyServer(ctx, a)
 	}
 	if err := r.rebuild(ctx, "server_fix.hand_over"); err != nil {
 		return err
@@ -1096,22 +1114,26 @@ func HandOverToMichel(ctx context.Context, d Deps, attemptID, hash string) error
 	if executorFor(r.t, r.b) != target.ExecMichel {
 		return refused("the server's settings do not let Michel run it", ErrNotMichelExecutor)
 	}
+	// Nothing changes before the server answered: a server down leaves the
+	// person their fix, the script to copy and « Je l'ai appliqué ».
+	c, err := sshx.Dial(ctx, d.SSH, r.t)
+	if err != nil {
+		return refused("connect", fmt.Errorf("cannot connect to server %s: %w", r.t.Name, err))
+	}
+	_ = c.Close()
 	sf := r.sf
 	sf.Executor = target.ExecMichel
 	lang := d.lang()
 	b := r.b
 	np := Proposal{AttemptID: a.ID, Summary: summaryOf(lang, r.t, sf), StepsServer: explainServer(lang, r.t, sf, b),
 		Scripts: &b, Server: &sf, Hash: serverHash(b.Hash, sf)}
-	if err := repo.SetState(ctx, a.ID, []State{StateApproved}, StateProposed, ""); err != nil {
+	if err := d.approvalChecks(ctx, a, np, np.Hash); err != nil {
 		return err
 	}
-	np, err = repo.AddProposal(ctx, np)
-	if err != nil {
-		// Back to what the user approved: nothing else changed.
-		_ = repo.SetState(ctx, a.ID, []State{StateProposed}, StateApproved, "")
+	if np, err = repo.ReplaceApproved(ctx, a.ID, a.ApprovedProposal, np, d.actor()); err != nil {
 		return err
 	}
-	if err := d.approveServer(ctx, a, np, np.Hash); err != nil {
+	if err := d.recordApproved(ctx, a, np); err != nil {
 		return err
 	}
 	_ = d.record(ctx, "server_fix.hand_over", a.ID, "ok", map[string]any{"attempt_id": a.ID, "target_id": a.ProjectID, "finding_id": a.FindingID,

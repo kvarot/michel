@@ -108,6 +108,8 @@ var (
 	ErrNoInventory = errors.New("the server was never checked: check it first")
 	// ErrReportOnly: the server's fix level is 0 (report only).
 	ErrReportOnly = errors.New("this server is set to report only")
+	// ErrServerOff: the server is turned off in Michel; nothing runs on it.
+	ErrServerOff = errors.New("this server is turned off in Michel")
 	// ErrNeedsAgent: Michel has no deterministic fix for this finding.
 	ErrNeedsAgent = errors.New("Michel has no ready-made fix for this finding")
 	// ErrPreprodMissing: the linked preprod server does not show the
@@ -177,6 +179,7 @@ func serverErrorKey(err error) string {
 		{ErrFindingGone, "fix.server.finding_gone"},
 		{ErrNoInventory, "fix.server.no_inventory"},
 		{ErrReportOnly, "fix.server.report_only"},
+		{ErrServerOff, "fix.server.off"},
 		{ErrNeedsAgent, "fix.server.needs_agent"},
 		{ErrPreprodMissing, "fix.server.preprod_missing"},
 		{ErrSnapshotRequired, "fix.server.snapshot_required"},
@@ -703,6 +706,25 @@ func SnapshotDone(ctx context.Context, d Deps, attemptID, actor string) error {
 // approveServer is Approve for a server fix: the hash is the proposal's,
 // a package upgrade needs the snapshot acknowledged.
 func (d Deps) approveServer(ctx context.Context, a Attempt, prop Proposal, hash string) error {
+	if err := d.approvalChecks(ctx, a, prop, hash); err != nil {
+		return err
+	}
+	if err := d.repo().Approve(ctx, a.ID, d.actor(), prop.ID, prop.Hash); err != nil {
+		return err
+	}
+	return d.recordApproved(ctx, a, prop)
+}
+
+func (d Deps) recordApproved(ctx context.Context, a Attempt, prop Proposal) error {
+	return d.record(ctx, "server_fix.approve", a.ID, "ok", map[string]any{
+		"attempt_id": a.ID, "target_id": a.ProjectID, "finding_id": a.FindingID, "proposal_id": prop.ID, "hash": prop.Hash,
+		"correction_id": prop.Server.CorrectionID, "executor": string(prop.Server.Executor), "author": d.actor(),
+	})
+}
+
+// approvalChecks is what any approval of a server fix must pass: who approves,
+// the hash, scripts that can be shown, the server's level, the snapshot.
+func (d Deps) approvalChecks(ctx context.Context, a Attempt, prop Proposal, hash string) error {
 	repo := d.repo()
 	// A rule never approves an agent's fix: the user alone does.
 	if d.actor() == ActorAuto && agentOrigin(a.Origin) {
@@ -715,6 +737,15 @@ func (d Deps) approveServer(ctx context.Context, a Attempt, prop Proposal, hash 
 	}
 	if prop.Server == nil || prop.Scripts == nil {
 		return ErrScriptChanged
+	}
+	if d.Targets != nil {
+		// A server set to report only runs nothing, even what was prepared before.
+		if t, err := d.Targets.Get(ctx, prop.Server.TargetID); err != nil {
+			return err
+		} else if t.FixLevel == 0 {
+			_ = d.record(ctx, "server_fix.approve", a.ID, "refused", map[string]any{"attempt_id": a.ID, "reason": "report only", "hash": prop.Hash})
+			return ErrReportOnly
+		}
 	}
 	if !utf8.ValidString(prop.Scripts.Apply) || !utf8.ValidString(prop.Scripts.Undo) {
 		// The page shows no script it cannot show as is: nothing is
@@ -732,13 +763,7 @@ func (d Deps) approveServer(ctx context.Context, a Attempt, prop Proposal, hash 
 			return ErrSnapshotRequired
 		}
 	}
-	if err := repo.Approve(ctx, a.ID, d.actor(), prop.ID, prop.Hash); err != nil {
-		return err
-	}
-	return d.record(ctx, "server_fix.approve", a.ID, "ok", map[string]any{
-		"attempt_id": a.ID, "target_id": a.ProjectID, "finding_id": a.FindingID, "proposal_id": prop.ID, "hash": prop.Hash,
-		"correction_id": prop.Server.CorrectionID, "executor": string(prop.Server.Executor), "author": d.actor(),
-	})
+	return nil
 }
 
 // PurgeServerBackups deletes the workstation copies of server backups older

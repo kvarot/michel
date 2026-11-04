@@ -306,32 +306,7 @@ func stepsJSON(steps []StepResult) (string, error) {
 // on an approved or applied attempt). ID and CreatedAt are set here.
 func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	now := r.now()
-	id, err := r.newID(now)
-	if err != nil {
-		return Proposal{}, err
-	}
-	p.ID, p.CreatedAt, p.Superseded = id, now, false
-	p.Files, p.StepsServer = nonNil(p.Files), nonNil(p.StepsServer)
-	files, err := json.Marshal(p.Files)
-	if err != nil {
-		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
-	}
-	steps, err := json.Marshal(p.StepsServer)
-	if err != nil {
-		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
-	}
-	if p.Commands == nil {
-		p.Commands = []RanCommand{}
-	}
-	cmds, err := json.Marshal(p.Commands)
-	if err != nil {
-		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
-	}
-	scripts, err := scriptsJSON(p)
-	if err != nil {
-		return Proposal{}, err
-	}
-	stepsDone, err := stepsJSON(p.Steps)
+	p, insert, err := r.proposalInsert(p, now)
 	if err != nil {
 		return Proposal{}, err
 	}
@@ -355,12 +330,83 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 		}
 		return Proposal{}, fmt.Errorf("%w (a proposal needs an attempt that is preparing or proposed, not %s)", ErrBadTransition, state)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
+	if err := insert(ctx, tx); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)`,
-		p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
-		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds), scripts, stepsDone); err != nil {
+	if err := tx.Commit(); err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	return p, nil
+}
+
+// proposalInsert prepares p for storing: its id and date, and the function
+// that, inside a transaction, supersedes the attempt's proposals and inserts it.
+func (r *Repo) proposalInsert(p Proposal, now time.Time) (Proposal, func(context.Context, *sql.Tx) error, error) {
+	id, err := r.newID(now)
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	p.ID, p.CreatedAt, p.Superseded = id, now, false
+	p.Files, p.StepsServer = nonNil(p.Files), nonNil(p.StepsServer)
+	files, err := json.Marshal(p.Files)
+	if err != nil {
+		return Proposal{}, nil, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	steps, err := json.Marshal(p.StepsServer)
+	if err != nil {
+		return Proposal{}, nil, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	if p.Commands == nil {
+		p.Commands = []RanCommand{}
+	}
+	cmds, err := json.Marshal(p.Commands)
+	if err != nil {
+		return Proposal{}, nil, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	scripts, err := scriptsJSON(p)
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	stepsDone, err := stepsJSON(p.Steps)
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	return p, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)`,
+			p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
+			p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds), scripts, stepsDone)
+		return err
+	}, nil
+}
+
+// ReplaceApproved swaps the proposal of an approved attempt for p, approved
+// by by, in one transaction: the attempt never leaves approved, so the worker
+// never sees it as proposed, and a failure leaves the old approval whole.
+// fromProposalID must be the approved proposal (ErrBadTransition otherwise).
+func (r *Repo) ReplaceApproved(ctx context.Context, id, fromProposalID string, p Proposal, by string) (Proposal, error) {
+	now := r.now()
+	p.AttemptID = id
+	p, insert, err := r.proposalInsert(p, now)
+	if err != nil {
+		return Proposal{}, err
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET approved_by = ?, approved_proposal = ?, approved_hash = ?, updated_at = ?
+		WHERE id = ? AND state = ? AND approved_proposal = ?`, by, p.ID, p.Hash, ts(now), id, string(StateApproved), fromProposalID)
+	if err != nil {
+		return Proposal{}, fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Proposal{}, fmt.Errorf("%w (the attempt is no longer approved on that proposal)", ErrBadTransition)
+	}
+	if err := insert(ctx, tx); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

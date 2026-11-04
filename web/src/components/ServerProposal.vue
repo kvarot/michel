@@ -85,6 +85,14 @@
           </p>
         </div>
         <p v-else-if="attempt.state === 'approved' && attempt.approved_by === 'auto'" class="m-voice">{{ $t('srvfix.auto') }}</p>
+        <!-- Validated for Michel, whose run could not start: nothing else would ever run it. -->
+        <div v-else-if="handOver === 'retry'" class="m-sprop__user">
+          <p class="m-small">{{ $t('srvfix.handover.retry') }}</p>
+          <div class="m-sprop__actions">
+            <v-btn size="small" variant="flat" color="primary" :loading="acting === 'handover'" :disabled="!!acting" @click="$emit('handover', p?.hash || '')">{{ $t('srvfix.handover.retry_action') }}</v-btn>
+          </div>
+          <p v-if="acting === 'handover'" class="m-voice m-small" role="status">{{ $t('srvfix.handover.busy') }}</p>
+        </div>
         <p v-else-if="attempt.state === 'approved'" class="m-voice">{{ $t('srvfix.approved') }}</p>
         <p v-if="attempt.state === 'running'" class="m-voice" role="status">
           <v-progress-circular indeterminate size="16" width="2" color="primary" />
@@ -153,6 +161,7 @@
         <v-card-title id="sfix-handover-title" class="m-sprop__dialog-title">{{ $t('srvfix.handover.title') }}</v-card-title>
         <v-card-text>
           <p class="m-sprop__dialog-body">{{ $t(server.run_as_root ? 'srvfix.handover.body' : 'srvfix.handover.body_plain') }}</p>
+          <p v-if="needsSnap" class="m-sprop__dialog-body m-sprop__warn">{{ $t('srvfix.handover.snapshot', { date: dateText(server.snapshot_done_at) }) }}</p>
         </v-card-text>
         <v-card-actions class="m-sprop__dialog-actions">
           <v-btn variant="text" @click="handOverOpen = false">{{ $t('srvfix.handover.no') }}</v-btn>
@@ -230,7 +239,7 @@ export default {
       const f = this.flaw || { rule: this.attempt.finding?.osv_id, title: this.attempt.finding?.summary, package: this.attempt.finding?.package }
       return findingTitle(f, this.lang)
     },
-    // handOver: 'ready' (Michel can run the validated script now), 'settings' (not yet), or ''.
+    // handOver: 'ready' (Michel can run the validated script now), 'settings' (not yet), 'retry' (he could not start), or ''.
     handOver() {
       return handOverOf(this.attempt)
     },

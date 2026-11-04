@@ -397,6 +397,8 @@ describe('the hand over to Michel (R62)', () => {
     expect(handOverOf(approved('ready', 'user', 'proposed'))).toBe('')
     expect(handOverOf(approved('ready', 'michel'))).toBe('')
     expect(handOverOf(approved(undefined))).toBe('')
+    expect(handOverOf(approved('retry', 'michel'))).toBe('retry')
+    expect(handOverOf(approved('retry', 'michel', 'running'))).toBe('')
     expect(handOverOf(null)).toBe('')
   })
   test('the words exist in both catalogs, and the confirmation says administrator rights', () => {

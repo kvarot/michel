@@ -490,12 +490,15 @@ export function serversHash(id, finding = '') {
 /**
  * handOverOf says whether a fix the user validated to run themselves can now be
  * run by Michel (R62): 'ready' when the server's settings let him, 'settings' when
- * they do not, '' for any other fix. The server decides (fix.MichelRuns).
+ * they do not, 'retry' when he was to run it and could not start (nothing ran), '' for
+ * any other fix. The server decides.
  * @param {object|null} attempt AttemptView with server
- * @returns {'ready'|'settings'|''}
+ * @returns {'ready'|'settings'|'retry'|''}
  */
 export function handOverOf(attempt) {
-  if (!attempt || attempt.state !== 'approved' || attempt.server?.executor !== 'user') return ''
-  const h = attempt.server.hand_over
+  if (!attempt || attempt.state !== 'approved') return ''
+  const h = attempt.server?.hand_over
+  if (attempt.server?.executor === 'michel') return h === 'retry' ? h : ''
+  if (attempt.server?.executor !== 'user') return ''
   return h === 'ready' || h === 'settings' ? h : ''
 }

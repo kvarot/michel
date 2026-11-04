@@ -1051,6 +1051,7 @@
   "fix.server.needs_agent": "Michel has no ready-made fix for this problem: it needs to be looked at case by case.",
   "fix.server.no_inventory": "Michel has never checked this server: check it first, then prepare the fix.",
   "fix.server.not_michel": "Michel does not run this fix on the server: copy the script and run it yourself, then tell Michel you applied it.",
+  "fix.server.off": "This server is turned off in Michel: nothing runs on it. Turn it back on in its settings if you want Michel to run this script.",
   "fix.server.not_run": "The script could not be started on the server: nothing changed.",
   "fix.server.not_server": "This finding is not about a server.",
   "fix.server.not_user": "Michel runs this fix itself: there is nothing for you to run.",
