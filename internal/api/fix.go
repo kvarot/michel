@@ -151,6 +151,22 @@ type AttemptView struct {
 	// Hold is set while the attempt waits for the person's answer about the
 	// possible keys found in its copy: files and lines, never a value.
 	Hold *HoldView `json:"hold,omitempty"`
+	// Push is how the branch stands with the Git service the project is attached
+	// to: null for a server, a project not attached now, and in lists, which run
+	// no git for each attempt.
+	Push *AttemptPushView `json:"push"`
+}
+
+// AttemptPushView is the send button of an attempt. MergeURL and PushedAt are set
+// once the branch left; a site without a link leaves MergeURL empty.
+type AttemptPushView struct {
+	Provider string `json:"provider"`
+	Display  string `json:"display"`
+	Branch   string `json:"branch"`
+	MergeURL string `json:"merge_url"`
+	PushedAt string `json:"pushed_at"`
+	Pushed   bool   `json:"pushed"`
+	CanPush  bool   `json:"can_push"`
 }
 
 // HoldFileView is one file with a possible key, and its lines.
@@ -278,6 +294,11 @@ func (s *server) fixDeps(w http.ResponseWriter, r *http.Request, lang i18n.Lang)
 		s.fail(w, http.StatusServiceUnavailable, i18n.T(lang, "api.fix.unavailable"), "")
 		return fix.Deps{}, false
 	}
+	return s.liveFixDeps(lang), true
+}
+
+// liveFixDeps is the fix service's collaborators for a request; s.deps.Fix is set.
+func (s *server) liveFixDeps(lang i18n.Lang) fix.Deps {
 	d := *s.deps.Fix
 	d.Policy = s.currentPolicy()
 	d.LivePolicy = s.currentPolicy
@@ -286,7 +307,7 @@ func (s *server) fixDeps(w http.ResponseWriter, r *http.Request, lang i18n.Lang)
 	if s.deps.Reload != nil {
 		d.Reload = s.reload
 	}
-	return d, true
+	return d
 }
 
 // fixWorker is serve's loop of the level 2 queue, on the server's
@@ -436,6 +457,11 @@ func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool, lang
 				Package: scan.SanitizeText(fi.Package), OSVID: scan.SanitizeText(fi.OSVID), Severity: severityOf(effective(fi)),
 				InstalledVersion: scan.SanitizeText(fi.InstalledVersion), FixedVersions: sanitizeAll(fi.FixedVersions),
 				Summary: scan.SanitizeText(fi.Summary), Status: fi.Status}
+			if full && s.deps.Fix != nil {
+				if v.Push, err = s.attemptPush(ctx, a, p, lang); err != nil {
+					return AttemptView{}, err
+				}
+			}
 		} else {
 			v.Finding = FixFindingView{ID: a.FindingID, FixedVersions: []string{}}
 		}
@@ -452,6 +478,19 @@ func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool, lang
 		for _, msg := range msgs {
 			v.Messages = append(v.Messages, messageView(m, msg))
 		}
+	}
+	return v, nil
+}
+
+// attemptPush is the send button of a project's attempt, read without network.
+func (s *server) attemptPush(ctx context.Context, a fix.Attempt, p project.Project, lang i18n.Lang) (*AttemptPushView, error) {
+	st, err := fix.AttemptPush(ctx, s.liveFixDeps(lang), a, p)
+	if err != nil || st == nil {
+		return nil, err
+	}
+	v := &AttemptPushView{Provider: st.Provider, Display: st.Display, Branch: st.Branch, MergeURL: st.MergeURL, Pushed: st.Pushed, CanPush: st.CanPush}
+	if st.Pushed {
+		v.PushedAt = stamp(st.PushedAt)
 	}
 	return v, nil
 }

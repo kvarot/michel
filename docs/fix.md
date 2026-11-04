@@ -153,9 +153,40 @@ Michel refuses a change that touches a file outside the copy (`..`, absolute pat
 
 ## The branch, then you deploy
 
-Applying = Michel builds **one commit** of its own in the mirror (author Michel, parent = your real commit, the agent's own commits are ignored), then fetches it from your repository into the branch `michel/fix-<short id>`. No checkout, no merge: your current branch, your working tree and your index do not move (checked by a test, even with modified files or another branch checked out). It is the only write Michel makes in your project, and only after your approval: objects and one ref in its `.git`.
+Applying = Michel builds **one commit** of its own in the mirror (author Michel, parent = your real commit, the agent's own commits are ignored), then fetches it from your repository into the branch `michel/fix-<short id>`. No checkout, no merge: your current branch, your working tree and your index do not move (checked by a test, even with modified files or another branch checked out). Without attachment, it is the only write Michel makes in your project, and only after your approval: objects and one ref in its `.git`.
 
 The page then says: "The branch michel/fix-… is ready. Merge it, then deploy with PhpStorm as usual." Michel never merges and never deploys.
+
+## Attach your project to GitHub, Bitbucket or GitLab
+
+Michel asks one question on the project's page: is this project on a Git service? **Nothing happens without a yes.** What Michel offers first is only a suggestion, never an answer. As long as you have not said yes, everything above stands: you merge and you send with your own tool.
+
+To ask, Michel reads your project's address from its Git settings, without network. If that address holds a password or a token, Michel tells you so, and neither shows, keeps nor uses it. Your yes holds for that address only. It writes one network rule, for that host only. Answering no or "I don't know" later removes the rule, if Michel wrote it and no other attached project uses it. If the address changes, nothing leaves until you answer again.
+
+A yes gives you two buttons. Nothing else starts them: no level, no scan, no background work and no command line.
+
+**Send the fix**, on a fix with its branch:
+
+- it sends only the branch `michel/fix-…` and the commits it needs, to your remote. Your main branch does not move;
+- never forced: if the service refuses, Michel says so and stops;
+- one click, one send. A second click sends nothing more when the branch is already there;
+- it sends from a temporary repository in Michel's data folder (`<data>/fix-net/`), removed afterwards. That repository does not read your project's settings, so they can start no program. In your project, this button writes nothing;
+- on GitHub, Bitbucket and GitLab (`github.com`, `bitbucket.org`, `gitlab.com`), the page then gives a link to ask for the merge. On any other service, it gives the branch's name. You accept on the site.
+
+Michel stores no token. It uses the Git access already on this computer, and it cannot ask you for any: if it finds none, it says so, and you send once with your usual Git tool.
+
+**Update my folder**, once the merge is accepted:
+
+- it brings the main branch of the remote into your folder, with `git merge --ff-only`: your folder only moves forward, nothing is mixed;
+- only when your folder is on its main branch, with no change in the files Git follows, and no merge in progress;
+- no hook and no file conversion program (Git LFS for example) runs. If the update would need one, Michel refuses and leaves your files alone. It also refuses rather than overwrite a file that Git does not follow or ignores;
+- what it writes in your project: the commits that arrive, your main branch, its tracking reference (`<remote>/<branch>`) and the files changed. When it refuses after fetching, the commits and the tracking reference may already be written: your files and your branch have not moved.
+
+**These two buttons lift, for an attached project and on your click, the rule "Michel does not push and runs nothing in your folder".** Without attachment, that rule stands entirely. Each click is recorded in the audit log, refusals included (`project.git.answer`, `project.git.push`, `project.git.update`). What git prints is neither shown nor kept, since it can hold private data: you see a sentence, and for more detail you use your usual Git tool.
+
+**Michel still never merges**, and never deploys. Merging is your step, on the site or with your tool.
+
+A partial copy of a repository (a "partial clone") cannot be attached: Git would fetch what it lacks on its own, so Michel neither sends nor updates there, and says so.
 
 ## The proof
 
@@ -163,7 +194,7 @@ The page then says: "The branch michel/fix-… is ready. Merge it, then deploy w
 - **`proven_fixed`**: after you merged, during a `michel scan` of your project, the tool that found the flaw looks again and no longer sees it **and** the branch's change is in the current branch of your repository. Michel checks it read-only: the commit itself (`git merge-base --is-ancestor`), or, after a "Squash" or a "Rebase" on the host's site, which change the commit, the same patch (`git cherry`). That comparison ignores whitespace and where the lines are, so the same lines indented otherwise, or in another identical block, also count: a rare false "merged", and the tool below must still stop seeing the flaw. That tool is the scan of your dependencies for a dependency; for a flaw found by an external tool (Semgrep, Trivy…), it is that tool, which runs at the end of the scan.
 - The flaw gone without that commit, or the commit merged while the tool still sees the flaw: the attempt is `inconclusive`, with the reason.
 - If that tool did not look during this scan (off, not set to run during the scan, failed; for a dependency, a folder with no dependency file), Michel concludes nothing: the attempt stays `applied` until a scan where it looks. Running the tool alone (`michel source run`, or an imported report) concludes nothing either.
-- Michel does not rerun the tests after the merge, because it never runs anything in your folder: the tests ran on the copy, before the merge. A local scan sees the merge, not the deployment: Michel says "fixed in your code" and reminds you to deploy; it does not claim the server is up to date.
+- Michel does not rerun the tests after the merge: it runs no program of your project, and "Update my folder" only brings the files there. The tests ran on the copy, before the merge. A local scan sees the merge, not the deployment: Michel says "fixed in your code" and reminds you to deploy; it does not claim the server is up to date.
 
 The states you will see on the page: `held` (possible keys in the code: Michel waits for your answer) → `withdrawn` or `preparing`; `preparing` → `proposed` → `approved` or `refused` → `applied` → `proven_fixed` or `inconclusive`; `failed` from `preparing`, `held`, `proposed` or `approved` (with its cause: the agent stopped, Michel refused the change or could not create the branch, your project changed since the search); `superseded` when a newer proposal replaces one.
 
@@ -194,6 +225,7 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 - **Anthropic reads the copy's code**, as said on the consent screen.
 - **The answer about a key found is no proof that a person read it.** Michel takes this yes only through the page or a terminal, and its own automation never gives it. But a person or a program running with your rights (a script, a test of the project, code the agent wrote on another project) can fake a terminal or call the page with its token. That program could read the key directly anyway.
 - **The agent's text must not be taken at its word.** It is shown, never executed; its proposal is checked by Michel, and you decide.
+- **On an attached project, the SSH connection and your Git access manager are outside the proxy.** Over SSH, git and ssh open their own connection: Michel decides and records before git starts, but neither carries nor stops it. A Git access manager (Git Credential Manager, for example) is a program of yours that git starts: it can open its own connections too. See [security/network-egress.md](security/network-egress.md).
 
 ## Troubleshooting
 
@@ -205,7 +237,7 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 | "…Michel needs your agreement…" | Read the consent screen and accept, or `michel fix consent <project> --yes`. |
 | "Your policy is strict_local" | Use the button of the consent screen on the page, or set `sovereignty.mode: standard` yourself (see above). |
 | "This project is classified health" | Never sent to an external AI. Read the brief and fix by hand. |
-| "This project is not tracked by git" / "no commit yet" | Michel copies with git: put the project in git (and make a first commit). The brief stays available. |
+| "This project is not tracked by git" / "no commit yet" | Michel copies with git: the folder you added must be the main folder of a repository, with a first commit. The check and the brief stay available. |
 | "Your project is too large" | Exclude big folders (`--exclude`), or fix by hand from the brief. |
 | "…would make the install run programs from the project itself" | A setting of your project (npm, Composer) would run code during the install; Michel does not accept it, so nothing ran. Fix by hand, or remove that setting. |
 | "Tests: not run", no test command | Set one: `michel project set <name> --test-cmd "…"`. |
@@ -216,5 +248,34 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 | "The proposal changed since you read it" | Read the new one, then approve it. |
 | "A fix is already in progress on this project, or waits for your answer" | Answer it first, or finish it. It is in the list of fixes. |
 | Level 2: nothing starts | `michel serve` must run; the project needs its AI consent; at most 3 attempts started alone per day and per project. |
+| "This folder is not a Git repository" | Michel can check it and explain its flaws, but cannot prepare a fix or send one. |
+| "This Git repository holds nothing saved yet" | Make a first commit: Michel needs it to prepare a fix or send one. |
+| "Michel finds no usable address in this project" | It needs one https or SSH address, or one named `origin`. |
+| "This folder is a partial copy of a repository" | Use your usual Git tool. For Michel to do it, it needs a full copy of the repository. |
+| "This project is not attached to a Git service" | Answer yes on the project's page if you want to send your fixes there. |
+| "The project's address changed since you agreed" | Look at the project's page and answer again. |
+| "The network rule that allows this service was removed" | Answer the question again on the project's page. |
+| "This fix has no branch to send" | A branch exists only after your approval, and until the fix is finished. |
+| "This fix's branch changed or no longer exists" | Michel only sends what you approved. Start a new fix, or send the branch yourself. |
+| "Michel is already working on this folder" | Wait for it to end, then try again. |
+| "The service refused access, or Michel found no Git access on this computer" | Send once with your usual Git tool to save your access, then try again. |
+| "This computer does not recognise this service, or its identity changed" | Connect once with your usual Git tool. If you already used to connect, ask for help: this change can be an attack. |
+| "The service does not find this project, or your account has no access" | Check the address shown and that your account has access. |
+| "The service refused this branch" | A branch of the same name may exist with other content, or a rule of the service forbids it. Look on the site. Michel never forces a send. |
+| "Michel could not reach the service" | Check your Internet connection, then try again. A company proxy can also prevent it. Over https, Michel only reaches port 443 (the usual door of secure websites). |
+| "The service did not answer in time" | Click again: if everything is already there, Michel sees it and sends nothing more. |
+| "It failed for a reason Michel does not recognise" | Try with your usual Git tool. Michel does not show the detail, which may hold private data. |
+| "Your folder is on branch …, not on the main branch …" | Go back to the main branch, then try again. |
+| "Your folder is on no branch" | Put it back on its main branch, then try again. |
+| "Michel does not know your folder's main branch" | Update with your usual Git tool. |
+| "Your folder holds changes not saved yet" | Save them or set them aside, then try again. |
+| "A merge or a pick is in progress in your folder" | Finish or cancel it, then try again. |
+| "Your folder holds saved work that is not on the site" | Send it or settle this with your usual Git tool, then try again. Michel mixes nothing. |
+| "A file in your folder would be overwritten by this update" | Move that file elsewhere, then try again. |
+| "A file or folder that Git ignores … stands where this update writes" | Move it elsewhere, then try again. Careful: an update made by hand with Git can overwrite it without warning. |
+| "This update would remove or replace a subfolder Git manages apart" | Move its content elsewhere, empty this subfolder without deleting it, then try again. Careful: an update made by hand with Git can erase what it holds. |
+| "This update would run a file conversion program" | Update with your usual Git tool, then click **Check this project**. |
+| "The update failed: Git stopped it" | Check your folder's state with your usual Git tool. |
+| "The update stopped halfway" | Close any program that may hold a file open (an editor, an antivirus). Your folder held no change before the update: with your usual Git tool, cancel these changes, then try again. |
 
 What leaves the computer, host by host: [security/network-egress.md](security/network-egress.md).

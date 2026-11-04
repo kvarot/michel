@@ -153,6 +153,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			// old conversations purged; the handler then works the level 2
 			// queue in the background and runs the agents of the page.
 			fd := fixDeps(cmd, deps, secrets, "serve")
+			fd.AllowLocalRemote = allowLocalRemote // a compile-time constant, never read at run time (R33)
 			fd.Sessions = fix.NewSessions()
 			if err := fix.Sweep(ctx, fd); err != nil {
 				return deps.Wrapf("cli.serve.fix_sweep_failed", err)

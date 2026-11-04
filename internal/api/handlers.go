@@ -17,6 +17,7 @@ import (
 	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/digest"
 	"github.com/kvarot/michel/internal/explain"
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
@@ -149,6 +150,13 @@ func (s *server) projectView(ctx context.Context, lang i18n.Lang, p project.Proj
 	v := ProjectView{Name: scan.SanitizeText(p.Name), Classification: string(p.Classification), FixLevel: p.FixLevel,
 		AutoFixMinor: p.AutoFixMinor, HasTestCmd: strings.TrimSpace(p.TestCmd) != "", GitRepo: workcopy.IsGitRepo(p.Path),
 		Open: map[string]int{}, Decided: map[string]int{}, LastScanStatus: "never"}
+	row, answered, err := fix.NewRepo(s.deps.Store).GitAnswer(ctx, p.ID)
+	if err != nil {
+		return ProjectView{}, err
+	}
+	if answered {
+		v.GitAnswer, v.GitAttached = row.Answer, row.Answer == fix.GitYes
+	}
 	for _, sev := range severities {
 		v.Open[sev] = 0
 	}

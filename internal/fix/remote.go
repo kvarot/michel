@@ -83,6 +83,15 @@ type PushOutcome struct {
 	At       time.Time // when the branch first reached the remote
 }
 
+// PushState is what the page shows of a fix's branch and the attached service.
+type PushState struct {
+	Provider, Display string
+	Branch            string
+	MergeURL          string // set once sent, and only for a site Michel builds a link for
+	PushedAt          time.Time
+	Pushed, CanPush   bool
+}
+
 // gitLock is the lock of a project for a click and a check started from the page:
 // a click in the process of michel serve, the only one with these routes (R29, R35).
 func (s *Sessions) gitLock(projectID string) *sync.Mutex {
@@ -235,16 +244,62 @@ func (d Deps) updateState(ctx context.Context, p project.Project, read remoteRea
 	if GitBusy(d, p.ID) {
 		return refused(ErrGitBusy)
 	}
-	if read.remote.Provider != gitremote.Local && d.Gateway != nil {
-		if _, ok := d.Gateway.MatchRule(read.remote.Host, policy.PurposeProjectGit); !ok {
-			return refused(ErrGitNoRule)
-		}
+	if d.ruleMissing(read) {
+		return refused(ErrGitNoRule)
 	}
 	plan, err := workcopy.UpdateCheck(ctx, d.work(), p, read.name)
 	if err != nil {
 		return refused(err)
 	}
 	return &UpdateState{Ready: true, Current: plan.Current, Default: plan.Default}
+}
+
+// ruleMissing says the network rule of the remote's host is gone: a click would be
+// refused. A local remote has none.
+func (d Deps) ruleMissing(read remoteRead) bool {
+	if read.remote.Provider == gitremote.Local || d.Gateway == nil {
+		return false
+	}
+	_, ok := d.Gateway.MatchRule(read.remote.Host, policy.PurposeProjectGit)
+	return !ok
+}
+
+// AttemptPush says how a fix's branch stands with the service its project is
+// attached to, without network: nil for a server's fix and for a project that is
+// not attached now, whatever stops it (no answer, another address, a folder Michel
+// cannot read; ProjectGit says why). CanPush says a click would start, and stays
+// true once sent: a second click answers "already" (R29). The link appears once the
+// branch left, since it leads nowhere before.
+func AttemptPush(ctx context.Context, d Deps, a Attempt, p project.Project) (*PushState, error) {
+	if a.Work.Server != nil {
+		return nil, nil
+	}
+	row, answered, err := d.repo().GitAnswer(ctx, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !answered || row.Answer != GitYes {
+		return nil, nil
+	}
+	read, err := d.attached(ctx, p)
+	if err != nil {
+		return nil, nil //nolint:nilerr // not attached now: the view has nothing to offer
+	}
+	prop, hasProposal, err := d.repo().CurrentProposal(ctx, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	sent, pushed, err := d.repo().Push(ctx, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	branch := Branch(a.ID)
+	st := &PushState{Provider: string(read.remote.Provider), Display: read.remote.Display(), Branch: branch, Pushed: pushed,
+		CanPush: a.State == StateApplied && hasProposal && prop.CommitSHA != "" && !d.ruleMissing(read) && !GitBusy(d, p.ID)}
+	if pushed {
+		st.MergeURL, st.PushedAt = gitremote.MergeURL(read.remote, branch), sent.PushedAt
+	}
+	return st, nil
 }
 
 // AnswerGit records the person's answer, on their click. A yes is for the address

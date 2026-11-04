@@ -157,9 +157,40 @@ Michel refuse une modification qui touche un fichier hors de la copie (`..`, che
 
 ## La branche, puis tu déploies
 
-Appliquer, c'est : Michel construit **un seul commit** à lui dans le miroir (auteur Michel, parent = ton vrai commit ; les commits que l'agent aurait faits sont ignorés), puis le fait venir dans ton dépôt sur la branche `michel/fix-<id-court>`. Pas de changement de branche, pas de fusion : ta branche actuelle, tes fichiers et ce que tu as préparé pour ton prochain commit ne bougent pas (vérifié par un test, même si tu as des fichiers modifiés ou une autre branche en cours). C'est la seule écriture de Michel dans ton projet, et seulement après ta validation : des objets et une référence dans son `.git`.
+Appliquer, c'est : Michel construit **un seul commit** à lui dans le miroir (auteur Michel, parent = ton vrai commit ; les commits que l'agent aurait faits sont ignorés), puis le fait venir dans ton dépôt sur la branche `michel/fix-<id-court>`. Pas de changement de branche, pas de fusion : ta branche actuelle, tes fichiers et ce que tu as préparé pour ton prochain commit ne bougent pas (vérifié par un test, même si tu as des fichiers modifiés ou une autre branche en cours). Sans rattachement, c'est la seule écriture de Michel dans ton projet, et seulement après ta validation : des objets et une référence dans son `.git`.
 
 La page dit alors : « La branche michel/fix-… est prête. Fusionne-la puis déploie avec PhpStorm comme d'habitude. » Michel ne fusionne jamais et ne déploie jamais.
+
+## Rattacher ton projet à GitHub, Bitbucket ou GitLab
+
+Michel pose une question sur la fiche du projet : ce projet est-il sur un service Git ? **Rien ne se passe sans un oui.** Ce que Michel propose d'abord n'est qu'une suggestion, jamais une réponse. Tant que tu n'as pas dit oui, tout ce qui précède reste vrai : tu fusionnes et tu envoies avec ton propre outil.
+
+Pour poser la question, Michel lit l'adresse de ton projet dans ses réglages Git, sans réseau. Si cette adresse contient un mot de passe ou un jeton (une clé d'accès), Michel te le dit, et il ne l'affiche pas, ne le garde pas et ne s'en sert pas. Ton oui vaut pour cette adresse seulement. Il écrit une règle réseau, pour ce seul hôte (le site de cette adresse). Répondre non ou « je ne sais pas » plus tard retire la règle, si c'est Michel qui l'a écrite et si aucun autre projet rattaché ne s'en sert. Si l'adresse change, plus rien ne part avant ta nouvelle réponse.
+
+Un oui te donne deux boutons. Rien d'autre ne les déclenche : ni un niveau, ni un scan, ni le travail en arrière-plan, ni la ligne de commande.
+
+**Envoyer la correction**, sur une correction qui a sa branche :
+
+- il envoie seulement la branche `michel/fix-…` et les commits dont elle a besoin, vers ton service. Ta branche principale ne bouge pas ;
+- jamais en force : si le service refuse, Michel le dit et s'arrête ;
+- un clic, un envoi. Un second clic n'envoie rien de plus quand la branche est déjà là ;
+- l'envoi part d'un dépôt temporaire, dans le dossier de données de Michel (`<data>/fix-net/`), retiré ensuite. Ce dépôt ne lit pas les réglages de ton projet : ils ne peuvent lancer aucun programme. Dans ton projet, ce bouton n'écrit rien ;
+- sur GitHub, Bitbucket et GitLab (`github.com`, `bitbucket.org`, `gitlab.com`), la page donne ensuite un lien pour demander la fusion. Sur un autre service, elle donne le nom de la branche. C'est toi qui acceptes, sur le site.
+
+Michel n'enregistre aucun jeton. Il se sert des accès Git déjà en place sur cet ordinateur, et il ne peut pas t'en demander : s'il n'en trouve pas, il le dit, et tu fais un envoi avec ton outil Git habituel.
+
+**Mettre à jour mon dossier**, une fois la fusion acceptée :
+
+- il amène la branche principale du service dans ton dossier, avec `git merge --ff-only` : ton dossier avance seulement, rien n'est mélangé ;
+- seulement si ton dossier est sur sa branche principale, sans modification dans les fichiers que Git suit, et sans fusion en cours ;
+- aucun hook (un programme que Git lance tout seul) et aucun programme de conversion de fichiers (Git LFS par exemple) ne tourne. Si la mise à jour en avait besoin, Michel refuse et ne touche pas à tes fichiers. Il refuse aussi plutôt que d'écraser un fichier que Git ne suit pas ou qu'il ignore ;
+- ce qu'il écrit dans ton projet : les commits qui arrivent, ta branche principale, sa référence de suivi (`<service>/<branche>`) et les fichiers changés. Quand il refuse après avoir récupéré, les commits et la référence de suivi peuvent déjà être écrits : tes fichiers et ta branche n'ont pas bougé.
+
+**Ces deux boutons lèvent, pour un projet rattaché et sur ton clic, la règle « Michel ne pousse pas et ne lance rien dans ton dossier ».** Sans rattachement, cette règle reste entière. Chaque clic est noté dans le journal d'audit, refus compris (`project.git.answer`, `project.git.push`, `project.git.update`). Ce que git affiche n'est ni montré ni gardé, car cela peut contenir des données privées : tu vois une phrase, et pour plus de détail tu utilises ton outil Git habituel.
+
+**Michel ne fusionne toujours jamais**, et ne déploie jamais. Fusionner reste ton étape, sur le site ou avec ton outil.
+
+Une copie partielle d'un dépôt (un « partial clone ») ne peut pas être rattachée : Git irait y chercher tout seul ce qui lui manque. Michel n'y fait donc ni envoi ni mise à jour, et il le dit.
 
 ## La preuve
 
@@ -167,7 +198,7 @@ La page dit alors : « La branche michel/fix-… est prête. Fusionne-la puis d�
 - **`proven_fixed`** (corrigée, prouvé) : après ta fusion, pendant un `michel scan` de ton projet, l'outil qui a trouvé la faille regarde à nouveau et ne la voit plus **et** le changement de la branche est dans la branche actuelle de ton dépôt. Michel le vérifie sans rien écrire : le commit lui-même (`git merge-base --is-ancestor`), ou, après un « Squash » ou un « Rebase » sur le site, qui changent le commit, le même patch (`git cherry`). Cette comparaison ne regarde ni les espaces ni la place des lignes : les mêmes lignes autrement indentées, ou dans un autre bloc identique, comptent aussi. C'est un « fusionné » à tort, rare, et l'outil doit quand même ne plus voir la faille. Cet outil, c'est le scan de tes dépendances pour une dépendance ; pour une faille trouvée par un outil externe (Semgrep, Trivy…), c'est cet outil, qui tourne à la fin du scan.
 - Faille disparue sans ce commit, ou commit fusionné alors que l'outil voit encore la faille : la tentative passe `inconclusive` (pas concluant), avec la raison.
 - Si cet outil n'a pas regardé pendant ce scan (éteint, pas réglé pour tourner pendant le scan, en échec ; pour une dépendance, un dossier sans fichier de dépendances), Michel ne conclut rien : la tentative reste `applied` jusqu'à un scan où il regarde. Lancer l'outil seul (`michel source run`, ou un rapport importé) ne conclut rien non plus.
-- Michel ne relance pas les tests après la fusion, parce qu'il ne lance jamais rien dans ton dossier : les tests ont tourné sur la copie, avant la fusion. Un scan sur ton ordinateur voit la fusion, pas le déploiement : Michel dit « corrigée dans ton code » et te rappelle de déployer ; il ne prétend pas que le serveur est à jour.
+- Michel ne relance pas les tests après la fusion : il ne lance aucun programme de ton projet, et « Mettre à jour » ne fait qu'y amener les fichiers. Les tests ont tourné sur la copie, avant la fusion. Un scan sur ton ordinateur voit la fusion, pas le déploiement : Michel dit « corrigée dans ton code » et te rappelle de déployer ; il ne prétend pas que le serveur est à jour.
 
 Voici les états que tu verras sur la page : `held` (clés possibles dans le code : Michel attend ta réponse) → `withdrawn` (tu les retires d'abord) ou `preparing` ; `preparing` (en préparation) → `proposed` (proposée) → `approved` (validée) ou `refused` (refusée) → `applied` (branche créée) → `proven_fixed` ou `inconclusive` ; `failed` (échouée, avec sa cause : l'agent s'est arrêté, Michel a refusé la modification ou n'a pas pu créer la branche, ton projet a changé depuis la recherche) depuis `preparing`, `held`, `proposed` ou `approved` ; `superseded` (remplacée) quand une proposition plus récente prend sa place.
 
@@ -198,6 +229,7 @@ Une faille de **serveur** (un réglage de PHP, un paquet) a sa propre correction
 - **Anthropic lit le code de la copie**, comme le dit l'écran d'accord.
 - **La réponse à une clé trouvée n'est pas une preuve qu'une personne a lu.** Michel n'accepte ce oui que par la page ou par un terminal, et sa propre automatisation ne le donne jamais. Mais une personne ou un programme lancé avec tes droits (un script, un test du projet, du code écrit par l'agent sur un autre projet) peut simuler un terminal ou appeler la page avec son jeton. Ce programme pourrait de toute façon lire la clé directement.
 - **Le texte de l'agent ne doit pas être cru sur parole.** Il est affiché, jamais exécuté ; sa proposition est vérifiée par Michel, et c'est toi qui décides.
+- **Sur un projet rattaché, la connexion SSH et ton gestionnaire d'accès Git passent hors du proxy.** En SSH, git et ssh ouvrent leur propre connexion : Michel décide et note avant le lancement de git, mais il ne la porte pas et ne l'arrête pas. Un gestionnaire d'accès Git (Git Credential Manager, par exemple) est un programme à toi que git lance : il peut lui aussi ouvrir ses propres connexions. Voir [security/network-egress.fr.md](security/network-egress.fr.md).
 
 ## En cas de problème
 
@@ -209,7 +241,7 @@ Une faille de **serveur** (un réglage de PHP, un paquet) a sa propre correction
 | « …Michel a besoin de ton accord… » | Lis l'écran d'accord et accepte, ou `michel fix consent <projet> --yes`. |
 | « Ta politique est en mode strict_local » | Utilise le bouton de l'écran d'accord sur la page, ou mets toi-même `sovereignty.mode: standard` (voir plus haut). |
 | « Ce projet est classé santé » | Jamais envoyé à une IA externe. Lis la fiche et corrige à la main. |
-| « Ce projet n'est pas suivi par git » / « pas encore de commit » | Michel copie avec git : mets le projet dans git (et fais un premier commit). La fiche reste disponible. |
+| « Ce projet n'est pas suivi par git » / « pas encore de commit » | Michel copie avec git : le dossier ajouté doit être le dossier principal d'un dépôt, avec un premier commit. Le contrôle et la fiche restent disponibles. |
 | « Ton projet est trop gros » | Exclus les gros dossiers (`--exclude`), ou corrige à la main depuis la fiche. |
 | « …feraient lancer des programmes du projet lui-même » | Un réglage de ton projet (npm, Composer) demanderait d'exécuter du code pendant l'installation ; Michel ne l'accepte pas, donc rien n'a tourné. Corrige à la main ou retire ce réglage. |
 | « Tests : pas lancés », aucune commande de test | Indique-la : `michel project set <nom> --test-cmd "…"`. |
@@ -220,5 +252,34 @@ Une faille de **serveur** (un réglage de PHP, un paquet) a sa propre correction
 | « La proposition a changé depuis que tu l'as lue » | Lis la nouvelle, puis valide-la. |
 | « Une correction est déjà en cours sur ce projet, ou attend ta réponse » | Réponds-y d'abord, ou termine-la. Elle est dans la liste des corrections. |
 | Niveau 2 : rien ne démarre | `michel serve` doit tourner ; le projet a besoin de son accord IA ; au plus 3 tentatives lancées seules par jour et par projet. |
+| « Ce dossier n'est pas un dépôt Git » | Michel peut le contrôler et expliquer ses failles, mais il ne peut ni préparer une correction ni l'envoyer. |
+| « Ce dépôt Git n'a encore aucun enregistrement » | Fais un premier commit : il en a besoin pour préparer une correction ou l'envoyer. |
+| « Michel ne trouve pas d'adresse utilisable dans ce projet » | Il lui faut une seule adresse en https ou SSH (une connexion sécurisée), ou une adresse nommée `origin`. |
+| « Ce dossier est une copie partielle d'un dépôt » | Utilise ton outil Git habituel. Pour que Michel le fasse, il lui faut une copie complète du dépôt. |
+| « Ce projet n'est pas rattaché à un service Git » | Réponds oui à la question sur la fiche du projet si tu veux y envoyer tes corrections. |
+| « L'adresse du projet a changé depuis ton accord » | Regarde la fiche du projet et réponds à nouveau. |
+| « La règle réseau qui autorise ce service a été retirée » | Réponds à nouveau à la question sur la fiche du projet. |
+| « Cette correction n'a pas de branche à envoyer » | Une branche existe seulement après ta validation, et tant que la correction n'est pas terminée. |
+| « La branche de cette correction a changé ou n'existe plus » | Michel envoie seulement ce que tu as validé. Relance une correction, ou envoie la branche toi-même. |
+| « Michel travaille déjà sur ce dossier » | Attends la fin, puis réessaie. |
+| « Le service a refusé l'accès, ou Michel n'a pas trouvé tes accès Git sur cet ordinateur » | Fais un envoi avec ton outil Git habituel pour enregistrer tes accès, puis réessaie. |
+| « Cet ordinateur ne reconnaît pas ce service, ou son identité a changé » | Connecte-toi une fois avec ton outil Git habituel. Si tu t'y connectais déjà, demande de l'aide : ce changement peut être une attaque. |
+| « Le service ne trouve pas ce projet, ou ton compte n'y a pas accès » | Vérifie que l'adresse affichée est la bonne et que ton compte y a accès. |
+| « Le service a refusé cette branche » | Une branche du même nom existe peut-être avec un autre contenu, ou une règle du service l'interdit. Regarde sur le site. Michel ne force jamais un envoi. |
+| « Michel n'a pas réussi à joindre le service » | Vérifie ta connexion à Internet, puis réessaie. Le proxy d'une entreprise peut aussi l'empêcher. En https, Michel passe seulement par le port 443 (la porte habituelle des sites sécurisés). |
+| « Le service n'a pas répondu à temps » | Clique à nouveau : si tout est déjà là, Michel le verra et n'enverra rien de plus. |
+| « L'opération a échoué pour une raison que Michel ne reconnaît pas » | Essaie avec ton outil Git habituel. Michel n'affiche pas le détail, qui peut contenir des données privées. |
+| « Ton dossier est sur la branche …, pas sur la branche principale … » | Reviens sur la branche principale, puis réessaie. |
+| « Ton dossier n'est sur aucune branche » | Remets-le sur sa branche principale, puis réessaie. |
+| « Michel ne sait pas quelle est la branche principale de ton dossier » | Fais la mise à jour avec ton outil Git habituel. |
+| « Ton dossier contient des modifications pas encore enregistrées » | Enregistre-les ou mets-les de côté, puis réessaie. |
+| « Une fusion ou une reprise est en cours dans ton dossier » | Termine-la ou annule-la, puis réessaie. |
+| « Ton dossier contient des enregistrements qui ne sont pas sur le site » | Envoie-les ou règle cet écart avec ton outil Git habituel, puis réessaie. Michel ne mélange rien. |
+| « Un fichier de ton dossier serait écrasé par cette mise à jour » | Mets ce fichier ailleurs, puis réessaie. |
+| « Un fichier ou un dossier que Git ignore … est à l'endroit où cette mise à jour écrit » | Mets-le ailleurs, puis réessaie. Attention : une mise à jour faite à la main avec Git peut l'écraser sans prévenir. |
+| « Cette mise à jour retirerait ou remplacerait un sous-dossier que Git gère à part » | Mets son contenu ailleurs, vide ce sous-dossier sans le supprimer, puis réessaie. Attention : une mise à jour faite à la main avec Git peut effacer ce qu'il contient. |
+| « Cette mise à jour lancerait un programme de conversion de fichiers » | Fais la mise à jour avec ton outil Git habituel, puis clique sur **Contrôler ce projet**. |
+| « La mise à jour a échoué : Git l'a arrêtée » | Vérifie l'état de ton dossier avec ton outil Git habituel. |
+| « La mise à jour s'est arrêtée en route » | Ferme le programme qui garde peut-être un fichier ouvert (un éditeur, un antivirus). Ton dossier n'avait aucune modification avant la mise à jour : avec ton outil Git habituel, annule ces modifications, puis réessaie. |
 
 Ce qui sort de l'ordinateur, site par site : [security/network-egress.fr.md](security/network-egress.fr.md).
