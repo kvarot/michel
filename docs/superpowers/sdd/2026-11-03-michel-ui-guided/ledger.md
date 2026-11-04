@@ -172,3 +172,31 @@ To tell Kévin in the final report:
 - Ruling R59: Task 15's M6 (empty data folder on a real server) is covered by Task 16, not redone on a stub — same run, real API — costs a late finding.
 - Masking gap: 7e6238f; review running. Weak code on a sensitive array key stays masked, not holding (only widens). Task 15 fix: dispatched, BASE 7e6238f.
 - Task 15 fix with 14g round 2: 480d8e2, f7b8615; re-review running. Masking review: 1 high 6 medium 4 low; fix round 1 dispatched.
+- Task 14g: complete (84c2a1a..480d8e2).
+- Task 15: fix round 1/5, 24 addressed, 0 open; M6 goes to Task 16. Task 15: complete (701449e..f7b8615).
+- Task 15: minor (deferred): N-A `check_failed_hint` promises more than `target check` says on an unmapped error; N-B `helpLost` stays true after the guide is dismissed, can show while loading; N-C two CLI `no_agent` tests check only "SSH agent", add `ssh-add`; N-D `guide.check.failed`, `help.settings.token` read oddly. W/task-15-rereview.md.
+- Masking fix round 1/5: c62fedf; re-review running. Arrays only for quoted index and quoted value; calls case-insensitive, multi-line; unparseable call is a miss, listed in docs.
+- Task 16: prep dispatched, disposable folder %LOCALAPPDATA%\Temp\michel-t16.
+- Ruling R60: Task 16 runs in phases: prep agent leaves server and container running with their PIDs in W/task-16-env.md; a novice agent with only what the plan lists; a driver agent for phone width, 1 bis, exposure changes, screens, absence checks; then fixes; the last agent stops everything — a subagent cannot spawn, and the novice must not know the setup — costs servers living across agents, recorded by PID.
+- Masking re-review: 10 addressed, 2 open, new 1 high 2 medium 3 low (literalTail excludes the letter n; automated note agrees). Fix round 2/5 dispatched.
+- Masking fix round 2/5: 76314b5; re-review running. Old PDO detector kept: dropping it narrows masking.
+- Task 16 prep done: serve on the tag build of c62fedf (mask fixes come in a rebuild before the driver), container up, own fake agent (repo's fakeclaude never calls propose_fix), composer update needs network at prepare time. Novice agent dispatched.
+- Masking re-review round 2: 7 addressed, new 3 medium 4 low on the chain scanner. Fix round 3/5 dispatched. N4: old PDO detector kept, doc note.
+- Masking fix round 3/5: f139d5d; re-review running.
+- Masking re-review round 3: all but N-H (medium, leak) and N-I; automated note adds 4 medium. Fix round 4/5 dispatched on a more capable model, W/task-mask-round4.md.
+- Ruling R61: a dot ends a chain only outside a PHP-shaped match — `.PHP_EOL.` is everyday PHP and the next literal leaked, and Python's `.encode()` must stay intact — costs a rare non-PHP shape read as PHP masking a harmless string.
+- Task 16 novice run: goal 1 reached, goal 2 blocked at "run this as root", goal 3 reached; 8 hesitations, ~40 words, 3 dead clicks, 4 calls for help.
+- Ruling R62: goal 2's dead end: the choice "Michel lance les scripts" is named before validating, and a validated attempt with Michel now chosen gets one confirmed button that runs the same script through the normal path — a setting changed afterwards changed nothing and the person was stuck; the click and fingerprint stay — costs one more route to the root script, audited.
+- Driver phase (phone, 1 bis, exposure, screens, absence checks) runs after those fixes, on the rebuilt binary, so replays count once.
+- Masking fix round 4/5: 8a4c891; re-review running.
+- Ruling R63: `$password = 'a' . 'b'`, `$c->password`, `const X =`, `password:` mask only the first piece, as before this work, stated in docs/fix*.md — following them would hold the agent on ordinary code — costs a tail of a concatenated secret reaching the agent on those shapes. Final review may overturn.
+- Task 16 fixes: dispatched, BASE 8a4c891.
+- Masking re-review round 4: 4 addressed, 0 open, new 1 low. Masking gap: complete (7e6238f..8a4c891).
+- Masking: minor (deferred): N-J a non-value head before a PHP chain masks later literals in that statement, over-masks only.
+- Task 16 fixes: 43fe3f1..35c3f86 (B1-B10, N-A to N-D, words). B2 not reproduced. B3 was a blue bar without text. B1(b): hand over writes a new proposal with the same scripts, audited `server_fix.hand_over`. Attempt ended inconclusive after a real run: driver investigates. Review running.
+- Task 16: minor (deferred): `agent/status` said "trop ancienne" on the first read after a restart, then ready; `internal/cli` test with git exit 143 failed once under load.
+- Task 16 fixes review: 1 critical (strict_local consent folds the deciding line), 12 important, 10 minor; scripts of the hand over cannot differ. Fix waits for the driver's report, same dispatch.
+- Task 16 driver: all journeys and checks pass; 0 critical 1 major 3 medium 8 minor. D-1: php.ini flaw ends inconclusive with Debian source off, a Michel defect. ServerLogs TypeError: not raised against the real API. Absence checks: 0 hits. prefers-reduced-motion could not be emulated, stylesheet only.
+- Ruling R64: D-1: only mitigation findings are protected from closing when a source is off, a php.ini finding closes on a complete reading — a package finding that cannot be judged still stays open — costs a wrong close if a php.ini reading were partial; `complete reading` is already required.
+- Task 16 fix round 2: dispatched, BASE 35c3f86, W/task-16-fix2-brief.md.
+- Usage limit reached during Task 16 fix round 2 (agent may have stopped; check `git log` from 35c3f86, W/task-16-fix2-report.md, `git status`). Left, in order: finish round 2, scoped re-review; write docs/superpowers/sdd/2026-11-03-michel-ui-guided/novice-run.md (aggregates, person's words, no host, fingerprint, token); Step 7 cleanup per W/task-16-env.md (container, image, D, test agent, serve, WSL keep-alive, by PID); Step 8 gates; final review on the most capable model, base main, ledger's deferred minors; one fix, one re-review; merge into main, push; memory michel-plan-status; delete W; final report in French with the handoff's list and all rulings. Old session still to archive.
