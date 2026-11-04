@@ -126,3 +126,15 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 14: dispatched, BASE 008180f.
 - Task 14: ccebcf0, review 3 high 5 medium 7 low, fix 0033c83. Task 14: complete. `queue` stays true. Path checked only when added.
 - Task 14b: dispatched, BASE 0033c83.
+- Task 14b: 87ff0b9, review running.
+- Ruling R54: `project_remote.url` stores the address without its SSH user, and the comparison at each click ignores the user, the push reading it from the person's config — "never a credential stored" — costs a re-read of the config.
+- Task 14c: dispatched, BASE 87ff0b9.
+- Task 14b fix: 4592ded, `Address()`. Task 14b: complete. Plan updated for R54.
+- Task 14c: f2e2964; review running.
+- Ruling R55: a person's own `http."https://host".proxy` config can bypass Michel's proxy: stated as declared only in 14f, no refusal — it is the person's own setup, and SSH already goes directly — costs an egress not seen by the gateway. 14d's `Update` is named `UpdateFolder`, `workcopy.Update` exists.
+- Task 14d: dispatched, BASE f2e2964.
+- Task 14c review: 1 critical 1 high 2 medium 2 minor. Critical: a hostile project's `.git/config` with `extensions.partialClone`, a promisor remote and `core.sshCommand` runs a program on `rev-parse`, also in the older `copy.go:340`, `apply.go:526`, already on main. Fix after 14d ends: `GIT_NO_LAZY_FETCH=1`, refuse promisor keys, everywhere Michel runs git in a project. To tell Kévin.
+- Task 14d: b5e5937; review running. Task 14c fix and hardening of all git calls: dispatched.
+- Task 14d review: 1 critical 4 high 2 medium 5 low. Critical: merge overwrites ignored files with result `updated`. Fix after the hardening round ends, same package.
+- Ruling R56: the patch id test stays, comment and R25's cost corrected: it ignores whitespace and position — a squash needs it — costs a rare false "merged" that the scan then contradicts.
+- Task 14c fix and hardening: a5dc896, 34d62f9. One git runner, witnesses on every command; holes found beyond 14c on `fetch` and in a scanner's env, all closed. Remaining for a hostile project: its tests run in the copy by design; a scanner's git partly covered, Semgrep and Trivy real commands not observed. Partial clones get `failed`: to state in 14f. Task 14c: complete; final review covers it.
