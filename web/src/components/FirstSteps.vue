@@ -20,7 +20,10 @@
           <!-- The Git question belongs to step one, and holds up no step. -->
           <div v-if="s.key === 'add' && git" class="m-steps__git">
             <p class="m-small m-steps__git-for">{{ $t('guide.git.for', { name: git.name }) }}</p>
-            <p v-if="git.mode === 'no_repo'" class="m-small">{{ $t('git.none') }}</p>
+            <template v-if="git.mode === 'no_repo'">
+              <p class="m-small">{{ $t('git.none') }}</p>
+              <p class="m-small">{{ $t('git.none_how') }}</p>
+            </template>
             <p v-else-if="gitFailure" class="m-small" role="alert">{{ gitFailure.key ? $t(gitFailure.key) : gitFailure.error }}</p>
             <p v-else-if="!gitView" class="m-small m-muted" role="status">{{ $t('app.loading') }}</p>
             <GitQuestion v-else :key="git.name" :name="git.name" :view="gitView" @answered="gitView = $event" @reload="loadGit" />

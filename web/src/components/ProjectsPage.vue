@@ -59,7 +59,7 @@ export default {
   props: {
     digest: { type: Object, required: true },
   },
-  emits: ['decided'],
+  emits: ['decided', 'changed'],
   data() {
     return { views: [], dialog: false, notice: '', lost: false, misses: 0, timer: null, digestFresh: false, awaiting: false, firstLoad: true }
   },
@@ -127,6 +127,8 @@ export default {
       }
     },
     onScanChanged() {
+      // The digest predates this check: if the person leaves before it ends, the To-do page reads it again.
+      this.$emit('changed')
       this.notice = ''
       this.awaiting = true
       this.loadViews()

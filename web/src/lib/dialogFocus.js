@@ -13,31 +13,52 @@ export function focusAfterDialog({ active, body, inClosedDialog, opener }) {
   return opener?.isConnected ? 'opener' : 'main'
 }
 
+const openDialog = '.v-dialog.v-overlay--active'
+
+/**
+ * dialogWatcher is the state behind the watcher: the last button clicked, the
+ * opener kept when a dialog opened, and whether one was open at the last look.
+ * It needs of the document only what the tests can fake.
+ * @param {Document} doc
+ */
+export function dialogWatcher(doc) {
+  let lastClicked = null
+  let opener = null
+  let wasOpen = false
+  return {
+    click(e) {
+      const el = e.target?.closest?.('button, a, [role="button"], input, [tabindex]')
+      if (el && !el.closest('.v-overlay')) lastClicked = el
+    },
+    look() {
+      const open = !!doc.querySelector(openDialog)
+      if (open === wasOpen) return
+      wasOpen = open
+      if (open) {
+        // A click opens one dialog at most: a dialog opened with no click goes to the main area.
+        opener = lastClicked
+        lastClicked = null
+        return
+      }
+      const active = doc.activeElement
+      const go = focusAfterDialog({ active, body: doc.body, inClosedDialog: !!active?.closest?.('.v-overlay'), opener })
+      if (go === 'opener') {
+        opener.focus({ preventScroll: true })
+        // A disabled or hidden button takes no focus: the keyboard must not be left on nothing.
+        if (doc.activeElement !== opener) doc.getElementById('main')?.focus({ preventScroll: true })
+      } else if (go === 'main') doc.getElementById('main')?.focus({ preventScroll: true })
+      opener = null
+    },
+  }
+}
+
 /**
  * installDialogFocus starts the watcher, once for the page's life. It reads a
  * class that Vuetify sets, nothing else: what fails to find it does nothing.
  * @param {Document} doc
  */
 export function installDialogFocus(doc) {
-  const openDialog = '.v-dialog.v-overlay--active'
-  let lastClicked = null
-  let opener = null
-  let wasOpen = false
-  doc.addEventListener('click', (e) => {
-    const el = e.target?.closest?.('button, a, [role="button"], input, [tabindex]')
-    if (el && !el.closest('.v-overlay')) lastClicked = el
-  }, true)
-  new MutationObserver(() => {
-    const open = !!doc.querySelector(openDialog)
-    if (open === wasOpen) return
-    wasOpen = open
-    if (open) {
-      opener = lastClicked
-      return
-    }
-    const active = doc.activeElement
-    const go = focusAfterDialog({ active, body: doc.body, inClosedDialog: !!active?.closest?.('.v-overlay'), opener })
-    if (go === 'opener') opener.focus({ preventScroll: true })
-    else if (go === 'main') doc.getElementById('main')?.focus({ preventScroll: true })
-  }).observe(doc.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] })
+  const w = dialogWatcher(doc)
+  doc.addEventListener('click', (e) => w.click(e), true)
+  new MutationObserver(() => w.look()).observe(doc.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] })
 }

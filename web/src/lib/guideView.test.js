@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { dismissGuide, guideFlaw, guideGitQuestion, guideSteps, guideVisible, markGuideRead, readGuide, showGuideAgain } from './guideView.js'
+import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideUnseen, guideVisible, guideWaiting, markGuideRead, readGuide, showGuideAgain } from './guideView.js'
 import { keys } from './storage.js'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
@@ -50,13 +50,22 @@ describe('the first steps', () => {
     expect(srv.text).toBe('guide.check.failed')
     expect(srv.action).toEqual({ label: 'guide.check.action_failed', href: '#/servers/a' })
   })
-  test('a check that runs says so and offers nothing to click', () => {
+  test('a check that runs says so and offers to follow it', () => {
     const s = stepOf(guideSteps({ ...empty, projects: [{ name: 'demo', last_scan_status: 'never', scanning: true }] }), 'check')
     expect(s.text).toBe('guide.check.running')
-    expect(s.action).toBeNull()
-    const srv = stepOf(guideSteps({ ...empty, servers: [{ id: 'a', state: { code: 'checking' } }] }), 'check')
+    expect(s.action).toEqual({ label: 'guide.check.action_follow', href: '#/projects' })
+    const srv = stepOf(guideSteps({ ...empty, servers: [{ id: 'a b', state: { code: 'checking' } }] }), 'check')
     expect(srv.text).toBe('guide.check.running')
-    expect(srv.action).toBeNull()
+    expect(srv.action).toEqual({ label: 'guide.check.action_follow', href: '#/servers/a%20b' })
+  })
+  test('a row that says running with no process here is not waited for: the check is offered again', () => {
+    const dead = { name: 'demo', last_scan_status: 'running', scanning: false }
+    const s = stepOf(guideSteps({ ...empty, projects: [dead] }), 'check')
+    expect(s.text).toBe('guide.check.text')
+    expect(s.action.href).toBe('#/projects')
+    expect(guideWaiting([dead], [])).toBeNull()
+    expect(guideWaiting([{ scanning: true }], [])).toEqual({ href: '#/projects' })
+    expect(guideWaiting(null, null)).toBeNull()
   })
   test('no flaw means step three says so', () => {
     const s = stepOf(guideSteps({ projects: [scanned], servers: [], read: false, anyFinding: false }), 'read')
@@ -158,8 +167,14 @@ describe('the Git question', () => {
 })
 
 describe('the flaw step three opens', () => {
+  test('a line that is no flaw is not one to read', () => {
+    const key = { flaw: false, action: { href: '#/servers/a' } }
+    expect(guideFlaw({ lines: [key], projects: [], servers: [] })).toEqual({ any: false, href: '' })
+    const flaw = { flaw: true, action: { href: '#/fix/f' } }
+    expect(guideFlaw({ lines: [key, flaw], projects: [], servers: [] })).toEqual({ any: true, href: '#/fix/f' })
+  })
   test('the first line of the list', () => {
-    expect(guideFlaw({ lines: [{ action: { href: '#/fix/a' } }], projects: [], servers: [] })).toEqual({ any: true, href: '#/fix/a' })
+    expect(guideFlaw({ lines: [{ flaw: true, action: { href: '#/fix/a' } }], projects: [], servers: [] })).toEqual({ any: true, href: '#/fix/a' })
   })
   test('without a line, the place that counts it', () => {
     expect(guideFlaw({ lines: [], projects: [{ name: 'demo', open: { high: 1 } }], servers: [] })).toEqual({ any: true, href: '#/projects' })
@@ -173,6 +188,21 @@ describe('the flaw step three opens', () => {
   })
 })
 
+describe('an empty install', () => {
+  test('is said only once both lists were read', () => {
+    expect(emptyInstall([], [])).toBe(true)
+    expect(emptyInstall(null, [])).toBe(false)
+    expect(emptyInstall([], null)).toBe(false)
+    expect(emptyInstall([{ name: 'demo' }], [])).toBe(false)
+    expect(emptyInstall([], [{ id: 'a' }])).toBe(false)
+  })
+  test('the sentence "nothing" is not said under a title that says it', () => {
+    const list = [{ key: 'nothing' }, { key: 'in_progress' }]
+    expect(guideUnseen(list, true)).toEqual([{ key: 'in_progress' }])
+    expect(guideUnseen(list, false)).toEqual(list)
+  })
+})
+
 describe('the words of the guide and of the empty screens', () => {
   test('they name the buttons as the page does', () => {
     expect(fr['guide.add.action']).toBe(fr['projects.add'])
@@ -181,8 +211,8 @@ describe('the words of the guide and of the empty screens', () => {
     expect(en['empty.projects']).toContain(`"${en['project.check']}"`)
     expect(fr['empty.servers']).toContain(`« ${fr['servers.find']} »`)
     expect(en['empty.servers']).toContain(`"${en['servers.find']}"`)
-    expect(fr['guide.add.text']).toContain(`« ${fr['nav.servers']} »`)
-    expect(en['guide.add.text']).toContain(`"${en['nav.servers']}"`)
+    expect(fr['guide.add.text']).toContain(`« ${fr['nav.short.servers']} »`)
+    expect(en['guide.add.text']).toContain(`"${en['nav.short.servers']}"`)
   })
   test('michel serve is said to be what starts Michel, and nothing promises tomorrow', () => {
     expect(fr['help.settings.token']).toContain('la commande qui démarre Michel')

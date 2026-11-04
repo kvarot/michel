@@ -122,7 +122,7 @@ import { save } from '../lib/storage.js'
 import FieldHelp from './FieldHelp.vue'
 import MaskedText from './MaskedText.vue'
 import { api } from '../api.js'
-import { exposureColumns, exposureDecisionCheck } from '../lib/exposureView.js'
+import { exposureColumns, exposureDecisionCheck, exposureEmptyKey, exposureShowsFlaw } from '../lib/exposureView.js'
 import { exposurePath } from '../lib/pathView.js'
 
 // ServerExposure is what the last check saw listen on a server, from inside it:
@@ -175,12 +175,11 @@ export default {
     },
     // Why there is nothing to show yet, and what to do: the button may be greyed.
     emptyKey() {
-      if (!this.target.active) return 'servers.state.inactive'
-      return this.target.host_key_pinned ? 'empty.exposure' : 'servers.state.key_unconfirmed'
+      return exposureEmptyKey(this.target)
     },
     // A row with its path is a flaw shown: it counts for the guide, like a card.
     showsFlaw() {
-      return this.cols.open.some((r) => r.findingId)
+      return exposureShowsFlaw(this.cols)
     },
     check() {
       return exposureDecisionCheck(this.why, new Date())

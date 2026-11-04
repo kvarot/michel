@@ -132,6 +132,20 @@ describe('order', () => {
 })
 
 describe('actions', () => {
+  test('only a line that carries a flaw says so: a key to confirm, a failed check or a log is none', () => {
+    const d = digest({ projects: [project('demo', { new: [{ name: 'lib', worst_severity: 'medium', finding_ids: ['p1'] }] })] })
+    const servers = [
+      server('k', { state: { code: 'key_unconfirmed' }, last_check_at: '' }),
+      server('c', { state: { code: 'check_failed', text: 'x' } }),
+      server('l', { log_new: 1 }),
+    ]
+    const r = build({ digest: d, servers })
+    const flaw = (prefix) => r.lines.find((l) => l.id.startsWith(prefix)).flaw
+    expect(flaw('key:k')).toBe(false)
+    expect(flaw('check:c')).toBe(false)
+    expect(flaw('logs:l')).toBe(false)
+    expect(flaw('new:demo')).toBe(true)
+  })
   test('one action per line', () => {
     const d = digest({
       exploited: [{ project: 'demo', package: 'bad', finding_id: 'x1', kev_added: '2026-01-01' }],

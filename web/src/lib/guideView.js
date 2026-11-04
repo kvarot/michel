@@ -3,6 +3,7 @@
 // person stands is read from the data, so an emptied or blocked storage changes
 // nothing but those two. Vitest covers them (guideView.test.js).
 import { keys } from './storage.js'
+import { runsHere } from './projectsView.js'
 import { serversHash } from './serversView.js'
 
 // The last check read something: a partial one or an empty folder is said elsewhere (todo.unseen).
@@ -55,7 +56,21 @@ export function showGuideAgain(state, save) {
   write(state, save)
 }
 
-/** failedCheck: the last check of this project or server did not end. */
+/**
+ * guideWaiting: a check runs here and now. A project row that says "running"
+ * alone may belong to another window, or to a process that died: it is not
+ * waited for (see runsHere), and the guide offers the check again.
+ * @param {object[]} projects
+ * @param {object[]} servers
+ * @returns {{href: string}|null} where to follow it, null when nothing runs
+ */
+export function guideWaiting(projects, servers) {
+  if ((projects || []).some((p) => p && runsHere(p))) return { href: '#/projects' }
+  const server = (servers || []).find((s) => s?.state?.code === 'checking')
+  return server ? { href: serversHash(server.id) } : null
+}
+
+/** projectFailed: the last check of this project did not end. */
 function projectFailed(p) {
   return !p.scanning && (!!p.last_failure || p.last_scan_status === 'failed')
 }
@@ -65,8 +80,8 @@ function projectFailed(p) {
  * Projects first: their button is on a page of its own, a server has its sheet.
  */
 function checkStep(projects, servers) {
-  const running = projects.some((p) => p.scanning || p.last_scan_status === 'running') || servers.some((s) => s.state?.code === 'checking')
-  if (running) return { text: 'guide.check.running', action: null }
+  const waiting = guideWaiting(projects, servers)
+  if (waiting) return { text: 'guide.check.running', action: { label: 'guide.check.action_follow', href: waiting.href } }
   const failedProject = projects.some(projectFailed)
   if (failedProject) return { text: 'guide.check.failed', action: { label: 'guide.check.action_failed', href: '#/projects' } }
   if (projects.length) return { text: 'guide.check.text', action: { label: 'guide.check.action', href: '#/projects' } }
@@ -141,12 +156,12 @@ function openNow(p) {
 
 /**
  * guideFlaw says whether there is a flaw to read, and where: the first line of
- * the list (the most urgent), else the place that counts one.
+ * the list that is a flaw (the most urgent), else the place that counts one.
  * @param {{lines: {action: {href: string}|null}[], projects: object[], servers: object[]}} input
  * @returns {{any: boolean, href: string}}
  */
 export function guideFlaw({ lines, projects, servers }) {
-  const line = (lines || []).find((l) => l?.action?.href)
+  const line = (lines || []).find((l) => l?.flaw && l.action?.href)
   if (line) return { any: true, href: line.action.href }
   if ((projects || []).some((p) => p && openNow(p) > 0)) return { any: true, href: '#/projects' }
   const server = (servers || []).find((s) => s && Number(s.open_findings) > 0)
@@ -162,4 +177,14 @@ export function guideFlaw({ lines, projects, servers }) {
  */
 export function emptyInstall(projects, servers) {
   return Array.isArray(projects) && Array.isArray(servers) && !projects.length && !servers.length
+}
+
+/**
+ * guideUnseen: the sentences under the list. On an empty install the title
+ * already says "nothing watched", so that one is not said twice.
+ * @param {{key: string}[]} unseen
+ * @param {boolean} nothingWatched
+ */
+export function guideUnseen(unseen, nothingWatched) {
+  return nothingWatched ? unseen.filter((u) => u.key !== 'nothing') : unseen
 }

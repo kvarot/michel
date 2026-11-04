@@ -3,7 +3,7 @@ import goEn from '../../../internal/i18n/catalog/en.json'
 import goFr from '../../../internal/i18n/catalog/fr.json'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
-import { closedExposures, exposureColumns, exposureDecisionCheck, exposureDecisionTarget, exposureFindingIds } from './exposureView.js'
+import { closedExposures, exposureColumns, exposureDecisionCheck, exposureDecisionTarget, exposureEmptyKey, exposureFindingIds, exposureShowsFlaw } from './exposureView.js'
 import { exposurePath } from './pathView.js'
 
 const target = (extra = {}) => ({ id: 't1', name: 'srv-demo', kind: 'vps', port: 22, ...extra })
@@ -287,7 +287,7 @@ describe('the connection port', () => {
 describe('changing your mind', () => {
   test('a decided row says how, with the id of its finding', () => {
     const r = cols(read([service(3306, 'open', 'database', 'close', { finding_id: 'f1', decided_why: 'voulu' })])).open[0]
-    expect(r.undo).toBe("Pour changer d'avis, tape dans un terminal (la fenêtre où l'on tape des commandes) : michel decide f1 defer --for 1d. Ton indication est alors remplacée.")
+    expect(r.undo).toBe("Pour changer d'avis, tape cette commande dans un terminal (la fenêtre où l'on tape des commandes) : michel decide f1 defer --for 1d. Elle remplace ce que tu as indiqué.")
     expect(exposureColumns(read([service(3306, 'open', 'database', 'close', { finding_id: 'f1', decided_why: 'voulu' })]), target(), 'en', false).open[0].undo).toContain('michel decide f1 defer --for 1d')
   })
   test('a row not decided says nothing of it', () => {
@@ -397,5 +397,20 @@ describe('closedExposures', () => {
   test('nothing read, nothing claimed', () => {
     expect(closedExposures(null, null)).toEqual([])
     expect(closedExposures(servers, {})).toEqual([])
+  })
+})
+
+describe('what the exposure component decides', () => {
+  test('why nothing is shown yet, and what to do', () => {
+    expect(exposureEmptyKey({ active: false, host_key_pinned: true })).toBe('servers.state.inactive')
+    expect(exposureEmptyKey({ active: true, host_key_pinned: false })).toBe('servers.state.key_unconfirmed')
+    expect(exposureEmptyKey({ active: true, host_key_pinned: true })).toBe('empty.exposure')
+    expect(exposureEmptyKey(null)).toBe('servers.state.inactive')
+  })
+  test('a row with its path is a flaw shown, in either column', () => {
+    expect(exposureShowsFlaw({ open: [{ findingId: '' }], reserved: [] })).toBe(false)
+    expect(exposureShowsFlaw({ open: [{ findingId: 'f' }], reserved: [] })).toBe(true)
+    expect(exposureShowsFlaw({ open: [], reserved: [{ findingId: 'f' }] })).toBe(true)
+    expect(exposureShowsFlaw(null)).toBe(false)
   })
 })

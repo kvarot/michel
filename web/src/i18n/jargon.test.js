@@ -12,7 +12,7 @@ const advancedOnly = ['fact.', 'term.']
 // git.suggest.unsupported explains SSH in its own sentence.
 // expo.udp.note says what TCP is ("le type le plus courant") and that the others are not read; expo.udp.name is its title, shown with it.
 // servers.discover.port gives the plain name first, for the word a host's page uses; servers.discover.key_only says what the SSH agent is.
-// servers.hostkey.first holds a command to type as it is, servers.remove.rules_not_removed the names written in the file to edit.
+// servers.hostkey.first holds a command to type as it is, and says who types it; servers.remove.rules_not_removed holds the names written in the file to edit, and says whom to ask.
 const jargonExceptions = [
   'help.server.port', 'plan.server.approval_michel', 'expo.udp.name', 'expo.udp.note', 'git.suggest.unsupported',
   'servers.discover.port', 'servers.discover.key_only', 'servers.hostkey.first', 'servers.remove.rules_not_removed',

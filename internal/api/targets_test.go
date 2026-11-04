@@ -512,9 +512,9 @@ func TestCheckFailureIsShownInClearWithoutPaths(t *testing.T) {
 	if got.LastCheck.OK || got.LastCheck.Code != "api.target.no_agent" || got.State.Code != "check_failed" {
 		t.Fatalf("outcome = %+v / %+v", got.LastCheck, got.State)
 	}
-	want := sshx.ErrNoAgent.Error()
-	if !strings.EqualFold(strings.TrimSuffix(got.LastCheck.Error, "."), want) {
-		t.Errorf("error = %q, want the sentinel %q", got.LastCheck.Error, want)
+	// The sentence is plain words for a screen, not the sentinel the agent reads: it still names the agent and the command.
+	if !strings.Contains(got.LastCheck.Error, "SSH agent") || !strings.Contains(got.LastCheck.Error, "ssh-add") || strings.Contains(got.LastCheck.Error, sock) {
+		t.Errorf("error = %q, want it to name the SSH agent and ssh-add, without the path", got.LastCheck.Error)
 	}
 	_, fr := tf.send("GET", "/api/v1/targets/"+v.ID+"?lang=fr", "")
 	if strings.Contains(fr, sock) || !strings.Contains(fr, "agent SSH") {

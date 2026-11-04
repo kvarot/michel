@@ -55,7 +55,7 @@
         </section>
 
         <SourcesPage v-else-if="page === 'sources'" @changed="stale = true" />
-        <ProjectsPage v-else-if="page === 'projects'" :digest="digest" @decided="loadToday(false)" />
+        <ProjectsPage v-else-if="page === 'projects'" :digest="digest" @decided="loadToday(false)" @changed="stale = true" />
         <ResolvedPage v-else-if="page === 'resolved'" />
         <SettingsPanel
           v-else-if="page === 'settings'"

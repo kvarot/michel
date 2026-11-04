@@ -18,6 +18,7 @@
 
       <FirstSteps v-if="guideShown" ref="guide" :steps="guideSteps" :git="guideGit" @dismiss="dismissGuide" />
       <p v-else-if="guideNotice" ref="notice" class="m-small m-todo__notice" role="status" tabindex="-1">{{ $t('guide.dismissed') }}</p>
+      <p v-if="helpLost && !guideShown" ref="lost" class="m-small m-todo__notice" role="status" tabindex="-1">{{ $t('guide.unreadable') }}</p>
       <v-btn v-if="nothingWatched && !guideShown" class="m-todo__empty-action" color="primary" variant="flat" href="#/projects">{{ $t('empty.todo_action') }}</v-btn>
 
       <OsvBanner :fetched-at="osvFetchedAt" :stale="digest.osv_stale" />
@@ -79,9 +80,12 @@ import FirstSteps from './FirstSteps.vue'
 import OsvBanner from './OsvBanner.vue'
 import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
-import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideVisible } from '../lib/guideView.js'
+import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideUnseen, guideVisible, guideWaiting } from '../lib/guideView.js'
 import { save } from '../lib/storage.js'
 import { buildTodo, projectsToRead, serversToRead, unseenBelow } from '../lib/todoView.js'
+
+// waitEvery is how long the page waits before it reads again, while a check runs.
+const waitEvery = 5000
 
 export default {
   name: 'TodayPage',
@@ -105,6 +109,10 @@ export default {
       // projectViews is GET /projects, null when it could not be read: the guide reads it.
       projectViews: null,
       guideNotice: false,
+      // helpLost: "Revoir le guide" was asked while a list could not be read.
+      helpLost: false,
+      // timer reads the page again while a check runs, so the guide follows it.
+      timer: null,
       details: {},
       findings: {},
       now: new Date(),
@@ -126,9 +134,7 @@ export default {
       })
     },
     unseen() {
-      // On an empty install the title already says it.
-      const list = this.nothingWatched ? this.todo.unseen.filter((u) => u.key !== 'nothing') : this.todo.unseen
-      return unseenBelow(list)
+      return unseenBelow(guideUnseen(this.todo.unseen, this.nothingWatched))
     },
     nothingWatched() {
       return emptyInstall(this.projectViews, this.servers)
@@ -160,11 +166,15 @@ export default {
     // "Revoir le guide" from the menu, on this very page.
     '$ui.guide.asks'() {
       this.guideNotice = false
-      this.$nextTick(() => this.$refs.guide?.focus())
+      this.helpLost = !this.guideShown
+      this.$nextTick(() => (this.helpLost ? this.$refs.lost : this.$refs.guide)?.focus())
     },
   },
   created() {
     this.load()
+  },
+  beforeUnmount() {
+    clearTimeout(this.timer)
   },
   methods: {
     /**
@@ -174,6 +184,7 @@ export default {
      */
     async load() {
       const seq = ++this.seq
+      clearTimeout(this.timer)
       const lang = `lang=${encodeURIComponent(this.$ui.lang)}`
       const read = (path) => api.get(path).then((r) => r || []).catch(() => null)
       const digest = this.digest
@@ -202,6 +213,8 @@ export default {
       this.findings = findings
       this.now = new Date()
       this.loaded = true
+      // A check that runs ends without a click: ask the digest again, which reads the rest.
+      if (this.guideShown && guideWaiting(projectViews, servers)) this.timer = setTimeout(() => this.$emit('decided'), waitEvery)
     },
     /** dismissGuide hides the guide, says where it went, and keeps the keyboard there. */
     dismissGuide() {

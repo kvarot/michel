@@ -151,7 +151,7 @@ function noDate(t) {
  * something open and no list says so too, with a count that may be too high.
  * Lines of equal rank keep their order of arrival: projects, servers, then fixes.
  * @param {{digest: object, attempts: object[]|null, servers: object[]|null, details: Object<string, object>, findings: Object<string, object[]|null>, lang: string, now: Date, advanced: boolean}} input
- * @returns {{head: string, sub: string, lines: {id: string, tone: string, word: string, title: string, where: string, action: {label: string, href: string}|null, rank: number}[], unseen: {key: string, text: string}[]}}
+ * @returns {{head: string, sub: string, lines: {id: string, tone: string, word: string, title: string, where: string, action: {label: string, href: string}|null, rank: number, flaw: boolean}[], unseen: {key: string, text: string}[]}}
  */
 export function buildTodo({ digest, attempts, servers, details, findings, lang, now, advanced }) {
   const t = (key, params) => translate(lang, key, params)
@@ -317,6 +317,8 @@ export function buildTodo({ digest, attempts, servers, details, findings, lang, 
     .sort((a, b) => a.l.rank - b.l.rank || a.i - b.i)
     .map(({ l }) => ({
       id: l.id, tone: toneOf(l.word), word: t(`todo.word.${l.word}`), title: advanced ? l.title : stripTechnicalIds(l.title), where: l.where, action: l.action, rank: l.rank,
+      // A key to confirm, a failed check or new log lines carry no finding: they are no flaw to read.
+      flaw: l.ids.length > 0,
     }))
   const unseen = seenNot(d, servers, attempts, active, details, now, t)
   const scopes = new Set(lines.map((l) => l.scope))

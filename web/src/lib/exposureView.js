@@ -212,3 +212,24 @@ export function closedExposures(servers, views) {
   }
   return out
 }
+
+/**
+ * exposureEmptyKey: why there is nothing to show yet, as a catalog key. An
+ * inactive server and an unconfirmed fingerprint are said before the check.
+ * @param {{active?: boolean, host_key_pinned?: boolean}} target
+ * @returns {string}
+ */
+export function exposureEmptyKey(target) {
+  if (!target?.active) return 'servers.state.inactive'
+  return target.host_key_pinned ? 'empty.exposure' : 'servers.state.key_unconfirmed'
+}
+
+/**
+ * exposureShowsFlaw: a row with its path is a flaw shown, so it counts for the
+ * guide like a card does. The reserved column is built the same way and counts too.
+ * @param {{open: {findingId: string}[], reserved: {findingId: string}[]}} cols
+ * @returns {boolean}
+ */
+export function exposureShowsFlaw(cols) {
+  return [...(cols?.open || []), ...(cols?.reserved || [])].some((r) => r.findingId)
+}
