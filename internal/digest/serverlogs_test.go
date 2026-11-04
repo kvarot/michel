@@ -193,6 +193,7 @@ func TestDigestOmitsAServerWithNothingToSay(t *testing.T) {
 }
 
 func TestDigestShowsReadGap(t *testing.T) {
+	localZone(t, time.UTC)
 	// A preprod server that was never read: no alert goes out for it, the
 	// digest is the only place that says so.
 	l := newLogFixture(t, target.EnvPreprod)
@@ -220,22 +221,22 @@ func TestDigestShowsReadGap(t *testing.T) {
 		t.Fatalf("gaps = %+v", s.Gaps)
 	}
 	text, _ := RenderText(d)
-	if !strings.Contains(text, "srv-demo") || !strings.Contains(text, "between 2026-10-22 22:30 UTC and 2026-10-23 05:30 UTC") {
+	if !strings.Contains(text, "srv-demo") || !strings.Contains(text, "between 2026-10-22 22:30 and 2026-10-23 05:30") {
 		t.Errorf("text:\n%s", text)
 	}
 	fr, _ := RenderText(l.compute(i18n.FR, Options{}))
-	if !strings.Contains(fr, "entre le 22/10/2026 à 22h30 UTC et le 23/10/2026 à 05h30 UTC") {
+	if !strings.Contains(fr, "entre le 22/10/2026 à 22h30 et le 23/10/2026 à 05h30") {
 		t.Errorf("fr:\n%s", fr)
 	}
-	if page, _ := RenderHTML(d); !strings.Contains(page, "<li>Michel could not read the logs between 2026-10-22 22:30 UTC") {
+	if page, _ := RenderHTML(d); !strings.Contains(page, "<li>Michel could not read the logs between 2026-10-22 22:30") {
 		t.Errorf("html:\n%s", page)
 	}
 	// A gap stores two dates and nothing about why: the line says so, and names
 	// no cause it does not know.
-	if !strings.Contains(text, "Errors that happened then may be missing. Michel did not keep the reason for this break.") {
+	if !strings.Contains(text, "Errors that happened then may be missing. Michel does not know why.") {
 		t.Errorf("no word on the cause:\n%s", text)
 	}
-	if !strings.Contains(fr, "peuvent manquer. Michel n'a pas gardé la raison de cette coupure.") {
+	if !strings.Contains(fr, "peuvent manquer. Michel ne sait pas pourquoi.") {
 		t.Errorf("no word on the cause (fr):\n%s", fr)
 	}
 	// Past the window it is gone.

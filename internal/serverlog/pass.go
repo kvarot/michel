@@ -142,8 +142,8 @@ type PassResult struct {
 // number on the sheet of the server (Rank, from 1, in the order of
 // Repo.Sources, the sheet's order) and its format.
 type SourceRef struct {
-	Rank   int
-	Format Format
+	Rank   int    `json:"rank"`
+	Format Format `json:"format"`
 }
 
 // FailedSource is a source whose read failed in a pass. ID is the source's id

@@ -262,3 +262,32 @@ func (r *Repo) Failures(ctx context.Context, targetID string) (map[string]string
 	}
 	return out, rows.Err()
 }
+
+// KeptFailure is a failure as the pass kept it, with when it happened.
+type KeptFailure struct {
+	Failure
+	At time.Time
+}
+
+// KeptFailures lists the failures kept for a server with their dates, for the
+// digest: it tells a gap in the reading the cause of the failure that made it.
+func (r *Repo) KeptFailures(ctx context.Context, targetID string) ([]KeptFailure, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT source_id, reason, at FROM log_failure WHERE target_id = ? ORDER BY source_id`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log failure: %w", err)
+	}
+	defer rows.Close()
+	var out []KeptFailure
+	for rows.Next() {
+		var k KeptFailure
+		var at string
+		if err := rows.Scan(&k.SourceID, &k.Reason, &at); err != nil {
+			return nil, fmt.Errorf("cannot read the log failure: %w", err)
+		}
+		if k.At, err = parseTime(at); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
