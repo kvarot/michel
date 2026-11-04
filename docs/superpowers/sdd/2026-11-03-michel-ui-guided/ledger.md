@@ -146,3 +146,15 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Workcopy tests: 1c9872d, 414 s to about 100 s, same 273 names.
 - Task 14f: 212c542; review running. Task 14g: dispatched.
 - Task 14f fix: 4efae0a. Task 14f: complete. Task 14g: 84c2a1a; review running. Task 15: dispatched.
+
+## Handoff to a new session (Kévin asked, 2026-11-04)
+Done and pushed: Tasks 1-13, 8b, 14, 14b-14g. Running from the old session: Task 15 implementer, Task 14g reviewer (W/task-14g-findings.md, W/task-15-report.md when done).
+Left, in order: fix 14g findings; review and fix Task 15; close masking gap `$config['password'] = '…'` and `new mysqli(...)`; Task 16 novice run (real `michel serve`, real scan after an update, tag build for a local remote, check `ServerLogs` TypeError against the real API, real API behind every screen); final whole-branch review on the most capable model, base main, one fix dispatch, one scoped re-review; merge into main, push; check `michel-plan-status` memory; delete W once the ledger is mirrored; report to Kévin in French.
+To tell Kévin in the final report:
+- Rulings R37 (sudo also reads backups and simulates updates; root script without a click at level 3 with auto_config; no site address means no outage detection; updates never undone), R42-R44, R47-R53, R55.
+- Agent held on strong key hits only (R49-R52): what still passes unheld is listed in docs/fix*.md; the automated security note asking every hit to hold on automatic starts was declined, reason R50; noise on real code not measured after the last fix.
+- A reviewer ran the strength rule read-only on his 7 private projects, unasked, counts only.
+- Critical hole in code already on main: a hostile project's `.git/config` could run a program; fixed with one git runner (a5dc896, 34d62f9). Still possible: tests run in the copy by design, a scanner's own git partly covered, Semgrep and Trivy real commands not observed.
+- A server without `ss` stays not read, with a permanent note. Exposure is seen from inside only; firewall never verified.
+- CI not readable from this PC. Leftovers: go editing scripts in the temp folder from an implementer; Vite server on port 5199 (PID 23860) if still there; `digest_at: "00:00"` can give two copies around midnight (R29).
+- Not on a real host: https or SSH push, merge page links. Windows OpenSSH agent untested.
