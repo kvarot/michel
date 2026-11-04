@@ -232,7 +232,7 @@ func TestNotReadingMessageSaysWhy(t *testing.T) {
 		t.Errorf("no cause: %q", body)
 	}
 	for _, r := range []string{serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
-		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy, serverlog.ReasonError, "something else"} {
+		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonPolicy, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy, serverlog.ReasonError, "something else"} {
 		for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
 			in.Reason = r
 			if _, b := logMessage(lang, in, ""); strings.Contains(b, "!") {
@@ -267,34 +267,21 @@ func TestVolumeAndCapMessagesHideTheSource(t *testing.T) {
 	}
 }
 
-// One source failing is told as that source, by the path the sheet shows, with
-// the others said to be read: not as the server.
+// One source failing is told as that source, by its number on the sheet and its
+// format, with the others said to be read: not as the server, and with no path.
 func TestNotReadingNamesTheSourceAndSaysTheOthersWereRead(t *testing.T) {
 	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertNotReading, Reason: serverlog.ReasonDenied,
 		Items:   []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}},
-		Sources: []string{"/var/log/demo/other.log"}}
+		Sources: []serverlog.SourceRef{{Rank: 2, Format: serverlog.FormatPHP}}}
 	_, en := logMessage(i18n.EN, in, "")
-	want := "Michel can no longer read one error log of server srv-demo: /var/log/demo/other.log. The other logs of this server were read.\nCause: the server refused Michel access to the logs."
+	want := "Michel can no longer read one error log of server srv-demo: log no. 2 on the sheet (PHP). The other logs of this server were read.\nCause: the server refused Michel access to the logs."
 	if !strings.HasPrefix(en, want) {
 		t.Errorf("en = %q, want it to start with %q", en, want)
 	}
 	_, fr := logMessage(i18n.FR, in, "")
-	for _, w := range []string{"srv-demo", "/var/log/demo/other.log", "Les autres journaux de ce serveur ont bien été lus", "Cause : le serveur a refusé"} {
+	for _, w := range []string{"srv-demo", "le journal n° 2 de la fiche (PHP)", "Les autres journaux de ce serveur ont bien été lus", "Cause : le serveur a refusé"} {
 		if !strings.Contains(fr, w) {
 			t.Errorf("fr %q lacks %q", fr, w)
-		}
-	}
-	// Several, a path cleaned of control characters, never the line of a log.
-	in.Sources = []string{"/var/log/a.log", "/var/log/b\x1b[31m.log"}
-	for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
-		_, body := logMessage(lang, in, "")
-		for _, w := range []string{"/var/log/a.log", "/var/log/b[31m.log"} {
-			if !strings.Contains(body, w) {
-				t.Errorf("%s: %q lacks %q", lang, body, w)
-			}
-		}
-		if strings.Contains(body, "\x1b") || strings.Contains(body, "!") {
-			t.Errorf("%s: %q", lang, body)
 		}
 	}
 	// Without a named source it is the server, as before.
@@ -304,29 +291,56 @@ func TestNotReadingNamesTheSourceAndSaysTheOthersWereRead(t *testing.T) {
 	}
 }
 
-// A long list of sources is cut, and so is a long path.
-func TestNotReadingSourcesAreBounded(t *testing.T) {
+// No channel carries a path or what is in one (a name, an address), whatever the
+// language: the alert and the unread-sources list are made of numbers and formats.
+func TestNotReadingNeverCarriesAPath(t *testing.T) {
 	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertNotReading, Reason: serverlog.ReasonDenied,
-		Items: []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}}}
-	for i := 0; i < 8; i++ {
-		in.Sources = append(in.Sources, "/var/log/demo/"+strings.Repeat("x", 300)+string(rune('a'+i))+".log")
-	}
-	_, body := logMessage(i18n.EN, in, "")
-	if len(body) > 900 || strings.Contains(body, strings.Repeat("x", 150)) || strings.Contains(body, "g.log") {
-		t.Errorf("not bounded (%d bytes): %q", len(body), body)
+		Items:   []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}},
+		Sources: []serverlog.SourceRef{{Rank: 1, Format: serverlog.FormatPHP}, {Rank: 3, Format: serverlog.FormatMonolog}, {Rank: 4, Format: serverlog.FormatJSON}, {Rank: 5, Format: serverlog.FormatText}}}
+	for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
+		_, body := logMessage(lang, in, "")
+		for _, bad := range []string{"/", "jean.dupont", "192.0.2.10", ".log", "!"} {
+			if strings.Contains(body, bad) {
+				t.Errorf("%s: %q holds %q", lang, body, bad)
+			}
+		}
 	}
 }
 
-// A refused connection has its own sentence, in both languages, and an unknown
-// cause keeps the general one.
+// Four sources are named three, and the fourth is counted: no dangling ellipsis.
+func TestNotReadingSourcesAreBounded(t *testing.T) {
+	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertNotReading, Reason: serverlog.ReasonDenied,
+		Items: []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}}}
+	for i := 1; i <= 5; i++ {
+		in.Sources = append(in.Sources, serverlog.SourceRef{Rank: i, Format: serverlog.FormatPHP})
+	}
+	_, en := logMessage(i18n.EN, in, "")
+	if n := strings.Count(en, "on the sheet"); n != 3 || !strings.Contains(en, "log no. 3 on the sheet (PHP) and 2 others.") || strings.Contains(en, "…") {
+		t.Errorf("en = %q", en)
+	}
+	_, fr := logMessage(i18n.FR, in, "")
+	if n := strings.Count(fr, "de la fiche"); n != 3 || !strings.Contains(fr, "(PHP) et 2 autres.") {
+		t.Errorf("fr = %q", fr)
+	}
+}
+
+// A refused connection has its own sentence, the network policy of Michel
+// another, in both languages; an unknown cause keeps the general one.
 func TestNotReadingSaysARefusedConnection(t *testing.T) {
 	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertNotReading, Reason: serverlog.ReasonRefused,
 		Items: []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}}}
-	if _, body := logMessage(i18n.EN, in, ""); !strings.Contains(body, "Cause: the server refused the connection.") || strings.Contains(body, "the read failed") {
+	if _, body := logMessage(i18n.EN, in, ""); !strings.Contains(body, "Cause: the server refused the connection. The service that lets Michel in may be stopped") {
 		t.Errorf("en: %q", body)
 	}
-	if _, body := logMessage(i18n.FR, in, ""); !strings.Contains(body, "Cause : le serveur a refusé la connexion.") {
+	if _, body := logMessage(i18n.FR, in, ""); !strings.Contains(body, "Cause : le serveur a refusé la connexion. Le service qui laisse Michel y entrer") {
 		t.Errorf("fr: %q", body)
+	}
+	in.Reason = serverlog.ReasonPolicy
+	if _, body := logMessage(i18n.EN, in, ""); !strings.Contains(body, "Michel's own network rules") || strings.Contains(body, "the server refused") {
+		t.Errorf("policy en: %q", body)
+	}
+	if _, body := logMessage(i18n.FR, in, ""); !strings.Contains(body, "règles réseau de Michel") {
+		t.Errorf("policy fr: %q", body)
 	}
 	in.Reason = "something else"
 	if _, body := logMessage(i18n.EN, in, ""); !strings.Contains(body, "Cause: the read failed.") {

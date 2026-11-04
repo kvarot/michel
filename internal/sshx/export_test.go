@@ -9,3 +9,6 @@ func SetHandshakeTimeout(d time.Duration) (restore func()) {
 	handshakeTimeout = d
 	return func() { handshakeTimeout = was }
 }
+
+// NetCause exposes netCause to the tests.
+var NetCause = netCause

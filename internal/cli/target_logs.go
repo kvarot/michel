@@ -273,7 +273,7 @@ func newTargetLogsReadCmd(deps *Deps) *cobra.Command {
 func logReasonKey(reason string) string {
 	switch reason {
 	case serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
-		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy:
+		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonPolicy, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy:
 		return reason
 	}
 	return serverlog.ReasonError

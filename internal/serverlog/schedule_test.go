@@ -1043,26 +1043,45 @@ func TestLostRightsNoteAGapOnPreprod(t *testing.T) {
 	}
 }
 
+// fa is a failing source of a partial pass: a server of several sources.
+func fa(id string, rank int, reason string) FailedSource {
+	return FailedSource{ID: id, Ref: SourceRef{Rank: rank, Format: FormatPHP}, Reason: reason}
+}
+
+// ticks runs n rounds, 10 minutes apart, of a scheduler whose passes are given
+// by results (the pass number i, from 0), and returns what was told.
+func ticks(e *schedEnv, tg target.Target, n int, results func(i int) PassResult) []AlertInput {
+	e.interval(tg, 10*time.Minute)
+	i := 0
+	f := &fakePass{fn: func(context.Context, string) (PassResult, error) {
+		r := results(i)
+		i++
+		if len(r.Failed) == 0 {
+			return r, nil
+		}
+		return r, errors.New("the read failed")
+	}}
+	s := e.scheduler(f)
+	for k := 0; k < n; k++ {
+		s.tick(context.Background())
+		e.clock.Advance(10 * time.Minute)
+	}
+	return e.alerts.ofKind(AlertNotReading)
+}
+
 // An incident of one source, the others of the server being read, is told as
-// that source's: it names the source and the cause, and the alert says the
-// others were read. A server whose connection fails keeps the whole wording.
+// that source's: it names the source (by number and format, never by path) and
+// the cause, and the alert says the others were read.
 func TestNotReadingNamesTheSourceThatFails(t *testing.T) {
 	e := newSchedEnv(t)
 	tg, _ := e.server("srv-demo", target.EnvProd, true)
-	e.interval(tg, 10*time.Minute)
-	partial := PassResult{Reason: ReasonDenied, Read: 1, Failed: []FailedSource{{Label: "/var/log/demo/other.log", Reason: ReasonDenied}}}
-	f := &fakePass{fn: func(context.Context, string) (PassResult, error) { return partial, errors.New("the read failed") }}
-	s := e.scheduler(f)
-	ctx := context.Background()
-	for i := 0; i < 4; i++ {
-		s.tick(ctx)
-		e.clock.Advance(10 * time.Minute)
-	}
-	told := e.alerts.ofKind(AlertNotReading)
+	told := ticks(e, tg, 4, func(int) PassResult {
+		return PassResult{Reason: ReasonDenied, Read: 1, Failed: []FailedSource{fa("B", 2, ReasonDenied)}}
+	})
 	if len(told) != 1 {
 		t.Fatalf("alerts = %v", e.alerts.kinds())
 	}
-	if in := told[0]; in.Reason != ReasonDenied || len(in.Sources) != 1 || in.Sources[0] != "/var/log/demo/other.log" {
+	if in := told[0]; in.Reason != ReasonDenied || len(in.Sources) != 1 || in.Sources[0] != (SourceRef{Rank: 2, Format: FormatPHP}) {
 		t.Errorf("alert = %+v", in)
 	}
 }
@@ -1071,15 +1090,9 @@ func TestNotReadingNamesTheSourceThatFails(t *testing.T) {
 func TestNotReadingNamesNoSourceWhenNoneWasRead(t *testing.T) {
 	e := newSchedEnv(t)
 	tg, _ := e.server("srv-demo", target.EnvProd, true)
-	e.interval(tg, 10*time.Minute)
-	all := PassResult{Reason: ReasonDenied, Failed: []FailedSource{{Label: "/var/log/demo/app.log", Reason: ReasonDenied}}}
-	f := &fakePass{fn: func(context.Context, string) (PassResult, error) { return all, errors.New("the read failed") }}
-	s := e.scheduler(f)
-	for i := 0; i < 4; i++ {
-		s.tick(context.Background())
-		e.clock.Advance(10 * time.Minute)
-	}
-	told := e.alerts.ofKind(AlertNotReading)
+	told := ticks(e, tg, 4, func(int) PassResult {
+		return PassResult{Reason: ReasonDenied, Failed: []FailedSource{fa("A", 1, ReasonDenied)}}
+	})
 	if len(told) != 1 || len(told[0].Sources) != 0 {
 		t.Fatalf("alerts = %+v", told)
 	}
@@ -1090,16 +1103,84 @@ func TestNotReadingNamesNoSourceWhenNoneWasRead(t *testing.T) {
 func TestNotReadingMixedCausesAreGeneral(t *testing.T) {
 	e := newSchedEnv(t)
 	tg, _ := e.server("srv-demo", target.EnvProd, true)
-	e.interval(tg, 10*time.Minute)
-	mixed := PassResult{Reason: ReasonDenied, Read: 1, Failed: []FailedSource{{Label: "/var/log/demo/a.log", Reason: ReasonDenied}, {Label: "/var/log/demo/b.log", Reason: ReasonTools}}}
-	f := &fakePass{fn: func(context.Context, string) (PassResult, error) { return mixed, errors.New("the read failed") }}
-	s := e.scheduler(f)
-	for i := 0; i < 4; i++ {
-		s.tick(context.Background())
-		e.clock.Advance(10 * time.Minute)
-	}
-	told := e.alerts.ofKind(AlertNotReading)
+	told := ticks(e, tg, 4, func(int) PassResult {
+		return PassResult{Reason: ReasonDenied, Read: 1, Failed: []FailedSource{fa("A", 1, ReasonDenied), fa("B", 2, ReasonTools)}}
+	})
 	if len(told) != 1 || told[0].Reason != ReasonError || len(told[0].Sources) != 2 {
 		t.Fatalf("alerts = %+v", told)
 	}
+}
+
+// With nothing read at all, the server is told as a whole and the cause is the
+// first one met (the pass's own): kept, and said here.
+func TestNotReadingWithNothingReadMixedCausesFirstCauseWins(t *testing.T) {
+	e := newSchedEnv(t)
+	tg, _ := e.server("srv-demo", target.EnvProd, true)
+	told := ticks(e, tg, 4, func(int) PassResult {
+		return PassResult{Reason: ReasonDenied, Failed: []FailedSource{fa("A", 1, ReasonDenied), fa("B", 2, ReasonTools)}}
+	})
+	if len(told) != 1 || told[0].Reason != ReasonDenied || len(told[0].Sources) != 0 {
+		t.Fatalf("alerts = %+v", told)
+	}
+}
+
+// A source is past the bar by its own streak: one that blips once is not named
+// because another one failed for long, one that starts failing after the alert
+// is told too, and two sources failing in turn are never an incident.
+func TestNotReadingIsPerSource(t *testing.T) {
+	part := func(fs ...FailedSource) PassResult {
+		return PassResult{Reason: fs[0].Reason, Read: 1, Failed: fs}
+	}
+	a, b, d := fa("A", 1, ReasonDenied), fa("B", 2, ReasonDenied), fa("D", 4, ReasonTimeout)
+	t.Run("a blip is not named", func(t *testing.T) {
+		e := newSchedEnv(t)
+		tg, _ := e.server("srv-demo", target.EnvProd, true)
+		told := ticks(e, tg, 5, func(i int) PassResult {
+			switch {
+			case i < 3:
+				return part(a)
+			case i == 3: // A is back for a pass, B fails once
+				return part(a, b)
+			}
+			return part(a)
+		})
+		if len(told) != 1 || len(told[0].Sources) != 1 || told[0].Sources[0].Rank != 1 {
+			t.Fatalf("alerts = %+v", told)
+		}
+	})
+	t.Run("a source that fails after the alert is told", func(t *testing.T) {
+		e := newSchedEnv(t)
+		tg, _ := e.server("srv-demo", target.EnvProd, true)
+		told := ticks(e, tg, 14, func(i int) PassResult {
+			if i < 4 {
+				return part(a)
+			}
+			if i < 5 {
+				return part(b) // A recovers, B blips
+			}
+			return part(d) // D fails on, for a long time
+		})
+		if len(told) != 2 {
+			t.Fatalf("alerts = %+v", told)
+		}
+		if first := told[0].Sources; len(first) != 1 || first[0].Rank != 1 {
+			t.Errorf("first alert = %+v", told[0])
+		}
+		if second := told[1].Sources; len(second) != 1 || second[0].Rank != 4 || told[1].Reason != ReasonTimeout {
+			t.Errorf("second alert = %+v", told[1])
+		}
+	})
+	t.Run("two sources failing in turn never make an incident", func(t *testing.T) {
+		e := newSchedEnv(t)
+		tg, _ := e.server("srv-demo", target.EnvProd, true)
+		told := ticks(e, tg, 12, func(i int) PassResult {
+			if i%2 == 0 {
+				return part(a)
+			}
+			return part(b)
+		})
+		if len(told) != 0 {
+			t.Fatalf("alerts = %+v", told)
+		}
+	})
 }

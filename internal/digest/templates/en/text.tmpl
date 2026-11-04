@@ -57,6 +57,7 @@ open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "hi
 {{end}}{{end}}{{range .Gaps}}    {{serverLogGap .}}
 {{end}}{{if .Skipped}}    {{serverLogSkipped .Skipped}}
 {{end}}{{range .Unopened}}    {{serverLogUnopened .}}
+{{end}}{{if .UnopenedMore}}    {{serverLogUnopenedMore .UnopenedMore}}
 {{end}}{{if .Deviations}}    {{serverLogDeviations .}}
 {{end}}{{end}}{{end}}
 {{- if .Reading}}

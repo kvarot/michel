@@ -488,3 +488,24 @@ func TestMarkerExemptionIsNarrow(t *testing.T) {
 		}
 	}
 }
+
+// The errors of a source turned off are not "new" for the badge: nobody reads
+// that source any more.
+func TestCountNewIgnoresASourceTurnedOff(t *testing.T) {
+	e := setup(t, target.EnvProd)
+	ctx := context.Background()
+	if _, _, _, err := e.r.Apply(ctx, e.src, []Record{rec(1, t0)}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.r.CountNew(ctx, e.tgt.ID); err != nil || n != 1 {
+		t.Fatalf("CountNew = %d, %v", n, err)
+	}
+	off := e.src
+	off.Active = false
+	if err := e.r.UpdateSource(ctx, off); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.r.CountNew(ctx, e.tgt.ID); err != nil || n != 0 {
+		t.Fatalf("CountNew with the source off = %d, %v", n, err)
+	}
+}

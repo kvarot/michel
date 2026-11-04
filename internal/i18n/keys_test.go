@@ -44,6 +44,8 @@ var dynamicPrefixes = []string{
 	// notify.log.reason.* and notify.log.why.* are named by serverlog.Reason*
 	// and serverlog.Alert* (the cause of a failed read, why an error is told).
 	"notify.log.reason.", "notify.log.why.",
+	// digest.serverlogs.format.* are named by the format of a source (serverlog.Format*).
+	"digest.serverlogs.format.",
 	// api.logs.* are named by the refusals of the log routes (logRefused: the key
 	// and its _hint), by the sentences of a note, of a proposal and of a risk.
 	"api.logs.",

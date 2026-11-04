@@ -94,13 +94,15 @@ export function privacyChoices(settings, kind, lang) {
 /**
  * privacyStrongNote is the marked warning under a privacy setting of a health
  * (hds) server whose choice in force is away from the recommendation. "" for
- * any other server, and for a setting on the recommended choice.
+ * any other server, for a setting on the recommended choice, and when the API's
+ * own health warning (apiWarns) already shows: one warning, not two.
  * @param {{choices: {current: boolean, strong: boolean}[]}|undefined} group one of privacyChoices
  * @param {string} lang
+ * @param {boolean} [apiWarns] the settings carry the API health warning
  * @returns {string}
  */
-export function privacyStrongNote(group, lang) {
-  return group?.choices?.some((c) => c.current && c.strong) ? t(lang, 'privacy.strong') : ''
+export function privacyStrongNote(group, lang, apiWarns = false) {
+  return !apiWarns && group?.choices?.some((c) => c.current && c.strong) ? t(lang, 'privacy.strong') : ''
 }
 
 /**

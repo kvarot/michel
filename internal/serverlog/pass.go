@@ -56,6 +56,7 @@ const (
 	ReasonDenied         = "denied"
 	ReasonTimeout        = "timeout"
 	ReasonRefused        = "refused"
+	ReasonPolicy         = "policy"
 	ReasonOutputCut      = "output_cut"
 	ReasonTools          = "tools"
 	ReasonInactive       = "inactive"
@@ -91,10 +92,11 @@ type AlertInput struct {
 	Kind   AlertKind
 	Items  []AlertItem
 	Reason string
-	// Sources, on an AlertNotReading, are the declared paths of the sources that
+	// Sources, on an AlertNotReading, are the sources (never their paths) that
 	// fail when the others of the server were read: the alert then speaks of
-	// these sources only. Empty: the server as a whole cannot be read.
-	Sources []string
+	// these sources only, by number and format. Empty: the server as a whole cannot
+	// be read.
+	Sources []SourceRef
 }
 
 // Deps are the services a pass needs.
@@ -136,12 +138,20 @@ type PassResult struct {
 	Failed []FailedSource `json:"-"`
 }
 
-// FailedSource is a source whose read failed in a pass. Label is the path the
-// source declares, as the sheet shows it (the caller cleans it before showing
-// it); Reason is the cause, a key of the Reason* constants. Never what the
-// server printed.
+// SourceRef names a source without its path, which no message carries: its
+// number on the sheet of the server (Rank, from 1, in the order of
+// Repo.Sources, the sheet's order) and its format.
+type SourceRef struct {
+	Rank   int
+	Format Format
+}
+
+// FailedSource is a source whose read failed in a pass. ID is the source's id
+// (for the memory of the scheduler only, it never leaves the process); Reason is
+// the cause, a key of the Reason* constants. Never what the server printed.
 type FailedSource struct {
-	Label  string
+	ID     string
+	Ref    SourceRef
 	Reason string
 }
 
@@ -257,7 +267,9 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 		return PassResult{Reason: ReasonError}, err
 	}
 	var sources []Source
-	for _, s := range all {
+	rank := make(map[string]int, len(all))
+	for i, s := range all {
+		rank[s.ID] = i + 1
 		if s.Active {
 			sources = append(sources, s)
 		}
@@ -298,7 +310,7 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 			if res.Reason == "" {
 				res.Reason = reason
 			}
-			res.Failed = append(res.Failed, FailedSource{Label: src.Path, Reason: reason})
+			res.Failed = append(res.Failed, FailedSource{ID: src.ID, Ref: SourceRef{Rank: rank[src.ID], Format: src.Format}, Reason: reason})
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -750,7 +762,7 @@ func reasonOf(err error) string {
 	case errors.As(err, &unk):
 		return ReasonHostKeyUnknown
 	case errors.Is(err, sshx.ErrDenied):
-		return ReasonDenied
+		return ReasonPolicy
 	case errors.Is(err, sshx.ErrNoAgent):
 		return ReasonNoAgent
 	case errors.Is(err, sshx.ErrNoKeyAccepted):

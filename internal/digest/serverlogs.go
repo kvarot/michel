@@ -23,12 +23,28 @@ const LogReadLag = 5 * time.Second
 // server are not the recommended ones.
 const DeviationReminder = 7 * 24 * time.Hour
 
-// UnopenedSource is a source of which Count files cannot be opened. Label is the
-// path the source declares, as the sheet shows it; the files are not named: the
-// sheet does.
+// UnopenedSource is a source of which Count files cannot be opened. It is named
+// by its number on the sheet of the server and its format, never by a path; the
+// files are not named: the sheet does.
 type UnopenedSource struct {
-	Label string `json:"label"`
-	Count int    `json:"count"`
+	Rank   int              `json:"rank"`
+	Format serverlog.Format `json:"format"`
+	Count  int              `json:"count"`
+}
+
+// SourceLabel names a source in a message without its path: its number on the
+// sheet of the server and its format ("log no. 2 on the sheet (PHP)").
+func SourceLabel(lang i18n.Lang, ref serverlog.SourceRef) string {
+	return i18n.T(lang, "digest.serverlogs.source", ref.Rank, sourceFormat(lang, ref.Format))
+}
+
+// sourceFormat is the format of a source in a word or two.
+func sourceFormat(lang i18n.Lang, f serverlog.Format) string {
+	switch f {
+	case serverlog.FormatPHP, serverlog.FormatPostgres, serverlog.FormatMonolog, serverlog.FormatJSON, serverlog.FormatText:
+		return i18n.T(lang, "digest.serverlogs.format."+string(f))
+	}
+	return i18n.T(lang, "digest.serverlogs.format.other")
 }
 
 // deviationKey is the key of Run.Summary that marks a digest which carried the
@@ -57,6 +73,9 @@ type ServerLogDigest struct {
 	// (the rights are refused) while another file of it is read: at most MaxLogTop
 	// of them. It is a state, listed as long as it lasts, and no alert of its own.
 	Unopened []UnopenedSource `json:"unopened,omitempty"`
+	// UnopenedMore counts the sources in the same case that the list left out. Like
+	// Unopened it is left out when errors of level error go nowhere on this server.
+	UnopenedMore int `json:"unopened_more,omitempty"`
 	// Deviations are the keys of the settings that are not the recommended
 	// ones (serverlog.Deviation*), set once a week only.
 	Deviations []string `json:"deviations,omitempty"`
@@ -197,13 +216,16 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 		if st.Routes[serverlog.LevelError] != serverlog.RouteIgnored {
 			sl.Skipped = skippedIn(notes, since, until)
 		}
-		if sl.Unopened, err = unopenedSources(ctx, repo, t.ID); err != nil {
-			return nil, err
+		// Files refused, with the rule of the level error like the volume left unread.
+		if st.Routes[serverlog.LevelError] != serverlog.RouteIgnored {
+			if sl.Unopened, sl.UnopenedMore, err = unopenedSources(ctx, repo, t.ID, c.since); err != nil {
+				return nil, err
+			}
 		}
 		if remind {
 			sl.Deviations = serverlog.Deviations(st)
 		}
-		if int64(sl.New+sl.Reopened+len(sl.Top)+len(sl.Gaps)+len(sl.Deviations)+len(sl.Unopened))+sl.Skipped > 0 {
+		if int64(sl.New+sl.Reopened+len(sl.Top)+len(sl.Gaps)+len(sl.Deviations)+len(sl.Unopened)+sl.UnopenedMore)+sl.Skipped > 0 {
 			out = append(out, sl)
 		}
 	}
@@ -212,29 +234,37 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 }
 
 // unopenedSources lists the active sources of a server with files Michel cannot
-// open because the server refuses the rights, while another file of the source is
-// read: the last read left them in the unseen list, and a file of the source,
-// outside it, was read for real. A source with no file read is a failed read, told
-// as a gap and an alert; an absent file, a link or a missing tool is not about
-// rights. At most MaxLogTop sources, the files not named.
-func unopenedSources(ctx context.Context, repo *serverlog.Repo, targetID string) ([]UnopenedSource, error) {
+// open because the server refuses the rights, while another file of the source
+// was read in the same read: the unseen list holds the refused ones, and a file
+// of the source outside it has the date of that read. A source with no file read
+// is a failed read, told as a gap and an alert; an absent file, a link, a folder
+// or a missing tool is not about rights, and neither is the pattern itself when
+// its folder is refused. A state that Michel has not seen again since the window
+// began (a server not read any more) is not told as present. At most MaxLogTop
+// sources are listed, the others counted in more; the files are not named, and
+// neither is the path: a source is its number on the sheet and its format.
+func unopenedSources(ctx context.Context, repo *serverlog.Repo, targetID string, since time.Time) (out []UnopenedSource, more int, err error) {
 	srcs, err := repo.Sources(ctx, targetID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	unseen, err := repo.Unseen(ctx, targetID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	var out []UnopenedSource
-	for _, src := range srcs {
+	for i, src := range srcs {
 		if !src.Active {
 			continue
 		}
+		wild := strings.ContainsAny(src.Path, "*?")
 		refused := map[string]bool{}
+		listed := map[string]bool{}
+		var at time.Time
 		for _, u := range unseen[src.ID] {
-			if u.Cause == serverlog.CauseDenied {
+			listed[u.File] = true
+			if u.Cause == serverlog.CauseDenied && !(wild && u.File == src.Path) && !u.At.Before(since) {
 				refused[u.File] = true
+				at = u.At
 			}
 		}
 		if len(refused) == 0 {
@@ -242,17 +272,14 @@ func unopenedSources(ctx context.Context, repo *serverlog.Repo, targetID string)
 		}
 		cursors, err := repo.Cursors(ctx, src.ID)
 		if err != nil {
-			return nil, err
-		}
-		listed := map[string]bool{}
-		for _, u := range unseen[src.ID] {
-			listed[u.File] = true
+			return nil, 0, err
 		}
 		read := false
 		for _, c := range cursors {
-			// The placeholder of an activation is no file; a file with no read date was
-			// only located.
-			if !strings.HasSuffix(c.File, "/") && !c.ReadAt.IsZero() && !listed[c.File] {
+			// The placeholder of an activation is no file; a file read in an earlier
+			// pass, or only located, has another date than the read that listed the
+			// refused ones.
+			if !strings.HasSuffix(c.File, "/") && !listed[c.File] && c.ReadAt.Equal(at) {
 				read = true
 				break
 			}
@@ -260,12 +287,13 @@ func unopenedSources(ctx context.Context, repo *serverlog.Repo, targetID string)
 		if !read {
 			continue
 		}
-		out = append(out, UnopenedSource{Label: scan.SanitizeText(src.Path), Count: len(refused)})
 		if len(out) == MaxLogTop {
-			break
+			more++
+			continue
 		}
+		out = append(out, UnopenedSource{Rank: i + 1, Format: src.Format, Count: len(refused)})
 	}
-	return out, nil
+	return out, more, nil
 }
 
 // gapsSince joins the gap notes that reach into the window: periods of
@@ -363,7 +391,13 @@ func serverLogSkipped(lang i18n.Lang, n int64) string {
 
 // serverLogUnopened says that some files of a source cannot be opened.
 func serverLogUnopened(lang i18n.Lang, u UnopenedSource) string {
-	return i18n.N(lang, "digest.serverlogs.unopened", u.Count, u.Label)
+	of := i18n.T(lang, "digest.serverlogs.source_of", u.Rank, sourceFormat(lang, u.Format))
+	return i18n.N(lang, "digest.serverlogs.unopened", u.Count, of)
+}
+
+// serverLogUnopenedMore counts the sources in that case that the list left out.
+func serverLogUnopenedMore(lang i18n.Lang, n int) string {
+	return i18n.N(lang, "digest.serverlogs.unopened_more", n)
 }
 
 // serverLogDeviations is the weekly reminder about the settings of a server.

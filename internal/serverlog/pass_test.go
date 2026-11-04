@@ -1481,7 +1481,7 @@ func TestPassNamesTheSourcesThatFailed(t *testing.T) {
 	if err == nil {
 		t.Fatal("a source failed and the pass did not")
 	}
-	if res.Read != 1 || len(res.Failed) != 1 || res.Failed[0] != (FailedSource{Label: src2.Path, Reason: ReasonDenied}) {
+	if res.Read != 1 || len(res.Failed) != 1 || res.Failed[0] != (FailedSource{ID: src2.ID, Ref: SourceRef{Rank: 2, Format: FormatMonolog}, Reason: ReasonDenied}) {
 		t.Errorf("result %+v", res)
 	}
 	deny.Store(false)
@@ -1564,9 +1564,7 @@ func TestResolveGoesPerSource(t *testing.T) {
 	}
 }
 
-// A server where nothing listens is a refused connection, told as such; the
-// cause of a timeout of the connection is the timeout one. Anything else stays
-// the general cause.
+// A server where nothing listens is a refused connection, told as such.
 func TestPassReportsARefusedConnection(t *testing.T) {
 	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1586,6 +1584,9 @@ func TestPassReportsARefusedConnection(t *testing.T) {
 	}
 }
 
+// The cause of a connection that failed: a timeout is the timeout one, the
+// network policy of Michel is its own cause, not the server refusing, and
+// anything unknown stays the general one.
 func TestReasonOfTellsTheNetworkApart(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
@@ -1593,6 +1594,8 @@ func TestReasonOfTellsTheNetworkApart(t *testing.T) {
 	}{
 		{fmt.Errorf("x: %w", sshx.ErrConnectionRefused), ReasonRefused},
 		{fmt.Errorf("x: %w", sshx.ErrConnectTimeout), ReasonTimeout},
+		{fmt.Errorf("x: %w", sshx.ErrDenied), ReasonPolicy},
+		{ErrSourceDenied, ReasonDenied},
 		{fmt.Errorf("x: %w", sshx.ErrNoKeyAccepted), ReasonNoKeyAccepted},
 		{errors.New("ssh: handshake failed: EOF"), ReasonError},
 	} {

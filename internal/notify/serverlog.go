@@ -17,10 +17,8 @@ const (
 	maxLogItems = 5
 	// maxLogTextRunes bounds the cleaned text of one error in a message.
 	maxLogTextRunes = 200
-	// maxLogSources bounds the sources named in one message, maxLogLabelRunes the
-	// length of the name of one.
-	maxLogSources    = 3
-	maxLogLabelRunes = 80
+	// maxLogSources bounds the sources named in one message; the rest is counted.
+	maxLogSources = 3
 )
 
 // shortName is the name of a server as an alert shows it: clean and short.
@@ -69,36 +67,35 @@ func logItemLine(lang i18n.Lang, it serverlog.AlertItem, kind serverlog.AlertKin
 func logReason(lang i18n.Lang, reason string) string {
 	switch reason {
 	case serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
-		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy:
+		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonPolicy, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy:
 		return i18n.T(lang, "notify.log.reason."+reason)
 	}
 	return i18n.T(lang, "notify.log.reason."+serverlog.ReasonError)
 }
 
-// sourceLabels are the sources an alert names, as the sheet of the server shows
-// them (the declared path), cleaned and bounded: at most maxLogSources, each cut
-// at maxLogLabelRunes. The rest is marked by an ellipsis, never listed.
-func sourceLabels(sources []string) []string {
-	var out []string
+// sourceList names the sources an alert is about without any path: each by its
+// number on the sheet and its format, at most maxLogSources, the rest counted
+// ("and 2 others").
+func sourceList(lang i18n.Lang, sources []serverlog.SourceRef) string {
+	var labels []string
 	for i, s := range sources {
 		if i == maxLogSources {
-			out = append(out, "…")
 			break
 		}
-		label := scan.SanitizeText(s)
-		if r := []rune(label); len(r) > maxLogLabelRunes {
-			label = string(r[:maxLogLabelRunes-1]) + "…"
-		}
-		out = append(out, label)
+		labels = append(labels, digest.SourceLabel(lang, s))
 	}
-	return out
+	list := strings.Join(labels, ", ")
+	if rest := len(sources) - maxLogSources; rest > 0 {
+		list += " " + i18n.N(lang, "notify.log.sources_more", rest)
+	}
+	return list
 }
 
 // logMessage is the text of a server log alert. By default: the type, the
 // place and the count of each error, the name of the server and the page link;
 // the cleaned text only when an item holds it. Never a host, a user, the id of a
-// source or a line of a log; the only path is the one a source declares, as the
-// sheet shows it, when a not-reading alert says which source fails.
+// source, a path or a line of a log; a source is named by its number on the sheet
+// and its format, when a not-reading alert says which source fails.
 func logMessage(lang i18n.Lang, in serverlog.AlertInput, pageURL string) (title, body string) {
 	if !lang.Valid() {
 		lang = i18n.EN
@@ -116,8 +113,8 @@ func logMessage(lang i18n.Lang, in serverlog.AlertInput, pageURL string) (title,
 		if len(names) == 0 {
 			names = []string{name}
 		}
-		if labels := sourceLabels(in.Sources); len(labels) > 0 {
-			body = i18n.N(lang, "notify.log.not_reading_sources", len(in.Sources), name, strings.Join(labels, ", "))
+		if len(in.Sources) > 0 {
+			body = i18n.N(lang, "notify.log.not_reading_sources", len(in.Sources), name, sourceList(lang, in.Sources))
 		} else {
 			body = i18n.N(lang, "notify.log.not_reading", len(names), strings.Join(names, ", "))
 		}

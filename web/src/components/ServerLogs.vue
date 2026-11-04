@@ -425,7 +425,7 @@ export default {
       return g.choices.find((c) => c.current)?.value
     },
     strongNote(g) {
-      return privacyStrongNote(g, this.lang)
+      return privacyStrongNote(g, this.lang, !!this.settings?.health)
     },
     /** fail keeps the API's sentence (a busy read says so in plain words); a 401 is the page's business. */
     fail(err) {

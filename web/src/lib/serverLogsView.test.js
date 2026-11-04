@@ -231,3 +231,11 @@ describe('privacyStrongNote', () => {
     expect(privacyStrongNote(undefined, 'en')).toBe('')
   })
 })
+
+describe('privacyStrongNote with the API warning', () => {
+  test('says nothing when the settings already carry the health warning, so only one shows', () => {
+    const g = privacyChoices(settings({ store_text: true }), 'hds', 'en').find((x) => x.key === 'store_text')
+    expect(privacyStrongNote(g, 'en', true)).toBe('')
+    expect(privacyStrongNote(g, 'en', false)).not.toBe('')
+  })
+})
