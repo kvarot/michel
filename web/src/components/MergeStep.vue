@@ -224,7 +224,14 @@ export default {
       this.watching = false
       this.checkFailure = view?.last_failure ? { error: view.last_failure.error, hint: view.last_failure.hint } : null
       // The sentence about the folder waits until the attempt is read again: it speaks of that reading.
-      this.$emit('refresh', { final: true, done: (ok) => { if (this.gone) return; this.checked = ok; this.lost = !ok } })
+      const done = (ok) => {
+        if (this.gone) return
+        this.checked = ok
+        this.lost = !ok
+        // The Git view was read while the check ran and said "busy": read it again.
+        this.$emit('reload-git')
+      }
+      this.$emit('refresh', { final: true, done })
     },
   },
 }

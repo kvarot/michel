@@ -186,6 +186,8 @@ describe('the texts', () => {
       expect(cat['git.after']).toContain(cat['git.update.button'])
       expect(cat['git.update.check_self']).toContain(cat['project.check'])
       expect(cat['git.update.check_self']).toContain(cat['nav.projects'])
+      expect(cat['git.push.way_out']).toContain(cat['git.change'])
+      expect(cat['git.push.way_out']).toContain(cat['git.answer.no'])
     }
   })
 })
