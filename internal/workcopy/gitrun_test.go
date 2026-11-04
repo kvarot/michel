@@ -366,7 +366,7 @@ func TestLazyFetchRunsNoProgram(t *testing.T) {
 	t.Run("RepoState", func(t *testing.T) {
 		h := lazyProject(t)
 		_, err := RepoState(ctx, h.deps, h.proj)
-		wantClass(t, err, classFailed)
+		wantClass(t, err, classPartial)
 		h.wantNothingRan(t, "RepoState")
 	})
 	t.Run("Push", func(t *testing.T) {
@@ -423,7 +423,7 @@ func TestLazyFetchRunsNoProgram(t *testing.T) {
 		writeFile(t, dir, "inc", "[remote \"evil\"]\n\tpromisor = true\n\turl = ssh://example.test/demo.git\n")
 		h.set(t, "include.path", filepath.ToSlash(filepath.Join(dir, "inc")))
 		_, err := RepoState(ctx, h.deps, h.proj)
-		wantClass(t, err, classFailed)
+		wantClass(t, err, classPartial)
 	})
 }
 

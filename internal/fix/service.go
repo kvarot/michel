@@ -149,6 +149,9 @@ type Deps struct {
 	// CheckTimeout one recollection (0: DefaultCheckTimeout).
 	SiteCheckTimeout time.Duration
 	CheckTimeout     time.Duration
+	// AllowLocalRemote lets a project attach to a remote on this disk: tests and
+	// the trial build only (R28, R33). No variable, option or setting opens it.
+	AllowLocalRemote bool
 	// BackupKeyWait is how long a process waits for the backup key another
 	// one is writing before it takes the key for lost (0: 10 s).
 	BackupKeyWait time.Duration
@@ -207,6 +210,7 @@ func (d Deps) actor() string {
 
 func (d Deps) work() workcopy.Deps {
 	w := d.Work
+	w.AllowLocalRemote = d.AllowLocalRemote
 	if w.DataDir == "" {
 		w.DataDir = d.DataDir
 	}
@@ -254,6 +258,8 @@ type Sessions struct {
 	m         map[string]*running
 	lock      map[string]*sync.Mutex
 	proposing map[string]*sync.Mutex
+	// gitLocks are the locks of a click on a remote, per project.
+	gitLocks map[string]*sync.Mutex
 	// The level 3 runner's memory (ApplyAutoServer) and the agents' package
 	// simulations, per attempt.
 	autoErr     map[string]string
@@ -1841,6 +1847,7 @@ func Sweep(ctx context.Context, d Deps) error {
 	if err := d.expireHeld(ctx); err != nil {
 		return err
 	}
+	workcopy.SweepNetRepos(d.work(), d.now())
 	preparing, err := repo.ListAttempts(ctx, "", string(StatePreparing))
 	if err != nil {
 		return err
@@ -1964,8 +1971,15 @@ func (d Deps) purge(ctx context.Context) error {
 
 // PurgeProject forgets what the fix service keeps for a project outside its
 // tables: the mask tables and tokens of its attempts in the secret store,
-// its copies, mirrors and briefs. The rows go with project.Repo.Purge.
+// its copies, mirrors and briefs, and the network rule Michel wrote for its Git
+// service if no other attached project uses it. The rows go with
+// project.Repo.Purge.
 func PurgeProject(ctx context.Context, d Deps, projectID string) error {
+	// A rule that cannot be removed does not keep the files: said at the end.
+	row, ok, ruleErr := d.repo().GitAnswer(ctx, projectID)
+	if ruleErr == nil && ok && row.RuleWritten {
+		ruleErr = d.releaseGitRule(ctx, projectID, row.Host)
+	}
 	attempts, err := d.repo().ListAttempts(ctx, projectID, "")
 	if err != nil {
 		return err
@@ -1983,9 +1997,9 @@ func PurgeProject(ctx context.Context, d Deps, projectID string) error {
 	// (Windows): a few tries.
 	for try := 0; try < 5; try++ {
 		if err = RemoveProjectFiles(d.DataDir, projectID); err == nil {
-			return nil
+			return ruleErr
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return err
+	return errors.Join(err, ruleErr)
 }

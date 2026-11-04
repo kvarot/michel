@@ -47,6 +47,7 @@ const (
 	classUpdateFailed   = "update_failed"
 	classIgnored        = "ignored"
 	classUpdatePartial  = "update_partial"
+	classSubmodule      = "submodule"
 )
 
 // UpdateResult is what happened to the current branch of the folder.
@@ -333,7 +334,8 @@ func (h home) checkIncomingFilters(ctx context.Context, d Deps, p project.Projec
 	return nil
 }
 
-// checkReplacedSubmodules refuses an update that removes a submodule or puts
+// checkReplacedSubmodules refuses, with its own class because the folder may hold
+// no change at all, an update that removes a submodule or puts
 // something else in its place while its folder holds anything: merge does not look
 // inside (--ignore-submodules=dirty and submodule.recurse=false) and would delete
 // the person's work. An empty folder is a submodule that was never filled.
@@ -360,7 +362,7 @@ func (h home) checkReplacedSubmodules(ctx context.Context, d Deps, p project.Pro
 		}
 		entries, err := os.ReadDir(filepath.Join(p.Path, filepath.FromSlash(rel)))
 		if err != nil || len(entries) > 0 {
-			return &GitFailure{Class: classDirty, Path: failureName(rel)}
+			return &GitFailure{Class: classSubmodule, Path: failureName(rel)}
 		}
 	}
 	return nil

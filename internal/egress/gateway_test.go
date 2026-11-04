@@ -452,3 +452,38 @@ func TestMatchRuleReturnsTheMatchingRule(t *testing.T) {
 		t.Error("loopback grant returned as a rule")
 	}
 }
+
+func TestAuthorizeAllowsAndRecords(t *testing.T) {
+	g := egress.New(pol(policy.AllowRule{Host: "git.example.test", Purpose: policy.PurposeProjectGit}), nil)
+	if err := g.Authorize("git.example.test", policy.PurposeProjectGit); err != nil {
+		t.Fatal(err)
+	}
+	a := g.Attempts()
+	if len(a) != 1 || !a[0].Allowed || a[0].Host != "git.example.test" || a[0].Purpose != policy.PurposeProjectGit {
+		t.Fatalf("attempts = %+v", a)
+	}
+}
+
+func TestAuthorizeRefusesWithoutRule(t *testing.T) {
+	g := egress.New(pol(policy.AllowRule{Host: "git.example.test", Purpose: "osv.db"}), nil)
+	for _, host := range []string{"git.example.test", "other.example.test"} {
+		if err := g.Authorize(host, policy.PurposeProjectGit); !errors.Is(err, egress.ErrEgressDenied) {
+			t.Errorf("Authorize(%s) = %v, want ErrEgressDenied", host, err)
+		}
+	}
+	a := g.Attempts()
+	if len(a) != 2 || a[0].Allowed || a[1].Allowed {
+		t.Fatalf("a refusal must be recorded too: %+v", a)
+	}
+}
+
+type brokenSink struct{}
+
+func (brokenSink) Record(egress.Attempt) error { return errors.New("the audit log is down") }
+
+func TestAuthorizeFailsClosedWithoutAudit(t *testing.T) {
+	g := egress.New(pol(policy.AllowRule{Host: "git.example.test", Purpose: policy.PurposeProjectGit}), brokenSink{})
+	if err := g.Authorize("git.example.test", policy.PurposeProjectGit); !errors.Is(err, egress.ErrEgressDenied) {
+		t.Fatalf("Authorize without an audit log = %v", err)
+	}
+}

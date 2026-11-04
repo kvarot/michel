@@ -951,3 +951,98 @@ func (r *Repo) TargetBlock(ctx context.Context, targetID string) (string, error)
 	}
 	return block, nil
 }
+
+// GitAnswerRow is one project's answer about its Git service. URL is
+// Remote.Address: no secret and no SSH user. RuleWritten says the network rule of
+// Host is Michel's to remove.
+type GitAnswerRow struct {
+	ProjectID, Answer, RemoteName, URL, Host, Provider string
+	RuleWritten                                        bool
+	AnsweredAt                                         time.Time
+}
+
+// FixPush is a fix branch that reached the remote, kept with its first date.
+type FixPush struct {
+	AttemptID, CommitSHA, Host string
+	PushedAt                   time.Time
+}
+
+// GitAnswer returns the project's answer; ok is false when it never answered.
+func (r *Repo) GitAnswer(ctx context.Context, projectID string) (GitAnswerRow, bool, error) {
+	row := GitAnswerRow{ProjectID: projectID}
+	var written int
+	var at string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT answer, remote_name, url, host, provider, rule_written, answered_at
+		FROM project_remote WHERE project_id = ?`, projectID).Scan(&row.Answer, &row.RemoteName, &row.URL, &row.Host, &row.Provider, &written, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GitAnswerRow{}, false, nil
+	}
+	if err != nil {
+		return GitAnswerRow{}, false, fmt.Errorf("cannot read the Git answer: %w", err)
+	}
+	row.RuleWritten = written != 0
+	if row.AnsweredAt, err = parseTime(at); err != nil {
+		return GitAnswerRow{}, false, err
+	}
+	return row, true, nil
+}
+
+// SetGitAnswer stores the project's answer in place of the last one.
+func (r *Repo) SetGitAnswer(ctx context.Context, row GitAnswerRow) error {
+	written := 0
+	if row.RuleWritten {
+		written = 1
+	}
+	_, err := r.s.DB().ExecContext(ctx, `INSERT INTO project_remote (project_id, answer, remote_name, url, host, provider, rule_written, answered_at)
+		VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT (project_id) DO UPDATE SET answer = excluded.answer, remote_name = excluded.remote_name, url = excluded.url,
+			host = excluded.host, provider = excluded.provider, rule_written = excluded.rule_written, answered_at = excluded.answered_at`,
+		row.ProjectID, row.Answer, row.RemoteName, row.URL, row.Host, row.Provider, written, ts(r.now()))
+	if err != nil {
+		return fmt.Errorf("cannot save the Git answer: %w", err)
+	}
+	return nil
+}
+
+// PassGitRule hands the rule of host over to the other projects attached to it, so
+// that the last one to leave removes it. It returns how many there are.
+func (r *Repo) PassGitRule(ctx context.Context, projectID, host string) (int, error) {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE project_remote SET rule_written = 1
+		WHERE answer = 'yes' AND host = ? AND project_id <> ?`, host, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("cannot read who uses the rule: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("cannot read who uses the rule: %w", err)
+	}
+	return int(n), nil
+}
+
+// RecordPush notes that a fix branch reached the remote. A second click keeps the
+// first date.
+func (r *Repo) RecordPush(ctx context.Context, p FixPush) error {
+	_, err := r.s.DB().ExecContext(ctx, `INSERT INTO fix_push (attempt_id, commit_sha, host, pushed_at) VALUES (?,?,?,?)
+		ON CONFLICT(attempt_id) DO NOTHING`, p.AttemptID, p.CommitSHA, p.Host, ts(p.PushedAt))
+	if err != nil {
+		return fmt.Errorf("cannot save the push: %w", err)
+	}
+	return nil
+}
+
+// Push returns what was sent for an attempt; ok is false when nothing was.
+func (r *Repo) Push(ctx context.Context, attemptID string) (FixPush, bool, error) {
+	p := FixPush{AttemptID: attemptID}
+	var at string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT commit_sha, host, pushed_at FROM fix_push WHERE attempt_id = ?`, attemptID).Scan(&p.CommitSHA, &p.Host, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return FixPush{}, false, nil
+	}
+	if err != nil {
+		return FixPush{}, false, fmt.Errorf("cannot read the push: %w", err)
+	}
+	if p.PushedAt, err = parseTime(at); err != nil {
+		return FixPush{}, false, err
+	}
+	return p, true, nil
+}

@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/kvarot/michel/internal/audit"
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
@@ -390,18 +391,36 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusNotFound, i18n.T(lang, "api.project_not_found"), "")
 		return
 	}
+	// A check of this project that runs holds the lock: its own sentence first.
+	if run, _ := s.scans.get(p.ID); run.running {
+		s.failedBody(w, http.StatusConflict, lang, "api.project.scan_running", "api.project.scan_running_hint")
+		return
+	}
+	// A check does not read a folder a click is writing, and no click starts
+	// during a check (R35).
+	unlock := func() {}
+	if s.deps.Fix != nil {
+		var free bool
+		if unlock, free = fix.TryGitLock(*s.deps.Fix, p.ID); !free {
+			s.failedBody(w, http.StatusConflict, lang, "api.git.busy", "api.git.busy_hint")
+			return
+		}
+	}
 	if !s.scans.begin(p.ID) {
+		unlock()
 		s.failedBody(w, http.StatusConflict, lang, "api.project.scan_running", "api.project.scan_running_hint")
 		return
 	}
 	if _, err := s.deps.Audit.Record(ctx, audit.Event{Actor: decisionAuthor, Action: "project.scan", Target: p.Name, Result: "started",
 		Evidence: map[string]any{}}); err != nil {
 		s.scans.end(p.ID, s.deps.Now(), "api.project.scan_failed")
+		unlock()
 		s.auditFailed(w, r)
 		return
 	}
 	run := s.deps.ScanProject
 	started := s.goBackground(func(ctx context.Context) {
+		defer unlock()
 		ctx, cancel := context.WithTimeout(ctx, scanBound)
 		defer cancel()
 		code := "api.project.scan_failed"
@@ -417,6 +436,7 @@ func (s *server) scanProject(w http.ResponseWriter, r *http.Request) {
 	})
 	if !started {
 		s.scans.end(p.ID, s.deps.Now(), "api.project.scan_failed")
+		unlock()
 		s.fail(w, http.StatusServiceUnavailable, i18n.T(lang, "api.closing"), "")
 		return
 	}

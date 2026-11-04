@@ -53,6 +53,7 @@ const (
 	classFailed      = "failed"
 	classBranchMoved = "branch_moved"
 	classNotDefault  = "not_default"
+	classPartial     = "partial_clone"
 )
 
 // GitFailure is the only error of the operations on a remote. It holds a closed
@@ -231,10 +232,15 @@ func removeStaleNetRepos(d Deps, now time.Time) {
 	}
 }
 
+// SweepNetRepos removes the temporary repositories a crash left, for the sweep of
+// the fix service. Each one is a full copy of a project's objects.
+func SweepNetRepos(d Deps, now time.Time) { removeStaleNetRepos(d, now) }
+
 // RepoState tells what the folder of a project is: not a repository (only the
 // folder itself is looked at, not its parents), a repository without a commit,
 // or one Michel can work on. A project that declares a remote fetching on its own
-// has no state to show: the page reaches this with no click.
+// has no state to show and its own class, partial_clone: the page reaches this with
+// no click.
 func RepoState(ctx context.Context, d Deps, p project.Project) (string, error) {
 	if !filepath.IsAbs(p.Path) || !IsGitRepo(p.Path) {
 		return RepoNone, nil
@@ -243,8 +249,12 @@ func RepoState(ctx context.Context, d Deps, p project.Project) (string, error) {
 	if err != nil {
 		return "", failure(classFailed)
 	}
-	if h.refusePromisor(ctx, d, p.Path) {
+	keys, err := h.localConfigKeys(ctx, d, p.Path)
+	if err != nil {
 		return "", failure(classFailed)
+	}
+	if slices.ContainsFunc(keys, isPromisorKey) {
+		return "", failure(classPartial)
 	}
 	head, err := h.revParseCommit(ctx, d, p.Path, "HEAD")
 	if err != nil {

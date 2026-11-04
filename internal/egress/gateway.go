@@ -194,6 +194,25 @@ func isLoopback(host string) bool {
 	return ip.Equal(net.IPv6loopback)
 }
 
+// Authorize makes the check and the record of DialContext without opening a
+// connection, for a program that opens its own (git over SSH). A nil error means
+// the host is allowed and the Attempt has a durable trace. It panics if purpose is
+// empty, like Client.
+func (g *Gateway) Authorize(host, purpose string) error {
+	if purpose == "" {
+		panic("egress: Authorize requires a non-empty purpose")
+	}
+	ok, reason := g.Allowed(host, purpose)
+	sinkErr := g.record(Attempt{Host: host, Purpose: purpose, Allowed: ok, At: time.Now(), Reason: reason})
+	if ok && sinkErr != nil {
+		ok, reason = false, "audit unavailable: "+sinkErr.Error()
+	}
+	if !ok {
+		return fmt.Errorf("%w: host %s purpose %s: %s", ErrEgressDenied, host, purpose, reason)
+	}
+	return nil
+}
+
 // dialTimeout bounds the TCP connection set-up of DialContext.
 const dialTimeout = 15 * time.Second
 

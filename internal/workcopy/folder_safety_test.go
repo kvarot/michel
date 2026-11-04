@@ -124,7 +124,7 @@ func inTheWayCases() []inTheWay {
 		{name: "untracked file, the update makes it a folder", class: classUntracked, path: "changed.txt",
 			incoming: bring("changed.txt/inside.txt"),
 			keep:     []string{"changed.txt"}},
-		{name: "submodule edited, the update makes it a file", class: classDirty, path: "sub",
+		{name: "submodule edited, the update makes it a file", class: classSubmodule, path: "sub",
 			arrange: func(t *testing.T, f folderFixture) {
 				t.Helper()
 				f.addSubmodule(t, "sub")
@@ -134,7 +134,7 @@ func inTheWayCases() []inTheWay {
 				f.siteRemoves(t, "sub", map[string]string{"sub": "now a file\n"})
 			},
 			keep: []string{"sub/s.txt"}, gitLoses: true},
-		{name: "submodule with a file of the person's, the update makes it a file", class: classDirty, path: "sub",
+		{name: "submodule with a file of the person's, the update makes it a file", class: classSubmodule, path: "sub",
 			arrange: func(t *testing.T, f folderFixture) {
 				t.Helper()
 				f.addSubmodule(t, "sub")
@@ -144,7 +144,7 @@ func inTheWayCases() []inTheWay {
 				f.siteRemoves(t, "sub", map[string]string{"sub": "now a file\n"})
 			},
 			keep: []string{"sub/mine.txt"}, gitLoses: true},
-		{name: "submodule, the update puts a folder there", class: classDirty, path: "sub",
+		{name: "submodule, the update puts a folder there", class: classSubmodule, path: "sub",
 			arrange: func(t *testing.T, f folderFixture) {
 				t.Helper()
 				f.addSubmodule(t, "sub")
@@ -249,6 +249,35 @@ func TestUpdateLeavesAnIgnoredFileInAnotherCase(t *testing.T) {
 }
 
 // A file that merely sits next to what arrives is no reason to refuse.
+// The advice of api.git.submodule_hint: a clean submodule is refused because Michel
+// does not look inside it, and the update runs once its folder is empty.
+func TestUpdateRunsOnceTheSubmoduleFolderIsEmpty(t *testing.T) {
+	f := newFolderFixture(t)
+	f.addSubmodule(t, "sub")
+	f.siteRemoves(t, "sub", map[string]string{"sub": "now a file\n"})
+	to := gitT(t, f.env, f.site, "rev-parse", "HEAD")
+	var gf *GitFailure
+	if _, err := f.update(t); !errors.As(err, &gf) || gf.Class != classSubmodule || gf.Path != "sub" {
+		t.Fatalf("clean submodule: %v, %+v", err, gf)
+	}
+	entries, err := os.ReadDir(filepath.Join(f.proj.Path, "sub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(f.proj.Path, "sub", e.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := f.update(t)
+	if err != nil || res.To != to {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(f.proj.Path, "sub")); err != nil || strings.TrimSpace(string(b)) != "now a file" {
+		t.Errorf("sub = %q, %v", b, err)
+	}
+}
+
 func TestUpdateIgnoresWhatIsNotInTheWay(t *testing.T) {
 	f := newFolderFixture(t)
 	f.sync(t, map[string]string{".gitignore": "*.log\nlocal.cfg\n"})

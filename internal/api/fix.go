@@ -263,6 +263,10 @@ func (s *server) fixRoutes() {
 	m.HandleFunc("GET /api/v1/agent/status", s.agentStatus)
 	m.HandleFunc("GET /api/v1/projects/{name}/ai-consent", s.aiConsent)
 	m.HandleFunc("POST /api/v1/projects/{name}/ai-consent", s.aiConsentGive)
+	m.HandleFunc("GET /api/v1/projects/{name}/git", s.projectGit)
+	m.HandleFunc("POST /api/v1/projects/{name}/git/answer", s.projectGitAnswer)
+	m.HandleFunc("POST /api/v1/projects/{name}/git/update", s.projectGitUpdate)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/push", s.fixPush)
 }
 
 // fixDeps are the fix service's collaborators for one request: serve's,
