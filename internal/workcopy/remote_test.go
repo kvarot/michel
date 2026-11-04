@@ -63,28 +63,60 @@ type remoteFixture struct {
 // the test seam.
 func newRemoteFixture(t *testing.T) remoteFixture {
 	t.Helper()
-	home := isolatePerson(t)
-	f := newFixture(t)
+	return remoteFrom(t, "remote", "").remoteFixture
+}
+
+// remoteFrom copies a template ("remote" or "folder") into folders of the
+// test, with the person's home given (the process environment already names
+// it, set by the parent of parallel cases) or made by isolatePerson when empty.
+// The site is empty unless the template has one.
+func remoteFrom(t *testing.T, kind, home string) folderFixture {
+	t.Helper()
+	needGit(t)
+	if home == "" {
+		if inParallel(t) {
+			home = sharedPerson(t)
+		} else {
+			home = isolatePerson(t)
+		}
+	}
+	tp := template(t, kind)
+	bare := remoteAddress(t.TempDir())
+	repl := []string{remoteAddress(tp.dir), bare}
+	f := newFixtureFrom(t, filepath.Join(tp.dir, "proj"), repl)
 	f.deps.AllowLocalRemote = true
-	root := f.proj.Path
-	main := gitT(t, f.env, root, "rev-parse", "HEAD")
-	gitT(t, f.env, root, "tag", "v1")
-	gitT(t, f.env, root, "checkout", "-q", "-b", "other")
+	// remoteAddress joins remote.git to the folder, bare is that folder's.
+	copyTree(t, filepath.Join(tp.dir, "remote.git"), filepath.FromSlash(bare), nil)
+	site := ""
+	if kind == "folder" {
+		site = filepath.Join(t.TempDir(), "site")
+		copyTree(t, filepath.Join(tp.dir, "site"), site, repl)
+	}
+	return folderFixture{remoteFixture: remoteFixture{fixture: f, home: home, bare: bare, sha: tp.sha, other: tp.other, main: tp.main_}, site: site}
+}
+
+// buildRemote adds to the demo project a fix branch, another branch and a
+// tag, and a bare repository at bare holding only its main branch. It
+// returns the main, other and fix commits.
+func buildRemote(t *testing.T, env []string, root, bare string) (main, other, sha string) {
+	t.Helper()
+	main = gitT(t, env, root, "rev-parse", "HEAD")
+	gitT(t, env, root, "tag", "v1")
+	gitT(t, env, root, "checkout", "-q", "-b", "other")
 	writeFile(t, root, "other.txt", "other\n")
-	gitT(t, f.env, root, "add", "other.txt")
-	gitT(t, f.env, root, "commit", "-q", "-m", "other")
-	other := gitT(t, f.env, root, "rev-parse", "HEAD")
-	gitT(t, f.env, root, "checkout", "-q", "main")
-	gitT(t, f.env, root, "checkout", "-q", "-b", demoBranch)
+	gitT(t, env, root, "add", "other.txt")
+	gitT(t, env, root, "commit", "-q", "-m", "other")
+	other = gitT(t, env, root, "rev-parse", "HEAD")
+	gitT(t, env, root, "checkout", "-q", "main")
+	gitT(t, env, root, "checkout", "-q", "-b", demoBranch)
 	writeFile(t, root, "fix.txt", "fix\n")
-	gitT(t, f.env, root, "add", "fix.txt")
-	gitT(t, f.env, root, "commit", "-q", "-m", "fix")
-	sha := gitT(t, f.env, root, "rev-parse", "HEAD")
-	gitT(t, f.env, root, "checkout", "-q", "main")
-	bare := filepath.ToSlash(filepath.Join(t.TempDir(), "remote.git"))
-	gitT(t, f.env, filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
-	gitT(t, f.env, root, "push", "-q", bare, "main")
-	return remoteFixture{fixture: f, home: home, bare: bare, sha: sha, other: other, main: main}
+	gitT(t, env, root, "add", "fix.txt")
+	gitT(t, env, root, "commit", "-q", "-m", "fix")
+	sha = gitT(t, env, root, "rev-parse", "HEAD")
+	gitT(t, env, root, "checkout", "-q", "main")
+	gitT(t, env, filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	gitT(t, env, root, "push", "-q", bare, "main")
+	return main, other, sha
 }
 
 func (f remoteFixture) push(t *testing.T) (PushResult, error) {
@@ -203,6 +235,7 @@ func noMark(t *testing.T, mark, what string) {
 // --- Reading ---
 
 func TestReadRemotesRunsNoNetworkCommand(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	gitT(t, f.env, f.proj.Path, "remote", "add", "origin", demoHTTPS)
 	rec := &gitRecorder{}
@@ -221,6 +254,7 @@ func TestReadRemotesRunsNoNetworkCommand(t *testing.T) {
 }
 
 func TestReadRemotesOriginThenOnlyThenSeveral(t *testing.T) {
+	parallel(t)
 	secret := "https://u:" + demoCanary + "@example.test/a"
 	cases := []struct {
 		name     string
@@ -257,6 +291,7 @@ func TestReadRemotesOriginThenOnlyThenSeveral(t *testing.T) {
 }
 
 func TestInsteadOfIsNotApplied(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	gitT(t, f.env, f.proj.Path, "remote", "add", "origin", demoHTTPS)
 	gitT(t, f.env, f.proj.Path, "config", "url.https://evil.example.test/.insteadOf", "https://example.test/")
@@ -302,6 +337,7 @@ func TestRepoSubfolderIsNone(t *testing.T) {
 // --- Sending ---
 
 func TestPushSendsOnlyTheBranch(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	before := treeDigest(t, f.proj.Path)
 	got, err := f.push(t)
@@ -324,6 +360,7 @@ func TestPushSendsOnlyTheBranch(t *testing.T) {
 }
 
 func TestPushArgvIsClosed(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	ref := "refs/heads/" + demoBranch + ":refs/heads/" + demoBranch
 	rec := &gitRecorder{fake: fakePush("To "+demoSSH+"\n*\t"+ref+"\t[new branch]\nDone\n", nil)}
@@ -367,6 +404,7 @@ func TestPushArgvIsClosed(t *testing.T) {
 }
 
 func TestPushReadsOnlyItsPorcelainLine(t *testing.T) {
+	parallel(t)
 	ref := "refs/heads/" + demoBranch + ":refs/heads/" + demoBranch
 	line := func(flag string) string { return "To " + demoSSH + "\n" + flag + "\t" + ref + "\tsummary\nDone\n" }
 	cases := []struct {
@@ -404,6 +442,7 @@ func TestPushReadsOnlyItsPorcelainLine(t *testing.T) {
 }
 
 func TestPushTwiceIsAlready(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	if got, err := f.push(t); err != nil || got.Outcome != "pushed" {
 		t.Fatalf("first Push = %+v, %v", got, err)
@@ -419,6 +458,7 @@ func TestPushTwiceIsAlready(t *testing.T) {
 }
 
 func TestPushNeverForces(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	gitT(t, f.env, f.proj.Path, "push", "-q", f.bare, f.other+":refs/heads/"+demoBranch)
 	refs := f.refs(t)
@@ -431,6 +471,7 @@ func TestPushNeverForces(t *testing.T) {
 }
 
 func TestPushRefusesAMovedBranch(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	refs := f.refs(t)
 	rec := &gitRecorder{}
@@ -456,6 +497,7 @@ func TestPushRefusesAMovedBranch(t *testing.T) {
 // The branch moves between the check and the clone: what is in the temporary
 // repository is not what was approved.
 func TestPushChecksTheBranchAgainInTheTemporaryRepository(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	rec := &gitRecorder{}
 	rec.fake = func(_ context.Context, sub string, _ []string) ([]byte, []byte, error, bool) {
@@ -474,6 +516,7 @@ func TestPushChecksTheBranchAgainInTheTemporaryRepository(t *testing.T) {
 }
 
 func TestLocalRemoteNeedsTheSeam(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	refs := f.refs(t)
 	f.deps.AllowLocalRemote = false
@@ -486,6 +529,7 @@ func TestLocalRemoteNeedsTheSeam(t *testing.T) {
 }
 
 func TestPushRunsNoProjectConfig(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	script, mark := witness(t)
 	decoy := filepath.ToSlash(filepath.Join(t.TempDir(), "decoy.git"))
@@ -690,6 +734,7 @@ func TestPushHasItsDelay(t *testing.T) {
 }
 
 func TestProxyTokenNotInArgv(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	proxy := "http://michel:" + demoCanary + "@127.0.0.1:9"
 	rec := &gitRecorder{fake: fakePush(newBranchLine(), nil)}
@@ -718,6 +763,7 @@ func TestProxyTokenNotInArgv(t *testing.T) {
 }
 
 func TestPushOverSSHGetsNoProxy(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	rec := &gitRecorder{fake: fakePush(newBranchLine(), nil)}
 	f.deps.Exec = rec.exec
@@ -734,6 +780,7 @@ func TestPushOverSSHGetsNoProxy(t *testing.T) {
 
 // Without the proxy, an https push would go straight out, past the gateway.
 func TestPushHTTPSWithoutProxyIsRefused(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	rec := &gitRecorder{fake: fakePush("", nil)}
 	f.deps.Exec = rec.exec
@@ -746,6 +793,7 @@ func TestPushHTTPSWithoutProxyIsRefused(t *testing.T) {
 }
 
 func TestClassifyTable(t *testing.T) {
+	parallel(t)
 	cases := map[string]string{
 		"fatal: Authentication failed for 'https://example.test/a'":                              "auth",
 		"git@example.test: Permission denied (publickey).":                                       "auth",
@@ -780,6 +828,7 @@ func TestClassifyTable(t *testing.T) {
 }
 
 func TestFailureHoldsNoOutput(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	rec := &gitRecorder{fake: func(_ context.Context, sub string, _ []string) ([]byte, []byte, error, bool) {
 		if sub != "push" {
@@ -803,6 +852,7 @@ func TestFailureHoldsNoOutput(t *testing.T) {
 }
 
 func TestNotDefaultFailureIsSanitizedAndCut(t *testing.T) {
+	parallel(t)
 	gf := notDefaultFailure("a\x1b[31m"+strings.Repeat("é", 200), "main")
 	if strings.ContainsRune(gf.Current, 0x1b) {
 		t.Errorf("Current kept a control character: %q", gf.Current)

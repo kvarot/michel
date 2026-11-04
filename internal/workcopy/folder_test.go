@@ -25,11 +25,7 @@ type folderFixture struct {
 
 func newFolderFixture(t *testing.T) folderFixture {
 	t.Helper()
-	f := newRemoteFixture(t)
-	gitT(t, f.env, f.proj.Path, "remote", "add", "origin", f.bare)
-	site := filepath.Join(t.TempDir(), "site")
-	gitT(t, f.env, filepath.Dir(site), "clone", "-q", f.bare, site)
-	return folderFixture{remoteFixture: f, site: site}
+	return remoteFrom(t, "folder", "")
 }
 
 // advance commits files on the site's main and pushes it: a merge on the site.
@@ -295,6 +291,7 @@ func TestUpdateFastForwards(t *testing.T) {
 }
 
 func TestUpdateUpToDateWritesNothing(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	r := f.record()
 	head := gitT(t, f.env, f.proj.Path, "rev-parse", "HEAD")
@@ -328,10 +325,24 @@ func TestUpdateUpToDateWritesNothing(t *testing.T) {
 	f.fixNetEmpty(t)
 }
 
+// The refusals that write in the person's home run one after the other, first;
+// the others run together, in a home of their own that nothing writes in.
+var refusalsInTheHome = map[string]bool{
+	"filter, attribute in the person's core.attributesFile":        true,
+	"filter, attribute in a core.attributesFile the project names": true,
+}
+
 func TestUpdateRefused(t *testing.T) {
+	home := isolatePerson(t)
 	for _, c := range refusals() {
 		t.Run(c.name, func(t *testing.T) {
-			f := newFolderFixture(t)
+			var f folderFixture
+			if refusalsInTheHome[c.name] {
+				f = newFolderFixture(t)
+			} else {
+				t.Parallel()
+				f = newFolderFixtureIn(t, home)
+			}
 			f.advance(t, map[string]string{"changed.txt": "from the site\n"})
 			c.arrange(t, f)
 			before := folderState(t, f)
@@ -346,6 +357,7 @@ func TestUpdateRefused(t *testing.T) {
 }
 
 func TestUpdateRefusedNamesTheBranches(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	gitT(t, f.env, f.proj.Path, "checkout", "-q", "other")
 	_, err := f.update(t)
@@ -356,12 +368,14 @@ func TestUpdateRefusedNamesTheBranches(t *testing.T) {
 }
 
 func TestUpdateRefusesBeforeAnyNetwork(t *testing.T) {
+	home := isolatePerson(t)
 	for _, c := range refusals() {
-		if !c.preflight {
+		if !c.preflight || refusalsInTheHome[c.name] {
 			continue
 		}
 		t.Run(c.name, func(t *testing.T) {
-			f := newFolderFixture(t)
+			t.Parallel()
+			f := newFolderFixtureIn(t, home)
 			c.arrange(t, f)
 			r := f.record()
 			_, err := f.update(t)
@@ -380,6 +394,7 @@ func TestUpdateRefusesBeforeAnyNetwork(t *testing.T) {
 }
 
 func TestUpdateUsesTheRemoteHeadWhenThereIsOne(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	gitT(t, f.env, f.proj.Path, "branch", "master") // main and master: the reference decides
 	gitT(t, f.env, f.proj.Path, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -393,6 +408,7 @@ func TestUpdateUsesTheRemoteHeadWhenThereIsOne(t *testing.T) {
 
 // A tag named like the branch makes git symbolic-ref --short say heads/main.
 func TestUpdateWithATagNamedLikeTheBranch(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	gitT(t, f.env, f.proj.Path, "tag", "main")
 	plan, err := UpdateCheck(context.Background(), f.deps, f.proj, "origin")
@@ -412,6 +428,7 @@ func TestUpdateWithATagNamedLikeTheBranch(t *testing.T) {
 }
 
 func TestUpdateRefusesABadRemoteNameOrNoRepository(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	r := f.record()
 	for _, name := range []string{"", "-x", "a/b", "a b"} {
@@ -428,6 +445,7 @@ func TestUpdateRefusesABadRemoteNameOrNoRepository(t *testing.T) {
 }
 
 func TestUpdateNeedsTheSeamForALocalRemote(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	f.advance(t, map[string]string{"merged.txt": "x\n"})
 	f.deps.AllowLocalRemote = false
@@ -469,6 +487,7 @@ func TestUpdateKeepsAutocrlf(t *testing.T) {
 }
 
 func TestUntrackedFileIsNotDirty(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	writeFile(t, f.proj.Path, "notes.txt", "the person's notes\n")
 	to := f.advance(t, map[string]string{"merged.txt": "x\n"})
@@ -575,6 +594,7 @@ func TestUpdateRunsNoHookNorFilter(t *testing.T) {
 // A submodule's own configuration is not the folder's: git status goes down in
 // it, without the -c of the parent, and would run its programs.
 func TestUpdateRunsNothingOfASubmodule(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	sub := filepath.Join(t.TempDir(), "sub")
 	gitT(t, f.env, filepath.Dir(sub), "init", "-q", "-b", "main", sub)
@@ -617,6 +637,7 @@ func TestUpdateRunsNothingOfASubmodule(t *testing.T) {
 }
 
 func TestUpdateMovesOnlyTheDefaultBranch(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	writeFile(t, f.proj.Path, "README.md", "set aside\n")
 	gitT(t, f.env, f.proj.Path, "stash", "push", "-q")
@@ -653,6 +674,7 @@ func TestUpdateMovesOnlyTheDefaultBranch(t *testing.T) {
 }
 
 func TestUpdateCheckIsReadOnly(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	r := f.record()
 	writeFile(t, f.proj.Path, "README.md", "demo\n") // stat-dirty: an optional lock would rewrite the index
@@ -681,6 +703,7 @@ func TestUpdateCheckIsReadOnly(t *testing.T) {
 
 // The person may change branch or edit a file during the fetch.
 func TestUpdateReadsTheFolderAgainAfterTheFetch(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	f.advance(t, map[string]string{"merged.txt": "x\n"})
 	r := f.record()
@@ -699,6 +722,7 @@ func TestUpdateReadsTheFolderAgainAfterTheFetch(t *testing.T) {
 }
 
 func TestUpdateCheckAttrFailureWritesNothing(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	f.advance(t, map[string]string{"merged.txt": "x\n"})
 	r := f.record()
@@ -720,6 +744,7 @@ func TestUpdateCheckAttrFailureWritesNothing(t *testing.T) {
 }
 
 func TestCheckAttrAnswerMustBeComplete(t *testing.T) {
+	parallel(t)
 	for _, out := range []string{"", "a.txt\x00filter\x00", "a.txt\x00diff\x00unspecified\x00", "b.txt\x00filter\x00unset\x00"} {
 		if _, err := filterSet([]byte(out), []string{"a.txt"}); err == nil {
 			t.Errorf("answer %q accepted", out)
@@ -739,6 +764,7 @@ func TestCheckAttrAnswerMustBeComplete(t *testing.T) {
 }
 
 func TestCheckAttrGoesByBatches(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	files := map[string]string{".gitattributes": "zzz.bin filter=lfs\n", "zzz.bin": "pointer\n"}
 	for i := range 248 {
@@ -794,6 +820,7 @@ func TestUpdateMergeSurvivesAClosedPage(t *testing.T) {
 }
 
 func TestMergeFailureClasses(t *testing.T) {
+	parallel(t)
 	for out, want := range map[string]string{
 		"error: The following untracked working tree files would be overwritten by merge:\n\tx\nAborting\n": classUntracked,
 		"error: Updating the following directories would lose untracked files in them:\n\tx\n\nAborting\n":  classUntracked,
@@ -846,6 +873,7 @@ func wantMerged(t *testing.T, f fixture, sha string, want bool) {
 }
 
 func TestIsMergedAfterMergeCommit(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	sha := fixBranch(t, f, "fixed\n")
 	mainMoves(t, f)
@@ -855,6 +883,7 @@ func TestIsMergedAfterMergeCommit(t *testing.T) {
 }
 
 func TestIsMergedAfterFastForward(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	sha := fixBranch(t, f, "fixed\n")
 	gitT(t, f.env, f.proj.Path, "merge", "-q", "--ff-only", demoBranch)
@@ -862,6 +891,7 @@ func TestIsMergedAfterFastForward(t *testing.T) {
 }
 
 func TestIsMergedAfterSquash(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	sha := fixBranch(t, f, "fixed\n")
 	mainMoves(t, f)
@@ -875,6 +905,7 @@ func TestIsMergedAfterSquash(t *testing.T) {
 }
 
 func TestIsMergedAfterRebase(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	sha := fixBranch(t, f, "fixed\n")
 	mainMoves(t, f)
@@ -883,6 +914,7 @@ func TestIsMergedAfterRebase(t *testing.T) {
 }
 
 func TestIsMergedFalseForAnotherChange(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	sha := fixBranch(t, f, "fixed\n")
 	writeFile(t, f.proj.Path, "src/fixed.php", "fixed another way\n")
@@ -893,6 +925,7 @@ func TestIsMergedFalseForAnotherChange(t *testing.T) {
 
 // A squash with other commits is not the same change: it stays inconclusive.
 func TestIsMergedFalseForASquashWithOtherCommits(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	sha := fixBranch(t, f, "fixed\n")
 	gitT(t, f.env, f.proj.Path, "merge", "-q", "--squash", demoBranch)
@@ -904,6 +937,7 @@ func TestIsMergedFalseForASquashWithOtherCommits(t *testing.T) {
 
 // git cherry leaves merge commits out: its answer is empty.
 func TestIsMergedFalseOnEmptyCherry(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	root := f.proj.Path
 	first := gitT(t, f.env, root, "rev-parse", "HEAD")
@@ -918,6 +952,7 @@ func TestIsMergedFalseOnEmptyCherry(t *testing.T) {
 
 // A merge commit whose side holds several commits: several lines are not one fix.
 func TestIsMergedFalseOnSeveralLines(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	root := f.proj.Path
 	gitT(t, f.env, root, "checkout", "-q", "-b", "side")
@@ -941,6 +976,7 @@ func TestIsMergedFalseOnSeveralLines(t *testing.T) {
 }
 
 func TestIsMergedFalseForACommitWithoutParent(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	root := f.proj.Path
 	gitT(t, f.env, root, "checkout", "-q", "--orphan", "alone")
@@ -971,4 +1007,12 @@ func TestPrepareAndApplyNeverPushNorMerge(t *testing.T) {
 			t.Errorf("%d git %s", n, sub)
 		}
 	}
+}
+
+// newFolderFixtureIn is newFolderFixture for a case that runs in parallel
+// with others: the person's home is the one its parent made with
+// isolatePerson, and the case writes nothing in it.
+func newFolderFixtureIn(t *testing.T, home string) folderFixture {
+	t.Helper()
+	return remoteFrom(t, "folder", home)
 }

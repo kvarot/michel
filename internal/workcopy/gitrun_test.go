@@ -182,6 +182,7 @@ func reached(t *testing.T, rec *gitRecorder, subs ...string) {
 // Every command Michel runs on a project, the project's configuration hostile.
 // All of them keep working, because none of these keys is a reason to refuse.
 func TestHostileConfigRunsNoProgram(t *testing.T) {
+	parallel(t)
 	t.Run("reads, copy, branch, push", func(t *testing.T) {
 		h := newHostile(t)
 		h.arm(t, true)
@@ -226,6 +227,7 @@ func TestHostileConfigRunsNoProgram(t *testing.T) {
 // SSH and a program, the project asks for recursion, the update brings a commit
 // of the submodule that the folder does not have.
 func TestHostileSubmoduleRunsNoProgram(t *testing.T) {
+	parallel(t)
 	h := newHostile(t)
 	sub := filepath.Join(t.TempDir(), "sub")
 	gitT(t, h.env, filepath.Dir(sub), "init", "-q", "-b", "main", sub)
@@ -277,6 +279,7 @@ func TestHostileSubmoduleRunsNoProgram(t *testing.T) {
 // Git will not take a fetch address from the project: every command but a local
 // copy has no transport at all, and that one has only the file transport.
 func TestHostileRewriteOfTheLocalFetchRunsNoProgram(t *testing.T) {
+	parallel(t)
 	for _, target := range []string{"ssh://example.test/", "ext::sh -c 'sh WITNESS url'#"} {
 		t.Run(strings.Fields(target)[0], func(t *testing.T) {
 			h := newHostile(t)
@@ -308,6 +311,7 @@ func TestHostileRewriteOfTheLocalFetchRunsNoProgram(t *testing.T) {
 // A setting for a remote named by the fetch's own address names the program of
 // the local transport (uploadpack) or a helper (vcs).
 func TestHostileRemoteNamedLikeTheFetchAddressIsRefused(t *testing.T) {
+	parallel(t)
 	for _, key := range []string{"uploadpack", "vcs"} {
 		t.Run(key, func(t *testing.T) {
 			h := newHostile(t)
@@ -353,6 +357,7 @@ func (h hostile) setPromisor(t *testing.T) {
 }
 
 func TestLazyFetchRunsNoProgram(t *testing.T) {
+	parallel(t)
 	ctx := context.Background()
 	t.Run("control: plain git fetches and runs the witness", func(t *testing.T) {
 		h := lazyProject(t)
@@ -430,6 +435,7 @@ func TestLazyFetchRunsNoProgram(t *testing.T) {
 // A git that ignores GIT_NO_LAZY_FETCH must not reach a command that may read an
 // object: the keys are read first, on every command on a project.
 func TestOldGitRefusesAPromisorBeforeAnyCommand(t *testing.T) {
+	parallel(t)
 	ctx := context.Background()
 	h := lazyProject(t)
 	rec := h.record()
@@ -457,6 +463,7 @@ func TestOldGitRefusesAPromisorBeforeAnyCommand(t *testing.T) {
 }
 
 func TestGitVersionIsRead(t *testing.T) {
+	parallel(t)
 	for out, old := range map[string]bool{
 		"git version 2.46.2.windows.1\n": false,
 		"git version 2.45.0\n":           false,
@@ -474,6 +481,7 @@ func TestGitVersionIsRead(t *testing.T) {
 
 // The witnesses are alive: plain git, without the runner, starts each of them.
 func TestHostileKeysAreAlive(t *testing.T) {
+	parallel(t)
 	plain := func(t *testing.T, h hostile, stdin string, args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", h.proj.Path}, args...)...)
@@ -655,6 +663,7 @@ func TestSSHCommandInAnIncludedFileIsKept(t *testing.T) {
 }
 
 func TestOldTemporaryRepositoriesAreRemoved(t *testing.T) {
+	parallel(t)
 	f := newRemoteFixture(t)
 	dir := netDir(f.deps)
 	old := ulid.MustNew(ulid.Timestamp(time.Now().Add(-2*time.Hour)), ulid.DefaultEntropy()).String() + ".git"
@@ -792,6 +801,7 @@ func declName(decl ast.Decl) string {
 
 // No code of these packages starts git, or any program, outside the sites above.
 func TestNoOtherWayToStartGit(t *testing.T) {
+	parallel(t)
 	root := repoRoot(t)
 	found := map[string]bool{}
 	for _, pkg := range []string{"workcopy", "fix", "scan", "project", "cli", "api", "collect"} {

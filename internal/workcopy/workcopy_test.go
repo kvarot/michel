@@ -104,8 +104,23 @@ type fixture struct {
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	needGit(t)
+	return newFixtureFrom(t, filepath.Join(template(t, "project").dir, "proj"), nil)
+}
+
+// newFixtureFrom copies the project of a template into a folder of the test.
+func newFixtureFrom(t *testing.T, src string, repl []string) fixture {
+	t.Helper()
+	needGit(t)
 	env := testGitEnv(t)
 	root := t.TempDir()
+	copyTree(t, src, root, repl)
+	p := project.Project{ID: "01JDEMO0000000000000000000", Name: "demo", Path: root, Exclude: []string{"private"}}
+	return fixture{env: env, proj: p, deps: Deps{DataDir: t.TempDir(), ProxyAddr: "127.0.0.1:1", Now: func() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC) }}}
+}
+
+// buildProject builds, with git, the repository every fixture starts from.
+func buildProject(t *testing.T, env []string, root string) {
+	t.Helper()
 	gitT(t, env, root, "init", "-q", "-b", "main")
 	writeFile(t, root, "README.md", "demo\n")
 	writeFile(t, root, "composer.json", `{"name":"acme/lib"}`+"\n")
@@ -117,8 +132,6 @@ func newFixture(t *testing.T) fixture {
 	writeFile(t, root, "src/app.php", "<?php\n\n$k = '"+fakeAWS()+"';\n")
 	gitT(t, env, root, "add", "-A")
 	gitT(t, env, root, "commit", "-q", "-m", "init")
-	p := project.Project{ID: "01JDEMO0000000000000000000", Name: "demo", Path: root, Exclude: []string{"private"}}
-	return fixture{env: env, proj: p, deps: Deps{DataDir: t.TempDir(), ProxyAddr: "127.0.0.1:1", Now: func() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC) }}}
 }
 
 // treeDigest is the SHA-256 of every path, size, modification time and
@@ -152,6 +165,7 @@ func prepare(t *testing.T, f fixture) Copy {
 }
 
 func TestIsGitRepoFalseForPlainFolder(t *testing.T) {
+	parallel(t)
 	if IsGitRepo(t.TempDir()) {
 		t.Error("a plain folder is reported as a git repository")
 	}
@@ -172,6 +186,7 @@ func TestIsGitRepoFalseForPlainFolder(t *testing.T) {
 }
 
 func TestPrepareNeverWritesInProject(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	// A dirty working tree and an untracked file: still nothing written.
 	writeFile(t, f.proj.Path, "README.md", "changed\n")
@@ -206,6 +221,7 @@ func TestPrepareNeverWritesInProject(t *testing.T) {
 }
 
 func TestPrepareSkipsExcludedFiles(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	writeFile(t, f.proj.Path, "id_rsa", "untracked key\n")
 	c := prepare(t, f)
@@ -251,6 +267,7 @@ func TestPrepareSkipsExcludedFiles(t *testing.T) {
 }
 
 func TestPrepareReportsSecretHits(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	want := []mask.Hit{{File: "src/app.php", Line: 3, Kind: mask.KindAWSKey, Strong: true}}
@@ -311,6 +328,7 @@ func fakeCopy(t *testing.T, d Deps) Copy {
 }
 
 func TestRunTestsNotRunWithoutCommand(t *testing.T) {
+	parallel(t)
 	d := Deps{DataDir: t.TempDir()}
 	c := fakeCopy(t, d)
 	d.Exec = func(context.Context, string, []string, []string, string) ([]byte, []byte, error) {
@@ -356,6 +374,7 @@ func TestRunTestsNotRunWithoutCommand(t *testing.T) {
 }
 
 func TestSplitCommand(t *testing.T) {
+	parallel(t)
 	for in, want := range map[string][]string{
 		"":                                nil,
 		"   ":                             nil,
@@ -541,6 +560,7 @@ func TestApplyLeavesWorkingTreeUntouched(t *testing.T) {
 }
 
 func TestApplyRefusesExistingBranch(t *testing.T) {
+	parallel(t)
 	f, c, sha := committedFix(t)
 	branch := "michel/fix-01jattempt00"
 	if err := Apply(context.Background(), f.deps, f.proj, c, sha, branch); err != nil {
@@ -570,6 +590,7 @@ func TestApplyRefusesExistingBranch(t *testing.T) {
 }
 
 func TestIsMerged(t *testing.T) {
+	parallel(t)
 	f, c, sha := committedFix(t)
 	if ok, err := IsMerged(context.Background(), f.deps, f.proj, sha); ok || err != nil {
 		t.Errorf("before apply: %v %v, want false", ok, err)
@@ -595,6 +616,7 @@ func TestIsMerged(t *testing.T) {
 }
 
 func TestRemoveDeletesOnlyACopy(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	if err := Remove(f.deps, Copy{Dir: f.proj.Path}); err == nil {
@@ -622,6 +644,7 @@ func TestRemoveDeletesOnlyACopy(t *testing.T) {
 }
 
 func TestDiffRefusesTamperedCopyConfig(t *testing.T) {
+	parallel(t)
 	f, c, sha := committedFix(t)
 	if c.ConfigSHA == "" {
 		t.Fatal("Prepare recorded no configuration digest")
@@ -653,6 +676,7 @@ func TestDiffRefusesTamperedCopyConfig(t *testing.T) {
 }
 
 func TestCopyHasNoExcludedBlobs(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	objects := gitT(t, f.env, c.Dir, "cat-file", "--batch-all-objects", "--batch")
@@ -674,6 +698,7 @@ func TestCopyHasNoExcludedBlobs(t *testing.T) {
 }
 
 func TestCopyHasNoAbsolutePath(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	needles := []string{f.proj.Path, filepath.ToSlash(f.proj.Path), f.deps.DataDir, filepath.ToSlash(f.deps.DataDir)}
@@ -699,6 +724,7 @@ func TestCopyHasNoAbsolutePath(t *testing.T) {
 }
 
 func TestCopyKeepsFilesAsCommitted(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	// export-ignore would drop tests/ from git archive; eol=crlf would
 	// rewrite line ends; both are turned off for the copy.
@@ -725,6 +751,7 @@ func TestCopyKeepsFilesAsCommitted(t *testing.T) {
 }
 
 func TestDiffRawIsTheAppliedPatch(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	writeFile(t, c.Dir, "README.md", "fixed\x1b[31m\r\n")
@@ -752,6 +779,7 @@ func TestDiffRawIsTheAppliedPatch(t *testing.T) {
 }
 
 func TestApplyIgnoresAgentCommits(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	// The agent commits in its copy: a file added then removed, a hook.
@@ -796,6 +824,7 @@ func TestApplyIgnoresAgentCommits(t *testing.T) {
 }
 
 func TestPlantedHooksDoNotRun(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	marker := filepath.Join(t.TempDir(), "ran")
@@ -840,6 +869,7 @@ func TestInstallRefusesSymlinkedManifestDir(t *testing.T) {
 }
 
 func TestMirrorIsOutsideCopyTree(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	tree := filepath.Dir(c.Dir)
@@ -899,6 +929,7 @@ func TestMirrorIsOutsideCopyTree(t *testing.T) {
 }
 
 func TestSafeSegmentNormalizesLikeNTFS(t *testing.T) {
+	parallel(t)
 	for _, p := range []string{".git./hooks/x", ".GIT /x", "git~1/x", "GIT~2/config", "a:b", "nul.txt", "sub/CON", "lpt1.log", "com9", "aux .txt",
 		"a/<b", "a/b|c", "x\x01y", "a/../b", "./a", "a/./b", ". ./x", ".git"} {
 		if err := checkEntry(rawEntry{path: p, mode: "100644"}); !errors.Is(err, ErrOutsideCopy) {
@@ -913,6 +944,7 @@ func TestSafeSegmentNormalizesLikeNTFS(t *testing.T) {
 }
 
 func TestExtractSkipsUnsafeTarEntries(t *testing.T) {
+	parallel(t)
 	tmp := t.TempDir()
 	archive := filepath.Join(tmp, "a.tar")
 	out, err := os.Create(archive)
@@ -967,6 +999,7 @@ func TestExtractSkipsUnsafeTarEntries(t *testing.T) {
 }
 
 func TestExcludedPathsNeverReachTheCommit(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	writeFile(t, c.Dir, ".ENV", "DB_PASSWORD=other\n")
@@ -993,6 +1026,7 @@ func TestExcludedPathsNeverReachTheCommit(t *testing.T) {
 }
 
 func TestCheckExcludedIsCaseInsensitive(t *testing.T) {
+	parallel(t)
 	c := Copy{Excluded: []string{"config/.env.local"}, Exclude: []string{"private"}}
 	for _, p := range []string{".ENV", ".Env.production", "config/SERVER.KEY", "a/Cert.PEM", "ID_RSA", "PRIVATE/x.php", "src/Private/x", "CONFIG/.ENV.LOCAL"} {
 		if err := checkExcluded(c, []string{"src/ok.php", p}); !errors.Is(err, ErrExcludedPath) {
@@ -1005,6 +1039,7 @@ func TestCheckExcludedIsCaseInsensitive(t *testing.T) {
 }
 
 func TestPrepareExcludesCaseVariants(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	writeFile(t, f.proj.Path, "certs/Server.PEM", "pem\n")
 	f.proj.Exclude = []string{"private", "secret-docs"}
@@ -1023,6 +1058,7 @@ func TestPrepareExcludesCaseVariants(t *testing.T) {
 }
 
 func TestDisplayIgnoresDiffAttributes(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	writeFile(t, c.Dir, ".gitattributes", "* -diff\n")
@@ -1040,6 +1076,7 @@ func TestDisplayIgnoresDiffAttributes(t *testing.T) {
 }
 
 func TestCheckBinaryRefusesTextContent(t *testing.T) {
+	parallel(t)
 	dir := t.TempDir()
 	writeFile(t, dir, "a.txt", "plain text\n")
 	writeFile(t, dir, "b.bin", "\x00\x01\x02")
@@ -1067,6 +1104,7 @@ func TestPrepareBoundsTheArchive(t *testing.T) {
 }
 
 func TestExtractCreatesNoExcludedFolder(t *testing.T) {
+	parallel(t)
 	tmp := t.TempDir()
 	archive := filepath.Join(tmp, "a.tar")
 	out, err := os.Create(archive)
@@ -1102,6 +1140,7 @@ func TestExtractCreatesNoExcludedFolder(t *testing.T) {
 }
 
 func TestInstallArgvByLockfile(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -1176,6 +1215,7 @@ func installCase(t *testing.T, d Deps, c Copy, dir string, files map[string]stri
 }
 
 func TestNpmrcIsAllowlisted(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -1203,6 +1243,7 @@ func TestNpmrcIsAllowlisted(t *testing.T) {
 }
 
 func TestPackageJSONIsChecked(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -1262,6 +1303,7 @@ func TestPackageJSONIsChecked(t *testing.T) {
 }
 
 func TestComposerSettingsAreAllowlisted(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -1314,6 +1356,7 @@ func TestComposerSettingsAreAllowlisted(t *testing.T) {
 }
 
 func TestInstallStartsFromFreshFolders(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -1365,6 +1408,7 @@ func TestInstallStartsFromFreshFolders(t *testing.T) {
 }
 
 func TestCheckExcludedReadsNamesLikeWindows(t *testing.T) {
+	parallel(t)
 	c := Copy{Exclude: []string{"private"}}
 	for _, p := range []string{".ENV.", ".env ", "CONFIG~1/server.key", "PRIVAT~1/x.php", "SERVER~1.KEY", "src/A~12.TXT"} {
 		if err := checkExcluded(c, []string{p}); !errors.Is(err, ErrExcludedPath) {

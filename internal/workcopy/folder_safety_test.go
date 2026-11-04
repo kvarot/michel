@@ -59,6 +59,7 @@ type inTheWay struct {
 	incoming func(t *testing.T, f folderFixture)
 	keep     []string // the person's files, each holding personBytes
 	gitLoses bool     // git merge without Michel's options destroys it: the control
+	home     bool     // writes in the person's home: runs alone, before the others
 }
 
 func inTheWayCases() []inTheWay {
@@ -107,7 +108,7 @@ func inTheWayCases() []inTheWay {
 			},
 			incoming: bring("local.cfg"),
 			keep:     []string{"local.cfg"}, gitLoses: true},
-		{name: "ignored by the person's own excludes file", class: classIgnored, path: "local.cfg",
+		{name: "ignored by the person's own excludes file", class: classIgnored, path: "local.cfg", home: true,
 			arrange: func(t *testing.T, f folderFixture) {
 				t.Helper()
 				writeFile(t, f.home, "excludes", "local.cfg\n")
@@ -161,9 +162,16 @@ func inTheWayCases() []inTheWay {
 // the update wants to write, the update refuses, says what stands there, and the
 // file is byte for byte what it was, with the same date.
 func TestUpdateLeavesWhatIsInTheWay(t *testing.T) {
+	home := isolatePerson(t)
 	for _, c := range inTheWayCases() {
 		t.Run(c.name, func(t *testing.T) {
-			f := newFolderFixture(t)
+			var f folderFixture
+			if c.home {
+				f = newFolderFixture(t)
+			} else {
+				t.Parallel()
+				f = newFolderFixtureIn(t, home)
+			}
 			if c.arrange != nil {
 				c.arrange(t, f)
 			}
@@ -252,6 +260,7 @@ func TestUpdateLeavesAnIgnoredFileInAnotherCase(t *testing.T) {
 // The advice of api.git.submodule_hint: a clean submodule is refused because Michel
 // does not look inside it, and the update runs once its folder is empty.
 func TestUpdateRunsOnceTheSubmoduleFolderIsEmpty(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	f.addSubmodule(t, "sub")
 	f.siteRemoves(t, "sub", map[string]string{"sub": "now a file\n"})
@@ -279,6 +288,7 @@ func TestUpdateRunsOnceTheSubmoduleFolderIsEmpty(t *testing.T) {
 }
 
 func TestUpdateIgnoresWhatIsNotInTheWay(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	f.sync(t, map[string]string{".gitignore": "*.log\nlocal.cfg\n"})
 	writeFile(t, f.proj.Path, "local.cfg", personBytes)
@@ -321,12 +331,14 @@ func (f folderFixture) signedOnSite(t *testing.T) string {
 // branch.<name>.mergeOptions is read before the command line. Each value here must
 // change nothing: no program, a real fast-forward, nothing left in the index.
 func TestUpdateIsDeafToMergeOptions(t *testing.T) {
+	home := isolatePerson(t)
 	for _, options := range []string{
 		"--verify-signatures", "--squash", "--no-commit", "--no-ff", "-s ours", "--strategy=demo-none",
 		"--overwrite-ignore", "--autostash", "--verify-signatures --squash --no-ff",
 	} {
 		t.Run(options, func(t *testing.T) {
-			f := newFolderFixture(t)
+			t.Parallel()
+			f := newFolderFixtureIn(t, home)
 			script, mark := witness(t)
 			f.advance(t, map[string]string{"merged.txt": "x\n"})
 			to := f.signedOnSite(t)
@@ -440,6 +452,7 @@ func TestUpdateSeesTheFilterOfAnAttributesFile(t *testing.T) {
 // The fetch of the temporary repository into the project reads the project's
 // configuration: whatever it says, nothing runs and nothing else is reached.
 func TestFetchIntoProjectRunsNothing(t *testing.T) {
+	parallel(t)
 	apply := func(t *testing.T, h hostile) error {
 		t.Helper()
 		c := prepare(t, h.fixture)
@@ -487,6 +500,7 @@ func TestFetchIntoProjectRunsNothing(t *testing.T) {
 
 // A merge that fails after writing says so; one that wrote nothing says that.
 func TestUpdateFailureSaysWhetherFilesChanged(t *testing.T) {
+	parallel(t)
 	failing := func(t *testing.T, f *folderFixture, write func()) {
 		t.Helper()
 		r := f.record()
@@ -565,6 +579,7 @@ func TestUpdateLockedFileSaysPartial(t *testing.T) {
 }
 
 func TestPartialAndIgnoredHaveTheirSentences(t *testing.T) {
+	parallel(t)
 	for _, class := range []string{classUpdatePartial, classIgnored} {
 		for _, key := range []string{"api.git." + class, "api.git." + class + "_hint"} {
 			if !i18n.Has(key) {
@@ -579,6 +594,7 @@ func TestPartialAndIgnoredHaveTheirSentences(t *testing.T) {
 
 // A stopped git am keeps HEAD on the branch and the tree clean.
 func TestUpdateRefusesAStoppedAm(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	f.advance(t, map[string]string{"merged.txt": "x\n"})
 	patch := filepath.Join(t.TempDir(), "demo.patch")
@@ -606,6 +622,7 @@ func TestUpdateRefusesAStoppedAm(t *testing.T) {
 
 // An empty commit has no change: another empty commit on main is not its proof.
 func TestIsMergedFalseForAnEmptyFix(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	root := f.proj.Path
 	gitT(t, f.env, root, "checkout", "-q", "-b", "side")
@@ -623,6 +640,7 @@ func TestIsMergedFalseForAnEmptyFix(t *testing.T) {
 // git cherry may name a commit of the side of a merge: its patch is not the
 // merge's change.
 func TestIsMergedFalseWhenCherryNamesAnotherCommit(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	root := f.proj.Path
 	gitT(t, f.env, root, "checkout", "-q", "-b", "side")
@@ -647,6 +665,7 @@ func TestIsMergedFalseWhenCherryNamesAnotherCommit(t *testing.T) {
 // lines are. A squash needs it. These two are false "merged" answers it gives,
 // accepted: Prove also needs the tool to stop seeing the flaw.
 func TestIsMergedPatchIDIgnoresWhitespaceAndPosition(t *testing.T) {
+	parallel(t)
 	t.Run("whitespace", func(t *testing.T) {
 		f := newFixture(t)
 		root := f.proj.Path
@@ -682,6 +701,7 @@ func TestIsMergedPatchIDIgnoresWhitespaceAndPosition(t *testing.T) {
 }
 
 func TestUpdateArgvIsDeafToTheBranchOptions(t *testing.T) {
+	parallel(t)
 	f := newFolderFixture(t)
 	to := f.advance(t, map[string]string{"merged.txt": "x\n"})
 	r := f.record()

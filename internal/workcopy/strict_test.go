@@ -15,6 +15,7 @@ import (
 )
 
 func TestComposerLockIsReadStrictly(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -59,6 +60,7 @@ func TestComposerLockIsReadStrictly(t *testing.T) {
 }
 
 func TestPackageLockIsReadStrictly(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -123,6 +125,7 @@ func TestPackageLockIsReadStrictly(t *testing.T) {
 }
 
 func TestStrictJSONRefusesAmbiguousDocuments(t *testing.T) {
+	parallel(t)
 	for _, bad := range []string{`{"a":1,"a":2}`, `{"a":1,"A":2}`, `{"x":{"a":1,"a":2}}`, `{"x":[{"a":1,"A":2}]}`, `{} {}`, `{"a":1} x`, `{"a":`, `x`, ``, `{"a":1}}`} {
 		if _, err := strictJSON([]byte(bad)); err == nil {
 			t.Errorf("%s accepted", bad)
@@ -195,6 +198,7 @@ func TestInstallRefusesJunctionedLockfileDir(t *testing.T) {
 }
 
 func TestArchiveHoldsNoExcludedFiles(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	var names []string
 	f.deps.Exec = func(ctx context.Context, name string, args, env []string, dir string) ([]byte, []byte, error) {
@@ -244,6 +248,7 @@ func TestArchiveHoldsNoExcludedFiles(t *testing.T) {
 }
 
 func TestComposerPackageNamesAreChecked(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -363,6 +368,7 @@ func TestNpmWorkspaceFoldersStayInTheCopy(t *testing.T) {
 }
 
 func TestBundledEntriesNeedABundlingParent(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -397,6 +403,7 @@ func TestBundledEntriesNeedABundlingParent(t *testing.T) {
 }
 
 func TestPrepareOfTreeWithOnlyExcludedFiles(t *testing.T) {
+	parallel(t)
 	needGit(t)
 	env := testGitEnv(t)
 	for name, files := range map[string][]string{"only-excluded": {".env", "private/notes.txt"}, "empty": nil} {
@@ -466,6 +473,7 @@ func TestCheckBinaryRefusesUnreadableFiles(t *testing.T) {
 }
 
 func TestTreeListingCapIsReachable(t *testing.T) {
+	parallel(t)
 	if listingCap() >= maxGitOutput {
 		t.Errorf("the listing cap %d is not below the git output cap %d: it can never refuse a listing", listingCap(), maxGitOutput)
 	}
@@ -475,6 +483,7 @@ func TestTreeListingCapIsReachable(t *testing.T) {
 // refused, and its folder prefixes are never cut at a wildcard (a key
 // "src*/node_modules/x" must not stop the junction check before src*).
 func TestLockKeysAreLiteral(t *testing.T) {
+	parallel(t)
 	for _, k := range []string{"node_modules/a*", "src?/node_modules/x", "node_modules/[a]", "node_modules/{a,b}", "node_modules/!a", "a]/node_modules/x", "a}/node_modules/x"} {
 		if validLockKey(k) {
 			t.Errorf("validLockKey(%q) = true, want false", k)
@@ -537,6 +546,7 @@ func TestLinkTargetsAreChecked(t *testing.T) {
 // Ruling 29: checkPackageJSON returns the workspaces it collected together
 // with the error of the walk, whatever the evaluation order.
 func TestCheckPackageJSONReturnsWorkspaces(t *testing.T) {
+	parallel(t)
 	dir := t.TempDir()
 	writeFile(t, dir, "p/package.json", `{"workspaces":["apps/web","packages/*"]}`)
 	root, err := os.OpenRoot(dir)

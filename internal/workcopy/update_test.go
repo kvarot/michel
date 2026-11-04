@@ -102,6 +102,7 @@ func envValue(env []string, key string) string {
 }
 
 func TestTreeHashAndCommitFile(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	t0, err := TreeHash(context.Background(), f.deps, c)
@@ -141,6 +142,7 @@ func TestTreeHashAndCommitFile(t *testing.T) {
 }
 
 func TestSnapshotFreezesTheCopy(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
@@ -196,6 +198,7 @@ func TestSnapshotFreezesTheCopy(t *testing.T) {
 }
 
 func TestFreezeChangeComesFromTheTree(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
@@ -224,6 +227,7 @@ func TestFreezeChangeComesFromTheTree(t *testing.T) {
 }
 
 func TestMaterializeFailsClosed(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	unknown := strings.Repeat("a", 40)
@@ -245,6 +249,7 @@ func TestMaterializeFailsClosed(t *testing.T) {
 }
 
 func TestCommitSnapshotChecksTheCommit(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
@@ -283,6 +288,7 @@ func TestCommitSnapshotChecksTheCommit(t *testing.T) {
 }
 
 func TestRemoveRefusesScratch(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	c := prepare(t, f)
 	snap, err := Freeze(context.Background(), f.deps, c)
