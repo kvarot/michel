@@ -145,3 +145,4 @@ Ruling: C46 (14c), `git.suggest.unsupported` goes in `jargonExceptions`, `s.scan
 - Task 14f: dispatched, minus routes, plus R55 and partial clones in "Declared only".
 - Workcopy tests: 1c9872d, 414 s to about 100 s, same 273 names.
 - Task 14f: 212c542; review running. Task 14g: dispatched.
+- Task 14f fix: 4efae0a. Task 14f: complete. Task 14g: 84c2a1a; review running. Task 15: dispatched.
