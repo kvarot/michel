@@ -442,9 +442,12 @@ export function chatNoStart({ guided, project, gone = false }) {
 export function plainRisk(finding, sheet, lang, advanced) {
   const flaw = sheet || finding
   if (String(flaw?.kind || '').startsWith('server_')) return serverRisk(flaw, lang, advanced)
-  const text = sheet?.explanation?.impact || sheet?.summary || finding?.summary
+  const impact = sheet?.explanation?.impact
+  const text = impact || sheet?.summary || finding?.summary
   if (!text) return translate(lang, 'path.means_none')
-  return advanced ? text : plainSentence(text, sheet || finding)
+  if (advanced) return text
+  // Without Michel's own sentence, the summary is the advisory's title, often English (B10).
+  return impact ? plainSentence(text, sheet || finding) : translate(lang, 'path.means_title', { title: text })
 }
 
 /**

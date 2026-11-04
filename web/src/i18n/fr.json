@@ -1201,6 +1201,7 @@
   "path.state.stopped": "arrêté",
   "path.means": "Ce que ça veut dire",
   "path.means_none": "Michel n'a pas encore d'explication pour cette faille.",
+  "path.means_title": "Titre de l'avis, tel que ses auteurs l'ont écrit : « {title} »",
   "path.title_any": "Une faille à corriger",
   "path.back": "Retour à la liste",
   "path.chat": "La conversation avec l'agent",

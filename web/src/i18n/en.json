@@ -1201,6 +1201,7 @@
   "path.state.stopped": "stopped",
   "path.means": "What this means",
   "path.means_none": "Michel has no explanation for this flaw yet.",
+  "path.means_title": "The advisory's own title: \"{title}\"",
   "path.title_any": "A flaw to fix",
   "path.back": "Back to the list",
   "path.chat": "The conversation with the agent",

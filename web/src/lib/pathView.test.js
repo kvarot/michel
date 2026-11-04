@@ -468,7 +468,10 @@ describe('plainRisk', () => {
     expect(plainRisk(finding(), sheet(text), 'fr', true)).toBe(text)
   })
   test('falls back on the summary, then says it has nothing', () => {
-    expect(plainRisk(finding({ summary: 'Un résumé.' }), null, 'fr', false)).toBe('Un résumé.')
+    // B10: the summary is the advisory's own title, often English: the simple mode says so.
+    expect(plainRisk(finding({ summary: 'Cross-domain cookie leakage' }), null, 'fr', false)).toBe("Titre de l'avis, tel que ses auteurs l'ont écrit : « Cross-domain cookie leakage »")
+    expect(plainRisk(finding({ summary: 'Cross-domain cookie leakage' }), null, 'en', false)).toBe("The advisory's own title: \"Cross-domain cookie leakage\"")
+    expect(plainRisk(finding({ summary: 'Cross-domain cookie leakage' }), null, 'fr', true)).toBe('Cross-domain cookie leakage')
     expect(plainRisk(finding(), null, 'fr', false)).toBe("Michel n'a pas encore d'explication pour cette faille.")
     expect(plainRisk(finding(), null, 'en', false)).toBe('Michel has no explanation for this flaw yet.')
   })
