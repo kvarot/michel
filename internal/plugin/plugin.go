@@ -311,8 +311,8 @@ func defaultExec(ctx context.Context, name string, args, env []string, dir strin
 // needs to start (PATH, SystemRoot, TEMP/TMP), HOME and USERPROFILE set to
 // home (the tool keeps its settings and logs there, in the data folder; left
 // out when home is ""), the proxy at proxyAddr for every scheme, and the
-// switches that keep Trivy and Semgrep offline. No secret, token or other
-// variable of Michel's reaches it.
+// switches that keep Trivy and Semgrep offline and what the git they may run
+// reads. No secret, token or other variable of Michel's reaches it.
 func toolEnv(proxyAddr, home string) []string {
 	var env []string
 	for _, k := range []string{"PATH", "SystemRoot", "TEMP", "TMP"} {
@@ -327,7 +327,11 @@ func toolEnv(proxyAddr, home string) []string {
 	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
 		env = append(env, k+"="+proxy)
 	}
-	return append(env, "NO_PROXY=", "no_proxy=", "TRIVY_SKIP_DB_UPDATE=true", "SEMGREP_SEND_METRICS=off")
+	env = append(env, "NO_PROXY=", "no_proxy=", "TRIVY_SKIP_DB_UPDATE=true", "SEMGREP_SEND_METRICS=off")
+	// Semgrep runs git on the project by itself (git ls-files), and a project is
+	// not trusted: these variables beat what its .git/config says.
+	return append(env, "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=none", "GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.fsmonitor", "GIT_CONFIG_VALUE_0=false")
 }
 
 // noPath drops the file path of a file system error: report and data paths
