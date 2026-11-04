@@ -584,6 +584,7 @@ func TestPushDeadlineKillsTheWholeTree(t *testing.T) {
 }
 
 func TestRevParseCutByTheDeadlineIsNotAnEmptyRepository(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	rec := &gitRecorder{fake: func(ctx context.Context, sub string, _ []string) ([]byte, []byte, error, bool) {
 		if sub != "rev-parse" {
@@ -744,6 +745,7 @@ func startsAProgram(call *ast.CallExpr) bool {
 
 // Nothing in the whole program names git as the program to start but the runner.
 func TestGitIsNamedOnlyByTheRunner(t *testing.T) {
+	parallel(t)
 	root := repoRoot(t)
 	for _, top := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, top), func(path string, e os.DirEntry, err error) error {

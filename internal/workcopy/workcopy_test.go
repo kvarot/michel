@@ -277,6 +277,7 @@ func TestPrepareReportsSecretHits(t *testing.T) {
 }
 
 func TestDiffRejectsOutsideCopy(t *testing.T) {
+	parallel(t)
 	for _, e := range []rawEntry{
 		{path: "../x", mode: "100644"},
 		{path: "a/../../x", mode: "100644"},
@@ -507,6 +508,7 @@ func fileSHA(t *testing.T, p string) string {
 }
 
 func TestApplyLeavesWorkingTreeUntouched(t *testing.T) {
+	parallel(t)
 	f, c, sha := committedFix(t)
 	statusBefore := gitT(t, f.env, f.proj.Path, "status", "--porcelain")
 	gitDir := filepath.Join(f.proj.Path, ".git")
@@ -852,6 +854,7 @@ func TestPlantedHooksDoNotRun(t *testing.T) {
 }
 
 func TestInstallRefusesSymlinkedManifestDir(t *testing.T) {
+	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -1432,6 +1435,7 @@ func TestTreeSizeIgnoresExcludedFiles(t *testing.T) {
 }
 
 func TestEnvAcceptsProxyURL(t *testing.T) {
+	parallel(t)
 	d := Deps{DataDir: t.TempDir(), ProxyAddr: "http://michel:0123abcd@127.0.0.1:4567"}
 	env, home, err := Env(d)
 	if err != nil {
