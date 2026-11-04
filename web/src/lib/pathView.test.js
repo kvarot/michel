@@ -414,7 +414,7 @@ describe('project plan tells the truth for each case', () => {
     expect(keysOf(refused)).not.toContain('self_start')
   })
   test('what the copy holds and what Michel searches are two paragraphs, in both languages', () => {
-    const words = (text) => text.split(/s+/).length
+    const words = (text) => text.split(/\s+/).length
     for (const dict of [fr, en]) {
       expect(words(dict['plan.project.copy'])).toBeLessThan(75)
       expect(words(dict['plan.project.keys'])).toBeLessThan(75)

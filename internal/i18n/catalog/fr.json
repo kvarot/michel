@@ -94,7 +94,7 @@
   "api.git.rejected": "Le service a refusé cette branche. Michel ne force jamais un envoi.",
   "api.git.rejected_hint": "Une branche du même nom existe peut-être avec un autre contenu, ou une règle du service l'interdit. Regarde sur le site.",
   "api.git.sent_not_noted": "La correction est bien partie : la branche est sur le service, mais Michel n'a pas pu le noter chez lui.",
-  "api.git.sent_not_noted_hint": "La correction n'a pas été envoyée deux fois. Tu peux ouvrir le site et y fusionner la branche. Pour que Michel le note, clique à nouveau : si la branche est encore là, telle quelle, il n'enverra rien de plus. S'il ne peut toujours pas le noter, il te le redira.",
+  "api.git.sent_not_noted_hint": "La correction n'a pas été envoyée deux fois. Pour que Michel le note, clique à nouveau avant de fusionner : si la branche est encore là, telle quelle, il n'enverra rien de plus. Si tu l'as déjà fusionnée et que le site l'a supprimée, ne clique pas : Michel l'enverrait de nouveau. S'il ne peut toujours pas le noter, il te le redira.",
   "api.git.remote_changed": "L'adresse du projet a changé depuis ton accord : Michel n'a rien fait.",
   "api.git.remote_changed_hint": "Regarde la fiche du projet et réponds à nouveau.",
   "api.git.submodule": "Cette mise à jour retirerait ou remplacerait un sous-dossier que Git gère à part (un sous-module), et il n'est pas vide : Michel n'a pas touché à tes fichiers.",

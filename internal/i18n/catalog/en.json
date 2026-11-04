@@ -94,7 +94,7 @@
   "api.git.rejected": "The service refused this branch. Michel never forces a send.",
   "api.git.rejected_hint": "A branch of the same name may exist with other content, or a rule of the service forbids it. Look on the site.",
   "api.git.sent_not_noted": "The fix did go: the branch is on the service, but Michel could not note it on his side.",
-  "api.git.sent_not_noted_hint": "The fix was not sent twice. You can open the site and merge the branch there. For Michel to note it, click again: if the branch is still there, unchanged, he sends nothing more. If he still cannot note it, he will tell you.",
+  "api.git.sent_not_noted_hint": "The fix was not sent twice. For Michel to note it, click again before merging: if the branch is still there, unchanged, he sends nothing more. If you already merged it and the site deleted it, do not click: Michel would send it again. If he still cannot note it, he will tell you.",
   "api.git.remote_changed": "The project's address changed since you agreed: Michel did nothing.",
   "api.git.remote_changed_hint": "Look at the project's page and answer again.",
   "api.git.submodule": "This update would remove or replace a subfolder Git manages apart (a submodule), and it is not empty: Michel left your files alone.",
