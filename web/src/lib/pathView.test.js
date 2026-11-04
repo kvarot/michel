@@ -281,11 +281,11 @@ describe('the words of the plan (F1, F6, F7, F9, FR)', () => {
     expect(fr['path.note.deploy_unchecked']).toContain("Michel l'a vu dans ton projet (il ne pouvait pas le contrôler avant). Pense à publier")
     expect(en['path.note.deploy_unchecked']).toContain('Michel saw it in your project (he could not check it before). Remember to publish')
   })
-  test('the branch is named where PhpStorm shows it', () => {
-    expect(fr['git.manual.lead']).toContain('le nom de ta branche est affiché dans PhpStorm')
-    expect(fr['git.manual.lead']).not.toContain('bas à droite')
-    expect(en['git.manual.lead']).toContain('the name of your branch is shown in PhpStorm')
-    expect(en['git.manual.lead']).not.toContain('bottom right')
+  test('the branch is found with a command, not in a named editor (B4)', () => {
+    expect(fr['git.manual.lead']).toContain('git branch --show-current')
+    expect(fr['git.manual.lead']).not.toContain('PhpStorm')
+    expect(en['git.manual.lead']).toContain('git branch --show-current')
+    expect(en['git.manual.lead']).not.toContain('PhpStorm')
   })
   test('self_start names the consent', () => {
     expect(fr['plan.project.self_start']).toContain('une fois ton accord donné pour ce projet')

@@ -593,7 +593,7 @@ func newFixApproveCmd(deps *Deps) *cobra.Command {
 				return deps.Wrapf("cli.fix.approve.apply_failed", err)
 			}
 			_ = os.Remove(shownFile(cmd, a.ID))
-			fmt.Fprintln(deps.Stdout, deps.T("fix.msg.applied", fix.Branch(a.ID)))
+			fmt.Fprintln(deps.Stdout, deps.T("fix.msg.applied", fix.Branch(a.ID)), deps.T("cli.fix.approve.merge_next"))
 			return nil
 		},
 	}

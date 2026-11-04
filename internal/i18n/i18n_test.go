@@ -242,3 +242,17 @@ func TestConsentDoesNotPromiseThatSecretsStay(t *testing.T) {
 		}
 	}
 }
+
+// B4: the message left in the conversation when the branch exists does not
+// tell what to do next (the page does, and what it says depends on whether
+// the project is attached to a Git service) and names no editor.
+func TestBranchReadyMessageGivesNoNextStep(t *testing.T) {
+	for lang, bad := range map[Lang][]string{FR: {"PhpStorm", "Fusionne", "déploie", "d'habitude"}, EN: {"PhpStorm", "Merge it", "deploy", "as usual"}} {
+		got := catalogs[lang]["fix.msg.applied"]
+		for _, w := range bad {
+			if strings.Contains(got, w) {
+				t.Errorf("%s fix.msg.applied still says %q: %q", lang, w, got)
+			}
+		}
+	}
+}
