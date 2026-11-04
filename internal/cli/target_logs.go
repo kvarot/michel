@@ -86,7 +86,7 @@ func newTargetLogsListCmd(deps *Deps) *cobra.Command {
 					}
 				}
 				for _, u := range unseen[s.ID] {
-					row.Unseen = append(row.Unseen, logUnseenRow{File: api.LogPath(u.File), Cause: u.Cause, Reason: api.LogUnseenReason(deps.Lang, u.Cause)})
+					row.Unseen = append(row.Unseen, logUnseenRow{File: api.LogPath(u.File), Cause: u.Cause, Reason: api.LogUnseenReasonFor(deps.Lang, u.Cause, api.UnseenIsFolder(s, u.File))})
 				}
 				for _, n := range api.LogStateNotes(notes, s.ID, touched) {
 					row.Notes = append(row.Notes, api.LogNoteText(deps.Lang, n))

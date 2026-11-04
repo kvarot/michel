@@ -1012,6 +1012,7 @@
   "logs.title": "Journaux",
   "logs.intro": "Un journal est un fichier où ton serveur note ce qui s'est mal passé. Michel peut le lire de temps en temps pour te prévenir quand une nouvelle erreur apparaît. Il ne change rien sur le serveur et ne garde jamais une ligne du journal.",
   "logs.loading": "Michel regarde les journaux de ce serveur…",
+  "logs.note.gap": "Michel n'a pas pu lire ce journal du {from} au {to}.",
   "logs.recommended": "recommandé",
   "logs.cancel": "Annuler",
   "logs.close": "Fermer",

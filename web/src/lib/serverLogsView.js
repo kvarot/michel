@@ -4,6 +4,7 @@
 // of computing: the recommended choice comes first and says so.
 import { translate } from '../i18n/index.js'
 import { agoText } from './sourcesView.js'
+import { localDay } from './digestView.js'
 
 /** The levels of an error, the worst first (the API's own words). */
 export const levelOrder = ['critical', 'error', 'warning', 'info']
@@ -308,4 +309,36 @@ export function routeChoices(level, env, lang) {
   return [rec, ...routes.filter((r) => r !== rec)].map((value) => ({
     value, recommended: value === rec, title: value === rec ? `${t(lang, `route.${value}`)} (${t(lang, 'recommended')})` : t(lang, `route.${value}`),
   }))
+}
+
+/**
+ * moment writes a time on the clock of the person, day and hour, as the page
+ * writes dates elsewhere (local, never "UTC"): « 02/11/2026 à 15h04 » in French,
+ * « 2026-11-02 15:04 » in English. "" for a time that is not one.
+ * @param {string} iso @param {string} lang
+ */
+function moment(iso, lang) {
+  const d = new Date(String(iso || ''))
+  if (!iso || Number.isNaN(d.getTime())) return ''
+  const h = String(d.getHours()).padStart(2, '0')
+  const m = String(d.getMinutes()).padStart(2, '0')
+  return lang === 'fr' ? `${localDay(iso, lang)} à ${h}h${m}` : `${localDay(iso, lang)} ${h}:${m}`
+}
+
+/**
+ * noteLine is the sentence of a note of a log (what Michel could not read or left
+ * out). The API's own sentence stands, except for a gap in the reading: its dates
+ * come as RFC 3339 times, and the page writes them on the clock of the person.
+ * @param {{kind?: string, text?: string, from?: string, to?: string}} note one of a source's notes
+ * @param {string} lang
+ * @returns {string}
+ */
+export function noteLine(note, lang) {
+  const n = note || {}
+  if (n.kind === 'gap') {
+    const from = moment(n.from, lang)
+    const to = moment(n.to, lang)
+    if (from && to) return t(lang, 'note.gap', { from, to })
+  }
+  return String(n.text || '')
 }

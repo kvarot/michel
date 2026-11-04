@@ -1012,6 +1012,7 @@
   "logs.title": "Logs",
   "logs.intro": "A log is a file where your server writes down what went wrong. Michel can read it from time to time to tell you when a new error shows up. It changes nothing on the server and never keeps a line of the log.",
   "logs.loading": "Michel is looking at the logs of this server…",
+  "logs.note.gap": "Michel could not read this log from {from} to {to}.",
   "logs.recommended": "recommended",
   "logs.cancel": "Cancel",
   "logs.close": "Close",

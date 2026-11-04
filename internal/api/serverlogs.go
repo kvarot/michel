@@ -286,13 +286,17 @@ func LogChannelHears(p policy.Policy, st serverlog.Settings) bool {
 // it is what the page sends back.
 func LogPath(p string) string { return localPaths(srvText("", p)) }
 
-func noteTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+// noteTime writes a time on the clock of this computer, which is the person's:
+// day and hour, never "UTC".
+func noteTime(lang i18n.Lang, t time.Time) string {
+	return t.In(time.Local).Format(i18n.T(lang, "api.logs.note.moment_layout"))
+}
 
 // noteText is the sentence of a note.
 func noteText(lang i18n.Lang, n serverlog.Note) string {
 	switch n.Kind {
 	case serverlog.NoteGap:
-		return i18n.T(lang, "api.logs.note.gap", noteTime(n.From), noteTime(n.To))
+		return i18n.T(lang, "api.logs.note.gap", noteTime(lang, n.From), noteTime(lang, n.To))
 	case serverlog.NoteSkipped:
 		return i18n.T(lang, "api.logs.note.skipped", serverlog.ByteSize(n.Amount))
 	case serverlog.NoteRotated:
@@ -383,8 +387,24 @@ func (s *server) logSourceOf(w http.ResponseWriter, r *http.Request, lang i18n.L
 // the filter wrote (serverlog.Cause*): the real cause, in plain words, so that a
 // refused link does not read as a rights problem.
 func LogUnseenReason(lang i18n.Lang, cause string) string {
+	return LogUnseenReasonFor(lang, cause, false)
+}
+
+// UnseenIsFolder says whether an unseen entry of a source is the folder of its
+// pattern rather than a file: a pattern with a wildcard that the filter reported
+// as it is declared, which it does when the folder cannot be listed.
+func UnseenIsFolder(src serverlog.Source, entry string) bool {
+	return strings.ContainsAny(src.Path, "*?") && entry == src.Path
+}
+
+// LogUnseenReasonFor is LogUnseenReason for an entry that is a folder (see
+// UnseenIsFolder) when folder is set: "this folder", where the data says so.
+func LogUnseenReasonFor(lang i18n.Lang, cause string, folder bool) string {
 	switch cause {
 	case serverlog.CauseDenied:
+		if folder {
+			return i18n.T(lang, "api.logs.unseen.denied_folder")
+		}
 		return i18n.T(lang, "api.logs.unseen.denied")
 	case serverlog.CauseLink:
 		return i18n.T(lang, "api.logs.unseen.link")
@@ -489,7 +509,7 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 			v.Notes = append(v.Notes, LogNoteView{Kind: n.Kind, Text: noteText(lang, n), From: stamp(n.From), To: stamp(n.To), Amount: n.Amount})
 		}
 		for _, u := range unseen[src.ID] {
-			v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u.File), Reason: LogUnseenReason(lang, u.Cause)})
+			v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u.File), Reason: LogUnseenReasonFor(lang, u.Cause, UnseenIsFolder(src, u.File))})
 		}
 		if src.Active {
 			reason, failed := failures[src.ID]
@@ -903,7 +923,7 @@ func (s *server) logSourceTry(w http.ResponseWriter, r *http.Request) {
 		v.SkippedBytes += f.Skipped
 	}
 	for _, u := range out.Unseen {
-		v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u), Reason: LogUnseenReason(lang, out.UnseenCause[u])})
+		v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u), Reason: LogUnseenReasonFor(lang, out.UnseenCause[u], UnseenIsFolder(src, u))})
 	}
 	switch {
 	case len(v.Records) > 0 || len(v.Unseen) > 0:
