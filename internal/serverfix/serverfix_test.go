@@ -1,10 +1,10 @@
 package serverfix_test
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
