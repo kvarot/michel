@@ -79,7 +79,7 @@ var detectors = []detector{
 	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?[ 	]*(?:=>|:|=)[ 	]*` + valueExpr), 0, false, false},
 	// PHP: define('DB_PASSWORD', '...'), Laravel's 'key' => 'base64:...', and
 	// the password, third argument of new PDO, new mysqli and mysqli_connect.
-	{KindAssignment, regexp.MustCompile(`\bdefine\([ 	]*['"]([^'"\n]*(?:PASSWORD|KEY|SECRET|SALT|TOKEN)[^'"\n]*)['"][ 	]*,[ 	]*` + valueExpr), 1, true, false},
+	{KindAssignment, regexp.MustCompile(`\bdefine\([ 	]*['"]([^'"\n]*(?:PASSWORD|KEY|SECRET|SALT|TOKEN)[^'"\n]*)['"][ 	]*,[ 	]*` + valueExpr), 1, true, true},
 	{KindAssignment, regexp.MustCompile(`['"]key['"][ 	]*=>[ 	]*['"](base64:[A-Za-z0-9+/=]{16,})['"]`), 0, false, false},
 	{KindAssignment, regexp.MustCompile(`\bnew[ 	]+\\?PDO\([^,\n]+,[^,\n]+,[ 	]*` + valueExpr), 0, true, false},
 	// The same, read by arguments: strings and one or two levels of parentheses are
@@ -180,12 +180,10 @@ func rank(k Kind) int {
 func find(s, tokenPrefix string) []match {
 	var all []match
 	for _, d := range detectors {
-		covered := 0 // where the last chain of this detector ended: never read twice
+		covered := 0 // where the last accepted chain of this detector ended
 		for _, loc := range d.re.FindAllStringSubmatchIndex(s, -1) {
 			a, b := loc[0], loc[1]
-			unquoted := false
-			value := ""
-			var tails [][2]int
+			unquoted, quoted := false, false
 			if len(loc) > 2 {
 				a, b = -1, -1
 				for g := 1 + d.skip; 2*g+1 < len(loc); g++ {
@@ -193,30 +191,41 @@ func find(s, tokenPrefix string) []match {
 						a, b = loc[2*g], loc[2*g+1]
 						// The last group of valueExpr is the value without quotes.
 						unquoted = 2*g+3 >= len(loc)
-						if d.concat && g-d.skip <= 3 {
-							if b+1 >= covered {
-								tails, covered = chainTails(s, b+1)
-							}
-						}
+						quoted = g-d.skip <= 3
 						break
 					}
 				}
 			}
-			if a < 0 || b <= a || isPlaceholder(s[a:b], tokenPrefix) {
-				continue
-			}
-			if d.quotedOnly && unquoted {
+			if a < 0 || (d.quotedOnly && unquoted) {
 				continue
 			}
 			if d.skip > 0 && notSecretNames.MatchString(s[loc[2]:loc[3]]) {
 				continue
 			}
-			if (d.kind == KindEnvValue || d.kind == KindAssignment) && isNonValue(s[a:b]) {
-				continue
+			noValue := b <= a || isPlaceholder(s[a:b], tokenPrefix) ||
+				((d.kind == KindEnvValue || d.kind == KindAssignment) && isNonValue(s[a:b]))
+			var tails [][2]int
+			if d.concat && quoted && b+1 >= covered {
+				read, end := chainTails(s, b+1, phpShaped(s, loc[0], a))
+				for _, t := range read {
+					if !isPlaceholder(s[t[0]:t[1]], tokenPrefix) {
+						tails = append(tails, t)
+					}
+				}
+				if !noValue || len(tails) > 0 {
+					covered = end
+				}
+			}
+			if noValue {
+				// '' . 'value': what is not a value leaves the rest of the chain to judge.
+				if len(tails) == 0 {
+					continue
+				}
+				a, b, tails = tails[0][0], tails[0][1], tails[1:]
 			}
 			// The value is judged as the literals of the chain put end to end; each
 			// literal is hidden inside its own quotes, so the line stays balanced.
-			value = s[a:b]
+			value := s[a:b]
 			for _, t := range tails {
 				value += s[t[0]:t[1]]
 			}
@@ -305,99 +314,175 @@ func mustRel(base, target string) string {
 	return r
 }
 
-// maxChain bounds how far a chain of literals is read before the rest of its
-// line is hidden whole.
-const maxChain = 4096
+const (
+	// maxChain bounds how far a chain is read literal by literal.
+	maxChain = 4096
+	// maxChainCut bounds the part past maxChain, hidden whole.
+	maxChainCut = 1 << 16
+)
 
-// chainTails finds the literals joined, after a quoted value that ends just
-// before pos, by dots: 'abc' . $x . "def". It returns the inside of every
-// non-empty literal of the chain, and where it stopped, so no position is read
-// twice. A chain ends at ";" or "," outside a bracket, at the bracket that
-// closes the call, at "?>", at a dot that is not a PHP concatenation, and at a
-// line end unless the line ends with a dot or the next one starts with one.
-// Comments are skipped. A string over several lines or a heredoc ends the
-// chain unread. When the limit cuts a chain, the rest of that line is returned
-// as one span, quotes included: a leak is worse than a masked line.
-func chainTails(s string, pos int) (tails [][2]int, end int) {
-	started, depth, last := false, 0, byte(0)
-	limit := min(len(s), pos+maxChain)
-	i := pos
-	for ; i < limit; i++ {
-		c := s[i]
-		if j := commentEnd(s, i); j > i {
-			i = j - 1
-			continue
+// chainTails finds the literals joined by dots to a quoted value that ends just
+// before pos: 'abc' . $x . "def". It returns the inside of every non-empty
+// literal, so the quotes stay balanced, and where it stopped. A chain starts
+// with a dot, within maxChain; comments do not count.
+//
+// It ends at ";" or "," outside a bracket, at the bracket that closes the call,
+// at "?>", at a string not closed on its line (unread), and at a line end unless
+// the next sign is a dot; a line end just after a dot does not count.
+//
+// Rule of the dots: in PHP (php is true) any expression may follow a dot, and
+// its brackets and strings are read as above; only ".=" ends the chain. Elsewhere
+// 'abc'.encode() is a method: see dotContinues.
+//
+// Past maxChain, a leak being worse than a masked line, everything is returned as
+// one span, quotes included, up to the next ";", ",", "?>" or closing bracket,
+// across lines. Past maxChainCut, up to the end of that line.
+func chainTails(s string, pos int, php bool) (tails [][2]int, end int) {
+	limit, hard := min(len(s), pos+maxChain), min(len(s), pos+maxChainCut)
+	i, _ := skipBlanks(s, pos, limit)
+	if i >= limit || s[i] != '.' || !dotContinues(s, i, limit, php) {
+		return nil, pos
+	}
+	cut, depth := -1, 0
+scan:
+	for {
+		var newline bool
+		i, newline = skipBlanks(s, i, hard)
+		if i >= limit && cut < 0 {
+			cut = i
 		}
-		switch {
+		if i >= hard {
+			break
+		}
+		if newline && depth == 0 && i < limit && s[i] != '.' {
+			break
+		}
+		switch c := s[i]; {
 		case c == '\'' || c == '"':
-			if !started {
-				return nil, pos
-			}
 			j := stringEnd(s, i)
 			if j < 0 {
-				return tails, i
+				if i >= limit {
+					i = lineEnd(s, i)
+				}
+				break scan
 			}
-			if j > i+1 {
+			if i < limit && j > i+1 {
 				tails = append(tails, [2]int{i + 1, j})
 			}
-			i, last = j, c
-		case c == '\n' && depth == 0:
-			if started && last != '.' && nextSign(s, i) != '.' {
-				return tails, i
+			i = j + 1
+		case c == '.':
+			if depth == 0 && i < limit && !dotContinues(s, i, hard, php) {
+				break scan
 			}
-		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
-		case c == '.' && depth == 0:
-			if !dotContinues(s, i) {
-				return tails, i
-			}
-			started, last = true, c
-		case !started:
-			return nil, pos
+			i, _ = skipBlanks(s, i+1, hard)
 		case c == '?' && i+1 < len(s) && s[i+1] == '>':
-			return tails, i
+			break scan
 		case c == '(' || c == '[' || c == '{':
 			depth++
-			last = c
+			i++
 		case c == ')' || c == ']' || c == '}':
-			if depth--; depth < 0 {
-				return tails, i
+			if depth == 0 {
+				break scan
 			}
-			last = c
+			depth--
+			i++
 		case (c == ';' || c == ',') && depth == 0:
-			return tails, i
+			break scan
 		default:
-			last = c
+			i++
 		}
 	}
-	if started && i >= limit && limit < len(s) {
-		eol := strings.IndexByte(s[limit:], '\n')
-		if eol < 0 {
-			eol = len(s) - limit
-		}
-		if i < limit+eol {
-			tails = append(tails, [2]int{i, limit + eol})
-			i = limit + eol
+	if i >= hard && hard < len(s) {
+		i = lineEnd(s, i)
+	}
+	if cut >= 0 && i > cut {
+		if span := strings.TrimRight(s[cut:i], " \t\r\n"); span != "" {
+			tails = append(tails, [2]int{cut, cut + len(span)})
 		}
 	}
 	return tails, i
 }
 
+// phpShaped says the match that starts at start, with its value at value, is PHP:
+// a call to new or mysqli_, define, a fat arrow, or a "$" before it on its line
+// ($config['password'], where the match itself starts at the name).
+func phpShaped(s string, start, value int) bool {
+	head := strings.ToLower(s[start:min(start+7, value)])
+	if strings.HasPrefix(head, "new") || strings.HasPrefix(head, "mysqli_") || strings.HasPrefix(head, "define") ||
+		strings.Contains(s[start:value], "=>") {
+		return true
+	}
+	before := s[max(0, start-256):start]
+	return strings.Contains(before[strings.LastIndexByte(before, '\n')+1:], "$")
+}
+
+// dotContinues says the dot at i joins a chain. ".=" never does. Outside PHP a
+// method on a string, 'abc'.encode(), does not: a variable, a quote or a
+// parenthesis does; a name does if a blank stands beside the dot.
+func dotContinues(s string, i, stop int, php bool) bool {
+	if i+1 >= len(s) || s[i+1] == '=' {
+		return false
+	}
+	if php {
+		return true
+	}
+	next, _ := skipBlanks(s, i+1, stop)
+	if next >= stop {
+		return false
+	}
+	switch c := s[next]; {
+	case c == '$' || c == '\'' || c == '"' || c == '(' || c == '\\':
+		return true
+	case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+		return s[i+1] == ' ' || s[i+1] == '\t' || (i > 0 && (s[i-1] == ' ' || s[i-1] == '\t'))
+	}
+	return false
+}
+
+// skipBlanks returns the index of the next sign from i before stop, or stop, with
+// blanks and comments skipped, and whether a line end was crossed outside a block
+// comment.
+func skipBlanks(s string, i, stop int) (int, bool) {
+	newline := false
+	for i < stop {
+		switch s[i] {
+		case '\n':
+			newline = true
+			i++
+		case ' ', '\t', '\r':
+			i++
+		default:
+			j := commentEnd(s, i, stop)
+			if j == i {
+				return i, newline
+			}
+			i = j
+		}
+	}
+	return i, newline
+}
+
 // commentEnd returns the index after the comment that starts at i, or i when
-// none starts there. An unclosed block comment runs to the end of the text.
-func commentEnd(s string, i int) int {
+// none starts there. A line comment ends before its line end; a comment not
+// closed before stop ends at stop.
+func commentEnd(s string, i, stop int) int {
+	k := -1
 	switch {
 	case strings.HasPrefix(s[i:], "/*"):
-		if k := strings.Index(s[i+2:], "*/"); k >= 0 {
+		if i+2 > stop {
+			return stop
+		}
+		if k = strings.Index(s[i+2:stop], "*/"); k >= 0 {
 			return i + 2 + k + 2
 		}
-		return len(s)
 	case strings.HasPrefix(s[i:], "//"), s[i] == '#':
-		if k := strings.IndexByte(s[i:], '\n'); k >= 0 {
+		if k = strings.IndexByte(s[i:stop], '\n'); k >= 0 {
 			return i + k
 		}
-		return len(s)
+	default:
+		return i
 	}
-	return i
+	return stop
 }
 
 // stringEnd returns the index of the quote that closes the string opened at i,
@@ -414,32 +499,10 @@ func stringEnd(s string, i int) int {
 	return -1
 }
 
-// nextSign is the next byte after i that is not blank, with comments skipped.
-func nextSign(s string, i int) byte {
-	for i++; i < len(s); i++ {
-		if j := commentEnd(s, i); j > i {
-			i = j - 1
-		} else if !strings.ContainsRune(" \t\r\n", rune(s[i])) {
-			return s[i]
-		}
+// lineEnd returns the index of the line end at or after i, or the end of s.
+func lineEnd(s string, i int) int {
+	if k := strings.IndexByte(s[i:], '\n'); k >= 0 {
+		return i + k
 	}
-	return 0
-}
-
-// dotContinues says the dot at i joins a chain in PHP: ".=" does not, and a
-// method call written 'abc'.encode() (a name and a parenthesis, no blank around
-// the dot) does not. A variable, a quote or a parenthesis does; a name does if
-// a blank stands beside the dot.
-func dotContinues(s string, i int) bool {
-	if i+1 >= len(s) || s[i+1] == '=' {
-		return false
-	}
-	blank := strings.ContainsRune(" \t", rune(s[i+1])) || (i > 0 && strings.ContainsRune(" \t", rune(s[i-1])))
-	switch c := nextSign(s, i); {
-	case c == '$' || c == '\'' || c == '"' || c == '(' || c == '\\':
-		return true
-	case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
-		return blank
-	}
-	return false
+	return len(s)
 }
