@@ -88,6 +88,23 @@ type incident struct {
 	reason   string
 	alerted  bool
 	carrier  bool
+
+	// partial: the last pass reached the server and read some sources, so the
+	// incident is told source by source. sources are the streaks of the sources
+	// failing in the last pass (by id), keyed out as soon as one does not fail;
+	// told the sources already told in this incident; named the sources past the
+	// bar in the last pass, newly those of them not told yet.
+	partial bool
+	sources map[string]*streak
+	told    map[string]bool
+	named   []FailedSource
+	newly   []string
+}
+
+// streak counts the passes in a row in which one source failed.
+type streak struct {
+	failures int
+	first    time.Time
 }
 
 // schedulerPass is the read of one server; replaced in tests.
@@ -313,6 +330,12 @@ func (s *scheduler) markTold(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if inc := s.incidents[id]; inc != nil {
+		if inc.partial {
+			for _, src := range inc.newly {
+				inc.told[src] = true
+			}
+			return
+		}
 		inc.alerted = true
 	}
 }
@@ -332,6 +355,12 @@ func (s *scheduler) fail(ctx context.Context, o passOutcome) (reached, untold bo
 	}
 	inc.failures++
 	inc.reason = o.res.Reason
+	// The server answered and some of its sources were opened: each source that
+	// fails has its own bar, and is told once per incident.
+	if inc.partial = o.res.Read > 0 && len(o.res.Failed) > 0; inc.partial {
+		return s.failSources(inc, o, o.t.Env == target.EnvProd)
+	}
+	inc.sources, inc.named, inc.newly = nil, nil, nil
 	if since.IsZero() || since.After(inc.first) {
 		since = inc.first
 	}
@@ -341,6 +370,52 @@ func (s *scheduler) fail(ctx context.Context, o passOutcome) (reached, untold bo
 	untold = !inc.alerted
 	if o.t.Env == target.EnvProd {
 		inc.alerted = true
+	}
+	return true, untold
+}
+
+// failSources updates the streaks of the sources that failed in a pass that
+// reached the server (the caller holds the lock). A source that does not fail
+// loses its streak. A source is past the bar after 3 failures in a row and 30
+// minutes since the first of them; it is told once per incident, and a source
+// newly past the bar is a new thing to tell, whatever was told before. A prod
+// incident counts as told from here, as in fail.
+func (s *scheduler) failSources(inc *incident, o passOutcome, prod bool) (reached, untold bool) {
+	if inc.told == nil {
+		inc.told = map[string]bool{}
+	}
+	now := make(map[string]*streak, len(o.res.Failed))
+	inc.named, inc.newly = nil, nil
+	for _, f := range o.res.Failed {
+		st := inc.sources[f.ID]
+		if st == nil {
+			st = &streak{first: o.at}
+		}
+		st.failures++
+		now[f.ID] = st
+		if st.failures >= notReadingFailures && o.at.Sub(st.first) >= notReadingAfter {
+			inc.named = append(inc.named, f)
+			if !inc.told[f.ID] {
+				inc.newly = append(inc.newly, f.ID)
+			}
+		}
+	}
+	inc.sources = now
+	// A source that did not fail in this pass is back: its next failure is a new
+	// thing to tell.
+	for id := range inc.told {
+		if _, still := now[id]; !still {
+			delete(inc.told, id)
+		}
+	}
+	if len(inc.named) == 0 {
+		return false, false
+	}
+	untold = len(inc.newly) > 0
+	if prod {
+		for _, id := range inc.newly {
+			inc.told[id] = true
+		}
 	}
 	return true, untold
 }
@@ -404,15 +479,37 @@ func (s *scheduler) send(ctx context.Context, group []passOutcome, reason string
 		return
 	}
 	items := make([]AlertItem, len(group))
+	var named []FailedSource
 	s.mu.Lock()
 	for i, o := range group {
 		items[i] = AlertItem{Kind: AlertNotReading, Type: o.t.Name}
 		if inc := s.incidents[o.t.ID]; inc != nil {
 			inc.carrier = true
+			if len(group) == 1 && inc.partial {
+				named = append(named, inc.named...)
+			}
 		}
 	}
 	s.mu.Unlock()
-	s.d.Alert(ctx, AlertInput{Target: group[0].t, Kind: AlertNotReading, Items: items, Reason: reason})
+	in := AlertInput{Target: group[0].t, Kind: AlertNotReading, Items: items, Reason: reason}
+	if len(named) > 0 {
+		in.Sources, in.Reason = namedSources(named)
+	}
+	s.d.Alert(ctx, in)
+}
+
+// namedSources says which sources a partial alert is about, and the cause they
+// share (the general one if they differ).
+func namedSources(named []FailedSource) ([]SourceRef, string) {
+	refs := make([]SourceRef, 0, len(named))
+	shared := named[0].Reason
+	for _, f := range named {
+		refs = append(refs, f.Ref)
+		if f.Reason != shared {
+			shared = ReasonError
+		}
+	}
+	return refs, shared
 }
 
 // noteGap puts the silence in the notes of each source that is behind: from its

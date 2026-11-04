@@ -230,6 +230,14 @@ func TestDigestShowsReadGap(t *testing.T) {
 	if page, _ := RenderHTML(d); !strings.Contains(page, "<li>Michel could not read the logs between 2026-10-22 22:30 UTC") {
 		t.Errorf("html:\n%s", page)
 	}
+	// A gap stores two dates and nothing about why: the line says so, and names
+	// no cause it does not know.
+	if !strings.Contains(text, "Errors that happened then may be missing. Michel did not keep the reason for this break.") {
+		t.Errorf("no word on the cause:\n%s", text)
+	}
+	if !strings.Contains(fr, "peuvent manquer. Michel n'a pas gardé la raison de cette coupure.") {
+		t.Errorf("no word on the cause (fr):\n%s", fr)
+	}
 	// Past the window it is gone.
 	d2, err := Compute(ctx, l.st, now.Add(30*time.Hour), i18n.EN, Options{Since: now})
 	if err != nil || len(d2.ServerLogs) != 0 {
@@ -614,4 +622,202 @@ func TestDigestFrequentListIsCappedWithoutAFloor(t *testing.T) {
 	if !strings.Contains(text, "- Old7Exception, Demo.php:42, 7 times\n") || strings.Contains(text, "Old2Exception") || strings.Contains(text, "(often)") {
 		t.Errorf("text:\n%s", text)
 	}
+}
+
+// wildcardUnopened sets a source on a pattern with two files known: a.log was
+// read in the last read, secret-b.log is one Michel cannot open (cause), as that
+// read left it. Both dates are the one of the read, as the pass writes them.
+func (l logFixture) wildcardUnopened(cause string, readA bool) serverlog.Source {
+	l.t.Helper()
+	ctx := context.Background()
+	src, err := l.repo.AddSource(ctx, serverlog.Source{TargetID: l.tgt.ID, Path: "/var/log/demo/*.log", Format: serverlog.FormatPHP, Active: true})
+	if err != nil {
+		l.t.Fatal(err)
+	}
+	at := now.Add(-time.Hour)
+	cs := []serverlog.Cursor{{SourceID: src.ID, File: "/var/log/demo/secret-b.log", FileID: "2", Offset: 10}}
+	if readA {
+		cs = append(cs, serverlog.Cursor{SourceID: src.ID, File: "/var/log/demo/a.log", FileID: "1", Offset: 10, ReadAt: at})
+	}
+	if err := l.repo.SaveCursors(ctx, cs); err != nil {
+		l.t.Fatal(err)
+	}
+	if err := l.repo.SetUnseen(ctx, src.ID, map[string]string{"/var/log/demo/secret-b.log": cause}, at); err != nil {
+		l.t.Fatal(err)
+	}
+	return src
+}
+
+// Rights lost on some files of a pattern while another is read stay on the
+// sheet, and now the digest says it too: one line with the source and the count,
+// never the name of a file nor a path, in all four templates.
+func TestDigestTellsFilesMichelCannotOpen(t *testing.T) {
+	l := newLogFixture(t, target.EnvPreprod)
+	l.wildcardUnopened(serverlog.CauseDenied, true)
+	d, s := l.logSection(i18n.EN)
+	// The source is the second of the sheet: the fixture's own log was created first.
+	if len(s.Unopened) != 1 || s.Unopened[0] != (UnopenedSource{Rank: 2, Format: serverlog.FormatPHP, Count: 1}) {
+		t.Fatalf("unopened = %+v", s.Unopened)
+	}
+	text, _ := RenderText(d)
+	if !strings.Contains(text, "Michel cannot open 1 file of log no. 2 on the server page (PHP): the server refuses it access.") {
+		t.Errorf("text:\n%s", text)
+	}
+	dfr := l.compute(i18n.FR, Options{})
+	fr, _ := RenderText(dfr)
+	if !strings.Contains(fr, "Michel n'arrive pas à ouvrir 1 fichier du journal n° 2 de la page du serveur (PHP) : le serveur lui en refuse l'accès.") {
+		t.Errorf("fr:\n%s", fr)
+	}
+	page, _ := RenderHTML(d)
+	pagefr, _ := RenderHTML(dfr)
+	raw, _ := json.Marshal(d)
+	if !strings.Contains(page, "<li>Michel cannot open 1 file of log no. 2 on the server page (PHP)") || !strings.Contains(pagefr, "<li>Michel n&#39;arrive pas à ouvrir 1 fichier du journal n° 2 de la page du serveur (PHP)") {
+		t.Errorf("html:\n%s\n%s", page, pagefr)
+	}
+	for _, w := range []string{text, fr, page, pagefr, string(raw)} {
+		for _, bad := range []string{"secret-b", "/var/log", "demo/", ".log"} {
+			if strings.Contains(w, bad) {
+				t.Errorf("%q left: %s", bad, w)
+			}
+		}
+	}
+}
+
+// Not told: a source of which nothing is read (it is a failure, told as a gap
+// and an alert), a file that is only absent or lacks a tool, a turned off source,
+// errors of level error that go nowhere, a state last seen before the window, a
+// file read in an earlier pass and refused since, and a placeholder cursor.
+func TestDigestKeepsQuietWhenNoFileIsLeftUnopenedByRights(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cause string
+		readA bool
+	}{
+		"nothing read":  {serverlog.CauseDenied, false},
+		"absent file":   {serverlog.CauseAbsent, true},
+		"tools missing": {serverlog.CauseTools, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := newLogFixture(t, target.EnvPreprod)
+			l.wildcardUnopened(tc.cause, tc.readA)
+			if got := l.unopened(); len(got) != 0 {
+				t.Errorf("unopened = %+v", got)
+			}
+		})
+	}
+	t.Run("turned off", func(t *testing.T) {
+		l := newLogFixture(t, target.EnvPreprod)
+		src := l.wildcardUnopened(serverlog.CauseDenied, true)
+		src.Active = false
+		if err := l.repo.UpdateSource(context.Background(), src); err != nil {
+			t.Fatal(err)
+		}
+		if got := l.unopened(); len(got) != 0 {
+			t.Errorf("unopened = %+v", got)
+		}
+	})
+	t.Run("errors go nowhere", func(t *testing.T) {
+		l := newLogFixture(t, target.EnvPreprod)
+		l.wildcardUnopened(serverlog.CauseDenied, true)
+		l.settings(func(st *serverlog.Settings) { st.Routes[serverlog.LevelError] = serverlog.RouteIgnored })
+		if got := l.unopened(); len(got) != 0 {
+			t.Errorf("unopened = %+v", got)
+		}
+	})
+	t.Run("last seen before the window", func(t *testing.T) {
+		l := newLogFixture(t, target.EnvPreprod)
+		src := l.wildcardUnopened(serverlog.CauseDenied, true)
+		old := now.Add(-100 * time.Hour)
+		if err := l.repo.SetUnseen(context.Background(), src.ID, map[string]string{"/var/log/demo/secret-b.log": serverlog.CauseDenied}, old); err != nil {
+			t.Fatal(err)
+		}
+		if got := l.unopened(); len(got) != 0 {
+			t.Errorf("unopened = %+v", got)
+		}
+	})
+	t.Run("a file read earlier and refused since, no other file", func(t *testing.T) {
+		l := newLogFixture(t, target.EnvPreprod)
+		src := l.wildcardUnopened(serverlog.CauseDenied, false)
+		// The refused file was read before the rights went: its cursor has an older date.
+		if err := l.repo.SaveCursors(context.Background(), []serverlog.Cursor{{SourceID: src.ID, File: "/var/log/demo/secret-b.log", FileID: "2", Offset: 10, ReadAt: now.Add(-48 * time.Hour)}}); err != nil {
+			t.Fatal(err)
+		}
+		if got := l.unopened(); len(got) != 0 {
+			t.Errorf("unopened = %+v", got)
+		}
+	})
+	t.Run("a placeholder with a read date is no file", func(t *testing.T) {
+		l := newLogFixture(t, target.EnvPreprod)
+		src := l.wildcardUnopened(serverlog.CauseDenied, false)
+		if err := l.repo.SaveCursors(context.Background(), []serverlog.Cursor{{SourceID: src.ID, File: "/var/log/demo/_.log/", ReadAt: now.Add(-time.Hour)}}); err != nil {
+			t.Fatal(err)
+		}
+		if got := l.unopened(); len(got) != 0 {
+			t.Errorf("unopened = %+v", got)
+		}
+	})
+	t.Run("a folder refused is not a file", func(t *testing.T) {
+		l := newLogFixture(t, target.EnvPreprod)
+		ctx := context.Background()
+		src, err := l.repo.AddSource(ctx, serverlog.Source{TargetID: l.tgt.ID, Path: "/var/log/demo/*.log", Format: serverlog.FormatPHP, Active: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := now.Add(-time.Hour)
+		if err := l.repo.SaveCursors(ctx, []serverlog.Cursor{{SourceID: src.ID, File: "/var/log/demo/a.log", FileID: "1", ReadAt: at}}); err != nil {
+			t.Fatal(err)
+		}
+		// The pattern itself is what the filter reports when the folder cannot be searched.
+		if err := l.repo.SetUnseen(ctx, src.ID, map[string]string{"/var/log/demo/*.log": serverlog.CauseDenied}, at); err != nil {
+			t.Fatal(err)
+		}
+		if got := l.unopened(); len(got) != 0 {
+			t.Errorf("unopened = %+v", got)
+		}
+	})
+}
+
+// The line follows the caps of the digest: five sources at most for a server,
+// the others counted in a line of their own.
+func TestDigestUnopenedSourcesAreCapped(t *testing.T) {
+	l := newLogFixture(t, target.EnvPreprod)
+	ctx := context.Background()
+	for i := 0; i < MaxLogTop+2; i++ {
+		src, err := l.repo.AddSource(ctx, serverlog.Source{TargetID: l.tgt.ID, Path: fmt.Sprintf("/var/log/demo/s%d/*.log", i), Format: serverlog.FormatPHP, Active: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := now.Add(-time.Hour)
+		if err := l.repo.SaveCursors(ctx, []serverlog.Cursor{{SourceID: src.ID, File: "x/a.log", FileID: "1", ReadAt: at}, {SourceID: src.ID, File: "x/b.log", FileID: "2"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.repo.SetUnseen(ctx, src.ID, map[string]string{"x/b.log": serverlog.CauseDenied}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, s := l.logSection(i18n.EN)
+	if len(s.Unopened) != MaxLogTop || s.UnopenedMore != 2 {
+		t.Fatalf("unopened = %d, more %d", len(s.Unopened), s.UnopenedMore)
+	}
+	dfr := l.compute(i18n.FR, Options{})
+	text, _ := RenderText(d)
+	fr, _ := RenderText(dfr)
+	page, _ := RenderHTML(d)
+	pagefr, _ := RenderHTML(dfr)
+	for w, want := range map[string]string{text: "2 other logs also have files that Michel cannot open", fr: "2 autres journaux ont aussi des fichiers", page: "<li>2 other logs also have files", pagefr: "<li>2 autres journaux ont aussi des fichiers"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("lacks %q:\n%s", want, w)
+		}
+	}
+}
+
+// unopened is the unopened sources of the section of srv-demo, none if the
+// digest has no section for it.
+func (l logFixture) unopened() []UnopenedSource {
+	l.t.Helper()
+	for _, s := range l.compute(i18n.EN, Options{}).ServerLogs {
+		if s.Name == "srv-demo" {
+			return s.Unopened
+		}
+	}
+	return nil
 }

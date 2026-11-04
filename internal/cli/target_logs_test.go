@@ -386,3 +386,16 @@ func TestTargetLogsListShowsNotesAndReadNamesTheServer(t *testing.T) {
 		t.Errorf("read: %q %v", out, err)
 	}
 }
+
+// Every cause a read can name has its key, a refused connection included; the
+// ones nobody named are the general cause.
+func TestLogReasonKeyKnowsTheRefusedConnection(t *testing.T) {
+	for reason, want := range map[string]string{
+		serverlog.ReasonRefused: serverlog.ReasonRefused, serverlog.ReasonTimeout: serverlog.ReasonTimeout,
+		serverlog.ReasonNoKeyAccepted: serverlog.ReasonNoKeyAccepted, "something else": serverlog.ReasonError,
+	} {
+		if got := logReasonKey(reason); got != want {
+			t.Errorf("logReasonKey(%q) = %q, want %q", reason, got, want)
+		}
+	}
+}

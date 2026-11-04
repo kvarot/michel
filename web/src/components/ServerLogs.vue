@@ -25,7 +25,9 @@
       <ul v-else class="m-logs__list" :aria-labelledby="`${uid}-sources`">
         <li v-for="s in sourceRows" :key="s.id" class="m-logs__item">
           <p>
+            <strong class="m-logs__rank">{{ $t('logs.sources.rank', { n: s.rank }) }}</strong>
             <span :id="`${uid}-src-${s.id}`" class="m-code">{{ s.path }}</span>
+            <span class="m-muted m-small"> — {{ shortFormat(s.format) }}</span>
             <span v-if="$ui.advanced" class="m-muted m-small"> — {{ formatText(s.format) }}</span>
           </p>
           <v-switch
@@ -217,6 +219,7 @@
           >
             <v-radio v-for="c in g.choices" :key="String(c.value)" :value="c.value" :label="c.label" :disabled="c.disabled" color="primary" />
           </v-radio-group>
+          <p v-if="strongNote(g)" class="m-logs__warn m-small" role="status">{{ strongNote(g) }}</p>
         </div>
         <div v-if="settings.deviations.length" class="m-logs__away" role="status">
           <p class="m-small">{{ $t('logs.privacy.away') }}</p>
@@ -282,8 +285,8 @@ import TryResult from './LogTryResult.vue'
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
 import {
-  channelNotes, deviationWarning, domId, errorGroups, formatLabel, formats, intervalChoices, intervalNote, levelLabel, levelOrder, levelSeverity, settingsSaveOutcome,
-  privacyChoices, readState, routeChoices, statusLabel,
+  channelNotes, deviationWarning, domId, errorGroups, formatLabel, formatShort, formats, intervalChoices, intervalNote, levelLabel, levelOrder, levelSeverity, numberSources, settingsSaveOutcome,
+  privacyChoices, privacyStrongNote, readState, routeChoices, statusLabel,
 } from '../lib/serverLogsView.js'
 
 let counter = 0
@@ -350,7 +353,7 @@ export default {
       return { ...this.draft }
     },
     sourceRows() {
-      return this.sources.map((s) => ({ ...s, state: readState(s, this.now, this.lang), channelNotes: channelNotes({ noChannel: s.active && s.no_channel }, this.lang), notes: s.notes || [] }))
+      return numberSources(this.sources).map((s) => ({ ...s, state: readState(s, this.now, this.lang), channelNotes: channelNotes({ noChannel: s.active && s.no_channel }, this.lang), notes: s.notes || [] }))
     },
     groups() {
       return errorGroups(this.errors)
@@ -402,6 +405,9 @@ export default {
     },
     levelSeverity,
     domId,
+    shortFormat(f) {
+      return formatShort(f, this.lang)
+    },
     formatText(f) {
       return formatLabel(f, this.lang)
     },
@@ -422,6 +428,9 @@ export default {
     },
     current(g) {
       return g.choices.find((c) => c.current)?.value
+    },
+    strongNote(g) {
+      return privacyStrongNote(g, this.lang, !!this.settings?.health)
     },
     /** fail keeps the API's sentence (a busy read says so in plain words); a 401 is the page's business. */
     fail(err) {
@@ -630,6 +639,7 @@ export default {
 .m-logs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.7rem; min-width: 0; }
 .m-logs > * { min-width: 0; }
 .m-logs__item { min-width: 0; }
+.m-logs__rank { margin-right: 0.4rem; }
 .m-logs .m-code { overflow-wrap: anywhere; }
 .m-logs p { margin: 0; line-height: 1.55; }
 .m-sheet__sub { font-size: 0.95rem; font-weight: 650; margin: 0.8rem 0 0; }

@@ -6,12 +6,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -472,5 +474,124 @@ func TestRunKeepsTailOfCutStream(t *testing.T) {
 	}
 	if !bytes.HasSuffix(res.StderrTail, []byte("last line\n")) || len(res.StderrTail) > sshx.TailSize {
 		t.Errorf("tail %d bytes, ends %q", len(res.StderrTail), res.StderrTail[max(0, len(res.StderrTail)-20):])
+	}
+}
+
+// closedPort is a local port nothing listens on.
+func closedPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port
+}
+
+// A server where nothing listens is told apart from any other failure.
+func TestRefusedConnectionIsTold(t *testing.T) {
+	srv := sshtest.New(t, sshtest.Options{})
+	tg := tgt(t, srv, true)
+	tg.Port = closedPort(t)
+	_, err := sshx.Dial(context.Background(), deps(t, srv, true), tg)
+	if !errors.Is(err, sshx.ErrConnectionRefused) {
+		t.Fatalf("want ErrConnectionRefused, got %v", err)
+	}
+	if errors.Is(err, sshx.ErrConnectTimeout) {
+		t.Errorf("a refusal is no timeout: %v", err)
+	}
+}
+
+// A server that takes the connection and never answers the handshake is a
+// timeout, not an unknown failure.
+func TestSilentServerIsATimeout(t *testing.T) {
+	defer sshx.SetHandshakeTimeout(300 * time.Millisecond)()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+	srv := sshtest.New(t, sshtest.Options{})
+	tg := tgt(t, srv, true)
+	tg.Port = l.Addr().(*net.TCPAddr).Port
+	_, err = sshx.Dial(context.Background(), deps(t, srv, true), tg)
+	if !errors.Is(err, sshx.ErrConnectTimeout) {
+		t.Fatalf("want ErrConnectTimeout, got %v", err)
+	}
+	if errors.Is(err, sshx.ErrConnectionRefused) {
+		t.Errorf("a timeout is no refusal: %v", err)
+	}
+}
+
+// What stays unknown stays as it is: a server that closes the line, a refused
+// policy, a refused key.
+func TestOtherFailuresKeepTheirCause(t *testing.T) {
+	srv := sshtest.New(t, sshtest.Options{})
+	_, err := sshx.Dial(context.Background(), deps(t, srv, false), tgt(t, srv, true))
+	if !errors.Is(err, sshx.ErrDenied) || errors.Is(err, sshx.ErrConnectionRefused) || errors.Is(err, sshx.ErrConnectTimeout) {
+		t.Errorf("policy refusal = %v", err)
+	}
+}
+
+// timeoutErr is a network error that says it timed out, whatever its text.
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "something took long" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return false }
+
+// netCause tells each case apart, and only those: a timeout by what the error
+// says or by the deadline, a refusal by the errno (the Windows one too), and
+// anything else comes back as it was.
+func TestNetCauseTellsOnlyWhatItKnows(t *testing.T) {
+	refused := &net.OpError{Op: "dial", Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED}}
+	wsaRefused := &net.OpError{Op: "dial", Err: &os.SyscallError{Syscall: "connectex", Err: syscall.Errno(10061)}}
+	for name, tc := range map[string]struct {
+		err              error
+		refused, timeout bool
+	}{
+		"refused":         {refused, true, false},
+		"refused windows": {wsaRefused, true, false},
+		"net timeout":     {timeoutErr{}, false, true},
+		"deadline":        {fmt.Errorf("read: %w", os.ErrDeadlineExceeded), false, true},
+		"reset":           {&net.OpError{Op: "read", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}, false, false},
+		"eof":             {io.EOF, false, false},
+		"plain":           {errors.New("ssh: handshake failed"), false, false},
+	} {
+		got := sshx.NetCause(tc.err)
+		if errors.Is(got, sshx.ErrConnectionRefused) != tc.refused || errors.Is(got, sshx.ErrConnectTimeout) != tc.timeout {
+			t.Errorf("%s: %v", name, got)
+		}
+		if !tc.refused && !tc.timeout && got != tc.err {
+			t.Errorf("%s: an unknown failure was changed: %v", name, got)
+		}
+	}
+}
+
+// A changed host key and a refused key keep their own cause, and are neither a
+// refused connection nor a timeout.
+func TestOtherFailuresKeepTheirOwnCause(t *testing.T) {
+	srv := sshtest.New(t, sshtest.Options{PasswordOnly: true})
+	_, err := sshx.Dial(context.Background(), deps(t, srv, true), tgt(t, srv, true))
+	if !errors.Is(err, sshx.ErrNoKeyAccepted) || errors.Is(err, sshx.ErrConnectionRefused) || errors.Is(err, sshx.ErrConnectTimeout) {
+		t.Errorf("refused key = %v", err)
+	}
+	srv2 := sshtest.New(t, sshtest.Options{})
+	tg := tgt(t, srv2, true)
+	tg.HostKey = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	_, err = sshx.Dial(context.Background(), deps(t, srv2, true), tg)
+	var chg sshx.ErrHostKeyChanged
+	if !errors.As(err, &chg) || errors.Is(err, sshx.ErrConnectionRefused) || errors.Is(err, sshx.ErrConnectTimeout) {
+		t.Errorf("changed host key = %v", err)
 	}
 }

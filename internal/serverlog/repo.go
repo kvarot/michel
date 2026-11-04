@@ -568,28 +568,37 @@ func (r *Repo) Apply(ctx context.Context, src Source, recs []Record, now time.Ti
 	return fresh, reopened, spiked, nil
 }
 
-// Resolve marks as resolved the errors of one server with no occurrence for its
-// delay (ResolveAfter), except ignored ones. It returns them. Only the server
-// that was just read can say so: another one may simply not have been read.
-func (r *Repo) Resolve(ctx context.Context, targetID string, now time.Time) ([]Signature, error) {
+// Resolve marks as resolved the errors of the given sources of one server with
+// no occurrence for its delay (ResolveAfter), except ignored ones. It returns
+// them. Only a source that was just read can say so: another one, of this server
+// or not, may simply not have been read, or have failed. No source: nothing.
+func (r *Repo) Resolve(ctx context.Context, targetID string, now time.Time, sourceIDs []string) ([]Signature, error) {
+	if len(sourceIDs) == 0 {
+		return nil, nil
+	}
+	read := make(map[string]bool, len(sourceIDs))
+	for _, id := range sourceIDs {
+		read[id] = true
+	}
 	st, err := r.settingsOrDefault(ctx, targetID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, last_at FROM log_signature WHERE target_id = ? AND status IN (?,?,?)`,
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT id, last_at, source_id FROM log_signature WHERE target_id = ? AND status IN (?,?,?)`,
 		targetID, string(StatusNew), string(StatusSeen), string(StatusReopened))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the log errors: %w", err)
 	}
 	type cand struct {
-		id   string
-		last time.Time
+		id     string
+		last   time.Time
+		source string
 	}
 	var cands []cand
 	for rows.Next() {
 		var c cand
 		var last string
-		if err := rows.Scan(&c.id, &last); err != nil {
+		if err := rows.Scan(&c.id, &last, &c.source); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("cannot read the log errors: %w", err)
 		}
@@ -607,7 +616,7 @@ func (r *Repo) Resolve(ctx context.Context, targetID string, now time.Time) ([]S
 
 	var due []string
 	for _, c := range cands {
-		if !now.Before(c.last.Add(st.ResolveAfter)) {
+		if read[c.source] && !now.Before(c.last.Add(st.ResolveAfter)) {
 			due = append(due, c.id)
 		}
 	}

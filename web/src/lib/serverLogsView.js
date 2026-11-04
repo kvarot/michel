@@ -35,6 +35,29 @@ export function levelLabel(level, lang) {
   return levelOrder.includes(level) ? t(lang, `level.${level}`) : String(level || '')
 }
 
+/**
+ * formatShort is the format of a log in a word or two, the words the alerts and
+ * the digest use ("PHP", "erreurs de l'application"): what a person reads in
+ * "journal n° 2 (PHP)" finds here.
+ * @param {string} format @param {string} lang
+ */
+export function formatShort(format, lang) {
+  return t(lang, `format.short.${formats.includes(format) ? format : 'other'}`)
+}
+
+/**
+ * numberSources gives each log its number on the page, from 1, in the order the
+ * API sends them (the order the alerts count in) and the turned off ones
+ * included: the alert says « journal n° 2 de la page du serveur » and this is
+ * the row. It neither filters nor reorders, so it must be called on the list as
+ * it comes.
+ * @param {object[]} sources GET /logs/sources
+ * @returns {(object & {rank: number})[]}
+ */
+export function numberSources(sources) {
+  return (Array.isArray(sources) ? sources : []).map((s, i) => ({ ...s, rank: i + 1 }))
+}
+
 /** @param {string} level @returns {string} the severity class (m-sev--…) that looks like this level. */
 export function levelSeverity(level) {
   return { critical: 'critical', error: 'high', warning: 'medium', info: 'low' }[level] || 'unknown'
@@ -89,6 +112,20 @@ export function privacyChoices(settings, kind, lang) {
     { key: 'alert_text', choices: alert },
     { key: 'retention', choices: retention },
   ]
+}
+
+/**
+ * privacyStrongNote is the marked warning under a privacy setting of a health
+ * (hds) server whose choice in force is away from the recommendation. "" for
+ * any other server, for a setting on the recommended choice, and when the API's
+ * own health warning (apiWarns) already shows: one warning, not two.
+ * @param {{choices: {current: boolean, strong: boolean}[]}|undefined} group one of privacyChoices
+ * @param {string} lang
+ * @param {boolean} [apiWarns] the settings carry the API health warning
+ * @returns {string}
+ */
+export function privacyStrongNote(group, lang, apiWarns = false) {
+  return !apiWarns && group?.choices?.some((c) => c.current && c.strong) ? t(lang, 'privacy.strong') : ''
 }
 
 /**

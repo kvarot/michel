@@ -85,10 +85,11 @@ func (r *Repo) Unseen(ctx context.Context, targetID string) (map[string][]Unseen
 	return out, rows.Err()
 }
 
-// CountNew counts the errors of a server that are new or came back.
+// CountNew counts the errors of a server that are new or came back, in the
+// sources that are on: nobody reads the others.
 func (r *Repo) CountNew(ctx context.Context, targetID string) (int, error) {
 	var n int
-	err := r.s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM log_signature WHERE target_id = ? AND status IN (?, ?)`,
+	err := r.s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM log_signature g JOIN log_source s ON s.id = g.source_id WHERE g.target_id = ? AND s.active = 1 AND g.status IN (?, ?)`,
 		targetID, string(StatusNew), string(StatusReopened)).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("cannot count the log errors: %w", err)

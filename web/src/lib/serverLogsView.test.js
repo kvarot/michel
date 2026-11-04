@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  channelNotes, deviationWarning, domId, errorGroups, intervalChoices, intervalNote, logBadges, privacyChoices, readState, routeChoices, settingsSaveOutcome,
+  channelNotes, deviationWarning, domId, errorGroups, formatShort, intervalChoices, intervalNote, logBadges, numberSources, privacyChoices, privacyStrongNote, readState, routeChoices, settingsSaveOutcome,
 } from './serverLogsView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -211,5 +211,64 @@ describe('routeChoices', () => {
     expect(routeChoices('error', 'prod', 'fr')[0].value).toBe('digest')
     expect(routeChoices('warning', 'prod', 'fr').map((c) => c.value)).toEqual(['ignored', 'immediate', 'digest'])
     expect(routeChoices('info', 'prod', 'fr').filter((c) => c.recommended)).toHaveLength(1)
+  })
+})
+
+describe('privacyStrongNote', () => {
+  const group = (kind, extra, key) => privacyChoices(settings(extra), kind, 'en').find((g) => g.key === key)
+
+  test('a health server on a choice away from the recommendation gets a marked warning, per setting', () => {
+    expect(privacyStrongNote(group('hds', { store_text: true }, 'store_text'), 'en')).toMatch(/health data/)
+    expect(privacyStrongNote(group('hds', { store_text: true }, 'store_text'), 'fr')).toMatch(/données de santé/)
+    // The setting still on the recommended choice says nothing, even on this server.
+    expect(privacyStrongNote(group('hds', { store_text: true }, 'alert_text'), 'en')).toBe('')
+    expect(privacyStrongNote(group('hds', { retention_days: 30 }, 'retention'), 'en')).not.toBe('')
+  })
+
+  test('other servers, and the recommended choices, say nothing', () => {
+    for (const kind of ['vps', 'shared']) expect(privacyStrongNote(group(kind, { store_text: true }, 'store_text'), 'en')).toBe('')
+    expect(privacyStrongNote(group('hds', {}, 'store_text'), 'en')).toBe('')
+    expect(privacyStrongNote(undefined, 'en')).toBe('')
+  })
+})
+
+describe('privacyStrongNote with the API warning', () => {
+  test('says nothing when the settings already carry the health warning, so only one shows', () => {
+    const g = privacyChoices(settings({ store_text: true }), 'hds', 'en').find((x) => x.key === 'store_text')
+    expect(privacyStrongNote(g, 'en', true)).toBe('')
+    expect(privacyStrongNote(g, 'en', false)).not.toBe('')
+  })
+})
+
+describe('numberSources', () => {
+  const list = [
+    { id: 'a', path: '/x/a.log', format: 'php', active: true },
+    { id: 'b', path: '/x/b.log', format: 'json', active: false },
+    { id: 'c', path: '/x/c.log', format: 'monolog', active: true },
+  ]
+
+  test('numbers the rows from 1 in the order the API gives, the turned off ones counted', () => {
+    expect(numberSources(list).map((s) => [s.id, s.rank])).toEqual([['a', 1], ['b', 2], ['c', 3]])
+  })
+
+  test('does not change the rows, nor their order, and takes anything for nothing', () => {
+    const out = numberSources(list)
+    expect(out.map((s) => s.path)).toEqual(list.map((s) => s.path))
+    expect(list[0].rank).toBeUndefined()
+    expect(numberSources(undefined)).toEqual([])
+  })
+
+  test('a log removed moves the numbers of those below it', () => {
+    expect(numberSources(list.filter((s) => s.id !== 'a')).map((s) => s.rank)).toEqual([1, 2])
+  })
+})
+
+describe('formatShort', () => {
+  test('says the format with the words of the alerts, in both languages', () => {
+    expect(formatShort('php', 'en')).toBe('PHP')
+    expect(formatShort('monolog', 'en')).toBe('application errors')
+    expect(formatShort('monolog', 'fr')).toBe("erreurs de l'application")
+    expect(formatShort('text', 'fr')).toBe('texte')
+    expect(formatShort('nothing', 'en')).toBe('other')
   })
 })

@@ -55,6 +55,8 @@ const (
 	ReasonHostKeyChanged = "host_key_changed"
 	ReasonDenied         = "denied"
 	ReasonTimeout        = "timeout"
+	ReasonRefused        = "refused"
+	ReasonPolicy         = "policy"
 	ReasonOutputCut      = "output_cut"
 	ReasonTools          = "tools"
 	ReasonInactive       = "inactive"
@@ -90,6 +92,11 @@ type AlertInput struct {
 	Kind   AlertKind
 	Items  []AlertItem
 	Reason string
+	// Sources, on an AlertNotReading, are the sources (never their paths) that
+	// fail when the others of the server were read: the alert then speaks of
+	// these sources only, by number and format. Empty: the server as a whole cannot
+	// be read.
+	Sources []SourceRef
 }
 
 // Deps are the services a pass needs.
@@ -124,6 +131,27 @@ type PassResult struct {
 	Records, Rejected, Alerts int
 	// Unseen counts the files that could not be opened (the page says which and why).
 	Unseen int
+	Reason string
+	// Read counts the sources read well in this pass, Failed names the ones whose
+	// read failed (a connection that fails names none: no source was tried).
+	Read   int            `json:"-"`
+	Failed []FailedSource `json:"-"`
+}
+
+// SourceRef names a source without its path, which no message carries: its
+// number on the sheet of the server (Rank, from 1, in the order of
+// Repo.Sources, the sheet's order) and its format.
+type SourceRef struct {
+	Rank   int
+	Format Format
+}
+
+// FailedSource is a source whose read failed in a pass. ID is the source's id
+// (for the memory of the scheduler only, it never leaves the process); Reason is
+// the cause, a key of the Reason* constants. Never what the server printed.
+type FailedSource struct {
+	ID     string
+	Ref    SourceRef
 	Reason string
 }
 
@@ -218,7 +246,9 @@ const gapFloor = 30 * time.Minute
 //
 // A failing read (connection, filter, cap on the answer) makes the pass fail
 // after the other sources were read: the failed source keeps its positions and
-// is read again next time. PassResult.Reason then names the cause.
+// is read again next time. PassResult.Reason then names the cause, and Failed
+// the sources. The sources that were read well resolve their old errors all the
+// same; the one that failed keeps its errors as they are.
 func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 	t, err := d.Targets.Get(ctx, targetID)
 	if err != nil {
@@ -237,7 +267,9 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 		return PassResult{Reason: ReasonError}, err
 	}
 	var sources []Source
-	for _, s := range all {
+	rank := make(map[string]int, len(all))
+	for i, s := range all {
+		rank[s.ID] = i + 1
 		if s.Active {
 			sources = append(sources, s)
 		}
@@ -267,17 +299,28 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 	p := &onePass{d: d, t: t, st: st, now: now, texts: map[string]string{}, counts: map[string]int64{}}
 	var res PassResult
 	var firstErr error
+	var readIDs []string
 	for _, src := range sources {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
-		if err := p.readSource(ctx, client, src, o, &res); err != nil {
+		read, err := p.readSource(ctx, client, src, o, &res)
+		if err != nil {
+			reason := reasonOf(err)
 			if res.Reason == "" {
-				res.Reason = reasonOf(err)
+				res.Reason = reason
 			}
+			res.Failed = append(res.Failed, FailedSource{ID: src.ID, Ref: SourceRef{Rank: rank[src.ID], Format: src.Format}, Reason: reason})
 			if firstErr == nil {
 				firstErr = err
 			}
+			continue
+		}
+		if read.opened {
+			res.Read++
+		}
+		if read.whole {
+			readIDs = append(readIDs, src.ID)
 		}
 	}
 	// The read happened whatever comes next: what fails from here on is said in
@@ -285,15 +328,13 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 	if err := p.alert(ctx, &res); err != nil && ctx.Err() == nil {
 		slog.Warn("serverlog: the alerts of a log read could not be completed", "target", t.ID, "err", err)
 	}
-	if firstErr != nil {
-		return res, firstErr
-	}
 	// A missing occurrence is no proof after a gap, but the delay is the user's
-	// and the record is "resolved", never "fixed".
-	if _, err := d.Repo.Resolve(ctx, t.ID, now); err != nil && ctx.Err() == nil {
+	// and the record is "resolved", never "fixed". Only the sources seen entire can
+	// say it: one that failed, was read in part or not at all keeps its errors.
+	if _, err := d.Repo.Resolve(ctx, t.ID, now, readIDs); err != nil && ctx.Err() == nil {
 		slog.Warn("serverlog: cannot mark the log errors as resolved", "target", t.ID, "err", err)
 	}
-	return res, nil
+	return res, firstErr
 }
 
 // onePass is the state of one pass over the sources of a server.
@@ -317,10 +358,10 @@ type candidate struct {
 	item AlertItem
 }
 
-func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o FilterOptions, res *PassResult) error {
+func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o FilterOptions, res *PassResult) (readOutcome, error) {
 	cursors, err := p.d.Repo.Cursors(ctx, src.ID)
 	if err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	lastRead := latestRead(cursors)
 	out, next, err := Read(ctx, c, src, cursors, o, p.st.ReadTimeout, p.now)
@@ -328,11 +369,11 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 		if ctx.Err() == nil {
 			p.audit(ctx, "failed", map[string]any{"source": src.ID, "reason": reasonOf(err)})
 		}
-		return err
+		return readOutcome{}, err
 	}
 	fresh, reopened, spiked, err := p.d.Repo.Apply(ctx, src, out.Records, p.d.now())
 	if err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	for _, r := range out.Records {
 		id := SignatureID(src.ID, r.Level, r.Type, r.Location, r.Channel)
@@ -345,7 +386,7 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 	// queued before anything else can fail.
 	p.queue(ctx, src, fresh, reopened, spiked, lastRead)
 	if err := p.d.Repo.SaveCursors(ctx, next); err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	// Files that are gone, and the placeholder of an activation, leave their
 	// positions only when the answer is whole: a cut list (too many files) or a
@@ -358,21 +399,21 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 		}
 		keep = append(keep, out.Unseen...)
 		if err := p.d.Repo.PruneCursors(ctx, src.ID, keep); err != nil {
-			return err
+			return readOutcome{}, err
 		}
 	}
 	// A pass that opened no file (all unseen, or nothing matched) moves no date: the
 	// page must not show a fresh read where nothing was read.
 	if len(out.Files) > 0 {
 		if err := p.d.Repo.TouchCursors(ctx, src.ID, p.now, out.Unseen); err != nil {
-			return err
+			return readOutcome{}, err
 		}
 	}
 	if err := p.notes(ctx, src, out, cursors, lastRead); err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	if err := p.d.Repo.SetUnseen(ctx, src.ID, out.UnseenCause, p.now); err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	res.Records += len(out.Records)
 	res.Rejected += out.Rejected
@@ -381,14 +422,46 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 	// and the list of what is unseen. What remains is to say that it failed.
 	if err := sourceUnread(out); err != nil {
 		p.audit(ctx, "failed", map[string]any{"source": src.ID, "reason": reasonOf(err)})
-		return err
+		return readOutcome{}, err
 	}
 	p.audit(ctx, "ok", map[string]any{
 		"source": src.ID, "from": ts(lastRead), "to": ts(p.now),
 		"volume": bytesRead(out, cursors), "skipped": skippedBytes(out), "records": len(out.Records),
 		"occurrences": occurrences(out), "rejected": out.Rejected, "fingerprint": fingerprint(out.Records),
 	})
-	return nil
+	return readOutcome{opened: opened(out), whole: wholeRead(out)}, nil
+}
+
+// readOutcome says how well a source that did not fail was read. opened: a file
+// of it was really opened. whole: it was seen entire, so that what is missing
+// from it is gone (see wholeRead).
+type readOutcome struct{ opened, whole bool }
+
+// opened says whether a file of the answer was really opened: an F line with no
+// U line. An absent file, a link or a folder opens nothing.
+func opened(out Output) bool {
+	for _, f := range out.Files {
+		if _, unseen := out.UnseenCause[f.File]; !unseen {
+			return true
+		}
+	}
+	return false
+}
+
+// wholeRead says whether a source was seen entire: a file opened, none refused
+// (rights, a tool, another failure), the list of files not cut and no part of a
+// log skipped by the cap. Only then does the absence of an error mean anything.
+func wholeRead(out Output) bool {
+	if !opened(out) || out.TooManyFiles || skippedBytes(out) > 0 {
+		return false
+	}
+	for _, cause := range out.UnseenCause {
+		switch cause {
+		case CauseDenied, CauseTools, CauseOther:
+			return false
+		}
+	}
+	return true
 }
 
 // sourceUnread says why a source failed although the filter ran well: no file of
@@ -689,12 +762,14 @@ func reasonOf(err error) string {
 	case errors.As(err, &unk):
 		return ReasonHostKeyUnknown
 	case errors.Is(err, sshx.ErrDenied):
-		return ReasonDenied
+		return ReasonPolicy
 	case errors.Is(err, sshx.ErrNoAgent):
 		return ReasonNoAgent
 	case errors.Is(err, sshx.ErrNoKeyAccepted):
 		return ReasonNoKeyAccepted
-	case errors.Is(err, sshx.ErrCommandTimeout), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, sshx.ErrConnectionRefused):
+		return ReasonRefused
+	case errors.Is(err, sshx.ErrCommandTimeout), errors.Is(err, sshx.ErrConnectTimeout), errors.Is(err, context.DeadlineExceeded):
 		return ReasonTimeout
 	case errors.Is(err, ErrOutputCut):
 		return ReasonOutputCut

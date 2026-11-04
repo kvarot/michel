@@ -155,10 +155,17 @@ func TestApplyLifecycle(t *testing.T) {
 		t.Fatalf("second apply = %+v %+v", fresh, reopened)
 	}
 	// Not resolved before ResolveAfter, resolved after.
-	if got, err := e.r.Resolve(ctx, e.tgt.ID, t0.Add(6*24*time.Hour)); err != nil || len(got) != 0 {
+	if got, err := e.r.Resolve(ctx, e.tgt.ID, t0.Add(6*24*time.Hour), []string{e.src.ID}); err != nil || len(got) != 0 {
 		t.Fatalf("early resolve = %+v, %v", got, err)
 	}
-	got, err := e.r.Resolve(ctx, e.tgt.ID, t0.Add(8*24*time.Hour))
+	// A source not named is not read: it resolves nothing, however late.
+	if got, err := e.r.Resolve(ctx, e.tgt.ID, t0.Add(80*24*time.Hour), []string{"01OTHERSOURCE"}); err != nil || len(got) != 0 {
+		t.Fatalf("resolve of another source = %+v, %v", got, err)
+	}
+	if got, err := e.r.Resolve(ctx, e.tgt.ID, t0.Add(80*24*time.Hour), nil); err != nil || len(got) != 0 {
+		t.Fatalf("resolve of no source = %+v, %v", got, err)
+	}
+	got, err := e.r.Resolve(ctx, e.tgt.ID, t0.Add(8*24*time.Hour), []string{e.src.ID})
 	if err != nil || len(got) != 1 || got[0].ID != id || got[0].Status != StatusResolved {
 		t.Fatalf("resolve = %+v, %v", got, err)
 	}
@@ -176,7 +183,7 @@ func TestApplyLifecycle(t *testing.T) {
 	if err != nil || len(fresh)+len(reopened)+len(spiked) != 0 {
 		t.Fatalf("ignored apply = %+v %+v %+v, %v", fresh, reopened, spiked, err)
 	}
-	if got, _ := e.r.Resolve(ctx, e.tgt.ID, later.Add(30*24*time.Hour)); len(got) != 0 {
+	if got, _ := e.r.Resolve(ctx, e.tgt.ID, later.Add(30*24*time.Hour), []string{e.src.ID}); len(got) != 0 {
 		t.Fatalf("ignored was resolved: %+v", got)
 	}
 	sigs, _ := e.r.Signatures(ctx, e.tgt.ID)

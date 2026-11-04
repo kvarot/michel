@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1443,6 +1444,235 @@ func TestPassReasonOfMixedCauses(t *testing.T) {
 			res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
 			if !errors.Is(err, ErrReadFailed) || res.Reason != tc.reason {
 				t.Fatalf("result %+v, err %v", res, err)
+			}
+		})
+	}
+}
+
+// twoSources adds a second source on its own file, whose reads the simulated
+// server refuses while deny is true. The other source is read for real.
+func twoSources(t *testing.T, pe *passEnv, deny *atomic.Bool) (Source, string) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "other.log")
+	appendTo(t, file, "")
+	src, err := pe.repo.AddSource(context.Background(), Source{TargetID: pe.tgt.ID, Path: shPath(file), Format: FormatMonolog, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := pe.host.realShell(os.Environ())
+	pe.setShell(func(s *sshtest.Server, script string, out, errw io.Writer) int {
+		if deny.Load() && strings.Contains(script, src.Path) {
+			return answer(unseenLine(src.Path, CauseDenied))(s, script, out, errw)
+		}
+		return real(s, script, out, errw)
+	})
+	return src, file
+}
+
+// One source that fails does not make the others unread: the pass says which
+// failed, and why, and that the others were read.
+func TestPassNamesTheSourcesThatFailed(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	var deny atomic.Bool
+	src2, _ := twoSources(t, pe, &deny)
+	pe.activate()
+	deny.Store(true)
+	res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
+	if err == nil {
+		t.Fatal("a source failed and the pass did not")
+	}
+	if res.Read != 1 || len(res.Failed) != 1 || res.Failed[0] != (FailedSource{ID: src2.ID, Ref: SourceRef{Rank: 2, Format: FormatMonolog}, Reason: ReasonDenied}) {
+		t.Errorf("result %+v", res)
+	}
+	deny.Store(false)
+	res = pe.run()
+	if res.Read != 2 || len(res.Failed) != 0 {
+		t.Errorf("after the rights came back: %+v", res)
+	}
+}
+
+// A connection that fails has tried no source: none is named, none was read.
+func TestPassFailedConnectionNamesNoSource(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	pe.deps.SSH.Agent = func() (agent.ExtendedAgent, io.Closer, error) { return nil, nil, sshx.ErrNoAgent }
+	res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
+	if err == nil || res.Read != 0 || len(res.Failed) != 0 {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+}
+
+// A source that fails keeps its errors as they are, but the others of the server
+// are resolved all the same, so that an error of theirs that returns is told as
+// back. A source not read in the pass resolves nothing.
+func TestResolveGoesPerSource(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	ctx := context.Background()
+	var deny atomic.Bool
+	src2, file2 := twoSources(t, pe, &deny)
+	off, err := pe.repo.AddSource(ctx, Source{TargetID: pe.tgt.ID, Path: "/var/log/demo/off.log", Format: FormatMonolog, Active: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := pe.repo.Apply(ctx, off, []Record{rec(1, readNow)}, readNow); err != nil {
+		t.Fatal(err)
+	}
+	pe.activate()
+	pe.write(mono("CRITICAL", "PDOException", "Invoice.php", 42))
+	appendTo(t, file2, mono("CRITICAL", "PDOException", "Invoice.php", 42)+"\n")
+	pe.run()
+	status := func() map[string]Status {
+		out := map[string]Status{}
+		for _, g := range pe.signatures() {
+			out[g.SourceID] = g.Status
+		}
+		return out
+	}
+	if got := status(); len(got) != 3 {
+		t.Fatalf("signatures = %v", got)
+	}
+	// Eight days on, the second source cannot be read.
+	pe.clock.Advance(8 * 24 * time.Hour)
+	deny.Store(true)
+	if _, err := Pass(ctx, pe.deps, pe.tgt.ID); err == nil {
+		t.Fatal("the pass did not fail")
+	}
+	got := status()
+	if got[pe.src.ID] != StatusResolved {
+		t.Errorf("the source read: status = %s", got[pe.src.ID])
+	}
+	if got[src2.ID] == StatusResolved {
+		t.Error("the source that failed was resolved: it was not seen")
+	}
+	if got[off.ID] == StatusResolved {
+		t.Error("a source not read was resolved")
+	}
+	// The error of the source read comes back while the other still fails: told.
+	pe.write(mono("CRITICAL", "PDOException", "Invoice.php", 42))
+	pe.clock.Advance(time.Minute)
+	if _, err := Pass(ctx, pe.deps, pe.tgt.ID); err == nil {
+		t.Fatal("the pass did not fail")
+	}
+	if told := pe.alerts.ofKind(AlertReopened); len(told) != 1 {
+		t.Errorf("alerts = %v", pe.alerts.kinds())
+	}
+	// The other one is read again: nothing was lost, its errors resolve now.
+	deny.Store(false)
+	pe.clock.Advance(8 * 24 * time.Hour)
+	pe.run()
+	if got := status(); got[src2.ID] != StatusResolved {
+		t.Errorf("after the read: status = %s", got[src2.ID])
+	}
+}
+
+// A server where nothing listens is a refused connection, told as such.
+func TestPassReportsARefusedConnection(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	tg := pe.tgt
+	tg.Port = port
+	if err := pe.targets.Update(context.Background(), tg); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
+	if err == nil || res.Reason != ReasonRefused || res.Read != 0 {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+}
+
+// The cause of a connection that failed: a timeout is the timeout one, the
+// network policy of Michel is its own cause, not the server refusing, and
+// anything unknown stays the general one.
+func TestReasonOfTellsTheNetworkApart(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("x: %w", sshx.ErrConnectionRefused), ReasonRefused},
+		{fmt.Errorf("x: %w", sshx.ErrConnectTimeout), ReasonTimeout},
+		{fmt.Errorf("x: %w", sshx.ErrDenied), ReasonPolicy},
+		{ErrSourceDenied, ReasonDenied},
+		{fmt.Errorf("x: %w", sshx.ErrNoKeyAccepted), ReasonNoKeyAccepted},
+		{errors.New("ssh: handshake failed: EOF"), ReasonError},
+	} {
+		if got := reasonOf(tc.err); got != tc.want {
+			t.Errorf("reasonOf(%v) = %s, want %s", tc.err, got, tc.want)
+		}
+	}
+}
+
+// byPath makes a simulated server that answers each source by its own lines.
+func byPath(lines map[string][]string) sshtest.ShellFunc {
+	return func(_ *sshtest.Server, script string, out, _ io.Writer) int {
+		for path, ls := range lines {
+			if strings.Contains(script, path) {
+				io.WriteString(out, strings.Join(ls, "\n")+"\n")
+				return 0
+			}
+		}
+		return 1
+	}
+}
+
+// A source whose file is gone (or a link, a folder) was not read: it is no
+// "read" source for the alert, and its errors are not closed.
+func TestAbsentSourceIsNotReadAndResolvesNothing(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	ctx := context.Background()
+	var deny atomic.Bool
+	src2, _ := twoSources(t, pe, &deny)
+	if _, _, _, err := pe.repo.Apply(ctx, src2, []Record{rec(1, readNow)}, readNow); err != nil {
+		t.Fatal(err)
+	}
+	pe.activate()
+	pe.clock.Advance(8 * 24 * time.Hour)
+	pe.setShell(byPath(map[string][]string{
+		pe.src.Path: {unseenLine(pe.src.Path, CauseDenied)},
+		src2.Path:   {unseenLine(src2.Path, CauseAbsent)},
+	}))
+	res, err := Pass(ctx, pe.deps, pe.tgt.ID)
+	if err == nil || res.Read != 0 || len(res.Failed) != 1 {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	for _, g := range pe.signatures() {
+		if g.SourceID == src2.ID && g.Status == StatusResolved {
+			t.Error("the error of a source that was not read was closed")
+		}
+	}
+}
+
+// A source read in part (a file refused, the list cut, the cap reached) closes
+// nothing: an error held only by what was not read is not gone.
+func TestPartialReadResolvesNothing(t *testing.T) {
+	for name, tc := range map[string]struct {
+		lines    func(a, b string) []string
+		resolved bool
+	}{
+		"whole":        {func(a, b string) []string { return []string{readLineOf(a)} }, true},
+		"file refused": {func(a, b string) []string { return []string{readLineOf(a), unseenLine(b, CauseDenied)} }, false},
+		"file absent":  {func(a, b string) []string { return []string{readLineOf(a), unseenLine(b, CauseAbsent)} }, true},
+		"list cut":     {func(a, b string) []string { return []string{readLineOf(a), "M"} }, false},
+		"cap reached":  {func(a, b string) []string { return []string{"F\t" + a + "\t123\t0\t5\t0\t0"} }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+			dir := pe.src.Path[:strings.LastIndex(pe.src.Path, "/")]
+			pe.src.Path = dir + "/*.log"
+			if err := pe.repo.UpdateSource(context.Background(), pe.src); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, err := pe.repo.Apply(context.Background(), pe.src, []Record{rec(1, readNow)}, readNow); err != nil {
+				t.Fatal(err)
+			}
+			pe.clock.Advance(8 * 24 * time.Hour)
+			pe.setShell(answer(tc.lines(dir+"/a.log", dir+"/b.log")...))
+			pe.run()
+			if got := pe.signatures()[0].Status == StatusResolved; got != tc.resolved {
+				t.Errorf("resolved = %v, want %v", got, tc.resolved)
 			}
 		})
 	}
