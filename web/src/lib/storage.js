@@ -20,4 +20,4 @@ export function save(key, value) {
   }
 }
 
-export const keys = { token: 'michel.token', lang: 'michel.lang', theme: 'michel.theme', advanced: 'michel.advanced' }
+export const keys = { token: 'michel.token', lang: 'michel.lang', theme: 'michel.theme', advanced: 'michel.advanced', guide: 'michel.guide' }

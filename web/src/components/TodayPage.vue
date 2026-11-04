@@ -8,12 +8,17 @@
     <template v-else>
       <header class="m-todo__head">
         <div class="m-todo__say">
-          <h1 id="todo-title" class="m-verdict">{{ todo.head }}</h1>
-          <p v-if="todo.sub" class="m-muted m-todo__sub">{{ todo.sub }}</p>
+          <h1 id="todo-title" class="m-verdict">{{ nothingWatched ? $t('empty.todo') : todo.head }}</h1>
+          <p v-if="nothingWatched" class="m-muted m-todo__sub">{{ $t('empty.todo_hint') }}</p>
+          <p v-else-if="todo.sub" class="m-muted m-todo__sub">{{ todo.sub }}</p>
           <p v-if="$ui.advanced && digest.since_label" class="m-muted m-small m-todo__sub">{{ digest.since_label }}</p>
         </div>
         <v-btn variant="text" class="m-todo__refresh" :loading="refreshing" @click="$emit('refresh')">{{ $t('app.refresh') }}</v-btn>
       </header>
+
+      <FirstSteps v-if="guideShown" ref="guide" :steps="guideSteps" :git="guideGit" @dismiss="dismissGuide" />
+      <p v-else-if="guideNotice" ref="notice" class="m-small m-todo__notice" role="status" tabindex="-1">{{ $t('guide.dismissed') }}</p>
+      <v-btn v-if="nothingWatched && !guideShown" class="m-todo__empty-action" color="primary" variant="flat" href="#/projects">{{ $t('empty.todo_action') }}</v-btn>
 
       <OsvBanner :fetched-at="osvFetchedAt" :stale="digest.osv_stale" />
 
@@ -70,14 +75,17 @@
 
 <script>
 import ExploitedBanner from './ExploitedBanner.vue'
+import FirstSteps from './FirstSteps.vue'
 import OsvBanner from './OsvBanner.vue'
 import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
+import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideVisible } from '../lib/guideView.js'
+import { save } from '../lib/storage.js'
 import { buildTodo, projectsToRead, serversToRead, unseenBelow } from '../lib/todoView.js'
 
 export default {
   name: 'TodayPage',
-  components: { ExploitedBanner, OsvBanner, ReadingList },
+  components: { ExploitedBanner, FirstSteps, OsvBanner, ReadingList },
   props: {
     digest: { type: Object, required: true },
     meta: { type: Object, default: null },
@@ -94,6 +102,9 @@ export default {
       readDigest: null,
       attempts: [],
       servers: [],
+      // projectViews is GET /projects, null when it could not be read: the guide reads it.
+      projectViews: null,
+      guideNotice: false,
       details: {},
       findings: {},
       now: new Date(),
@@ -115,7 +126,23 @@ export default {
       })
     },
     unseen() {
-      return unseenBelow(this.todo.unseen)
+      // On an empty install the title already says it.
+      const list = this.nothingWatched ? this.todo.unseen.filter((u) => u.key !== 'nothing') : this.todo.unseen
+      return unseenBelow(list)
+    },
+    nothingWatched() {
+      return emptyInstall(this.projectViews, this.servers)
+    },
+    guideSteps() {
+      const flaw = guideFlaw({ lines: this.todo.lines, projects: this.projectViews, servers: this.servers })
+      return guideSteps({ projects: this.projectViews, servers: this.servers, read: this.$ui.guide.read, anyFinding: flaw.any, flawHref: flaw.href })
+    },
+    // Where a person stands is only said once both lists were read.
+    guideShown() {
+      return !!this.projectViews && !!this.servers && guideVisible(this.guideSteps, this.$ui.guide)
+    },
+    guideGit() {
+      return guideGitQuestion(this.projectViews)
     },
     catalog() {
       return this.digest.catalog || {}
@@ -129,6 +156,11 @@ export default {
     // A new digest (refresh, decision, language) reads the rest again.
     digest() {
       this.load()
+    },
+    // "Revoir le guide" from the menu, on this very page.
+    '$ui.guide.asks'() {
+      this.guideNotice = false
+      this.$nextTick(() => this.$refs.guide?.focus())
     },
   },
   created() {
@@ -145,7 +177,7 @@ export default {
       const lang = `lang=${encodeURIComponent(this.$ui.lang)}`
       const read = (path) => api.get(path).then((r) => r || []).catch(() => null)
       const digest = this.digest
-      const [attempts, servers] = await Promise.all([read(`/fixes?${lang}`), read(`/targets?${lang}`)])
+      const [attempts, servers, projectViews] = await Promise.all([read(`/fixes?${lang}`), read(`/targets?${lang}`), read(`/projects?${lang}`)])
       if (seq !== this.seq) return
       const wanted = serversToRead(servers)
       const toRead = projectsToRead(digest, attempts)
@@ -165,10 +197,17 @@ export default {
       this.readDigest = digest
       this.attempts = attempts
       this.servers = servers
+      this.projectViews = projectViews
       this.details = details
       this.findings = findings
       this.now = new Date()
       this.loaded = true
+    },
+    /** dismissGuide hides the guide, says where it went, and keeps the keyboard there. */
+    dismissGuide() {
+      dismissGuide(this.$ui.guide, save)
+      this.guideNotice = true
+      this.$nextTick(() => this.$refs.notice?.focus())
     },
   },
 }
@@ -182,6 +221,8 @@ export default {
 .m-todo__sub { margin: 0.5rem 0 0; }
 .m-todo__refresh { flex: none; margin-right: -0.5rem; }
 .m-block { margin-bottom: 1.25rem; }
+.m-todo__notice { margin: 0 0 1.25rem; outline: none; }
+.m-todo__empty-action { margin-bottom: 1.25rem; }
 .m-todo__list { list-style: none; margin: 0; padding: 0; }
 .m-todo__row { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0.9rem; }
 .m-todo__row + .m-todo__row { border-top: 1px solid var(--m-line); }
@@ -207,5 +248,6 @@ export default {
   .m-todo__word { min-width: 0; }
   .m-todo__text { flex-basis: 100%; }
   .m-todo__action { width: 100%; }
+  .m-todo__empty-action { width: 100%; }
 }
 </style>

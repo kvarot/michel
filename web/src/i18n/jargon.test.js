@@ -1,19 +1,24 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import fr from './fr.json'
-import { findJargon } from './jargon.js'
+import { catalogJargon, findJargon } from './jargon.js'
 
-// Families of texts a novice reads in simple mode. The exploited banner stays
-// visible in simple mode, so its texts are checked too.
-const families = ['nav.', 'todo.', 'resolved.', 'path.', 'plan.', 'expo.', 'guide.', 'empty.', 'help.', 'git.', 'exploited.']
+// The whole catalog is read, minus the families only advanced mode shows. A family
+// goes here only with its proof below: where it is used, and behind what.
+const advancedOnly = ['fact.', 'term.']
 // Keys allowed to use port, paquet or SSH because their own sentence explains it.
 // A task that adds one lists it here, in the same commit.
 // help.server.port explains the word port in its own sentence, plan.server.approval_michel the word SSH.
 // git.suggest.unsupported explains SSH in its own sentence.
 // expo.udp.note says what TCP is ("le type le plus courant") and that the others are not read; expo.udp.name is its title, shown with it.
-const jargonExceptions = ['help.server.port', 'plan.server.approval_michel', 'expo.udp.name', 'expo.udp.note', 'git.suggest.unsupported']
+// servers.discover.port gives the plain name first, for the word a host's page uses; servers.discover.key_only says what the SSH agent is.
+// servers.hostkey.first holds a command to type as it is, servers.remove.rules_not_removed the names written in the file to edit.
+const jargonExceptions = [
+  'help.server.port', 'plan.server.approval_michel', 'expo.udp.name', 'expo.udp.note', 'git.suggest.unsupported',
+  'servers.discover.port', 'servers.discover.key_only', 'servers.hostkey.first', 'servers.remove.rules_not_removed',
+]
 
-const simpleEntries = Object.entries(fr).filter(([k]) => families.some((f) => k.startsWith(f)))
+const rules = { exempt: advancedOnly, exceptions: jargonExceptions }
 
 describe('findJargon', () => {
   test('fires on a planted string, singular and plural', () => {
@@ -32,13 +37,18 @@ describe('findJargon', () => {
   })
 })
 
-describe('no unexplained jargon in simple texts', () => {
-  test('no unexplained jargon in simple texts', () => {
-    const bad = []
-    for (const [k, v] of simpleEntries) {
-      for (const why of findJargon(v, jargonExceptions.includes(k))) bad.push(`${k}: ${why}`)
-    }
-    expect(bad).toEqual([])
+describe('no unexplained jargon in the catalog', () => {
+  test('the whole catalog, minus what only advanced mode shows', () => {
+    expect(catalogJargon(fr, rules)).toEqual([])
+  })
+  test('a planted word fails, in any family', () => {
+    expect(catalogJargon({ ...fr, 'servers.planted': 'Michel lit par SSH.' }, rules)).toEqual(['servers.planted: port, paquet or SSH'])
+    expect(catalogJargon({ ...fr, 'nouvelle.famille': 'Un paquet ancien.' }, rules)).toEqual(['nouvelle.famille: port, paquet or SSH'])
+    expect(catalogJargon({ ...fr, 'guide.planted': 'La faille CVE-2024-1.' }, rules)).toEqual(['guide.planted: identifier word'])
+  })
+  test('a key of a family that is only advanced is left out, and only those', () => {
+    expect(catalogJargon({ ...fr, 'fact.planted': 'par SSH' }, rules)).toEqual([])
+    expect(catalogJargon({ ...fr, 'factory.planted': 'par SSH' }, rules)).toEqual(['factory.planted: port, paquet or SSH'])
   })
   test('every exception exists and still holds its word', () => {
     for (const k of jargonExceptions) {
@@ -46,14 +56,25 @@ describe('no unexplained jargon in simple texts', () => {
       expect(findJargon(fr[k]).filter((w) => w !== 'identifier word'), k).not.toEqual([])
     }
   })
-  test('the exposure page only says words these rules look at', () => {
-    // Every key of its sheet and of its dialog is in a family above, or a decision's own.
-    const page = readFileSync(new URL('../components/ServerExposure.vue', import.meta.url), 'utf8')
-    const keys = [...page.matchAll(/\$t\('([^']+)'/g)].map((m) => m[1])
-    expect(keys.length).toBeGreaterThan(0)
-    expect(keys.filter((k) => !families.some((f) => k.startsWith(f)) && !k.startsWith('decision.') && !['offline.hint', 'error.generic', 'app.retry', 'servers.sheet.check'].includes(k))).toEqual([])
+})
+
+describe('what is left out is only shown in advanced mode', () => {
+  const read = (dir) => readdirSync(new URL(dir, import.meta.url))
+    .filter((f) => /\.(vue|js)$/.test(f) && !f.endsWith('.test.js'))
+    .map((f) => ({ file: `${dir}${f}`, text: readFileSync(new URL(`${dir}${f}`, import.meta.url), 'utf8') }))
+  const sources = [...read('../components/'), ...read('../lib/'), ...read('../')]
+  const usesAdvancedOnly = /['"`](fact|term)\./
+
+  test('these families are used in one file', () => {
+    expect(sources.filter((s) => usesAdvancedOnly.test(s.text)).map((s) => s.file)).toEqual(['../components/FindingSheet.vue'])
   })
-  test('the families are not empty', () => {
-    expect(simpleEntries.length).toBeGreaterThan(0)
+  test('in it, only inside the blocks that advanced mode opens', () => {
+    const sheet = sources.find((s) => s.file.endsWith('FindingSheet.vue')).text
+    const outside = sheet
+      .replace(/<dl v-if="\$ui\.advanced"[\s\S]*?<\/dl>/, '')
+      .replace(/<details v-if="\$ui\.advanced"[\s\S]*?<\/details>/, '')
+      .replace(/<section v-if="\$ui\.advanced && glossaryList\.length"[\s\S]*?<\/section>/, '')
+    expect(outside).not.toBe(sheet)
+    expect(outside.match(/['"`](fact|term)\.[^'"`]*/g)).toBeNull()
   })
 })

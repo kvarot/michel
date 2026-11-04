@@ -3,7 +3,7 @@
     <header class="m-srv__head">
       <h1 class="m-srv__title">{{ $t('servers.title') }}</h1>
       <p class="m-muted m-srv__intro">{{ $t('servers.intro') }}</p>
-      <div class="m-srv__actions">
+      <div v-if="!showsEmpty" class="m-srv__actions">
         <v-btn color="primary" variant="flat" @click="openDiscover(false)">{{ $t('servers.find') }}</v-btn>
         <v-btn variant="outlined" @click="openDiscover(true)">{{ $t('servers.add_manual') }}</v-btn>
       </div>
@@ -27,8 +27,11 @@
         <v-btn size="small" variant="tonal" color="primary" @click="load">{{ $t('app.retry') }}</v-btn>
       </div>
       <section v-else-if="!list.length" class="m-srv__empty">
-        <p class="m-voice">{{ $t('servers.empty') }}</p>
-        <p class="m-muted">{{ $t('servers.empty_hint') }}</p>
+        <p>{{ $t('empty.servers') }}</p>
+        <div class="m-srv__actions">
+          <v-btn color="primary" variant="flat" @click="openDiscover(false)">{{ $t('servers.find') }}</v-btn>
+          <v-btn variant="outlined" @click="openDiscover(true)">{{ $t('servers.add_manual') }}</v-btn>
+        </div>
       </section>
       <ul v-else class="m-srv__list" :aria-label="$t('servers.list_label')">
         <li v-for="t in list" :key="t.id">
@@ -89,6 +92,10 @@ export default {
   computed: {
     lang() {
       return this.$ui.lang
+    },
+    // The list is empty and read: the buttons then stand with the sentence.
+    showsEmpty() {
+      return !this.route.id && !this.loading && !this.failure && !this.list.length
     },
   },
   watch: {
@@ -180,8 +187,8 @@ export default {
 .m-srv__notice { padding: 0.5rem 0.75rem; border-radius: 8px; background: rgba(var(--v-theme-success), 0.12); }
 .m-srv__back { color: rgb(var(--v-theme-primary)); text-decoration: none; justify-self: start; }
 .m-srv__failure { display: grid; gap: 0.4rem; justify-items: start; }
-.m-srv__empty { display: grid; gap: 0.4rem; padding: 1rem 0; }
-.m-srv__empty .m-voice { font-size: 1.2rem; }
+.m-srv__empty { display: grid; gap: 0.75rem; }
+.m-srv__empty p { margin: 0; }
 .m-srv__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
 .m-srv__item {
   display: grid;

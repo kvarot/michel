@@ -67,6 +67,11 @@
         </form>
       </section>
 
+      <section class="m-settings__group" aria-labelledby="settings-guide">
+        <h3 id="settings-guide" class="m-settings__label">{{ $t('settings.guide') }}</h3>
+        <v-btn variant="tonal" color="primary" href="#/" @click="showGuide">{{ $t('settings.guide_open') }}</v-btn>
+      </section>
+
       <section class="m-settings__group" aria-labelledby="settings-sources">
         <h3 id="settings-sources" class="m-settings__label">{{ $t('settings.sources') }}</h3>
         <v-btn variant="tonal" color="primary" href="#/sources">{{ $t('settings.sources_open') }}</v-btn>
@@ -85,6 +90,7 @@
 import FieldHelp from './FieldHelp.vue'
 import { api } from '../api.js'
 import { languages } from '../i18n/index.js'
+import { showGuideAgain } from '../lib/guideView.js'
 import { keys, save } from '../lib/storage.js'
 
 export default {
@@ -109,6 +115,9 @@ export default {
     },
   },
   methods: {
+    showGuide() {
+      showGuideAgain(this.$ui.guide, save)
+    },
     // setAdvanced turns the advanced mode on or off and remembers the choice here.
     setAdvanced(on) {
       this.$ui.advanced = !!on

@@ -287,7 +287,7 @@ describe('the connection port', () => {
 describe('changing your mind', () => {
   test('a decided row says how, with the id of its finding', () => {
     const r = cols(read([service(3306, 'open', 'database', 'close', { finding_id: 'f1', decided_why: 'voulu' })])).open[0]
-    expect(r.undo).toBe("Pour changer d'avis, tape dans un terminal (la fenêtre où l'on tape des commandes) : michel decide f1 defer --for 1d. Michel t'en reparle demain.")
+    expect(r.undo).toBe("Pour changer d'avis, tape dans un terminal (la fenêtre où l'on tape des commandes) : michel decide f1 defer --for 1d. Ton indication est alors remplacée.")
     expect(exposureColumns(read([service(3306, 'open', 'database', 'close', { finding_id: 'f1', decided_why: 'voulu' })]), target(), 'en', false).open[0].undo).toContain('michel decide f1 defer --for 1d')
   })
   test('a row not decided says nothing of it', () => {

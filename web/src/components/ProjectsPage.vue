@@ -3,17 +3,21 @@
     <section aria-labelledby="projects-title" class="m-projects-page__head">
       <h1 id="projects-title" class="m-verdict">{{ $t('projects.title') }}</h1>
       <p class="m-muted m-small">{{ $t('projects.hint') }}</p>
-      <div class="m-projects-page__actions">
+      <div v-if="projects.length" class="m-projects-page__actions">
         <v-btn color="primary" variant="flat" @click="dialog = true">{{ $t('projects.add') }}</v-btn>
       </div>
     </section>
 
-    <p v-if="notice" class="m-projects-page__notice" role="status">{{ notice }}</p>
+    <p v-if="notice" ref="notice" class="m-projects-page__notice" role="status" tabindex="-1">{{ notice }}</p>
     <p v-if="lost" class="m-projects-page__notice" role="alert">{{ $t('projects.scan_lost') }}</p>
 
     <section v-if="!projects.length" class="m-empty">
-      <p>{{ $t('today.no_projects') }}</p>
-      <p class="m-muted">{{ $t('today.no_projects_hint') }}</p>
+      <template v-if="$ui.advanced">
+        <p>{{ $t('today.no_projects') }}</p>
+        <p class="m-muted">{{ $t('today.no_projects_hint') }}</p>
+      </template>
+      <p v-else>{{ $t('empty.projects') }}</p>
+      <v-btn class="m-empty__action" color="primary" variant="flat" @click="dialog = true">{{ $t('projects.add') }}</v-btn>
     </section>
 
     <div class="m-projects">
@@ -130,6 +134,8 @@ export default {
     onAdded(added) {
       this.dialog = false
       this.notice = this.$t('projects.added', { name: added?.name || '' })
+      // The button that opened the dialog may leave with the empty screen.
+      this.$nextTick(() => this.$refs.notice?.focus())
       this.$emit('decided')
       this.loadViews()
     },
@@ -141,8 +147,9 @@ export default {
 .m-projects-page__head { padding-bottom: 1.5rem; }
 .m-projects-page__head p { margin: 0.5rem 0 0; }
 .m-projects-page__actions { margin-top: 1rem; }
-.m-projects-page__notice { margin: 0 0 1rem; }
-.m-empty { display: grid; gap: 0.4rem; padding: 1.5rem 0; }
+.m-projects-page__notice { margin: 0 0 1rem; outline: none; }
+.m-empty { display: grid; gap: 0.4rem; padding: 0 0 1.5rem; justify-items: start; }
+.m-empty__action { margin-top: 0.6rem; }
 .m-empty p { margin: 0; }
 .m-projects { display: grid; gap: 1.25rem; }
 </style>

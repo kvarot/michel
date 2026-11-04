@@ -163,15 +163,15 @@ describe('the first script runs under the preprod’s settings', () => {
     // The production's rule would run alone; the preprod's own settings ask for a click.
     const k = keys(cfg(), target({ ...rule, preprod: pre }), { preprodTarget: { ...pre, ...asks, site_url: 'https://x.test' } })
     expect(k).toContain('who')
-    expect(k).toContain('approval_user')
+    expect(k).toContain('approval_user_preprod')
     expect(k).not.toContain('who_auto')
     expect(k).not.toContain('approval_auto')
     // And the other way round: the preprod's rule runs alone, the production's does not.
     const k2 = keys(cfg(), target({ ...asks, preprod: pre }), { preprodTarget: { ...pre, ...rule, site_url: 'https://x.test' } })
     expect(k2.slice(0, 2)).toEqual(['who_auto', 'preprod'])
-    expect(k2).toContain('approval_auto')
+    expect(k2).toContain('approval_auto_preprod')
     const k3 = keys(cfg(), target({ ...asks, preprod: pre }), { preprodTarget: { ...pre, executor: 'michel', sudo: 'nopasswd', fix_level: 1 } })
-    expect(k3).toContain('approval_michel')
+    expect(k3).toContain('approval_michel_preprod')
     expect(k3).toContain('root')
   })
   test('without them, no promise of a click and none of a run alone', () => {
@@ -179,7 +179,7 @@ describe('the first script runs under the preprod’s settings', () => {
       const k = keys(cfg(), t)
       expect(k).toContain('preprod')
       expect(k).toContain('who')
-      for (const x of ['who_auto', 'approval_auto', 'approval_michel', 'approval_user', 'root']) expect(k, x).not.toContain(x)
+      for (const x of ['who_auto', 'approval_auto', 'approval_michel', 'approval_user', 'approval_auto_preprod', 'approval_michel_preprod', 'approval_user_preprod', 'root']) expect(k, x).not.toContain(x)
     }
   })
   test('no preprod: the server’s own settings, as before', () => {

@@ -170,7 +170,7 @@ describe('stepLine', () => {
   test('and in English, with a plain word for what it does not know', () => {
     expect(stepLine({ op: 'reload_service', ok: true, detail: 'done' }, 'en')).toBe('Reload of PHP: done.')
     expect(stepLine({ op: 'package_upgrade', ok: false, detail: 'the upgrade failed; the package may have changed' }, 'en'))
-      .toBe('Package upgrade: the upgrade failed, the package may have changed.')
+      .toBe('Software update: the update failed, the software may have changed.')
     expect(stepLine({ op: 'mystery', ok: false, detail: 'weird' }, 'en')).toBe('Step: failed.')
     expect(stepLine({ op: 'mystery', ok: true, detail: 'weird' }, 'fr')).toBe('Étape : faite.')
     expect(stepLine(null, 'fr')).toBe('')

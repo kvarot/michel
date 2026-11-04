@@ -9,7 +9,7 @@
         </a>
       </li>
     </ul>
-    <a href="#/settings" class="m-nav__help">{{ $t('nav.help') }}</a>
+    <a href="#/" class="m-nav__help" @click="showGuide">{{ $t('nav.help') }}</a>
   </v-navigation-drawer>
 
   <v-bottom-navigation v-else tag="nav" :aria-label="$t('nav.label')" :model-value="active" grow class="m-bottom">
@@ -29,7 +29,9 @@
 </template>
 
 <script>
+import { showGuideAgain } from '../lib/guideView.js'
 import { activeEntry, navEntries, navMode } from '../lib/navView.js'
+import { save } from '../lib/storage.js'
 
 export default {
   name: 'AppNav',
@@ -46,6 +48,11 @@ export default {
     },
     active() {
       return activeEntry(this.page)
+    },
+  },
+  methods: {
+    showGuide() {
+      showGuideAgain(this.$ui.guide, save)
     },
   },
 }

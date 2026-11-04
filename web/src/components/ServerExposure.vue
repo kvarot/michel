@@ -12,6 +12,7 @@
     </v-alert>
 
     <div v-if="!cols.read && !cols.failed" class="m-expo__check">
+      <p class="m-small">{{ $t(emptyKey) }}</p>
       <v-btn
         color="primary"
         variant="tonal"
@@ -116,6 +117,8 @@
 
 <script>
 import FailurePath from './FailurePath.vue'
+import { markGuideRead } from '../lib/guideView.js'
+import { save } from '../lib/storage.js'
 import FieldHelp from './FieldHelp.vue'
 import MaskedText from './MaskedText.vue'
 import { api } from '../api.js'
@@ -170,6 +173,15 @@ export default {
     closedSteps() {
       return exposurePath({ gone: true }).steps
     },
+    // Why there is nothing to show yet, and what to do: the button may be greyed.
+    emptyKey() {
+      if (!this.target.active) return 'servers.state.inactive'
+      return this.target.host_key_pinned ? 'empty.exposure' : 'servers.state.key_unconfirmed'
+    },
+    // A row with its path is a flaw shown: it counts for the guide, like a card.
+    showsFlaw() {
+      return this.cols.open.some((r) => r.findingId)
+    },
     check() {
       return exposureDecisionCheck(this.why, new Date())
     },
@@ -181,6 +193,12 @@ export default {
     },
   },
   watch: {
+    showsFlaw: {
+      immediate: true,
+      handler(shows) {
+        if (shows) markGuideRead(this.$ui.guide, save)
+      },
+    },
     why() {
       this.touchedWhy = true
     },
@@ -247,7 +265,8 @@ export default {
 .m-expo__title { font-size: 1.25rem; font-weight: 600; line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
 .m-expo__shared { padding: 0.4rem 0.7rem; border-radius: 8px; background: rgb(var(--v-theme-tag-info)); }
 .m-expo__retry { margin: 0.25rem 0 0 -0.6rem; }
-.m-expo__check { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.m-expo__check { display: grid; gap: 0.5rem; justify-items: start; }
+.m-expo__check p { margin: 0; }
 .m-expo__wall { display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: stretch; margin-top: 0.25rem; }
 .m-expo__col {
   flex: 1 1 13rem;

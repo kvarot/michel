@@ -92,6 +92,8 @@
 
 <script>
 import FailurePath from './FailurePath.vue'
+import { markGuideRead } from '../lib/guideView.js'
+import { save } from '../lib/storage.js'
 import MaskedText from './MaskedText.vue'
 import MergeStep from './MergeStep.vue'
 import { api } from '../api.js'
@@ -224,6 +226,9 @@ export default {
     proposed() {
       return this.attempt?.state === 'proposed'
     },
+  },
+  mounted() {
+    markGuideRead(this.$ui.guide, save)
   },
   watch: {
     gitFor: {

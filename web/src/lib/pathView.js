@@ -398,7 +398,11 @@ export function serverPlan({ finding, target, attempt = null, tried = false, pre
   }
   lines.push({ key: 'plan.server.no_tests' })
 
-  if (set) lines.push({ key: `plan.server.approval_${auto ? 'auto' : michel ? 'michel' : 'user'}` })
+  // With a preprod, the click and the rule are the preprod's: the sentence names it.
+  if (set) {
+    const who = auto ? 'auto' : michel ? 'michel' : 'user'
+    lines.push(target.preprod ? { key: `plan.server.approval_${who}_preprod`, params: { name: target.preprod.name } } : { key: `plan.server.approval_${who}` })
+  }
   if (michel && !auto && root) lines.push({ key: 'plan.server.root' })
 
   // EligibleServer and serverTried (server_auto.go): once, on an active server;

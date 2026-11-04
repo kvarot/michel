@@ -6,7 +6,7 @@
     </template>
     <header v-else class="m-fix__head">
       <h1 class="m-fix__title">{{ $t('fix.title') }}</h1>
-      <p class="m-muted m-fix__intro">{{ serverOnly ? $t('fix.intro_server') : $t('fix.intro') }}</p>
+      <p v-if="loading || failure || !isEmpty" class="m-muted m-fix__intro">{{ serverOnly ? $t('fix.intro_server') : $t('fix.intro') }}</p>
     </header>
 
     <v-alert v-if="agentProblem && !serverOnly" type="warning" variant="tonal" density="comfortable" class="m-fix__agent" role="status">
@@ -28,7 +28,10 @@
       <v-btn size="small" variant="tonal" color="primary" @click="loadAll">{{ $t('app.retry') }}</v-btn>
     </div>
 
-    <p v-else-if="isEmpty" class="m-fix__state m-voice m-fix__empty">{{ $t('fix.empty') }}</p>
+    <div v-else-if="isEmpty" class="m-fix__state m-fix__empty">
+      <p class="m-voice">{{ $t('empty.fix') }}</p>
+      <v-btn color="primary" variant="flat" href="#/">{{ $t('empty.fix_action') }}</v-btn>
+    </div>
 
     <div v-else class="m-fix__grid" :class="{ 'm-fix__grid--guided': noList }">
       <nav v-if="!noList" class="m-fix__list" :aria-label="$t('fix.list_label')">
@@ -932,7 +935,7 @@ export default {
 .m-fix__agent-btn { margin: 0.25rem 0 0 -0.6rem; }
 .m-fix__state { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
 .m-fix__state p { margin: 0; flex-basis: 100%; }
-.m-fix__empty { font-size: 1.2rem; }
+.m-fix__empty .m-voice { font-size: 1.2rem; }
 .m-fix__grid {
   display: grid;
   grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr) minmax(17rem, 24rem);
