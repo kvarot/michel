@@ -180,6 +180,13 @@ describe('the button is the one the texts name', () => {
   })
 })
 
+describe('the card knows a folder without Git (D-4)', () => {
+  test('withScanState carries git_repo: the digest does not have it', () => {
+    expect(withScanState({ name: 'a' }, { git_repo: false }).git_repo).toBe(false)
+    expect(withScanState({ name: 'a' }, { git_repo: true }).git_repo).toBe(true)
+  })
+})
+
 describe('goneRows (D-3)', () => {
   const pkg = (ids, proven = []) => ({ name: 'acme/lib', worst_severity: 'high', finding_ids: ids, proven_ids: proven, osv_ids: ids, installed: '1', target: '2' })
   test('a flaw Michel proved fixed is not « he cannot prove it »', () => {

@@ -126,6 +126,7 @@ export function withScanState(project, view) {
     last_scan_status: view.last_scan_status || project.last_scan_status,
     git_answer: view.git_answer ?? '',
     git_attached: !!view.git_attached,
+    git_repo: view.git_repo,
   }
 }
 

@@ -68,7 +68,7 @@
     <v-btn v-if="proposed && !card" class="m-guide__go" color="primary" variant="flat" block @click="$emit('to-proposal')">{{ $t('path.to_proposal') }}</v-btn>
 
     <div class="m-guide__two">
-      <section v-if="!card && !fromProposal" class="m-guide__block m-panel" aria-labelledby="fix-means-title">
+      <section v-if="!card && !fromProposal && !path.verified" class="m-guide__block m-panel" aria-labelledby="fix-means-title">
         <component :is="subHeading" id="fix-means-title" class="m-guide__sub">{{ $t('path.means') }}</component>
         <p class="m-guide__text">{{ risk }}</p>
       </section>
