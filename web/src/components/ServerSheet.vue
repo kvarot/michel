@@ -667,13 +667,13 @@ export default {
         this.$nextTick(this.focusSettings)
       }
     },
-    /** refreshView reads the server again: the log badges follow what the Journaux block changed. A failure is shown, not swallowed. */
+    /** refreshView reads the server again: the log badges follow what the Journaux block changed. A failure is shown, not swallowed, unless an action error already stands: that one is the person's, and stays. */
     async refreshView() {
       try {
         const v = await api.get(this.q(`/targets/${this.enc(this.id)}`))
         if (this.alive) this.view = v
       } catch (err) {
-        if (this.alive && err?.status !== 401) {
+        if (this.alive && err?.status !== 401 && !this.actionError) {
           this.errorFor = ''
           this.actionError = err
         }
