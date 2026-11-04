@@ -159,3 +159,16 @@ To tell Kévin in the final report:
 - CI not readable from this PC. Leftovers: go editing scripts in the temp folder from an implementer; Vite server on port 5199 (PID 23860) if still there; `digest_at: "00:00"` can give two copies around midnight (R29).
 - Not on a real host: https or SSH push, merge page links. Windows OpenSSH agent untested.
 - Task 14g review back: 3 high 3 medium 6 low, W/task-14g-findings.md, not fixed. Task 15: 701449e, report W/task-15-report.md, not reviewed. Decision open: 68 keys of `internal/i18n/catalog/fr.json` hold jargon words outside the test, some reach simple-mode screens. Old session stops here.
+
+## New session took over (2026-11-04, 05:01)
+- Old session's two agents done: Task 15 701449e, 14g findings on file.
+- Ruling R57: 14g, every finding fixed incl. L5 and L6: `todo.applied` becomes the sentence of L5 — the owner asked to follow recommendations; L5 was only reserved for his call by a brief — costs a changed word he had kept. `git.push.lead` is traced against `Prepare`'s base by the fixer and says the unpublished commits if they travel — "say no more than the code does" — costs a longer sentence.
+- Ruling R58: Go catalog jargon (68 keys, open decision of Task 15): the Task 15 reviewer lists those reaching a simple-mode screen; those get reworded in Task 15's fix, the rest stays; test stays on the web catalog, R36 named it — `api.` strings are also read by CLI users — costs a later Go key with jargon not being caught.
+- 14g fix: dispatched, BASE 2612e38. Task 15 review: dispatched on 701449e.
+- 14g fix: 03d3132; re-review running. `git.push.lead` says unpublished commits travel (traced in workcopy.Push).
+- Masking gap: dispatched, BASE 03d3132.
+- 14g re-review: 11 addressed, L2 open; new 1 medium 3 low, all texts. 14g round 2 goes with Task 15 fix, both edit fr.json.
+- Task 15 review: partial, needs fixes; 2 high 6 medium 9 low; 47 Go keys reach simple screens, to rewrite.
+- Ruling R59: Task 15's M6 (empty data folder on a real server) is covered by Task 16, not redone on a stub — same run, real API — costs a late finding.
+- Masking gap: 7e6238f; review running. Weak code on a sensitive array key stays masked, not holding (only widens). Task 15 fix: dispatched, BASE 7e6238f.
+- Task 15 fix with 14g round 2: 480d8e2, f7b8615; re-review running. Masking review: 1 high 6 medium 4 low; fix round 1 dispatched.
