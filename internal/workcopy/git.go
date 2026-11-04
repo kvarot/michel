@@ -251,8 +251,9 @@ func (h home) git(ctx context.Context, d Deps, cwd, repo string, extra, env []st
 }
 
 // workCommands are the only commands that run with the person's configuration on
-// their folder, and status writes nothing there (--no-optional-locks).
-var workCommands = []string{"status", "merge"}
+// their folder. status writes nothing there (--no-optional-locks), and check-attr
+// reads the attributes merge would read, core.attributesFile included.
+var workCommands = []string{"status", "merge", "check-attr"}
 
 // workGit runs git on the folder of project p with the person's configuration,
 // not the environment of git: that one ignores core.autocrlf and would rewrite
@@ -265,17 +266,24 @@ func (h home) workGit(ctx context.Context, d Deps, p project.Project, sub string
 	if !slices.Contains(workCommands, sub) {
 		return nil, nil, fmt.Errorf("git %s is not a command Michel runs on a folder", sub)
 	}
+	c := folderCommand(ctx, d, p)
+	c.sub, c.args = sub, args
+	if sub == "status" {
+		c.options = []string{"--no-optional-locks"}
+	}
+	return h.runGit(ctx, d, c)
+}
+
+// folderCommand is the frame of a command on the person's folder: their
+// configuration, and a proxy where nothing answers.
+func folderCommand(ctx context.Context, d Deps, p project.Project) gitCommand {
 	env := userEnv(ctx, d)
 	const nowhere = "http://127.0.0.1:9" // discard port: nothing answers
 	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
 		env = append(env, k+"="+nowhere)
 	}
 	env = append(env, "NO_PROXY=", "no_proxy=")
-	var options []string
-	if sub == "status" {
-		options = []string{"--no-optional-locks"}
-	}
-	return h.runGit(ctx, d, gitCommand{profile: gitFolder, repo: p.Path, dir: d.DataDir, env: env, options: options, sub: sub, args: args})
+	return gitCommand{profile: gitFolder, repo: p.Path, dir: d.DataDir, env: env}
 }
 
 // gitErr is the error of a failed git command, with the first line of what

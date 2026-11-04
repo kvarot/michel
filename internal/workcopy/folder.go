@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -17,6 +19,9 @@ import (
 // mergeTimeout bounds the write in the person's folder. It does not depend on
 // the page: closing it or stopping the server does not cut a write in progress.
 const mergeTimeout = 2 * time.Minute
+
+// readAfterMergeTimeout bounds the reading of what a failed merge left.
+const readAfterMergeTimeout = 30 * time.Second
 
 // maxAttrBatch caps the paths of one git check-attr: ExecFunc has no stdin.
 const maxAttrBatch = 100
@@ -40,6 +45,8 @@ const (
 	classDiverged       = "diverged"
 	classUntracked      = "untracked"
 	classUpdateFailed   = "update_failed"
+	classIgnored        = "ignored"
+	classUpdatePartial  = "update_partial"
 )
 
 // UpdateResult is what happened to the current branch of the folder.
@@ -80,7 +87,8 @@ func folderHome(d Deps, p project.Project, remote string) (home, *GitFailure) {
 // an object. runGit checks the same keys and says no more than that it refuses:
 // here the person gets the reason.
 func (h home) checkFolderConfig(ctx context.Context, d Deps, p project.Project) *GitFailure {
-	keys, err := h.localConfigKeys(ctx, d, p.Path)
+	// Read as status reads them, with the person's HOME: an include can depend on it.
+	keys, err := h.commandConfigKeys(ctx, d, folderCommand(ctx, d, p))
 	if err != nil {
 		return failure(classUpdateFailed)
 	}
@@ -171,9 +179,13 @@ func (h home) updatePreflight(ctx context.Context, d Deps, p project.Project, re
 			return UpdatePlan{}, failure(classInProgress)
 		}
 	}
+	if f := h.checkStoppedSequence(ctx, d, p); f != nil {
+		return UpdatePlan{}, f
+	}
 	// --ignore-submodules=dirty: git status would go down into a submodule,
 	// without the settings of workGit, and run what its own configuration names.
-	// A submodule's working tree is not touched by the update.
+	// So a change inside a submodule is not seen here, and merge does not look
+	// either: checkReplacedSubmodules guards the one case that loses it.
 	out, _, err := h.workGit(ctx, d, p, "status", "--porcelain=v1", "--untracked-files=no", "--ignore-submodules=dirty")
 	if err != nil {
 		return UpdatePlan{}, failure(classUpdateFailed)
@@ -182,6 +194,39 @@ func (h home) updatePreflight(ctx context.Context, d Deps, p project.Project, re
 		return UpdatePlan{}, failure(classDirty)
 	}
 	return UpdatePlan{Current: current, Default: def}, nil
+}
+
+// checkStoppedSequence refuses a git am or a cherry-pick of several commits that
+// stopped: HEAD stays on the branch and the tree is clean, and moving the branch
+// would put the rest of it on another base. Same for a rebase, even if a detached
+// HEAD normally refuses it first. These are folders, not references.
+func (h home) checkStoppedSequence(ctx context.Context, d Deps, p project.Project) *GitFailure {
+	names := []string{"rebase-apply", "rebase-merge", "sequencer"}
+	args := []string{}
+	for _, name := range names {
+		args = append(args, "--git-path", name)
+	}
+	out, _, err := h.git(ctx, d, d.DataDir, p.Path, nil, nil, "rev-parse", args...)
+	if err != nil {
+		return failure(classUpdateFailed)
+	}
+	paths := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
+	if len(paths) != len(names) {
+		return failure(classUpdateFailed)
+	}
+	for _, path := range paths {
+		path = strings.TrimRight(path, "\r")
+		if !filepath.IsAbs(path) { // git answers from the folder it was given
+			path = filepath.Join(p.Path, path)
+		}
+		switch _, err := os.Stat(path); {
+		case err == nil:
+			return failure(classInProgress)
+		case !errors.Is(err, fs.ErrNotExist):
+			return failure(classUpdateFailed)
+		}
+	}
+	return nil
 }
 
 // UpdateCheck says whether the folder could be updated now and on which branch,
@@ -272,7 +317,8 @@ func (h home) checkIncomingFilters(ctx context.Context, d Deps, p project.Projec
 	for start := 0; start < len(paths); start += maxAttrBatch {
 		batch := paths[start:min(start+maxAttrBatch, len(paths))]
 		args := append([]string{"--source=" + sha, "-z", "filter", "--"}, batch...)
-		answer, _, err := h.git(ctx, d, d.DataDir, p.Path, nil, nil, "check-attr", args...)
+		// workGit: merge reads core.attributesFile, which h.git empties.
+		answer, _, err := h.workGit(ctx, d, p, "check-attr", args...)
 		if err != nil {
 			return failure(classUpdateFailed)
 		}
@@ -287,16 +333,109 @@ func (h home) checkIncomingFilters(ctx context.Context, d Deps, p project.Projec
 	return nil
 }
 
-// mergeFailure decides a class from what git merge wrote, which is then forgotten.
+// checkReplacedSubmodules refuses an update that removes a submodule or puts
+// something else in its place while its folder holds anything: merge does not look
+// inside (--ignore-submodules=dirty and submodule.recurse=false) and would delete
+// the person's work. An empty folder is a submodule that was never filled.
+func (h home) checkReplacedSubmodules(ctx context.Context, d Deps, p project.Project, head, sha string) *GitFailure {
+	out, _, err := h.git(ctx, d, d.DataDir, p.Path, nil, nil, "diff", "--raw", "-z", "--no-abbrev", "--no-renames", "--no-ext-diff", "--no-textconv", head, sha)
+	if err != nil || len(out) >= maxGitOutput {
+		return failure(classUpdateFailed)
+	}
+	fields := strings.Split(string(out), "\x00")
+	if fields[len(fields)-1] != "" || len(fields)%2 != 1 {
+		return failure(classUpdateFailed)
+	}
+	for i := 0; i+1 < len(fields); i += 2 {
+		modes := strings.Fields(fields[i])
+		if len(modes) < 2 {
+			return failure(classUpdateFailed)
+		}
+		if modes[0] != ":160000" || modes[1] == "160000" {
+			continue
+		}
+		rel := fields[i+1]
+		if !filepath.IsLocal(filepath.FromSlash(rel)) {
+			return failure(classUpdateFailed)
+		}
+		entries, err := os.ReadDir(filepath.Join(p.Path, filepath.FromSlash(rel)))
+		if err != nil || len(entries) > 0 {
+			return &GitFailure{Class: classDirty, Path: failureName(rel)}
+		}
+	}
+	return nil
+}
+
+// mergeFailure decides a class from what git merge wrote, which is then forgotten
+// but for the name of the first thing in the way.
 func mergeFailure(stderr, stdout []byte) *GitFailure {
 	said := append(append([]byte{}, stderr...), stdout...)
 	switch {
-	case bytes.Contains(said, []byte("untracked working tree files")):
-		return failure(classUntracked)
+	case bytes.Contains(said, []byte("untracked working tree files")), bytes.Contains(said, []byte("lose untracked files")):
+		return &GitFailure{Class: classUntracked, Path: failureName(firstListedPath(said))}
 	case bytes.Contains(said, []byte("Not possible to fast-forward")):
 		return failure(classDiverged)
 	}
 	return failure(classUpdateFailed)
+}
+
+// firstListedPath is the first line git indents with a tab: the list of its refusal.
+func firstListedPath(said []byte) string {
+	for line := range strings.Lines(string(said)) {
+		if name, ok := strings.CutPrefix(line, "\t"); ok {
+			return strings.TrimRight(name, "\r\n")
+		}
+	}
+	return ""
+}
+
+// samePlace says whether two paths of the folder are one and the same place, or
+// one is in the other. Windows and macOS disks mostly do not tell the case apart.
+func samePlace(a, b string) bool {
+	a, b = strings.ToLower(strings.TrimSuffix(a, "/")), strings.ToLower(strings.TrimSuffix(b, "/"))
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
+// ignoredInTheWay says whether what stops the merge is something Git ignores:
+// often a settings file, and one a plain git merge would overwrite. A folder is
+// named by git as a whole, while status names what is ignored inside it. If this
+// cannot be read, the refusal stays untracked: true, and less precise.
+func (h home) ignoredInTheWay(ctx context.Context, d Deps, p project.Project, path string) bool {
+	if path == "" {
+		return false
+	}
+	out, _, err := h.workGit(ctx, d, p, "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignored=matching", "--ignore-submodules=dirty")
+	if err != nil {
+		return false
+	}
+	for _, entry := range strings.Split(string(out), "\x00") {
+		if ignored, ok := strings.CutPrefix(entry, "!! "); ok && samePlace(ignored, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// folderFiles lists what git sees changed in the folder, to compare before and
+// after a merge that failed.
+func (h home) folderFiles(ctx context.Context, d Deps, p project.Project) ([]byte, error) {
+	out, _, err := h.workGit(ctx, d, p, "status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=dirty")
+	return out, err
+}
+
+// mergeFolder runs the only write in the person's folder. The command line beats
+// branch.<name>.mergeOptions, except --strategy, which adds up and turns off a
+// fast-forward: the -c empties that key for the branch, and the options stay in
+// case the name does not fit a -c (a name holding "="). git merge overwrites what
+// it ignores unless told otherwise: --no-overwrite-ignore is what keeps a person's
+// .env, and it is the worst thing this feature could do.
+func (h home) mergeFolder(ctx context.Context, d Deps, p project.Project, branch, sha string) ([]byte, []byte, error) {
+	c := folderCommand(ctx, d, p)
+	c.config = []string{"-c", "branch." + branch + ".mergeOptions="}
+	c.sub = "merge"
+	c.args = []string{"--ff-only", "--no-overwrite-ignore", "--no-verify-signatures", "--no-squash", "--commit",
+		"--no-stat", "--no-autostash", "--quiet", sha}
+	return h.runGit(ctx, d, c)
 }
 
 // UpdateFolder brings the person's folder up to date with its principal branch
@@ -342,14 +481,35 @@ func UpdateFolder(ctx context.Context, d Deps, p project.Project, url, proxyURL,
 		}
 		return UpdateResult{}, failure(classUpdateFailed)
 	}
+	if f := h.checkReplacedSubmodules(ctx, d, p, head, sha); f != nil {
+		return UpdateResult{}, f
+	}
 	if f := h.checkIncomingFilters(ctx, d, p, head, sha); f != nil {
 		return UpdateResult{}, f
 	}
 	write, cancel := context.WithTimeout(context.WithoutCancel(ctx), mergeTimeout)
 	defer cancel()
-	stdout, stderr, err := h.workGit(write, d, p, "merge", "--ff-only", "--no-stat", "--no-autostash", "--quiet", sha)
+	before, err := h.folderFiles(write, d, p)
 	if err != nil {
-		return UpdateResult{}, mergeFailure(stderr, stdout)
+		return UpdateResult{}, failure(classUpdateFailed)
+	}
+	stdout, stderr, err := h.mergeFolder(write, d, p, plan.Current, sha)
+	if err != nil {
+		// A deadline may have ended the merge: reading what it left has its own.
+		read, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), readAfterMergeTimeout)
+		defer cancelRead()
+		f := mergeFailure(stderr, stdout)
+		switch f.Class {
+		case classUntracked: // refused before any write
+			if h.ignoredInTheWay(read, d, p, f.Path) {
+				f.Class = classIgnored
+			}
+		case classUpdateFailed: // git writes files, then the index, then HEAD
+			if after, err := h.folderFiles(read, d, p); err != nil || !bytes.Equal(before, after) {
+				f.Class = classUpdatePartial
+			}
+		}
+		return UpdateResult{}, f
 	}
 	if got, err := h.revParseCommit(write, d, p.Path, "HEAD"); err != nil || got != sha {
 		return UpdateResult{}, failure(classUpdateFailed)

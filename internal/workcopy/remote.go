@@ -57,9 +57,12 @@ const (
 
 // GitFailure is the only error of the operations on a remote. It holds a closed
 // class and never git's output, which may hold an address, a secret or a line
-// written by the service. Current and Default are set for not_default only.
+// written by the service. Current and Default are set for not_default only. Path
+// is set when the class is about one thing of the folder (ignored, untracked, a
+// submodule that is dirty): its name in the project, cleaned and cut, and nothing
+// else of what git said.
 type GitFailure struct {
-	Class, Current, Default string
+	Class, Current, Default, Path string
 }
 
 // Error says the class and nothing else.

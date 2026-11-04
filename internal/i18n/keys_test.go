@@ -27,6 +27,8 @@ var dynamicPrefixes = []string{
 	// collect.unseen.* are the reasons stored in an inventory's Unseen lines;
 	// collect.secret_value is shown in place of a masked directive value.
 	"collect.unseen.", "collect.secret_value",
+	// api.git.<class> and its _hint are named by the class of a GitFailure.
+	"api.git.",
 	// serverrules.<rule>.title/.explain are named by the Key of each rule in
 	// the embedded rules.yaml.
 	"serverrules.",

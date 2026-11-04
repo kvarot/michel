@@ -123,6 +123,12 @@ func refusals() []refusal {
 			gitT(t, f.env, f.proj.Path, append([]string{"config"}, args...)...)
 		}
 	}
+	folderMarker := func(name string) func(*testing.T, folderFixture) {
+		return func(t *testing.T, f folderFixture) {
+			t.Helper()
+			writeFile(t, f.proj.Path, ".git/"+name+"/todo", "demo\n")
+		}
+	}
 	marker := func(name string) func(*testing.T, folderFixture) {
 		return func(t *testing.T, f folderFixture) {
 			t.Helper()
@@ -153,6 +159,9 @@ func refusals() []refusal {
 		{"in_progress, merge", classInProgress, true, marker("MERGE_HEAD")},
 		{"in_progress, cherry-pick", classInProgress, true, marker("CHERRY_PICK_HEAD")},
 		{"in_progress, revert", classInProgress, true, marker("REVERT_HEAD")},
+		{"in_progress, rebase-apply", classInProgress, true, folderMarker("rebase-apply")},
+		{"in_progress, rebase-merge", classInProgress, true, folderMarker("rebase-merge")},
+		{"in_progress, sequencer", classInProgress, true, folderMarker("sequencer")},
 		{"filter, local key", classFilter, true, config("filter.x.clean", "demo-program")},
 		{"filter, key in capitals", classFilter, true, config("FILTER.x.smudge", "demo-program")},
 		{"filter, key in an included file", classFilter, true, func(t *testing.T, f folderFixture) {
@@ -176,6 +185,14 @@ func refusals() []refusal {
 		}},
 		{"filter, attribute in info/attributes", classFilter, false, func(t *testing.T, f folderFixture) {
 			writeFile(t, f.proj.Path, ".git/info/attributes", "changed.txt filter=x\n")
+		}},
+		{"filter, attribute in the person's core.attributesFile", classFilter, false, func(t *testing.T, f folderFixture) {
+			writeFile(t, f.home, "attributes", "changed.txt filter=w\n")
+			writeFile(t, f.home, ".gitconfig", "[core]\n\tattributesFile = "+filepath.ToSlash(filepath.Join(f.home, "attributes"))+"\n")
+		}},
+		{"filter, attribute in a core.attributesFile the project names", classFilter, false, func(t *testing.T, f folderFixture) {
+			writeFile(t, f.home, "attributes", "changed.txt filter=w\n")
+			gitT(t, f.env, f.proj.Path, "config", "core.attributesFile", filepath.ToSlash(filepath.Join(f.home, "attributes")))
 		}},
 		{"diverged", classDiverged, false, func(t *testing.T, f folderFixture) {
 			writeFile(t, f.proj.Path, "mine.txt", "saved here only\n")
@@ -221,7 +238,7 @@ func TestUpdateFastForwards(t *testing.T) {
 		t.Fatalf("%d merges", len(merges))
 	}
 	m := merges[0]
-	wantTail := []string{"merge", "--ff-only", "--no-stat", "--no-autostash", "--quiet", to}
+	wantTail := []string{"merge", "--ff-only", "--no-overwrite-ignore", "--no-verify-signatures", "--no-squash", "--commit", "--no-stat", "--no-autostash", "--quiet", to}
 	if tail := m.args[len(m.args)-len(wantTail):]; !slices.Equal(tail, wantTail) {
 		t.Errorf("merge argv = %q", m.args)
 	}
@@ -251,9 +268,12 @@ func TestUpdateFastForwards(t *testing.T) {
 	if len(status) == 0 {
 		t.Fatal("no status")
 	}
+	// The check for changes, then what the merge is compared with if it fails.
 	wantStatus := []string{"status", "--porcelain=v1", "--untracked-files=no", "--ignore-submodules=dirty"}
+	wantFiles := []string{"status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=dirty"}
 	for _, s := range status {
-		if !slices.Contains(s.args, "--no-optional-locks") || !slices.Equal(s.args[len(s.args)-len(wantStatus):], wantStatus) {
+		tail := s.args[len(s.args)-len(wantStatus):]
+		if !slices.Contains(s.args, "--no-optional-locks") || !slices.Equal(tail, wantStatus) && !slices.Equal(tail, wantFiles) {
 			t.Errorf("status argv = %q", s.args)
 		}
 	}
@@ -776,6 +796,7 @@ func TestUpdateMergeSurvivesAClosedPage(t *testing.T) {
 func TestMergeFailureClasses(t *testing.T) {
 	for out, want := range map[string]string{
 		"error: The following untracked working tree files would be overwritten by merge:\n\tx\nAborting\n": classUntracked,
+		"error: Updating the following directories would lose untracked files in them:\n\tx\n\nAborting\n":  classUntracked,
 		"fatal: Not possible to fast-forward, aborting.\n":                                                  classDiverged,
 		"error: Your local changes to the following files would be overwritten by merge:\n\t" + demoCanary:  classUpdateFailed,
 		"": classUpdateFailed,

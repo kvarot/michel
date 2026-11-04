@@ -154,18 +154,18 @@ func (h home) checkProject(ctx context.Context, d Deps, c gitCommand) error {
 		return nil
 	}
 	old := gitIsOld(d)
-	writes := slices.Contains(workCommands, c.sub)
-	if !old && !writes && c.sub != "fetch" {
+	onFiles := c.sub == "status" || c.sub == "merge"
+	if !old && !onFiles && c.sub != "fetch" {
 		return nil
 	}
-	keys, err := h.localConfigKeys(ctx, d, c.repo)
+	keys, err := h.commandConfigKeys(ctx, d, c)
 	if err != nil {
 		return err
 	}
 	switch {
 	case old && slices.ContainsFunc(keys, isPromisorKey):
 		return errProjectConfig
-	case writes && slices.ContainsFunc(keys, isFolderKey):
+	case onFiles && slices.ContainsFunc(keys, isFolderKey):
 		return errProjectConfig
 	case c.sub == "fetch" && slices.ContainsFunc(keys, isPathRemoteKey):
 		return errProjectConfig
@@ -178,8 +178,16 @@ func (h home) checkProject(ctx context.Context, d Deps, c gitCommand) error {
 // --local alone follows no include, and --worktree is an error with several
 // working trees when that file is not on. git config fetches nothing.
 func (h home) localConfigKeys(ctx context.Context, d Deps, repo string) ([]string, error) {
+	return h.commandConfigKeys(ctx, d, gitCommand{profile: gitIsolated, repo: repo, dir: d.DataDir, env: h.env(d.ProxyAddr)})
+}
+
+// commandConfigKeys reads those names in the environment of the command c: an
+// include can depend on HOME or on the person's configuration (includeIf), so
+// what counts is what that very command would read.
+func (h home) commandConfigKeys(ctx context.Context, d Deps, c gitCommand) ([]string, error) {
 	read := func(scope string) ([]string, error) {
-		out, _, err := h.git(ctx, d, d.DataDir, repo, nil, nil, "config", scope, "--includes", "--name-only", "--list")
+		out, _, err := h.runGit(ctx, d, gitCommand{profile: c.profile, repo: c.repo, dir: c.dir, env: c.env, sub: "config",
+			args: []string{scope, "--includes", "--name-only", "--list"}})
 		if err != nil {
 			return nil, err
 		}
