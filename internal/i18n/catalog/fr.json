@@ -436,7 +436,7 @@
   "cli.fix.status.none": "Aucune tentative de correction pour l'instant.",
   "cli.fix.status.proposal": "Proposition : %s",
   "cli.fix.status.rescan_clean": "la faille a disparu",
-  "cli.fix.status.rescan_dirty": "la faille est toujours là",
+  "cli.fix.status.rescan_dirty": "la disparition de la faille n'est pas confirmée",
   "cli.fix.status.row": "%s  %s  projet %s  %s (%s)",
   "cli.fix.status.tests": "Tests : %s. Nouvelle analyse de la copie : %s.",
   "cli.fix.tests.failed": "en échec",

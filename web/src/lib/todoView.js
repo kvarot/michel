@@ -150,10 +150,10 @@ function noDate(t) {
  * /projects/{name}/findings, null when it could not be read; a project with
  * something open and no list says so too, with a count that may be too high.
  * Lines of equal rank keep their order of arrival: projects, servers, then fixes.
- * @param {{digest: object, attempts: object[]|null, servers: object[]|null, details: Object<string, object>, findings: Object<string, object[]|null>, lang: string, now: Date, advanced: boolean}} input
+ * @param {{projectViews?: object[]|null, digest: object, attempts: object[]|null, servers: object[]|null, details: Object<string, object>, findings: Object<string, object[]|null>, lang: string, now: Date, advanced: boolean}} input
  * @returns {{head: string, sub: string, lines: {id: string, tone: string, word: string, title: string, where: string, action: {label: string, href: string}|null, rank: number, flaw: boolean}[], unseen: {key: string, text: string}[]}}
  */
-export function buildTodo({ digest, attempts, servers, details, findings, lang, now, advanced }) {
+export function buildTodo({ digest, attempts, servers, details, findings, lang, now, advanced, projectViews }) {
   const t = (key, params) => translate(lang, key, params)
   const d = digest || {}
   const active = (servers || []).filter((s) => s && s.active !== false)
@@ -320,7 +320,7 @@ export function buildTodo({ digest, attempts, servers, details, findings, lang, 
       // A key to confirm, a failed check or new log lines carry no finding: they are no flaw to read.
       flaw: l.ids.length > 0,
     }))
-  const unseen = seenNot(d, servers, attempts, active, details, now, t)
+  const unseen = seenNot(d, servers, attempts, active, details, now, t, projectViews)
   const scopes = new Set(lines.map((l) => l.scope))
   const projects = [...scopes].filter((s) => s.startsWith('project:')).length
   const touched = [...scopes].filter((s) => s.startsWith('server:')).length + moreServers.length
@@ -351,6 +351,8 @@ function attemptLine(a, t, known) {
   const make = (rank, word, title, actionKey, href = fix) => ({ rank, word, title, where, action: { label: t(`todo.action.${actionKey}`), href }, scope })
   switch (a.state) {
     case 'held':
+      // A flaw gone since can no longer be continued: the hold only waits to end.
+      if (a.finding?.status === 'gone') return null
       // The agent does not start and the project is taken until the person answers.
       return make(2, 'yours', t('todo.held', { n: a.hold?.count ?? 0 }), 'answer')
     case 'proposed':
@@ -378,7 +380,7 @@ function attemptLine(a, t, known) {
 }
 
 /** seenNot lists what Michel could not see, or the page could not read. Names only, never a log line nor a reason. */
-function seenNot(d, servers, attempts, active, details, now, t) {
+function seenNot(d, servers, attempts, active, details, now, t, projectViews) {
   const out = []
   const note = (key, textKey, params) => out.push({ key, text: t(textKey, params) })
   const projects = d.projects || []
@@ -393,6 +395,13 @@ function seenNot(d, servers, attempts, active, details, now, t) {
   if (partial.length) note('partial', 'todo.unseen.partial', { n: partial.length, names: names(partial) })
   const empty = byStatus('empty')
   if (empty.length) note('empty', 'todo.unseen.empty', { n: empty.length, names: names(empty) })
+  // GET /projects holds the date of the last scan; the digest does not. A look that could not be read adds nothing.
+  const oldProjects = (projectViews || []).filter((p) => {
+    if (!p?.last_scan_at || ['never', 'running'].includes(p.last_scan_status)) return false
+    const at = Date.parse(p.last_scan_at)
+    return !Number.isNaN(at) && now.getTime() - at > staleCheckMs
+  })
+  if (oldProjects.length) note('project_stale', 'todo.unseen.project_stale', { n: oldProjects.length, names: names(oldProjects) })
   if (d.osv_stale) note('osv_stale', 'todo.unseen.osv_stale')
   else if (noDate(d.osv_fetched_at)) note('no_db', 'todo.unseen.no_db')
 

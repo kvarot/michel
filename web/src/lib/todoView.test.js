@@ -262,6 +262,28 @@ describe('decisions', () => {
     expect(r.lines[0]).toMatchObject({ rank: 3 })
     expect(r.lines[0].title).toContain('c')
   })
+  test('a project last scanned long ago says how old the look is', () => {
+    const old = { name: 'demo', last_scan_at: '2026-08-01T06:00:00Z', last_scan_status: 'ok' }
+    const fresh = { name: 'other', last_scan_at: '2026-11-03T06:00:00Z', last_scan_status: 'ok' }
+    const r = build({ projectViews: [old, fresh] })
+    const note = r.unseen.find((u) => u.key === 'project_stale')
+    expect(note.text).toContain('demo')
+    expect(note.text).not.toContain('other')
+    expect(r.head).toBe(fr['todo.head.unseen'])
+  })
+  test('no age note for a fresh, never scanned, running or unread project list', () => {
+    const keys = (projectViews) => build({ projectViews }).unseen.map((u) => u.key)
+    expect(keys([{ name: 'demo', last_scan_at: '2026-11-02T06:00:00Z', last_scan_status: 'ok' }])).not.toContain('project_stale')
+    expect(keys([{ name: 'demo', last_scan_at: '', last_scan_status: 'never' }])).not.toContain('project_stale')
+    expect(keys([{ name: 'demo', last_scan_at: '2026-08-01T06:00:00Z', last_scan_status: 'running' }])).not.toContain('project_stale')
+    expect(keys(null)).not.toContain('project_stale')
+    expect(keys(undefined)).not.toContain('project_stale')
+  })
+  test('a held attempt whose flaw is gone asks nothing', () => {
+    const held = (status) => attempt('h', 'held', { finding: { id: 'f-h', package: 'lib', severity: 'high', status }, hold: { count: 2 } })
+    expect(build({ attempts: [held('pending')] }).lines.length).toBe(1)
+    expect(build({ attempts: [held('gone')] }).lines.length).toBe(0)
+  })
   test('a decided server finding has no line', () => {
     const r = build({
       servers: [server('a', { open_findings: 1 })],

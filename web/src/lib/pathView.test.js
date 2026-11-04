@@ -161,6 +161,10 @@ describe('a flaw that cannot be rechecked on the copy', () => {
     expect(rescanKey(attempt('proposed', { proposal: notClean, finding: codeF() }))).toBe('fix.proposal.rescan_unknown')
     expect(rescanKey(attempt('proposed', { proposal: notClean }))).toBe('fix.proposal.rescan_dirty')
     expect(rescanKey(attempt('proposed', { proposal: { rescan_clean: true } }))).toBe('fix.proposal.rescan_clean')
+    // A new scan that did not confirm is not a scan that saw the flaw.
+    expect(fr['fix.proposal.rescan_dirty']).not.toContain('toujours là')
+    expect(en['fix.proposal.rescan_dirty']).not.toContain('still there')
+    expect(fr['fix.proposal.rescan_dirty']).toContain('ne peut pas confirmer')
     expect(fr['fix.proposal.rescan_unknown']).not.toContain('toujours là')
     expect(en['fix.proposal.rescan_unknown']).not.toContain('still there')
     expect(fr['path.note.not_checked']).not.toContain('toujours là')

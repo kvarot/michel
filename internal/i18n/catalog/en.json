@@ -436,7 +436,7 @@
   "cli.fix.status.none": "No fix attempt yet.",
   "cli.fix.status.proposal": "Proposal: %s",
   "cli.fix.status.rescan_clean": "the flaw is gone",
-  "cli.fix.status.rescan_dirty": "the flaw is still there",
+  "cli.fix.status.rescan_dirty": "the flaw being gone is not confirmed",
   "cli.fix.status.row": "%s  %s  project %s  %s (%s)",
   "cli.fix.status.tests": "Tests: %s. New scan of the copy: %s.",
   "cli.fix.tests.failed": "failed",

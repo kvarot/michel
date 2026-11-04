@@ -128,6 +128,7 @@ export default {
         servers: this.servers,
         details: this.details,
         findings: this.findings,
+        projectViews: this.projectViews,
         lang: this.$ui.lang,
         now: this.now,
         advanced: this.$ui.advanced,
