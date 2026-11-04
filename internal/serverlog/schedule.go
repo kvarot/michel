@@ -401,6 +401,13 @@ func (s *scheduler) failSources(inc *incident, o passOutcome, prod bool) (reache
 		}
 	}
 	inc.sources = now
+	// A source that did not fail in this pass is back: its next failure is a new
+	// thing to tell.
+	for id := range inc.told {
+		if _, still := now[id]; !still {
+			delete(inc.told, id)
+		}
+	}
 	if len(inc.named) == 0 {
 		return false, false
 	}

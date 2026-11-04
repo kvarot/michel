@@ -274,12 +274,12 @@ func TestNotReadingNamesTheSourceAndSaysTheOthersWereRead(t *testing.T) {
 		Items:   []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}},
 		Sources: []serverlog.SourceRef{{Rank: 2, Format: serverlog.FormatPHP}}}
 	_, en := logMessage(i18n.EN, in, "")
-	want := "Michel can no longer read one error log of server srv-demo: log no. 2 on the sheet (PHP). The other logs of this server were read.\nCause: the server refused Michel access to the logs."
+	want := "Michel can no longer read one error log of server srv-demo: log no. 2 on the server page (PHP). The other logs of this server were read.\nCause: the server refused Michel access to the logs."
 	if !strings.HasPrefix(en, want) {
 		t.Errorf("en = %q, want it to start with %q", en, want)
 	}
 	_, fr := logMessage(i18n.FR, in, "")
-	for _, w := range []string{"srv-demo", "le journal n° 2 de la fiche (PHP)", "Les autres journaux de ce serveur ont bien été lus", "Cause : le serveur a refusé"} {
+	for _, w := range []string{"srv-demo", "le journal n° 2 de la page du serveur (PHP)", "Les autres journaux de ce serveur ont bien été lus", "Cause : le serveur a refusé"} {
 		if !strings.Contains(fr, w) {
 			t.Errorf("fr %q lacks %q", fr, w)
 		}
@@ -315,11 +315,11 @@ func TestNotReadingSourcesAreBounded(t *testing.T) {
 		in.Sources = append(in.Sources, serverlog.SourceRef{Rank: i, Format: serverlog.FormatPHP})
 	}
 	_, en := logMessage(i18n.EN, in, "")
-	if n := strings.Count(en, "on the sheet"); n != 3 || !strings.Contains(en, "log no. 3 on the sheet (PHP) and 2 others.") || strings.Contains(en, "…") {
+	if n := strings.Count(en, "on the server page"); n != 3 || !strings.Contains(en, "log no. 3 on the server page (PHP) and 2 others.") || strings.Contains(en, "…") {
 		t.Errorf("en = %q", en)
 	}
 	_, fr := logMessage(i18n.FR, in, "")
-	if n := strings.Count(fr, "de la fiche"); n != 3 || !strings.Contains(fr, "(PHP) et 2 autres.") {
+	if n := strings.Count(fr, "de la page du serveur"); n != 3 || !strings.Contains(fr, "(PHP) et 2 autres.") {
 		t.Errorf("fr = %q", fr)
 	}
 }

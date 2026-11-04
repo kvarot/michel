@@ -660,18 +660,18 @@ func TestDigestTellsFilesMichelCannotOpen(t *testing.T) {
 		t.Fatalf("unopened = %+v", s.Unopened)
 	}
 	text, _ := RenderText(d)
-	if !strings.Contains(text, "Michel cannot open 1 file of log no. 2 on the sheet (PHP): the server refuses it access.") {
+	if !strings.Contains(text, "Michel cannot open 1 file of log no. 2 on the server page (PHP): the server refuses it access.") {
 		t.Errorf("text:\n%s", text)
 	}
 	dfr := l.compute(i18n.FR, Options{})
 	fr, _ := RenderText(dfr)
-	if !strings.Contains(fr, "Michel n'arrive pas à ouvrir 1 fichier du journal n° 2 de la fiche (PHP) : le serveur lui en refuse l'accès.") {
+	if !strings.Contains(fr, "Michel n'arrive pas à ouvrir 1 fichier du journal n° 2 de la page du serveur (PHP) : le serveur lui en refuse l'accès.") {
 		t.Errorf("fr:\n%s", fr)
 	}
 	page, _ := RenderHTML(d)
 	pagefr, _ := RenderHTML(dfr)
 	raw, _ := json.Marshal(d)
-	if !strings.Contains(page, "<li>Michel cannot open 1 file of log no. 2 on the sheet (PHP)") || !strings.Contains(pagefr, "<li>Michel n&#39;arrive pas à ouvrir 1 fichier du journal n° 2 de la fiche (PHP)") {
+	if !strings.Contains(page, "<li>Michel cannot open 1 file of log no. 2 on the server page (PHP)") || !strings.Contains(pagefr, "<li>Michel n&#39;arrive pas à ouvrir 1 fichier du journal n° 2 de la page du serveur (PHP)") {
 		t.Errorf("html:\n%s\n%s", page, pagefr)
 	}
 	for _, w := range []string{text, fr, page, pagefr, string(raw)} {

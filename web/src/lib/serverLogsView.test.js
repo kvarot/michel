@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  channelNotes, deviationWarning, domId, errorGroups, intervalChoices, intervalNote, logBadges, privacyChoices, privacyStrongNote, readState, routeChoices, settingsSaveOutcome,
+  channelNotes, deviationWarning, domId, errorGroups, formatShort, intervalChoices, intervalNote, logBadges, numberSources, privacyChoices, privacyStrongNote, readState, routeChoices, settingsSaveOutcome,
 } from './serverLogsView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -237,5 +237,38 @@ describe('privacyStrongNote with the API warning', () => {
     const g = privacyChoices(settings({ store_text: true }), 'hds', 'en').find((x) => x.key === 'store_text')
     expect(privacyStrongNote(g, 'en', true)).toBe('')
     expect(privacyStrongNote(g, 'en', false)).not.toBe('')
+  })
+})
+
+describe('numberSources', () => {
+  const list = [
+    { id: 'a', path: '/x/a.log', format: 'php', active: true },
+    { id: 'b', path: '/x/b.log', format: 'json', active: false },
+    { id: 'c', path: '/x/c.log', format: 'monolog', active: true },
+  ]
+
+  test('numbers the rows from 1 in the order the API gives, the turned off ones counted', () => {
+    expect(numberSources(list).map((s) => [s.id, s.rank])).toEqual([['a', 1], ['b', 2], ['c', 3]])
+  })
+
+  test('does not change the rows, nor their order, and takes anything for nothing', () => {
+    const out = numberSources(list)
+    expect(out.map((s) => s.path)).toEqual(list.map((s) => s.path))
+    expect(list[0].rank).toBeUndefined()
+    expect(numberSources(undefined)).toEqual([])
+  })
+
+  test('a log removed moves the numbers of those below it', () => {
+    expect(numberSources(list.filter((s) => s.id !== 'a')).map((s) => s.rank)).toEqual([1, 2])
+  })
+})
+
+describe('formatShort', () => {
+  test('says the format with the words of the alerts, in both languages', () => {
+    expect(formatShort('php', 'en')).toBe('PHP')
+    expect(formatShort('monolog', 'en')).toBe('application errors')
+    expect(formatShort('monolog', 'fr')).toBe("erreurs de l'application")
+    expect(formatShort('text', 'fr')).toBe('texte')
+    expect(formatShort('nothing', 'en')).toBe('other')
   })
 })

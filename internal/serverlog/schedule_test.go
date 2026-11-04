@@ -1051,7 +1051,14 @@ func fa(id string, rank int, reason string) FailedSource {
 // ticks runs n rounds, 10 minutes apart, of a scheduler whose passes are given
 // by results (the pass number i, from 0), and returns what was told.
 func ticks(e *schedEnv, tg target.Target, n int, results func(i int) PassResult) []AlertInput {
-	e.interval(tg, 10*time.Minute)
+	told, _ := ticksEvery(e, tg, 10*time.Minute, n, results)
+	return told
+}
+
+// ticksEvery is ticks with the interval between the rounds given; it also
+// returns the scheduler, for a test that looks at its memory.
+func ticksEvery(e *schedEnv, tg target.Target, every time.Duration, n int, results func(i int) PassResult) ([]AlertInput, *scheduler) {
+	e.interval(tg, every)
 	i := 0
 	f := &fakePass{fn: func(context.Context, string) (PassResult, error) {
 		r := results(i)
@@ -1064,9 +1071,104 @@ func ticks(e *schedEnv, tg target.Target, n int, results func(i int) PassResult)
 	s := e.scheduler(f)
 	for k := 0; k < n; k++ {
 		s.tick(context.Background())
-		e.clock.Advance(10 * time.Minute)
+		e.clock.Advance(every)
 	}
-	return e.alerts.ofKind(AlertNotReading)
+	return e.alerts.ofKind(AlertNotReading), s
+}
+
+// The bar of a source is 3 failures in a row and 30 minutes since the first: not
+// 3 passes alone, not 30 minutes alone.
+func TestSourceBarIsThreeFailuresAndThirtyMinutes(t *testing.T) {
+	part := func(int) PassResult {
+		return PassResult{Reason: ReasonDenied, Read: 1, Failed: []FailedSource{fa("B", 2, ReasonDenied)}}
+	}
+	for name, tc := range map[string]struct {
+		every  time.Duration
+		passes int
+		want   int
+	}{
+		"3 passes 10 minutes apart: 20 minutes, not told": {10 * time.Minute, 3, 0},
+		"the 4th, at 30 minutes, is told":                 {10 * time.Minute, 4, 1},
+		"2 passes an hour apart: 2 failures, not told":    {time.Hour, 2, 0},
+		"the 3rd, an hour apart, is told":                 {time.Hour, 3, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newSchedEnv(t)
+			tg, _ := e.server("srv-demo", target.EnvProd, true)
+			if told, _ := ticksEvery(e, tg, tc.every, tc.passes, part); len(told) != tc.want {
+				t.Errorf("alerts = %d, want %d", len(told), tc.want)
+			}
+		})
+	}
+}
+
+// A source that recovers is forgotten: when it fails again past the bar, it is
+// told again, even while another one went on failing.
+func TestSourceToldAgainAfterItRecovered(t *testing.T) {
+	e := newSchedEnv(t)
+	tg, _ := e.server("srv-demo", target.EnvProd, true)
+	a, d := fa("A", 1, ReasonDenied), fa("D", 4, ReasonTimeout)
+	part := func(fs ...FailedSource) PassResult { return PassResult{Reason: fs[0].Reason, Read: 1, Failed: fs} }
+	told := ticks(e, tg, 20, func(i int) PassResult {
+		switch {
+		case i < 4:
+			return part(a) // A past the bar, told
+		case i < 6:
+			return part(d) // A is back, D starts failing
+		}
+		return part(a, d) // A fails again, D goes on
+	})
+	if len(told) != 3 {
+		t.Fatalf("alerts = %d: %+v", len(told), told)
+	}
+	last := told[2].Sources
+	has := false
+	for _, s := range last {
+		has = has || s.Rank == 1
+	}
+	if !has {
+		t.Errorf("the third alert does not name A: %+v", told[2])
+	}
+}
+
+// On a server that is not prod, an incident of one source is told by the gap
+// note alone: no alert, one note however long it lasts, and the source counts as
+// told so that it is not told again.
+func TestPreprodSourceIsToldByTheNoteOnly(t *testing.T) {
+	e := newSchedEnv(t)
+	tg, _ := e.server("srv-demo", target.EnvPreprod, true)
+	part := func(int) PassResult {
+		return PassResult{Reason: ReasonDenied, Read: 1, Failed: []FailedSource{fa("B", 2, ReasonDenied)}}
+	}
+	gaps := func() int {
+		notes, err := e.repo.Notes(context.Background(), tg.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, x := range notes {
+			if x.Kind == NoteGap {
+				n++
+			}
+		}
+		return n
+	}
+	told, s := ticksEvery(e, tg, 10*time.Minute, 4, part)
+	if len(told) != 0 || gaps() != 1 {
+		t.Fatalf("after 4 passes: %d alerts, %d gap notes", len(told), gaps())
+	}
+	s.mu.Lock()
+	marked := s.incidents[tg.ID] != nil && s.incidents[tg.ID].told["B"]
+	s.mu.Unlock()
+	if !marked {
+		t.Error("the source is not marked as told once its note is written")
+	}
+	f := &fakePass{fn: func(context.Context, string) (PassResult, error) { return part(0), errors.New("the read failed") }}
+	s.pass = f.run
+	s.tick(context.Background())
+	if n := len(e.alerts.ofKind(AlertNotReading)); n != 0 || gaps() != 1 {
+		t.Errorf("5th pass: %d alerts, %d gap notes", n, gaps())
+	}
 }
 
 // An incident of one source, the others of the server being read, is told as
