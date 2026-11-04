@@ -352,6 +352,8 @@ function attemptLine(a, t, known) {
   switch (a.state) {
     case 'held':
       // The agent does not start and the project is taken until the person answers.
+      // The flaw has gone: ContinueHeld refuses, but the project stays taken up to 14 days. The fix page offers the withdraw.
+      if (!s && a.finding?.status === 'gone') return make(2, 'yours', t('todo.held_gone'), 'withdraw')
       return make(2, 'yours', t('todo.held', { n: a.hold?.count ?? 0 }), 'answer')
     case 'proposed':
       return make(2, 'validate', t('todo.proposed', { package: pkg }), 'validate')
@@ -395,7 +397,8 @@ function seenNot(d, servers, attempts, active, details, now, t, projectViews) {
   if (empty.length) note('empty', 'todo.unseen.empty', { n: empty.length, names: names(empty) })
   // GET /projects holds the date of the last scan; the digest does not. A look that could not be read adds nothing.
   const oldProjects = (projectViews || []).filter((p) => {
-    if (!p?.last_scan_at || ['never', 'running'].includes(p.last_scan_status)) return false
+    // A failed look has its own line: it is not also old.
+    if (!p?.last_scan_at || ['never', 'running', 'failed', 'interrupted'].includes(p.last_scan_status)) return false
     const at = Date.parse(p.last_scan_at)
     return !Number.isNaN(at) && now.getTime() - at > staleCheckMs
   })
@@ -427,6 +430,7 @@ function seenNot(d, servers, attempts, active, details, now, t, projectViews) {
   const logs = (d.server_logs || []).filter((l) => (l.gaps || []).length > 0 || Number(l.skipped) > 0)
   if (logs.length) note('logs', 'todo.unseen.logs', { names: names(logs) })
 
+  if (projectViews === null) note('projects_unread', 'todo.unseen.projects_unread')
   if (servers === null) note('servers_unread', 'todo.unseen.servers_unread')
   if (attempts === null) note('fixes_unread', 'todo.unseen.fixes_unread')
   return out

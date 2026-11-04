@@ -60,16 +60,18 @@ export function errorGroups(errors) {
  * privacyChoices lists, for each privacy setting, the choices a person can
  * pick: the recommended one first and marked « recommandé », then the others.
  * The choice in force is marked current (a retention outside the list is
- * added). The text of alerts is disabled while no text is kept.
+ * added). A choice away from the recommendation is strong on a health (hds)
+ * server. The text of alerts is disabled while no text is kept.
  * @param {{store_text: boolean, alert_text: boolean, retention_days: number}} settings GET /logs/settings
+ * @param {string} kind the kind of the server (vps, shared, hds)
  * @param {string} lang
- * @returns {{key: string, choices: {value: boolean|number, label: string, recommended: boolean, current: boolean, disabled: boolean}[]}[]}
+ * @returns {{key: string, choices: {value: boolean|number, label: string, recommended: boolean, current: boolean, strong: boolean, disabled: boolean}[]}[]}
  */
-export function privacyChoices(settings, lang) {
+export function privacyChoices(settings, kind, lang) {
   const st = settings || {}
   const mark = (label, recommended) => (recommended ? `${label} (${t(lang, 'recommended')})` : label)
   const make = (value, label, recommended, current, extra = {}) => ({
-    value, label: mark(label, recommended), recommended, current, disabled: false, ...extra,
+    value, label: mark(label, recommended), recommended, current, strong: kind === 'hds' && !recommended, disabled: false, ...extra,
   })
   const text = [
     make(false, t(lang, 'choice.store_text.no'), true, !st.store_text),

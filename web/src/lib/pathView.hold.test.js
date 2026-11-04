@@ -49,6 +49,17 @@ describe('the path of a held attempt', () => {
   })
 })
 
+describe('a held attempt whose flaw is gone', () => {
+  test('the page names the withdraw and what it frees, and keeps the warning on the keys', () => {
+    expect(fr['path.hold.withdraw_gone']).toBe('Retirer la correction')
+    expect(en['path.hold.withdraw_gone']).toBe('Withdraw the fix')
+    expect(fr['path.hold.gone']).toContain('Retire cette correction')
+    expect(fr['path.hold.gone']).toContain('restent dans tes fichiers')
+    expect(en['path.hold.gone']).toContain('Withdraw this fix')
+    expect(en['path.hold.gone']).toContain('stay in your files')
+  })
+})
+
 describe('holdView', () => {
   test('only for a held attempt with its list', () => {
     expect(holdView(null)).toBeNull()
@@ -114,8 +125,8 @@ describe('the words of a hold', () => {
     expect(en['path.hold.if_continue.other']).toContain('Anthropic')
   })
   test('a plan no longer leaves the key without a word, and no text says the warning follows', () => {
-    expect(fr['plan.project.copy']).toContain("l'agent ne démarre pas")
-    expect(en['plan.project.copy']).toContain('the agent does not start')
+    expect(fr['plan.project.keys']).toContain("l'agent ne démarre pas")
+    expect(en['plan.project.keys']).toContain('the agent does not start')
     expect(fr['plan.project.self_start']).toContain('attend ta réponse')
     expect(en['plan.project.self_start']).toContain('waits for your answer')
   })
@@ -126,14 +137,14 @@ describe('the words of a hold', () => {
     expect(translate('en', 'path.hold.more', { n: 3, more: 3 })).toBe('And in 3 other files.')
   })
   test('the page says the shape decides, and that a real key may not stop the agent', () => {
-    expect(fr['plan.project.copy']).toContain('forme inhabituelle')
-    expect(en['plan.project.copy']).toContain('unusual shape')
+    expect(fr['plan.project.keys']).toContain('forme inhabituelle')
+    expect(en['plan.project.keys']).toContain('unusual shape')
     expect(fr['path.hold.check']).toContain("Une vraie clé écrite d'une façon inhabituelle peut aussi passer sans que Michel s'arrête.")
     expect(en['path.hold.check']).toContain('A real key written in an unusual way can also get through without Michel stopping.')
     expect(fr['path.note.withdrawn']).toContain('Une fois les clés enlevées de ces fichiers')
     expect(en['path.note.withdrawn']).toContain('Once the keys are out of these files')
-    expect(fr['plan.project.copy']).toContain("n'arrête pas l'agent")
-    expect(en['plan.project.copy']).toContain('does not stop the agent')
+    expect(fr['plan.project.keys']).toContain("n'arrête pas l'agent")
+    expect(en['plan.project.keys']).toContain('does not stop the agent')
   })
   test('the page says what an unanswered hold blocks, and how it ends', () => {
     expect(fr['path.hold.once']).toContain('aucune autre correction de ce projet')

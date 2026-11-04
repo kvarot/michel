@@ -41,7 +41,7 @@
         {{ pushing ? $t('git.push.running') : $t(step.push.label, step.push.params) }}
       </v-btn>
       <p v-if="pushing" class="m-merge__hidden" role="status">{{ $t('git.push.running') }}</p>
-      <template v-if="pushFailure && git">
+      <template v-if="pushFailure && git && !sentNotNoted">
         <p>{{ $t('git.push.way_out') }}</p>
         <GitQuestion class="m-merge__git" :name="project" :view="git" :heading="heading" @answered="onAnswered" @reload="$emit('reload-git')" />
       </template>
@@ -77,7 +77,7 @@
 import GitQuestion from './GitQuestion.vue'
 import GitUpdateButton from './GitUpdateButton.vue'
 import { api } from '../api.js'
-import { afterPush, gitState, mergeAsks, pushSentence, refusalLines } from '../lib/gitView.js'
+import { afterPush, gitState, mergeAsks, pushSentence, refusalLines, sentNotNoted } from '../lib/gitView.js'
 import { mergeStep } from '../lib/pathView.js'
 
 // Between two looks at a running check; how many failed looks in a row are told.
@@ -102,7 +102,7 @@ export default {
   },
   emits: ['git', 'reload-git', 'refresh'],
   data() {
-    return { copied: false, copyFailed: false, asking: false, attaching: false, pushing: false, pushFailure: null, sent: null, outcome: '', watching: false, checked: false, checkFailure: null, lost: false, misses: 0, timer: null, gone: false }
+    return { copied: false, copyFailed: false, asking: false, attaching: false, pushing: false, pushFailure: null, sentNotNoted: false, sent: null, outcome: '', watching: false, checked: false, checkFailure: null, lost: false, misses: 0, timer: null, gone: false }
   },
   computed: {
     step() {
@@ -173,6 +173,7 @@ export default {
       if (this.pushing) return
       this.pushing = true
       this.pushFailure = null
+      this.sentNotNoted = false
       try {
         const res = await api.post(`/fix/${encodeURIComponent(this.attempt.id)}/push?lang=${encodeURIComponent(this.$ui.lang)}`)
         this.sent = res
@@ -181,6 +182,7 @@ export default {
       } catch (err) {
         if (err?.status === 401) return
         this.pushFailure = refusalLines(err)
+        this.sentNotNoted = sentNotNoted(err)
         this.outcome = ''
         // Refused: what the page holds may be old (an address changed, a rule removed).
         this.$emit('reload-git')

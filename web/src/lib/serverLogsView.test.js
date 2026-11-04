@@ -13,7 +13,7 @@ function settings(extra = {}) {
 describe('privacyChoices', () => {
   test('recommended option comes first and is marked, whatever the current choice', () => {
     for (const st of [settings(), settings({ store_text: true, alert_text: true, retention_days: 365 })]) {
-      const groups = privacyChoices(st, 'fr')
+      const groups = privacyChoices(st, 'vps', 'fr')
       expect(groups.map((g) => g.key)).toEqual(['store_text', 'alert_text', 'retention'])
       for (const g of groups) {
         expect(g.choices[0].recommended).toBe(true)
@@ -22,12 +22,12 @@ describe('privacyChoices', () => {
         expect(g.choices.slice(1).every((c) => !c.label.includes('recommandé'))).toBe(true)
       }
     }
-    const en = privacyChoices(settings(), 'en')
+    const en = privacyChoices(settings(), 'vps', 'en')
     expect(en[0].choices[0].label).toContain('recommended')
   })
 
   test('the current choice is the one selected, a retention outside the list is kept', () => {
-    const groups = privacyChoices(settings({ store_text: true, retention_days: 100 }), 'fr')
+    const groups = privacyChoices(settings({ store_text: true, retention_days: 100 }), 'vps', 'fr')
     expect(groups[0].choices.find((c) => c.current).value).toBe(true)
     const retention = groups[2].choices
     expect(retention.map((c) => c.value)).toContain(100)
@@ -36,11 +36,19 @@ describe('privacyChoices', () => {
   })
 
   test('the text of alerts cannot be chosen while no text is kept', () => {
-    const off = privacyChoices(settings(), 'fr')[1].choices
+    const off = privacyChoices(settings(), 'vps', 'fr')[1].choices
     expect(off.find((c) => c.value === true).disabled).toBe(true)
     expect(off.find((c) => c.value === false).disabled).toBe(false)
-    const on = privacyChoices(settings({ store_text: true }), 'fr')[1].choices
+    const on = privacyChoices(settings({ store_text: true }), 'vps', 'fr')[1].choices
     expect(on.find((c) => c.value === true).disabled).toBe(false)
+  })
+})
+
+describe('privacyChoices on a health server', () => {
+  test('a choice away from the recommendation is strong on a health (hds) server only', () => {
+    const strong = (kind) => privacyChoices(settings({ store_text: true }), kind, 'fr').map((g) => g.choices.map((c) => c.strong))
+    expect(strong('hds')).toEqual([[false, true], [false, true], [false, true, true, true, true]])
+    for (const kind of ['vps', 'shared']) expect(strong(kind).flat().every((v) => v === false)).toBe(true)
   })
 })
 

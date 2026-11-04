@@ -333,36 +333,36 @@ describe('project plan tells the truth for each case', () => {
     const plan = planOf(finding(), project())
     expect(plan.title).toBe('plan.project.title')
     expect(plan.action).toBe('start')
-    expect(keysOf(plan)).toEqual(['copy', 'update_near', 'tests', 'approval', 'data'])
-    expect(plan.lines[1].params).toEqual({ package: 'acme/lib', to: '1.0.5' })
+    expect(keysOf(plan)).toEqual(['copy', 'keys', 'update_near', 'tests', 'approval', 'data'])
+    expect(plan.lines[2].params).toEqual({ package: 'acme/lib', to: '1.0.5' })
     expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'sub/package-lock.json' }), project()))).toContain('update')
   })
   test('the analysis target comes before the first fixed version', () => {
     const plan = planOf(finding({ fixed_versions: ['1.0.5', '2.0.1'], analysis: { upgrade: { target: '2.0.1' } } }), project())
-    expect(plan.lines[1].params.to).toBe('2.0.1')
+    expect(plan.lines[2].params.to).toBe('2.0.1')
   })
   test('no version named when Michel does not pin it', () => {
     const indirect = planOf(finding({ analysis: { path: { directness: 'transitive' }, upgrade: { target: '1.0.5' } } }), project())
-    expect(keysOf(indirect)[1]).toBe('update_any')
-    expect(indirect.lines[1].params).toEqual({ package: 'acme/lib' })
-    expect(keysOf(planOf(finding({ fixed_versions: ['1.0.5', '2.0.1'] }), project()))[1]).toBe('update_any')
+    expect(keysOf(indirect)[2]).toBe('update_any')
+    expect(indirect.lines[2].params).toEqual({ package: 'acme/lib' })
+    expect(keysOf(planOf(finding({ fixed_versions: ['1.0.5', '2.0.1'] }), project()))[2]).toBe('update_any')
   })
   test('no known version, or no update Michel knows how to run: the agent searches', () => {
-    expect(keysOf(planOf(finding({ fixed_versions: [] }), project()))).toEqual(['copy', 'search', 'tests', 'approval', 'data'])
-    expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'yarn.lock', fixed_versions: [] }), project()))[1]).toBe('search')
+    expect(keysOf(planOf(finding({ fixed_versions: [] }), project()))).toEqual(['copy', 'keys', 'search', 'tests', 'approval', 'data'])
+    expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'yarn.lock', fixed_versions: [] }), project()))[2]).toBe('search')
   })
   test('a version is known but Michel does not run the update: the agent does it', () => {
     for (const file of ['yarn.lock', 'pnpm-lock.yaml']) {
-      expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: file }), project()))[1], file).toBe('update_agent')
+      expect(keysOf(planOf(finding({ ecosystem: 'npm', manifest_rel_path: file }), project()))[2], file).toBe('update_agent')
     }
   })
   test('Composer may resolve higher than the version named, npm pins it', () => {
     const composer = planOf(finding(), project())
-    expect(keysOf(composer)[1]).toBe('update_near')
-    expect(composer.lines[1].params).toEqual({ package: 'acme/lib', to: '1.0.5' })
+    expect(keysOf(composer)[2]).toBe('update_near')
+    expect(composer.lines[2].params).toEqual({ package: 'acme/lib', to: '1.0.5' })
     expect(fr['plan.project.update_near']).toContain('ou une version proche plus récente')
     const npm = planOf(finding({ ecosystem: 'npm', manifest_rel_path: 'package-lock.json' }), project())
-    expect(keysOf(npm)[1]).toBe('update')
+    expect(keysOf(npm)[2]).toBe('update')
   })
   test('approval_auto only where the rule could apply: without tests, approval', () => {
     const rule = project({ fix_level: 3, auto_fix_minor: true })
@@ -390,7 +390,7 @@ describe('project plan tells the truth for each case', () => {
   })
   test('a flaw that is not in a lockfile runs no tests either, and says so', () => {
     const keys = keysOf(planOf(finding({ kind: 'code', ecosystem: '', manifest_rel_path: '', fixed_versions: [] }), project()))
-    expect(keys).toEqual(['copy', 'search', 'no_install_kind', 'approval', 'data'])
+    expect(keys).toEqual(['copy', 'keys', 'search', 'no_install_kind', 'approval', 'data'])
   })
   test('approval_auto, without approval, only at level 3 with the rule', () => {
     const auto = keysOf(planOf(finding(), project({ fix_level: 3, auto_fix_minor: true })))
@@ -412,6 +412,17 @@ describe('project plan tells the truth for each case', () => {
     expect(keysOf(planOf(finding({ status: 'decided', decision: { action: 'defer' } }), project({ fix_level: 2 })))).not.toContain('self_start')
     const refused = projectPlan({ finding: finding(), project: project({ fix_level: 2 }), attempt: attempt('refused') })
     expect(keysOf(refused)).not.toContain('self_start')
+  })
+  test('what the copy holds and what Michel searches are two paragraphs, in both languages', () => {
+    const words = (text) => text.split(/\s+/).length
+    for (const dict of [fr, en]) {
+      expect(words(dict['plan.project.copy'])).toBeLessThan(75)
+      expect(words(dict['plan.project.keys'])).toBeLessThan(75)
+    }
+    expect(fr['plan.project.keys']).toMatch(/^Michel cherche dans cette copie/)
+    expect(en['plan.project.keys']).toMatch(/^Michel searches this copy/)
+    expect(fr['plan.project.copy']).not.toContain('Michel cherche dans')
+    expect(en['plan.project.copy']).not.toContain('Michel searches')
   })
   test('copy and data are always there on a plan that runs', () => {
     for (const lvl of [1, 2, 3]) {

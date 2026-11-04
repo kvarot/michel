@@ -362,7 +362,7 @@ export default {
       return intervalNote(this.settings, this.$ui.advanced, this.lang)
     },
     privacy() {
-      return privacyChoices(this.settings, this.lang)
+      return privacyChoices(this.settings, this.kind, this.lang)
     },
     settingNotes() {
       return channelNotes({ sms: !!this.settings?.sms }, this.lang)

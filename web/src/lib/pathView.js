@@ -332,7 +332,7 @@ export function projectPlan({ finding, project, level, attempt = null }) {
   if (terminal) return { title: 'plan.project.title_michel', lines: [{ key: `plan.project.${terminal}` }], action: null, why: terminal }
   const f = finding || {}
   const tests = testLines(f, project)
-  const lines = [{ key: 'plan.project.copy' }, updateLine(f), ...tests]
+  const lines = [{ key: 'plan.project.copy' }, { key: 'plan.project.keys' }, updateLine(f), ...tests]
   // The rule needs tests that passed: without tests it can never apply.
   const auto = lvl === 3 && project.auto_fix_minor && tests.some((l) => l.key === 'plan.project.tests')
   lines.push({ key: auto ? 'plan.project.approval_auto' : 'plan.project.approval' })

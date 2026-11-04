@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
-import { afterPush, canChangeAnswer, cardNeedsGit, cardShowsQuestion, gitQuestion, gitState, mergeAsks, providerName, pushSentence, questionOpen, readGit, refusalLines, refusedView, safeMergeUrl, scanAlreadyRunning, showsGitState, updateFollowUp } from './gitView.js'
+import { afterPush, canChangeAnswer, cardNeedsGit, cardShowsQuestion, gitQuestion, gitState, mergeAsks, providerName, pushSentence, questionOpen, readGit, refusalLines, refusedView, safeMergeUrl, sentNotNoted, scanAlreadyRunning, showsGitState, updateFollowUp } from './gitView.js'
 
 // As GET /projects/{name}/git answers (GitView, internal/api/projects_git.go).
 const view = (extra = {}) => ({
@@ -236,5 +236,14 @@ describe('what the components decide', () => {
     expect(scanAlreadyRunning({ status: 409, data: { code: 'api.other' } })).toBe(false)
     expect(scanAlreadyRunning(null)).toBe(false)
     expect(scanAlreadyRunning({ status: 500 })).toBe(false)
+  })
+})
+
+describe('sentNotNoted', () => {
+  test('only the refusal that says the branch went but was not noted', () => {
+    expect(sentNotNoted({ status: 409, data: { code: 'api.git.sent_not_noted' } })).toBe(true)
+    expect(sentNotNoted({ status: 409, data: { code: 'api.git.rejected' } })).toBe(false)
+    expect(sentNotNoted({ offline: true })).toBe(false)
+    expect(sentNotNoted(null)).toBe(false)
   })
 })

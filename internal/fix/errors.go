@@ -72,6 +72,10 @@ var (
 	ErrGitBusy = errors.New("Michel is already working on this folder")
 	// ErrGitNotApplied: the attempt has no branch to send.
 	ErrGitNotApplied = errors.New("this fix has no branch to send")
+	// ErrGitSentNotNoted: the branch left, and Michel could not note it (the
+	// row of the push or the audit log). It matches with errors.Is next to the
+	// cause, which stays in the log and never reaches the page.
+	ErrGitSentNotNoted = errors.New("the branch was sent, but Michel could not note it")
 )
 
 // gitSentinels are the catalog keys of the refusals of a click.
@@ -88,6 +92,7 @@ var gitSentinels = []struct {
 	{ErrGitBranchMoved, "api.git.branch_moved"},
 	{ErrGitBusy, "api.git.busy"},
 	{ErrGitNotApplied, "api.git.not_applied"},
+	{ErrGitSentNotNoted, "api.git.sent_not_noted"},
 }
 
 // gitErrorKey is the catalog key of a refusal of a click, "" for any other error. A

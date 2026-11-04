@@ -271,6 +271,18 @@ describe('decisions', () => {
     expect(note.text).not.toContain('other')
     expect(r.head).toBe(fr['todo.head.unseen'])
   })
+  test('a project whose last check failed is not also reported as old', () => {
+    const keys = (status) => build({ projectViews: [{ name: 'demo', last_scan_at: '2026-08-01T06:00:00Z', last_scan_status: status }] }).unseen.map((u) => u.key)
+    expect(keys('ok')).toContain('project_stale')
+    expect(keys('failed')).not.toContain('project_stale')
+    expect(keys('interrupted')).not.toContain('project_stale')
+  })
+  test('an unreadable project list is said, as the servers and the fixes are', () => {
+    const u = build({ projectViews: null }).unseen.find((x) => x.key === 'projects_unread')
+    expect(u.text).toBe(fr['todo.unseen.projects_unread'])
+    expect(build({ projectViews: [] }).unseen.map((x) => x.key)).not.toContain('projects_unread')
+    expect(build({}).unseen.map((x) => x.key)).not.toContain('projects_unread')
+  })
   test('no age note for a fresh, never scanned, running or unread project list', () => {
     const keys = (projectViews) => build({ projectViews }).unseen.map((u) => u.key)
     expect(keys([{ name: 'demo', last_scan_at: '2026-11-02T06:00:00Z', last_scan_status: 'ok' }])).not.toContain('project_stale')
@@ -279,10 +291,19 @@ describe('decisions', () => {
     expect(keys(null)).not.toContain('project_stale')
     expect(keys(undefined)).not.toContain('project_stale')
   })
-  test('a held attempt whose flaw is gone stays listed: the project waits and its page offers the way out', () => {
+  test('a held attempt whose flaw is gone stays listed, says so, and leads to the page that withdraws the fix', () => {
     const held = (status) => attempt('h', 'held', { finding: { id: 'f-h', package: 'lib', severity: 'high', status }, hold: { count: 2 } })
-    expect(build({ attempts: [held('pending')] }).lines.length).toBe(1)
-    expect(build({ attempts: [held('gone')] }).lines.length).toBe(1)
+    const open = build({ attempts: [held('pending')] }).lines
+    expect(open.length).toBe(1)
+    expect(open[0].title).toBe(fr['todo.held.other'].replace('{n}', '2'))
+    expect(open[0].action.label).toBe(fr['todo.action.answer'])
+    const gone = build({ attempts: [held('gone')] }).lines
+    expect(gone.length).toBe(1)
+    expect(gone[0].title).toBe(fr['todo.held_gone'])
+    expect(gone[0].title).not.toContain('dire s')
+    expect(gone[0].title).toContain('aucune autre correction de ce projet')
+    expect(gone[0].action.label).toBe(fr['todo.action.withdraw'])
+    expect(gone[0].action.href).toBe(open[0].action.href)
   })
   test('a decided server finding has no line', () => {
     const r = build({
