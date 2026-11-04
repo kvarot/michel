@@ -49,6 +49,17 @@ describe('the path of a held attempt', () => {
   })
 })
 
+describe('a held attempt whose flaw is gone', () => {
+  test('the page names the withdraw and what it frees, and keeps the warning on the keys', () => {
+    expect(fr['path.hold.withdraw_gone']).toBe('Retirer la correction')
+    expect(en['path.hold.withdraw_gone']).toBe('Withdraw the fix')
+    expect(fr['path.hold.gone']).toContain('Retire cette correction')
+    expect(fr['path.hold.gone']).toContain('restent dans tes fichiers')
+    expect(en['path.hold.gone']).toContain('Withdraw this fix')
+    expect(en['path.hold.gone']).toContain('stay in your files')
+  })
+})
+
 describe('holdView', () => {
   test('only for a held attempt with its list', () => {
     expect(holdView(null)).toBeNull()

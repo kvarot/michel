@@ -240,3 +240,13 @@ export function questionOpen(view, changing) {
 export function scanAlreadyRunning(err) {
   return err?.data?.code === 'api.project.scan_running'
 }
+
+/**
+ * sentNotNoted says a push refusal is the one where the branch did leave and
+ * Michel could not note it: the page must not tell the person to answer No.
+ * @param {*} err the ApiError
+ * @returns {boolean}
+ */
+export function sentNotNoted(err) {
+  return err?.data?.code === 'api.git.sent_not_noted'
+}

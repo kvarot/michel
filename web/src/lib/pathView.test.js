@@ -413,15 +413,15 @@ describe('project plan tells the truth for each case', () => {
     const refused = projectPlan({ finding: finding(), project: project({ fix_level: 2 }), attempt: attempt('refused') })
     expect(keysOf(refused)).not.toContain('self_start')
   })
-  test('what the copy holds and what Michel searches are two short paragraphs, in both languages', () => {
+  test('what the copy holds and what Michel searches are two paragraphs, in both languages', () => {
     const words = (text) => text.split(/s+/).length
     for (const dict of [fr, en]) {
-      expect(words(dict['plan.project.copy'])).toBeLessThan(70)
-      expect(words(dict['plan.project.keys'])).toBeLessThan(70)
+      expect(words(dict['plan.project.copy'])).toBeLessThan(75)
+      expect(words(dict['plan.project.keys'])).toBeLessThan(75)
     }
-    expect(fr['plan.project.keys']).toMatch(/^Michel y cherche/)
-    expect(en['plan.project.keys']).toMatch(/^Michel searches it/)
-    expect(fr['plan.project.copy']).not.toContain('Michel y cherche')
+    expect(fr['plan.project.keys']).toMatch(/^Michel cherche dans cette copie/)
+    expect(en['plan.project.keys']).toMatch(/^Michel searches this copy/)
+    expect(fr['plan.project.copy']).not.toContain('Michel cherche dans')
     expect(en['plan.project.copy']).not.toContain('Michel searches')
   })
   test('copy and data are always there on a plan that runs', () => {

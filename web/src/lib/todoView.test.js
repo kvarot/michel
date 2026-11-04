@@ -301,6 +301,7 @@ describe('decisions', () => {
     expect(gone.length).toBe(1)
     expect(gone[0].title).toBe(fr['todo.held_gone'])
     expect(gone[0].title).not.toContain('dire s')
+    expect(gone[0].title).toContain('aucune autre correction de ce projet')
     expect(gone[0].action.label).toBe(fr['todo.action.withdraw'])
     expect(gone[0].action.href).toBe(open[0].action.href)
   })

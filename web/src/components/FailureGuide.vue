@@ -45,10 +45,10 @@
         </li>
       </ul>
       <p v-if="hold.more" class="m-small">{{ $t('path.hold.more', { n: hold.more, more: hold.more }) }}</p>
-      <p class="m-guide__warn">{{ $t('path.hold.if_continue', { n: hold.count }) }}</p>
-      <p>{{ $t('path.hold.how', { n: hold.count }) }}</p>
+      <p v-if="hold.canContinue" class="m-guide__warn">{{ $t('path.hold.if_continue', { n: hold.count }) }}</p>
+      <p v-if="hold.canContinue">{{ $t('path.hold.how', { n: hold.count }) }}</p>
       <div class="m-guide__answers">
-        <v-btn color="primary" variant="flat" :loading="holdBusy === 'withdraw'" :disabled="!!holdBusy" @click="$emit('hold-withdraw')">{{ $t('path.hold.withdraw') }}</v-btn>
+        <v-btn color="primary" variant="flat" :loading="holdBusy === 'withdraw'" :disabled="!!holdBusy" @click="$emit('hold-withdraw')">{{ $t(hold.canContinue ? 'path.hold.withdraw' : 'path.hold.withdraw_gone') }}</v-btn>
         <v-btn
           v-if="hold.canContinue"
           color="warning"
