@@ -23,6 +23,14 @@ const LogReadLag = 5 * time.Second
 // server are not the recommended ones.
 const DeviationReminder = 7 * 24 * time.Hour
 
+// UnopenedSource is a source of which Count files cannot be opened. Label is the
+// path the source declares, as the sheet shows it; the files are not named: the
+// sheet does.
+type UnopenedSource struct {
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
 // deviationKey is the key of Run.Summary that marks a digest which carried the
 // reminder: the weekly rhythm is read from the runs, nothing else is stored.
 const deviationKey = "deviation_reminded"
@@ -45,6 +53,10 @@ type ServerLogDigest struct {
 	// past the read cap, all sources of the server together. It is left out when
 	// errors of level error go nowhere on this server.
 	Skipped int64 `json:"skipped,omitempty"`
+	// Unopened are the sources of a pattern some of whose files Michel cannot open
+	// (the rights are refused) while another file of it is read: at most MaxLogTop
+	// of them. It is a state, listed as long as it lasts, and no alert of its own.
+	Unopened []UnopenedSource `json:"unopened,omitempty"`
 	// Deviations are the keys of the settings that are not the recommended
 	// ones (serverlog.Deviation*), set once a week only.
 	Deviations []string `json:"deviations,omitempty"`
@@ -185,14 +197,74 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 		if st.Routes[serverlog.LevelError] != serverlog.RouteIgnored {
 			sl.Skipped = skippedIn(notes, since, until)
 		}
+		if sl.Unopened, err = unopenedSources(ctx, repo, t.ID); err != nil {
+			return nil, err
+		}
 		if remind {
 			sl.Deviations = serverlog.Deviations(st)
 		}
-		if int64(sl.New+sl.Reopened+len(sl.Top)+len(sl.Gaps)+len(sl.Deviations))+sl.Skipped > 0 {
+		if int64(sl.New+sl.Reopened+len(sl.Top)+len(sl.Gaps)+len(sl.Deviations)+len(sl.Unopened))+sl.Skipped > 0 {
 			out = append(out, sl)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// unopenedSources lists the active sources of a server with files Michel cannot
+// open because the server refuses the rights, while another file of the source is
+// read: the last read left them in the unseen list, and a file of the source,
+// outside it, was read for real. A source with no file read is a failed read, told
+// as a gap and an alert; an absent file, a link or a missing tool is not about
+// rights. At most MaxLogTop sources, the files not named.
+func unopenedSources(ctx context.Context, repo *serverlog.Repo, targetID string) ([]UnopenedSource, error) {
+	srcs, err := repo.Sources(ctx, targetID)
+	if err != nil {
+		return nil, err
+	}
+	unseen, err := repo.Unseen(ctx, targetID)
+	if err != nil {
+		return nil, err
+	}
+	var out []UnopenedSource
+	for _, src := range srcs {
+		if !src.Active {
+			continue
+		}
+		refused := map[string]bool{}
+		for _, u := range unseen[src.ID] {
+			if u.Cause == serverlog.CauseDenied {
+				refused[u.File] = true
+			}
+		}
+		if len(refused) == 0 {
+			continue
+		}
+		cursors, err := repo.Cursors(ctx, src.ID)
+		if err != nil {
+			return nil, err
+		}
+		listed := map[string]bool{}
+		for _, u := range unseen[src.ID] {
+			listed[u.File] = true
+		}
+		read := false
+		for _, c := range cursors {
+			// The placeholder of an activation is no file; a file with no read date was
+			// only located.
+			if !strings.HasSuffix(c.File, "/") && !c.ReadAt.IsZero() && !listed[c.File] {
+				read = true
+				break
+			}
+		}
+		if !read {
+			continue
+		}
+		out = append(out, UnopenedSource{Label: scan.SanitizeText(src.Path), Count: len(refused)})
+		if len(out) == MaxLogTop {
+			break
+		}
+	}
 	return out, nil
 }
 
@@ -287,6 +359,11 @@ func serverLogSkipped(lang i18n.Lang, n int64) string {
 		size = strings.NewReplacer("GiB", "Gio", "MiB", "Mio", "KiB", "Kio", " B", " o").Replace(size)
 	}
 	return i18n.T(lang, "digest.serverlogs.skipped", size)
+}
+
+// serverLogUnopened says that some files of a source cannot be opened.
+func serverLogUnopened(lang i18n.Lang, u UnopenedSource) string {
+	return i18n.N(lang, "digest.serverlogs.unopened", u.Count, u.Label)
 }
 
 // serverLogDeviations is the weekly reminder about the settings of a server.

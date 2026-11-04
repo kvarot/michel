@@ -841,6 +841,8 @@
   "digest.serverlogs.reopened.other": "%d errors came back",
   "digest.serverlogs.skipped": "%s of the logs of this server were not read: too much was written for Michel to read it all in one go. Errors written in that part may be missing.",
   "digest.serverlogs.title": "Server logs",
+  "digest.serverlogs.unopened.one": "%[1]d file of the logs %[2]s cannot be opened by Michel: the server refuses it access. Errors written in it may be missing. The server page in Michel tells which one.",
+  "digest.serverlogs.unopened.other": "%[1]d files of the logs %[2]s cannot be opened by Michel: the server refuses it access. Errors written in them may be missing. The server page in Michel tells which ones.",
   "digest.servers.fixed.one": "%d flaw fixed",
   "digest.servers.fixed.other": "%d flaws fixed",
   "digest.servers.new.one": "%d new flaw",

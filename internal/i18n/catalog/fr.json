@@ -841,6 +841,8 @@
   "digest.serverlogs.reopened.other": "%d erreurs revenues",
   "digest.serverlogs.skipped": "%s des journaux de ce serveur n'ont pas été lus : ils ont trop grossi pour que Michel lise tout en une fois. Des erreurs écrites dans cette partie peuvent manquer.",
   "digest.serverlogs.title": "Journaux des serveurs",
+  "digest.serverlogs.unopened.one": "%[1]d fichier des journaux %[2]s ne peut pas être ouvert par Michel : le serveur lui en refuse l'accès. Des erreurs écrites dedans peuvent manquer. La page du serveur dans Michel dit lequel.",
+  "digest.serverlogs.unopened.other": "%[1]d fichiers des journaux %[2]s ne peuvent pas être ouverts par Michel : le serveur lui en refuse l'accès. Des erreurs écrites dedans peuvent manquer. La page du serveur dans Michel dit lesquels.",
   "digest.servers.fixed.one": "%d faille corrigée",
   "digest.servers.fixed.other": "%d failles corrigées",
   "digest.servers.new.one": "%d nouvelle faille",

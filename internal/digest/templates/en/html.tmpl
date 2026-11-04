@@ -71,6 +71,7 @@
 {{range .Top}}<li>{{serverLogItem .}}{{if .Text}}<br><span class="what">{{.Text}}</span>{{end}}</li>
 {{end}}{{range .Gaps}}<li>{{serverLogGap .}}</li>
 {{end}}{{if .Skipped}}<li>{{serverLogSkipped .Skipped}}</li>
+{{end}}{{range .Unopened}}<li>{{serverLogUnopened .}}</li>
 {{end}}{{if .Deviations}}<li>{{serverLogDeviations .}}</li>
 {{end}}</ul>
 {{end}}{{end}}
