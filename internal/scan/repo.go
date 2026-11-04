@@ -175,7 +175,7 @@ func jsonList(s []string) string {
 // Only the OSV findings of the project (source_key "") are read and closed:
 // a scan never touches what a plugin reported.
 func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool, current map[string]decisionView, enriched bool) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
-	return apply(ctx, tx, projectID, "", scanID, now, findings, unread, nil, current, enriched)
+	return apply(ctx, tx, projectID, "", scanID, now, findings, unread, nil, nil, current, enriched)
 }
 
 // ApplyExternal records the findings of one plugin run (sourceKey, runID)
@@ -186,6 +186,14 @@ func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now ti
 // FindingID(projectID, sourceKey, "", ruleID, fingerprint or location).
 // A nil current reads the decisions in force of the project inside tx.
 func ApplyExternal(ctx context.Context, tx *sql.Tx, projectID, sourceKey, runID string, now time.Time, findings []Finding, current map[string]decisionView) (newN, still, gone int, superseded []Superseded, err error) {
+	return ApplyExternalKeeping(ctx, tx, projectID, sourceKey, runID, now, findings, nil, current)
+}
+
+// ApplyExternalKeeping is ApplyExternal for a run that left some findings out
+// without having failed to see them (a vulnerability that OSV reports now,
+// which the run skips): the ids in keep are neither refreshed nor closed, they
+// stay as they were.
+func ApplyExternalKeeping(ctx context.Context, tx *sql.Tx, projectID, sourceKey, runID string, now time.Time, findings []Finding, keep map[string]bool, current map[string]decisionView) (newN, still, gone int, superseded []Superseded, err error) {
 	if sourceKey == "" {
 		return 0, 0, 0, nil, errors.New("an external finding needs the key of its source")
 	}
@@ -194,7 +202,7 @@ func ApplyExternal(ctx context.Context, tx *sql.Tx, projectID, sourceKey, runID 
 			return 0, 0, 0, nil, err
 		}
 	}
-	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, projectID, sourceKey, runID, now, findings, nil, nil, current, false)
+	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, projectID, sourceKey, runID, now, findings, nil, nil, keep, current, false)
 	return newN, still + reappeared, gone, superseded, err
 }
 
@@ -269,14 +277,14 @@ func ApplyServerFindings(ctx context.Context, tx *sql.Tx, targetID, runID string
 	for _, m := range o.UnreadAdvisories {
 		unreadAdvisories[m] = true
 	}
-	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, targetID, "", runID, now, fs, unread, unreadAdvisories, current, o.Enriched)
+	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, targetID, "", runID, now, fs, unread, unreadAdvisories, nil, current, o.Enriched)
 	return newN, still + reappeared, gone, superseded, err
 }
 
 // apply is applyScan for the findings of one source: "" for the OSV scan, a
 // plugin key for a plugin run. Only the findings of that source are read and
 // closed; the findings are stored with that source key.
-func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string, now time.Time, findings []Finding, unread, unreadAdvisories map[string]bool, current map[string]decisionView, enriched bool) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
+func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string, now time.Time, findings []Finding, unread, unreadAdvisories, keep map[string]bool, current map[string]decisionView, enriched bool) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
 	ts := now.UTC().Format(time.RFC3339)
 	rows, err := tx.QueryContext(ctx, `SELECT id, manifest_rel_path, status, kev, kev_added, epss, epss_percentile, cvss_enriched, mitigation, kind
 		FROM finding WHERE project_id = ? AND source_key = ?`, projectID, sourceKey)
@@ -398,7 +406,7 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 	sort.Strings(ids)
 	for _, id := range ids {
 		k := existing[id]
-		if present[id] || k.status == StatusGone || unread[k.manifest] || ((k.mitigation || k.kind == KindServerPackage) && unreadAdvisories[k.manifest]) {
+		if present[id] || keep[id] || k.status == StatusGone || unread[k.manifest] || ((k.mitigation || k.kind == KindServerPackage) && unreadAdvisories[k.manifest]) {
 			continue
 		}
 		if _, err := closeStmt.ExecContext(ctx, StatusGone, StatusGone, ts, id); err != nil {

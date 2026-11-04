@@ -93,6 +93,8 @@
   "api.git.partial_clone_hint": "Utilise ton outil Git habituel. Pour que Michel le fasse, il lui faut une copie complète du dépôt.",
   "api.git.rejected": "Le service a refusé cette branche. Michel ne force jamais un envoi.",
   "api.git.rejected_hint": "Une branche du même nom existe peut-être avec un autre contenu, ou une règle du service l'interdit. Regarde sur le site.",
+  "api.git.sent_not_noted": "La correction est bien partie : la branche est sur le service, mais Michel n'a pas pu le noter chez lui.",
+  "api.git.sent_not_noted_hint": "Rien n'est perdu et rien n'a été envoyé deux fois. Tu peux cliquer à nouveau : Michel verra que tout est déjà là, n'enverra rien de plus et le notera cette fois. Tu peux aussi ouvrir le site et y fusionner la branche toi-même.",
   "api.git.remote_changed": "L'adresse du projet a changé depuis ton accord : Michel n'a rien fait.",
   "api.git.remote_changed_hint": "Regarde la fiche du projet et réponds à nouveau.",
   "api.git.submodule": "Cette mise à jour retirerait ou remplacerait un sous-dossier que Git gère à part (un sous-module), et il n'est pas vide : Michel n'a pas touché à tes fichiers.",

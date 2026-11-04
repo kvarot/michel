@@ -93,6 +93,8 @@
   "api.git.partial_clone_hint": "Use your usual Git tool. For Michel to do it, it needs a full copy of the repository.",
   "api.git.rejected": "The service refused this branch. Michel never forces a send.",
   "api.git.rejected_hint": "A branch of the same name may exist with other content, or a rule of the service forbids it. Look on the site.",
+  "api.git.sent_not_noted": "The fix did go: the branch is on the service, but Michel could not note it on his side.",
+  "api.git.sent_not_noted_hint": "Nothing is lost and nothing was sent twice. You can click again: Michel will see that everything is already there, send nothing more and note it this time. You can also open the site and merge the branch yourself.",
   "api.git.remote_changed": "The project's address changed since you agreed: Michel did nothing.",
   "api.git.remote_changed_hint": "Look at the project's page and answer again.",
   "api.git.submodule": "This update would remove or replace a subfolder Git manages apart (a submodule), and it is not empty: Michel left your files alone.",

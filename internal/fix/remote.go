@@ -612,16 +612,17 @@ func PushFix(ctx context.Context, d Deps, attemptID string) (PushOutcome, error)
 	// The branch left: the audit comes first and neither depends on the click's
 	// context, so that a failure of one does not hide the send from the other.
 	auditErr := d.recordDone(ctx, auditGitPush, a.ID, "ok", ev)
-	if auditErr != nil {
-		auditErr = fmt.Errorf("the branch was sent, but the audit log could not record it: %w", auditErr)
-	}
 	done, cancel := d.afterWrite(ctx)
 	defer cancel()
 	rowErr := d.repo().RecordPush(done, FixPush{AttemptID: a.ID, CommitSHA: prop.CommitSHA, Host: read.host(), PushedAt: out.At})
 	if first, ok, err := d.repo().Push(done, a.ID); err == nil && ok {
 		out.At = first.PushedAt
 	}
-	return out, errors.Join(auditErr, rowErr)
+	if err := errors.Join(auditErr, rowErr); err != nil {
+		// The send happened: the answer says so (a keyed refusal), not a 500 that reads as nothing sent.
+		return out, fmt.Errorf("%w: %w", ErrGitSentNotNoted, err)
+	}
+	return out, nil
 }
 
 // UpdateProject brings the folder up to date with the remote it agreed to, on the

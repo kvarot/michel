@@ -363,3 +363,39 @@ func TestPluginRunReportsAuditFailure(t *testing.T) {
 		t.Errorf("failed run with audit failure: %v", err)
 	}
 }
+
+// A vulnerability that a plugin reported and that OSV starts to report too is
+// skipped by the next run (OSV owns it). Skipped is not « not seen »: the
+// plugin's own finding stays as it was, it does not close.
+func TestSkippedKnownIsNotNotSeen(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	entry := pluginEntry("plugin.trivy", "trivy", FormatTrivyJSON, false)
+	report := filepath.Join("testdata", "trivy-misconfig.json")
+	status := func(rule string) string {
+		var s string
+		if err := e.st.DB().QueryRow(`SELECT status FROM finding WHERE project_id = ? AND source_key = 'plugin.trivy' AND rule_id = ?`, e.proj.ID, rule).Scan(&s); err != nil {
+			t.Fatalf("%s: %v", rule, err)
+		}
+		return s
+	}
+	if res, err := RunPlugin(ctx, e.deps, entry, e.proj, report); err != nil || res.New != 3 {
+		t.Fatalf("first = %+v %v", res, err)
+	}
+	if _, err := e.st.DB().Exec(`INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id, severity_label,
+		installed_version, fixed_versions, status, first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, status_changed_at, summary)
+		VALUES ('osv-1', ?, 'composer.lock', 'Packagist', 'acme-lib', 'CVE-2026-0001', 'high', '1.0.0', '["1.0.1"]', 'new', 's1', 's1', 't', 't', 't', 'x')`, e.proj.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := RunPlugin(ctx, e.deps, entry, e.proj, report)
+	if err != nil || res.SkippedKnown != 1 || res.Gone != 0 {
+		t.Errorf("second = %+v %v, want one skipped and none gone", res, err)
+	}
+	if got := status("CVE-2026-0001"); got == "gone" {
+		t.Errorf("the plugin's finding closed although OSV only started to report it: %s", got)
+	}
+	// The other vulnerability is in the report and nobody else reports it: it stays open.
+	if got := status("CVE-2026-0002"); got != "pending" {
+		t.Errorf("CVE-2026-0002 = %s", got)
+	}
+}
