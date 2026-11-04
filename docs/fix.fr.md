@@ -87,7 +87,7 @@ Ce qui arrête l'agent :
 
 - un format connu : clé AWS, jeton GitHub, clé privée, clé secrète Stripe de production (`sk_live_`, `rk_live_`), jeton JWT, jeton Slack (`xoxb-` et ses variantes). Toujours, même si c'est un exemple écrit dans ce format (`xoxb-your-bot-token`) ;
 - une valeur d'au moins 8 caractères, sans espace, sur un nom sensible (`password`, `token`, `api_key`, `DB_PASSWORD=`…), quand elle n'est pas faite de mots simples : des lettres mêlées à des chiffres ou à des signes, ou des lettres qui ne font pas un mot (majuscules éparpillées, 6 consonnes de suite) ;
-- la même chose en PHP : `define('DB_PASSWORD', '…')`, `'key' => 'base64:…'`, une clé de tableau comme `$config['password'] = '…'`, le troisième argument de `new PDO(…)` ou de `new mysqli(…)`, et de même pour `mysqli_connect(…)`, écrit entre guillemets ; et un mot de passe dans une adresse de connexion ;
+- la même chose en PHP : `define('DB_PASSWORD', '…')`, `'key' => 'base64:…'`, une clé de tableau comme `$config['password'] = '…'`, le troisième argument de `new PDO(…)` ou de `new mysqli(…)`, et de même pour `mysqli_connect(…)`, écrit entre guillemets (ces appels peuvent s'étendre sur plusieurs lignes, et un mot de passe écrit en plusieurs morceaux `'a' . 'b'` est lu en entier) ; et un mot de passe dans une adresse de connexion ;
 - un mot par défaut suivi de chiffres, entre guillemets ou dans une adresse (`password = 'admin123'`).
 
 Ce qui n'arrête pas l'agent, même si c'est une vraie clé. Michel le dit dans un message pour une ligne qu'il a vue, et l'agent peut la lire :
@@ -97,7 +97,7 @@ Ce qui n'arrête pas l'agent, même si c'est une vraie clé. Michel le dit dans 
 - un mot simple, une phrase, des mots simples reliés par des tirets (`cheval-correct-batterie`), une valeur de moins de 8 caractères, un mot par défaut (`password = 'password'`), un mot par défaut suivi de chiffres sans guillemets (`password: admin123`) ;
 - une valeur dont une partie est exactement `test`, `fake`, `mock`, `stub` ou `dummy` (`sk_test_…`, `mock-kP9mW2xQ7vT`), ou un exemple (`your`, `example`, `xxx`…) avec seulement des mots et des nombres à côté ;
 - une valeur qui commence par `npm:`, `workspace:`, `file:`, `link:`, `^`, `~` ou un mot de validation (`required|`, `nullable|`, `string|`, `sometimes|`), une valeur qui contient `://`, un chemin fait de mots courts en minuscules (`/etc/ssl/private/server.key`), et le hash public de l'ancienne `UserFactory` de Laravel ;
-- une valeur sans nom sensible que Michel sait lire à côté : les arguments d'un appel autre que ceux cités plus haut (par exemple `ldap_bind($c, 'uid', '…')`), un simple `key:`.
+- une valeur sans nom sensible que Michel sait lire à côté : les arguments d'un appel autre que ceux cités plus haut (par exemple `ldap_bind($c, 'uid', '…')`, `mysqli_real_connect(…)`, `->real_connect(…)`), un appel `new mysqli(…)`, `new PDO(…)` ou `mysqli_connect(…)` dont un argument avant le mot de passe est trop imbriqué (plus de deux parenthèses l'une dans l'autre) ou contient une apostrophe ou un guillemet non fermé, un mot de passe construit par une variable ou un appel, un simple `key:`.
 
 Quand la tentative s'arrête, tu choisis :
 

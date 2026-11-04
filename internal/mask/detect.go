@@ -35,6 +35,9 @@ type detector struct {
 	// quotedOnly keeps only a value written in quotes: a wide shape must not
 	// hide the code around it. A name in the skipped group is read too.
 	quotedOnly bool
+	// concat extends a quoted value over the literals joined to it by dots
+	// ('abc' . "def"): the whole chain is hidden and judged as one value.
+	concat bool
 }
 
 const (
@@ -48,30 +51,46 @@ const (
 	keywordExpr = `(?:password|passwd|pwd|secret_?key|secret|token|api_?key|access_?key|private_?key|app_?key|(?:^|[^A-Za-z0-9])pass)`
 )
 
+// phpArg is one argument of a PHP call: quoted strings, parentheses nested up to
+// two levels, and any other sign but a comma, a quote, a parenthesis or the end
+// of a statement. It may cross lines.
+const (
+	phpStr    = `'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"`
+	phpParen1 = `\((?:[^()'"]|` + phpStr + `)*\)`
+	phpParen2 = `\((?:[^()'"]|` + phpStr + `|` + phpParen1 + `)*\)`
+	phpArg    = `(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|` + phpParen2 + `|[^,;'"()])+`
+)
+
 var detectors = []detector{
-	{KindPrivateKey, regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|.*$)`), 0, false},
-	{KindAWSKey, regexp.MustCompile(`AKIA[0-9A-Z]{16}`), 0, false},
-	{KindGitHubToken, regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}`), 0, false},
+	{KindPrivateKey, regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----(?:.*?-----END [A-Z ]*PRIVATE KEY-----|.*$)`), 0, false, false},
+	{KindAWSKey, regexp.MustCompile(`AKIA[0-9A-Z]{16}`), 0, false, false},
+	{KindGitHubToken, regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}`), 0, false, false},
 	// Stripe secret keys, JSON Web Tokens, Slack tokens.
-	{KindKnownToken, regexp.MustCompile(`[sr]k_live_[A-Za-z0-9]{16,}|eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+|xox[abprs]-[A-Za-z0-9-]{8,}`), 0, false},
+	{KindKnownToken, regexp.MustCompile(`[sr]k_live_[A-Za-z0-9]{16,}|eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+|xox[abprs]-[A-Za-z0-9-]{8,}`), 0, false, false},
 	// The name holds a keyword, followed only by "_..." (SECRET_KEY_BASE) or
 	// nothing; the keyword may stick to what precedes it (DBPASSWORD).
-	{KindEnvValue, regexp.MustCompile(`(?im)^[ 	]*(?:export[ 	]+)?([A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)(?:_[A-Z0-9_]*)?)[ 	]*=[ 	]*` + valueExpr), 1, false},
-	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?\]?[ 	]*(?:=>|:|=)[ 	]*` + valueExpr), 0, false},
+	{KindEnvValue, regexp.MustCompile(`(?im)^[ 	]*(?:export[ 	]+)?([A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)(?:_[A-Z0-9_]*)?)[ 	]*=[ 	]*` + valueExpr), 1, false, false},
+	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?[ 	]*(?:=>|:|=)[ 	]*` + valueExpr), 0, false, false},
 	// PHP: define('DB_PASSWORD', '...'), Laravel's 'key' => 'base64:...', and
 	// the password, third argument of new PDO, new mysqli and mysqli_connect.
-	{KindAssignment, regexp.MustCompile(`\bdefine\([ 	]*['"]([^'"\n]*(?:PASSWORD|KEY|SECRET|SALT|TOKEN)[^'"\n]*)['"][ 	]*,[ 	]*` + valueExpr), 1, true},
-	{KindAssignment, regexp.MustCompile(`['"]key['"][ 	]*=>[ 	]*['"](base64:[A-Za-z0-9+/=]{16,})['"]`), 0, false},
-	{KindAssignment, regexp.MustCompile(`\bnew[ 	]+\\?PDO\([^,\n]+,[^,\n]+,[ 	]*` + valueExpr), 0, true},
-	{KindAssignment, regexp.MustCompile(`\b(?:new[ 	]+\\?mysqli|mysqli_connect)\([^,\n]+,[^,\n]+,[ 	]*` + valueExpr), 0, true},
+	{KindAssignment, regexp.MustCompile(`\bdefine\([ 	]*['"]([^'"\n]*(?:PASSWORD|KEY|SECRET|SALT|TOKEN)[^'"\n]*)['"][ 	]*,[ 	]*` + valueExpr), 1, true, false},
+	{KindAssignment, regexp.MustCompile(`['"]key['"][ 	]*=>[ 	]*['"](base64:[A-Za-z0-9+/=]{16,})['"]`), 0, false, false},
+	{KindAssignment, regexp.MustCompile(`\bnew[ 	]+\\?PDO\([^,\n]+,[^,\n]+,[ 	]*` + valueExpr), 0, true, false},
+	// The same, read by arguments: strings and one or two levels of parentheses are
+	// skipped, so a comma inside them does not shift the password. A call that does
+	// not read this way is not matched at all, never matched on the wrong argument.
+	{KindAssignment, regexp.MustCompile(`(?i)\b(?:new[ 	]+\\?(?:mysqli|pdo)|mysqli_connect)[ 	]*\(` + phpArg + `,` + phpArg + `,\s*` + valueExpr), 0, true, true},
+	// $config['password'] = '...': only a quoted index and a quoted value, so an
+	// index by a variable, a comparison or a call is left alone.
+	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["'][ 	]*\][ 	]*(?:\.=|\?\?=|=)[ 	]*` + valueExpr), 0, true, true},
 	// scheme://user:password@host: only the password.
-	{KindURLPassword, regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'<>]*:([^\s/@"'<>]+)@`), 0, false},
+	{KindURLPassword, regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'<>]*:([^\s/@"'<>]+)@`), 0, false, false},
 	{KindAbsPath, regexp.MustCompile(
 		// Windows: directories may hold spaces, the last segment may not.
 		`(?m)(?:^|[^A-Za-z0-9])([A-Za-z]:[\\/](?:[^\\/\r\n"'<>|*?:]+[\\/])*[^\s\\/"'<>|*?:]*)` +
 			// POSIX: at least two segments, after a separator, so URLs stay out;
 			// a ":" separates the entries of a list.
-			`|(?:^|[\s"'(=:])(/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._@+-]+)+)`), 0, false},
+			`|(?:^|[\s"'(=:])(/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._@+-]+)+)`), 0, false, false},
 }
 
 // notSecretNames are variable names that hold a keyword by accident or hold a
@@ -153,6 +172,8 @@ func find(s, tokenPrefix string) []match {
 		for _, loc := range d.re.FindAllStringSubmatchIndex(s, -1) {
 			a, b := loc[0], loc[1]
 			unquoted := false
+			value := ""
+			joined := false
 			if len(loc) > 2 {
 				a, b = -1, -1
 				for g := 1 + d.skip; 2*g+1 < len(loc); g++ {
@@ -160,6 +181,9 @@ func find(s, tokenPrefix string) []match {
 						a, b = loc[2*g], loc[2*g+1]
 						// The last group of valueExpr is the value without quotes.
 						unquoted = 2*g+3 >= len(loc)
+						if d.concat && g-d.skip <= 3 {
+							b, value, joined = joinLiterals(s, a, b)
+						}
 						break
 					}
 				}
@@ -176,7 +200,10 @@ func find(s, tokenPrefix string) []match {
 			if (d.kind == KindEnvValue || d.kind == KindAssignment) && isNonValue(s[a:b]) {
 				continue
 			}
-			all = append(all, match{a, b, d.kind, isStrong(d.kind, s[a:b], unquoted)})
+			if !joined {
+				value = s[a:b]
+			}
+			all = append(all, match{a, b, d.kind, isStrong(d.kind, value, unquoted)})
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
@@ -255,4 +282,32 @@ func mustRel(base, target string) string {
 		return ".."
 	}
 	return r
+}
+
+// literalTail is a dot and a quoted literal that follows a quoted value.
+var literalTail = regexp.MustCompile(`^[ 	]*\.[ 	]*(?:"((?:[^"\\n]|\.)*)"|'((?:[^'\\n]|\.)*)')`)
+
+// joinLiterals extends the quoted value s[a:b] over the literals joined to it
+// by dots: 'abc' . "def". It returns the end of the chain (before its last
+// quote), the literals joined as one text for the judgement of strength, and
+// whether there was a chain. What follows a variable or a call is not a literal.
+func joinLiterals(s string, a, b int) (end int, value string, joined bool) {
+	value = s[a:b]
+	end = b
+	pos := b + 1 // after the closing quote
+	for pos <= len(s) {
+		loc := literalTail.FindStringSubmatchIndex(s[pos:])
+		if loc == nil {
+			break
+		}
+		ga, gb := loc[2], loc[3]
+		if ga < 0 {
+			ga, gb = loc[4], loc[5]
+		}
+		value += s[pos+ga : pos+gb]
+		end = pos + gb
+		pos = pos + loc[1]
+		joined = true
+	}
+	return end, value, joined
 }
