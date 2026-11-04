@@ -256,3 +256,16 @@ func TestBranchReadyMessageGivesNoNextStep(t *testing.T) {
 		}
 	}
 }
+
+// T16 words: root and PHP-FPM are explained in the sentence of the script's steps.
+func TestServerStepWordsAreExplained(t *testing.T) {
+	if got := catalogs[FR]["fix.server.explain.root"]; !strings.Contains(got, "droits d'administrateur") {
+		t.Errorf("fr explain.root: %q", got)
+	}
+	if got := catalogs[EN]["fix.server.explain.root"]; !strings.Contains(got, "administrator rights") {
+		t.Errorf("en explain.root: %q", got)
+	}
+	if got := catalogs[FR]["fix.server.explain.test_fpm"]; !strings.Contains(got, "(la partie de PHP qui sert ton site)") {
+		t.Errorf("fr explain.test_fpm: %q", got)
+	}
+}

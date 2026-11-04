@@ -59,3 +59,20 @@ describe('the Git question for someone who does not know (B7, words)', () => {
     for (const [k, v] of Object.entries({ ...fr, ...en })) if (k.startsWith('git.') || k.startsWith('fix.')) expect(v, k).not.toContain('PhpStorm')
   })
 })
+
+describe('the words of the novice’s list are explained where they appear (T16)', () => {
+  test('server words', () => {
+    expect(fr['servers.discover.host']).toContain('un nom comme')
+    expect(fr['servers.settings.sudo']).toContain('administrateur')
+    expect(fr['srvfix.rollback.config']).toContain('le programme qui fait tourner ton site')
+  })
+  test('project words', () => {
+    expect(fr['fix.proposal.tests_not_run_hint']).not.toContain('fusionner')
+    expect(fr['fix.proposal.approve_hint']).toContain('une version à part de ton code')
+    expect(fr['fix.done.inconclusive']).toContain('une version à part de ton code')
+  })
+  test('the English counterparts say as much', () => {
+    expect(en['servers.settings.sudo']).toContain('administrator')
+    expect(en['fix.proposal.approve_hint']).toContain('a version apart from your code')
+  })
+})
