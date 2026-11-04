@@ -55,6 +55,7 @@ const (
 	ReasonHostKeyChanged = "host_key_changed"
 	ReasonDenied         = "denied"
 	ReasonTimeout        = "timeout"
+	ReasonRefused        = "refused"
 	ReasonOutputCut      = "output_cut"
 	ReasonTools          = "tools"
 	ReasonInactive       = "inactive"
@@ -717,7 +718,9 @@ func reasonOf(err error) string {
 		return ReasonNoAgent
 	case errors.Is(err, sshx.ErrNoKeyAccepted):
 		return ReasonNoKeyAccepted
-	case errors.Is(err, sshx.ErrCommandTimeout), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, sshx.ErrConnectionRefused):
+		return ReasonRefused
+	case errors.Is(err, sshx.ErrCommandTimeout), errors.Is(err, sshx.ErrConnectTimeout), errors.Is(err, context.DeadlineExceeded):
 		return ReasonTimeout
 	case errors.Is(err, ErrOutputCut):
 		return ReasonOutputCut

@@ -1118,6 +1118,7 @@
   "notify.log.reason.no_agent": "Cause : le programme qui garde ta clé SSH (ssh-agent) est verrouillé ou n'est pas lancé. Relance-le sur l'ordinateur qui fait tourner Michel.",
   "notify.log.reason.no_key_accepted": "Cause : le serveur n'a pas accepté ta clé SSH (ton moyen de connexion). Vérifie qu'elle est bien autorisée sur ce serveur.",
   "notify.log.reason.output_cut": "Cause : la réponse du serveur a été coupée avant la fin. Michel n'a pas pu tout lire.",
+  "notify.log.reason.refused": "Cause : le serveur a refusé la connexion. Vérifie qu'il est bien allumé et que l'adresse que Michel a pour lui est toujours la bonne.",
   "notify.log.reason.timeout": "Cause : le serveur a mis trop de temps à répondre. Il est peut-être surchargé ou injoignable.",
   "notify.log.reason.tools": "Cause : un programme dont Michel a besoin pour lire les journaux (awk, tail, head) manque sur le serveur.",
   "notify.log.times.one": "%[2]s, %[1]d fois",

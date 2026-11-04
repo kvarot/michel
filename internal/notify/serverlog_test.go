@@ -232,7 +232,7 @@ func TestNotReadingMessageSaysWhy(t *testing.T) {
 		t.Errorf("no cause: %q", body)
 	}
 	for _, r := range []string{serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
-		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy, serverlog.ReasonError, "something else"} {
+		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy, serverlog.ReasonError, "something else"} {
 		for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
 			in.Reason = r
 			if _, b := logMessage(lang, in, ""); strings.Contains(b, "!") {
@@ -314,5 +314,22 @@ func TestNotReadingSourcesAreBounded(t *testing.T) {
 	_, body := logMessage(i18n.EN, in, "")
 	if len(body) > 900 || strings.Contains(body, strings.Repeat("x", 150)) || strings.Contains(body, "g.log") {
 		t.Errorf("not bounded (%d bytes): %q", len(body), body)
+	}
+}
+
+// A refused connection has its own sentence, in both languages, and an unknown
+// cause keeps the general one.
+func TestNotReadingSaysARefusedConnection(t *testing.T) {
+	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertNotReading, Reason: serverlog.ReasonRefused,
+		Items: []serverlog.AlertItem{{Kind: serverlog.AlertNotReading, Type: "srv-demo"}}}
+	if _, body := logMessage(i18n.EN, in, ""); !strings.Contains(body, "Cause: the server refused the connection.") || strings.Contains(body, "the read failed") {
+		t.Errorf("en: %q", body)
+	}
+	if _, body := logMessage(i18n.FR, in, ""); !strings.Contains(body, "Cause : le serveur a refusé la connexion.") {
+		t.Errorf("fr: %q", body)
+	}
+	in.Reason = "something else"
+	if _, body := logMessage(i18n.EN, in, ""); !strings.Contains(body, "Cause: the read failed.") {
+		t.Errorf("unknown cause: %q", body)
 	}
 }

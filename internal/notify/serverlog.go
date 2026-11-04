@@ -69,7 +69,7 @@ func logItemLine(lang i18n.Lang, it serverlog.AlertItem, kind serverlog.AlertKin
 func logReason(lang i18n.Lang, reason string) string {
 	switch reason {
 	case serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
-		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy:
+		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonOutputCut, serverlog.ReasonTools, serverlog.ReasonInactive, serverlog.ReasonBusy:
 		return i18n.T(lang, "notify.log.reason."+reason)
 	}
 	return i18n.T(lang, "notify.log.reason."+serverlog.ReasonError)

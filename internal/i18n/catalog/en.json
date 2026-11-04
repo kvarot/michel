@@ -1118,6 +1118,7 @@
   "notify.log.reason.no_agent": "Cause: the program that keeps your SSH key (ssh-agent) is locked or not running. Start it again on the computer that runs Michel.",
   "notify.log.reason.no_key_accepted": "Cause: the server did not accept your SSH key (your way in). Check that it is allowed on this server.",
   "notify.log.reason.output_cut": "Cause: the answer of the server was cut before the end. Michel could not read it all.",
+  "notify.log.reason.refused": "Cause: the server refused the connection. Check that it is turned on and that the address Michel has for it is still right.",
   "notify.log.reason.timeout": "Cause: the server took too long to answer. It may be overloaded or unreachable.",
   "notify.log.reason.tools": "Cause: a program Michel needs to read the logs (awk, tail, head) is missing on the server.",
   "notify.log.times.one": "%[2]s, %[1]d time",

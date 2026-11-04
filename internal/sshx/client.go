@@ -12,9 +12,11 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -33,14 +35,22 @@ const (
 	TailSize = 64 << 10
 	// DefaultCommandTimeout bounds one command run by Run.
 	DefaultCommandTimeout = 60 * time.Second
-	// handshakeTimeout bounds the SSH handshake (key exchange and auth).
-	handshakeTimeout = 30 * time.Second
 
 	auditActor  = "michel"
 	auditAction = "target.connect"
 )
 
+// handshakeTimeout bounds the SSH handshake (key exchange and auth). A variable
+// for the tests only.
+var handshakeTimeout = 30 * time.Second
+
 var (
+	// ErrConnectionRefused means nothing answered at the address: the connection
+	// was refused. It wraps the network error.
+	ErrConnectionRefused = errors.New("the server refused the connection")
+	// ErrConnectTimeout means the server did not answer in time, to the
+	// connection or to the handshake. It wraps the network error.
+	ErrConnectTimeout = errors.New("the server did not answer in time")
 	// ErrNoAgent means no SSH agent could be reached, or it holds no key.
 	ErrNoAgent = errors.New("no SSH agent with a key is available: start the SSH agent and add your key (ssh-add)")
 	// ErrNoKeyAccepted means the server accepted none of the agent's keys
@@ -110,6 +120,25 @@ func address(t target.Target) string {
 	return net.JoinHostPort(t.Host, strconv.Itoa(port))
 }
 
+// wsaConnRefused is the Windows error of a refused connection, which is not
+// syscall.ECONNREFUSED there.
+const wsaConnRefused = syscall.Errno(10061)
+
+// netCause tells apart, among the failures of the network, a refused connection
+// and a timeout; any other error comes back as it is, so what is unknown stays
+// unknown. The network error stays in the chain.
+func netCause(err error) error {
+	var errno syscall.Errno
+	var ne net.Error
+	switch {
+	case errors.As(err, &errno) && (errno == syscall.ECONNREFUSED || errno == wsaConnRefused):
+		return fmt.Errorf("%w: %w", ErrConnectionRefused, err)
+	case errors.Is(err, os.ErrDeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
+		return fmt.Errorf("%w: %w", ErrConnectTimeout, err)
+	}
+	return err
+}
+
 // open dials addr through the gateway and runs the SSH handshake bounded by
 // ctx and handshakeTimeout. algos, once the TCP peer is known, chooses the
 // host key algorithms to offer.
@@ -122,7 +151,7 @@ func open(ctx context.Context, d Deps, addr string, cfg *ssh.ClientConfig, algos
 		if errors.Is(err, egress.ErrEgressDenied) {
 			return nil, nil, nil, fmt.Errorf("%w: %w", ErrDenied, err)
 		}
-		return nil, nil, nil, err
+		return nil, nil, nil, netCause(err)
 	}
 	cfg.HostKeyAlgorithms = algos(conn.RemoteAddr())
 	deadline := time.Now().Add(handshakeTimeout)
@@ -138,7 +167,7 @@ func open(ctx context.Context, d Deps, addr string, cfg *ssh.ClientConfig, algos
 		if ctx.Err() != nil {
 			return nil, nil, nil, fmt.Errorf("ssh handshake interrupted: %w", ctx.Err())
 		}
-		return nil, nil, nil, err
+		return nil, nil, nil, netCause(err)
 	}
 	conn.SetDeadline(time.Time{})
 	return sc, chans, reqs, nil

@@ -474,3 +474,69 @@ func TestRunKeepsTailOfCutStream(t *testing.T) {
 		t.Errorf("tail %d bytes, ends %q", len(res.StderrTail), res.StderrTail[max(0, len(res.StderrTail)-20):])
 	}
 }
+
+// closedPort is a local port nothing listens on.
+func closedPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port
+}
+
+// A server where nothing listens is told apart from any other failure.
+func TestRefusedConnectionIsTold(t *testing.T) {
+	srv := sshtest.New(t, sshtest.Options{})
+	tg := tgt(t, srv, true)
+	tg.Port = closedPort(t)
+	_, err := sshx.Dial(context.Background(), deps(t, srv, true), tg)
+	if !errors.Is(err, sshx.ErrConnectionRefused) {
+		t.Fatalf("want ErrConnectionRefused, got %v", err)
+	}
+	if errors.Is(err, sshx.ErrConnectTimeout) {
+		t.Errorf("a refusal is no timeout: %v", err)
+	}
+}
+
+// A server that takes the connection and never answers the handshake is a
+// timeout, not an unknown failure.
+func TestSilentServerIsATimeout(t *testing.T) {
+	defer sshx.SetHandshakeTimeout(300 * time.Millisecond)()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+	srv := sshtest.New(t, sshtest.Options{})
+	tg := tgt(t, srv, true)
+	tg.Port = l.Addr().(*net.TCPAddr).Port
+	_, err = sshx.Dial(context.Background(), deps(t, srv, true), tg)
+	if !errors.Is(err, sshx.ErrConnectTimeout) {
+		t.Fatalf("want ErrConnectTimeout, got %v", err)
+	}
+	if errors.Is(err, sshx.ErrConnectionRefused) {
+		t.Errorf("a timeout is no refusal: %v", err)
+	}
+}
+
+// What stays unknown stays as it is: a server that closes the line, a refused
+// policy, a refused key.
+func TestOtherFailuresKeepTheirCause(t *testing.T) {
+	srv := sshtest.New(t, sshtest.Options{})
+	_, err := sshx.Dial(context.Background(), deps(t, srv, false), tgt(t, srv, true))
+	if !errors.Is(err, sshx.ErrDenied) || errors.Is(err, sshx.ErrConnectionRefused) || errors.Is(err, sshx.ErrConnectTimeout) {
+		t.Errorf("policy refusal = %v", err)
+	}
+}

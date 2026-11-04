@@ -1563,3 +1563,41 @@ func TestResolveGoesPerSource(t *testing.T) {
 		t.Errorf("after the read: status = %s", got[src2.ID])
 	}
 }
+
+// A server where nothing listens is a refused connection, told as such; the
+// cause of a timeout of the connection is the timeout one. Anything else stays
+// the general cause.
+func TestPassReportsARefusedConnection(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	tg := pe.tgt
+	tg.Port = port
+	if err := pe.targets.Update(context.Background(), tg); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Pass(context.Background(), pe.deps, pe.tgt.ID)
+	if err == nil || res.Reason != ReasonRefused || res.Read != 0 {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+}
+
+func TestReasonOfTellsTheNetworkApart(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("x: %w", sshx.ErrConnectionRefused), ReasonRefused},
+		{fmt.Errorf("x: %w", sshx.ErrConnectTimeout), ReasonTimeout},
+		{fmt.Errorf("x: %w", sshx.ErrNoKeyAccepted), ReasonNoKeyAccepted},
+		{errors.New("ssh: handshake failed: EOF"), ReasonError},
+	} {
+		if got := reasonOf(tc.err); got != tc.want {
+			t.Errorf("reasonOf(%v) = %s, want %s", tc.err, got, tc.want)
+		}
+	}
+}
