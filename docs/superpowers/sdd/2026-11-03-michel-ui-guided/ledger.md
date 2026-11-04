@@ -158,3 +158,4 @@ To tell Kévin in the final report:
 - A server without `ss` stays not read, with a permanent note. Exposure is seen from inside only; firewall never verified.
 - CI not readable from this PC. Leftovers: go editing scripts in the temp folder from an implementer; Vite server on port 5199 (PID 23860) if still there; `digest_at: "00:00"` can give two copies around midnight (R29).
 - Not on a real host: https or SSH push, merge page links. Windows OpenSSH agent untested.
+- Task 14g review back: 3 high 3 medium 6 low, W/task-14g-findings.md, not fixed. Task 15: 701449e, report W/task-15-report.md, not reviewed. Decision open: 68 keys of `internal/i18n/catalog/fr.json` hold jargon words outside the test, some reach simple-mode screens. Old session stops here.
