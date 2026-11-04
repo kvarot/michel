@@ -1677,3 +1677,66 @@ func TestPartialReadResolvesNothing(t *testing.T) {
 		})
 	}
 }
+
+func TestPassKeepsTheReasonOfTheLastFailureUntilAGoodRead(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	ctx := context.Background()
+	pe.activate()
+	if fs, err := pe.repo.Failures(ctx, pe.tgt.ID); err != nil || len(fs) != 0 {
+		t.Fatalf("a good read left a failure: %v %v", fs, err)
+	}
+	// The connection fails: the cause belongs to the server, not to a source.
+	good := pe.deps.SSH.Agent
+	pe.deps.SSH.Agent = func() (agent.ExtendedAgent, io.Closer, error) { return nil, nil, sshx.ErrNoAgent }
+	for i := 0; i < 2; i++ {
+		pe.clock.Advance(5 * time.Minute)
+		if _, err := Pass(ctx, pe.deps, pe.tgt.ID); err == nil {
+			t.Fatal("the pass should fail")
+		}
+	}
+	fs, err := pe.repo.Failures(ctx, pe.tgt.ID)
+	if err != nil || len(fs) != 1 || fs[""] != ReasonNoAgent {
+		t.Fatalf("failures = %v (%v), want the server's no_agent", fs, err)
+	}
+	// A later failure replaces the reason.
+	pe.deps.SSH.Agent = good
+	pe.setShell(func(_ *sshtest.Server, _ string, _ io.Writer, _ io.Writer) int { return 1 })
+	pe.clock.Advance(5 * time.Minute)
+	if _, err := Pass(ctx, pe.deps, pe.tgt.ID); err == nil {
+		t.Fatal("the pass should fail")
+	}
+	fs, _ = pe.repo.Failures(ctx, pe.tgt.ID)
+	if len(fs) != 1 || fs[pe.src.ID] != ReasonError || fs[""] != "" {
+		t.Fatalf("failures = %v, want the source's error alone", fs)
+	}
+	// The next good read clears it.
+	pe.setShell(nil)
+	pe.clock.Advance(5 * time.Minute)
+	pe.run()
+	if fs, _ = pe.repo.Failures(ctx, pe.tgt.ID); len(fs) != 0 {
+		t.Fatalf("a good read kept %v", fs)
+	}
+}
+
+func TestFailuresGoWithTheirSourceAndTheirServer(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	ctx := context.Background()
+	if err := pe.repo.SetFailures(ctx, pe.tgt.ID, []Failure{{SourceID: pe.src.ID, Reason: ReasonTools}, {Reason: ReasonRefused}}, pe.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := pe.repo.SetFailures(ctx, pe.tgt.ID, []Failure{{SourceID: pe.src.ID, Reason: "<script>"}}, pe.clock.Now()); err == nil {
+		t.Error("a reason that is no key was stored")
+	}
+	if err := pe.repo.DeleteSource(ctx, pe.src.ID); err != nil {
+		t.Fatal(err)
+	}
+	if fs, _ := pe.repo.Failures(ctx, pe.tgt.ID); len(fs) != 1 || fs[""] != ReasonRefused {
+		t.Fatalf("after the source went: %v", fs)
+	}
+	if err := pe.repo.ForgetTarget(ctx, pe.tgt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if fs, _ := pe.repo.Failures(ctx, pe.tgt.ID); len(fs) != 0 {
+		t.Fatalf("after the server went: %v", fs)
+	}
+}

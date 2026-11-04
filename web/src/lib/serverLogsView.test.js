@@ -272,3 +272,20 @@ describe('formatShort', () => {
     expect(formatShort('nothing', 'en')).toBe('other')
   })
 })
+
+describe('readState failure', () => {
+  test('the cause of the last failed read comes as a sentence of its own, with the API words untouched', () => {
+    const why = 'Le serveur a refusé la connexion.'
+    const r = readState({ active: true, last_read_at: '', failure: why }, now, 'fr')
+    expect(r.line).toBe("Michel n'a pas encore réussi à lire ce journal.")
+    expect(r.failure).toBe(`Cause : ${why}`)
+    expect(readState({ active: true, last_read_at: '2026-11-01T11:30:00Z', failure: 'The server refused the connection.' }, now, 'en').failure).toBe('Reason: The server refused the connection.')
+  })
+
+  test('nothing to say when the last read did not fail, or the log is turned off', () => {
+    expect(readState({ active: true, last_read_at: '' }, now, 'fr').failure).toBe('')
+    expect(readState({ active: true, failure: '' }, now, 'fr').failure).toBe('')
+    expect(readState({ active: false, failure: 'x' }, now, 'fr').failure).toBe('')
+    expect(readState(null, now, 'fr').failure).toBe('')
+  })
+})

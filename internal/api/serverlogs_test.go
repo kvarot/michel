@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/secret"
 	"github.com/kvarot/michel/internal/serverlog"
@@ -987,5 +988,51 @@ func TestNoLogDataReachesAnAgent(t *testing.T) {
 				t.Errorf("%s (for %s) reaches %s", deps[0], roots[deps[0]], dep)
 			}
 		}
+	}
+}
+
+func TestSourcesSayWhyTheLastReadFailed(t *testing.T) {
+	lf := newLogFixture(t, "")
+	src := lf.addSource("")
+	list := func() LogSourceView {
+		t.Helper()
+		code, out := lf.send("GET", lf.url("/sources"), "")
+		var body []LogSourceView
+		if code != http.StatusOK || json.Unmarshal([]byte(out), &body) != nil || len(body) != 1 {
+			t.Fatalf("list = %d %s", code, out)
+		}
+		return body[0]
+	}
+	if f := list().Failure; f != "" {
+		t.Fatalf("a source never read says %q", f)
+	}
+	ctx := context.Background()
+	// The connection failed: the cause is the server's, and each source carries it.
+	if err := lf.repo().SetFailures(ctx, lf.id, []serverlog.Failure{{Reason: serverlog.ReasonRefused}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if f := list().Failure; !strings.Contains(f, "refus") && !strings.Contains(f, "refused") {
+		t.Errorf("server failure = %q", f)
+	}
+	// One source failed on its own: its own cause wins.
+	if err := lf.repo().SetFailures(ctx, lf.id, []serverlog.Failure{{SourceID: src.ID, Reason: serverlog.ReasonTools}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if f := list().Failure; !strings.Contains(f, "awk") {
+		t.Errorf("source failure = %q", f)
+	}
+	// A turned off source says nothing; a good read clears the rest.
+	if code, out := lf.send("PATCH", lf.url("/sources/"+src.ID), `{"active":false}`); code != http.StatusOK {
+		t.Fatalf("patch = %d %s", code, out)
+	}
+	if f := list().Failure; f != "" {
+		t.Errorf("a turned off source says %q", f)
+	}
+	// A reason this page does not know reads as the general one, which says what to try.
+	if got := LogFailureText(i18n.FR, "weird"); !strings.Contains(got, "Vérifier maintenant") {
+		t.Errorf("unknown reason = %q", got)
+	}
+	if got := LogFailureText(i18n.EN, serverlog.ReasonError); !strings.Contains(got, "Check now") {
+		t.Errorf("general reason = %q", got)
 	}
 }

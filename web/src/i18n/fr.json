@@ -1146,6 +1146,7 @@
   "logs.badge.new.other": "{n} nouvelles erreurs dans les journaux",
   "logs.badge.no_channel": "Personne ne sera prévenu des erreurs de journaux",
   "logs.badge.deviation": "Confidentialité : un réglage s'éloigne du choix recommandé",
+  "logs.read.failure": "Cause : {why}",
   "logs.read.last": "Dernière lecture réussie {ago}.",
   "logs.read.never": "Michel n'a pas encore réussi à lire ce journal.",
   "logs.read.off": "Michel ne lit pas ce journal pour le moment.",

@@ -54,6 +54,10 @@ type LogSourceView struct {
 	// Unseen lists the files of the source that the last read could not open,
 	// by path and why. LastReadAt leaves them out.
 	Unseen []TargetUnseenView `json:"unseen"`
+	// Failure is why the last read of the source failed, in a sentence ("" when
+	// the last read did not fail, or the source is turned off). The cause of a
+	// connection that failed is the server's, so every active source carries it.
+	Failure string `json:"failure,omitempty"`
 	// Note is a word of advice for the format (PostgreSQL's %e), when it has one.
 	Note      string `json:"note,omitempty"`
 	NoChannel bool   `json:"no_channel"`
@@ -394,6 +398,18 @@ func LogUnseenReason(lang i18n.Lang, cause string) string {
 	return i18n.T(lang, "api.logs.unseen.other")
 }
 
+// LogFailureText is the sentence for why a read failed, by the key the pass kept
+// (serverlog.Reason*). A key this page does not know reads as the general
+// cause, which says what can be tried.
+func LogFailureText(lang i18n.Lang, reason string) string {
+	switch reason {
+	case serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
+		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonPolicy, serverlog.ReasonOutputCut, serverlog.ReasonTools:
+		return i18n.T(lang, "api.logs.failure."+reason)
+	}
+	return i18n.T(lang, "api.logs.failure."+serverlog.ReasonError)
+}
+
 // LogNoteText is the sentence of a note of a source.
 func LogNoteText(lang i18n.Lang, n serverlog.Note) string { return noteText(lang, n) }
 
@@ -448,6 +464,10 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 	if err != nil {
 		return nil, err
 	}
+	failures, err := repo.Failures(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
 	hears := LogChannelHears(s.currentPolicy(), st)
 	out := make([]LogSourceView, 0, len(srcs))
 	for _, src := range srcs {
@@ -470,6 +490,15 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 		}
 		for _, u := range unseen[src.ID] {
 			v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u.File), Reason: LogUnseenReason(lang, u.Cause)})
+		}
+		if src.Active {
+			reason, failed := failures[src.ID]
+			if !failed {
+				reason, failed = failures[""]
+			}
+			if failed {
+				v.Failure = LogFailureText(lang, reason)
+			}
 		}
 		if src.Active && !hears {
 			v.NoChannel, v.Warning = true, i18n.T(lang, "api.logs.no_channel")

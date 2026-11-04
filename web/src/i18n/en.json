@@ -1146,6 +1146,7 @@
   "logs.badge.new.other": "{n} new errors in the logs",
   "logs.badge.no_channel": "Nobody will be warned of log errors",
   "logs.badge.deviation": "Privacy: a setting moves away from the recommended choice",
+  "logs.read.failure": "Reason: {why}",
   "logs.read.last": "Last successful read {ago}.",
   "logs.read.never": "Michel has not managed to read this log yet.",
   "logs.read.off": "Michel is not reading this log for now.",

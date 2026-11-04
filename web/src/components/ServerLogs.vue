@@ -43,6 +43,7 @@
           />
           <p class="m-muted m-small">{{ $t('logs.sources.active_hint') }}</p>
           <p class="m-small">{{ s.state.line }}</p>
+          <p v-if="s.state.failure" class="m-small">{{ s.state.failure }}</p>
           <ul v-if="s.state.unseen.length" class="m-sheet__list m-small">
             <li v-for="u in s.state.unseen" :key="u.what">{{ u.text }}</li>
           </ul>

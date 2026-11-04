@@ -181,6 +181,7 @@ func (r *Repo) DeleteSource(ctx context.Context, id string) error {
 		`DELETE FROM log_signature WHERE source_id = ?`,
 		`DELETE FROM log_cursor WHERE source_id = ?`,
 		`DELETE FROM log_unseen WHERE source_id = ?`,
+		`DELETE FROM log_failure WHERE source_id = ?`,
 		`DELETE FROM log_note WHERE source_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {
@@ -775,6 +776,7 @@ func (r *Repo) EraseTarget(ctx context.Context, targetID string) error {
 		`DELETE FROM log_signature WHERE target_id = ?`,
 		`DELETE FROM log_cursor WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`,
 		`DELETE FROM log_unseen WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`,
+		`DELETE FROM log_failure WHERE target_id = ?`,
 		`DELETE FROM log_note WHERE target_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, targetID); err != nil {

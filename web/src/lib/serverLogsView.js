@@ -233,11 +233,12 @@ export function intervalChoices(current, lang) {
 
 /**
  * readState says where the reading of one log stands: when it last succeeded,
- * and the files Michel could not see, each as « Non vu : … ».
- * @param {{active?: boolean, last_read_at?: string, unseen?: {what: string, reason: string}[]}} source one of GET /logs/sources
+ * why the last read failed (the sentence of the API, after « Cause : »), and the
+ * files Michel could not see, each as « Non vu : … ».
+ * @param {{active?: boolean, last_read_at?: string, failure?: string, unseen?: {what: string, reason: string}[]}} source one of GET /logs/sources
  * @param {Date} now
  * @param {string} lang
- * @returns {{line: string, unseen: {what: string, reason: string, text: string}[]}}
+ * @returns {{line: string, failure: string, unseen: {what: string, reason: string, text: string}[]}}
  */
 export function readState(source, now, lang) {
   const s = source || {}
@@ -246,7 +247,10 @@ export function readState(source, now, lang) {
   if (ago) line = t(lang, 'read.last', { ago })
   else line = s.active ? t(lang, 'read.never') : t(lang, 'read.off')
   const unseen = (Array.isArray(s.unseen) ? s.unseen : []).map((u) => ({ what: u.what, reason: u.reason, text: t(lang, 'read.unseen', { what: u.what, reason: u.reason }) }))
-  return { line, unseen }
+  // The cause the API kept for the last failed read, in the API's own words; a log
+  // that is turned off is not read, so it has none to give.
+  const failure = s.active && s.failure ? t(lang, 'read.failure', { why: s.failure }) : ''
+  return { line, unseen, failure }
 }
 
 /**
