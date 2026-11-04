@@ -1,10 +1,11 @@
 // Package workcopy is the fix copy of a project: an isolated git clone in
 // Michel's data folder, where dependencies are installed without scripts,
 // the project's tests run and the change is committed, then applied to the
-// user's repository as a new branch fetched from the copy. It is the only
-// code allowed to write into the user's repository, and only in Apply:
-// git objects and one refs/heads/michel/fix-<id> ref, never the working
-// tree, the index or HEAD.
+// user's repository as a new branch fetched from the copy. Apply and Push are
+// its only writes. Apply is the only code allowed to write into the user's
+// repository: git objects and one refs/heads/michel/fix-<id> ref, never the
+// working tree, the index or HEAD. Push writes on the remote, one branch, on a
+// click, and nothing in the project.
 package workcopy
 
 import (
@@ -41,6 +42,11 @@ type Deps struct {
 	ProxyAddr string
 	// Now dates the commits of the copy. Nil means time.Now.
 	Now func() time.Time
+	// AllowLocalRemote lets a push reach a remote on the local disk, whose
+	// hooks the local transport would run. It is the only source of ":file" in
+	// GIT_ALLOW_PROTOCOL: set by tests and by the trial build, nothing at run
+	// time opens it.
+	AllowLocalRemote bool
 }
 
 func (d Deps) exec() ExecFunc {
@@ -203,7 +209,7 @@ func Env(d Deps) (env []string, homeDir string, err error) {
 
 // allowedGit is the closed list of git subcommands Michel runs.
 var allowedGit = []string{"clone", "init", "archive", "add", "diff", "commit", "fetch", "merge-base", "rev-parse",
-	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree", "show"}
+	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree", "show", "config"}
 
 // safeConfig neutralizes, for every git command, the settings of a
 // repository's own .git/config (the user's project is not trusted) that make
