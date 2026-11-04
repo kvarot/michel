@@ -87,7 +87,7 @@ What stops the agent:
 
 - a known format: AWS key, GitHub token, private key, Stripe live secret key (`sk_live_`, `rk_live_`), JSON Web Token, Slack token (`xoxb-` and its kin). Always, even when it is an example written in that format (`xoxb-your-bot-token`);
 - a value of at least 8 characters, without a space, on a sensitive name (`password`, `token`, `api_key`, `DB_PASSWORD=`…), when it is not made of plain words: letters mixed with digits or signs, or letters that make no word (scattered capitals, 6 consonants in a row);
-- the same in PHP: `define('DB_PASSWORD', '…')`, `'key' => 'base64:…'`, an array key such as `$config['password'] = '…'`, the third argument of `new PDO(…)` or `new mysqli(…)` and the same for `mysqli_connect(…)`, when written in quotes (these calls may span several lines, and a password written in pieces `'a' . 'b'` is read whole); and a password in a connection address;
+- the same in PHP: `define('DB_PASSWORD', '…')`, `'key' => 'base64:…'`, an array key such as `$config['password'] = '…'`, the third argument of `new PDO(…)` or `new mysqli(…)` and the same for `mysqli_connect(…)`, when written in quotes (these calls may span several lines, and a password written in pieces `'a' . 'b'` is read whole, even when a variable or a call comes between the pieces; comments between the arguments are skipped); and a password in a connection address;
 - a default word with digits, in quotes or in an address (`password = 'admin123'`).
 
 What does not stop the agent, even if it is a real key. Michel says so in a message for a line it saw, and the agent can read it:
@@ -97,7 +97,7 @@ What does not stop the agent, even if it is a real key. Michel says so in a mess
 - a plain word, a sentence, plain words joined by dashes (`cheval-correct-batterie`), a value under 8 characters, a default word (`password = 'password'`), a default word with digits without quotes (`password: admin123`);
 - a value with a part that is exactly `test`, `fake`, `mock`, `stub` or `dummy` (`sk_test_…`, `mock-kP9mW2xQ7vT`), or a placeholder (`your`, `example`, `xxx`…) with only words and numbers beside it;
 - a value starting with `npm:`, `workspace:`, `file:`, `link:`, `^`, `~` or a validation word (`required|`, `nullable|`, `string|`, `sometimes|`), a value holding `://`, a path of short lowercase words (`/etc/ssl/private/server.key`), and the public hash of Laravel's old `UserFactory`;
-- a value with no sensitive name beside it Michel can read: the arguments of a call other than those named above (for example `ldap_bind($c, 'uid', '…')`, `mysqli_real_connect(…)`, `->real_connect(…)`), a `new mysqli(…)`, `new PDO(…)` or `mysqli_connect(…)` call with an argument before the password that is nested deeper than two parentheses or holds an unclosed quote, a password built from a variable or a call, a plain `key:`.
+- a value with no sensitive name beside it Michel can read: the arguments of a call other than those named above (for example `ldap_bind($c, 'uid', '…')`, `mysqli_real_connect(…)`, `->real_connect(…)`), a `new mysqli(…)`, `new PDO(…)` or `mysqli_connect(…)` call with an argument before the password that is nested deeper than three parentheses or holds an unclosed quote, a password built from a variable or a call, after `?:` or `??` or inside a function call, written in a heredoc, or on the line after the `=`, a plain `key:`.
 
 When the attempt stops, you choose:
 

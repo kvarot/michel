@@ -65,6 +65,31 @@ var phpShapeCases = []struct {
 	{"variable index literal", "$map[$token] = '" + secretValue + "';\n", false, false, false},
 	{"bare index", "$a[password] = x;\n", false, false, false},
 	{"comparison with literal", "if ($data['token'] == '" + secretValue + "') {\n", false, false, false},
+	// Fix round 2: tails with an n, a backslash or an escaped quote, broken chains, lines, comments.
+	{"array tail with n", "$config['password'] = 'S3cr3t!Demo' . 'Zz9#knLm2Qw';\n", true, true, true},
+	{"array tail escaped quote", "$config['password'] = 'S3cr3t!Demo' . 'Zz9#\\'nkLm2Qw';\n", true, true, true},
+	{"array tail ends with a backslash", "$config['password'] = 'S3cr3t!Demo' . 'Zz9#knLm2\\\\';\n", true, true, true},
+	{"array three parts", "$config['password'] = 'S3cr3t!Demo' . 'Zz9#kLm2Qw' . 'Aa1nBb2n';\n", true, true, true},
+	{"mysqli tail with n", "$db = new mysqli($h, $u, 'S3cr3t!Demo' . 'Zz9#nkLm2Qw', 'd');\n", true, true, true},
+	{"pdo tail with n", "$db = new PDO($dsn, 'u', 'S3cr3t!Demo' . 'Zz9#knLm2Qw');\n", true, true, true},
+	{"mysqli tail escaped quote", "$db = new mysqli($h, $u, \"S3cr3t!Demo\" . \"Zz9#\\\"knLm2Qw\", 'd');\n", true, true, true},
+	{"chain broken by a variable", "$config['password'] = 'S3cr3t!Demo' . $x . 'Zz9#knLm2Qw';\n", true, true, true},
+	{"mysqli chain broken by a variable", "$db = new mysqli($h, $u, 'S3cr3t!Demo' . $x . 'Zz9#knLm2Qw', 'd');\n", true, true, true},
+	{"chain broken by parentheses", "$config['password'] = 'S3cr3t!Demo' . ('Zz9#knLm2Qw');\n", true, true, true},
+	{"chain broken by a call", "$config['password'] = 'S3cr3t!Demo' . sprintf('%s', 'Zz9#knLm2Qw');\n", true, true, true},
+	{"chain over lines, dot first", "$config['password'] = 'S3cr3t!Demo'\n    . 'Zz9#knLm2Qw';\n", true, true, true},
+	{"chain over lines, dot last", "$config['password'] = 'S3cr3t!Demo' .\n    'Zz9#knLm2Qw';\n", true, true, true},
+	{"weak head, variable, strong tail", "$config['password'] = 'abc' . $x . 'S3cr3t!Demo-2024';\n", true, true, true},
+	{"mixed quotes single then double", "$config['password'] = 'S3cr3t!Demo' . \"Zz9#knLm2Qw\";\n", true, true, true},
+	{"mixed quotes double then single", "$config['password'] = \"S3cr3t!Demo\" . 'Zz9#knLm2Qw';\n", true, true, true},
+	{"fat arrow concatenation", "'password' => 'S3cr3t!Demo' . 'Zz9#knLm2Qw',\n", true, true, true},
+	{"array() fat arrow concatenation", "$c = array('password' => 'S3cr3t!Demo' . 'Zz9#knLm2Qw', 'user' => 'u');\n", true, true, true},
+	{"chain stops at the statement", "$config['password'] = 'S3cr3t!Demo-2024' . $x; $y = 'Zz9#knLm2Qw';\n", true, true, false},
+	{"chain stops at the argument", "$db = new mysqli($h, $u, 'S3cr3t!Demo-2024' . $x, 'Zz9#knLm2Qw');\n", true, true, false},
+	{"mysqli block comment", "$db = new mysqli($h, $u, /* pw */ 'S3cr3t!Demo-2024', 'd');\n", true, true, true},
+	{"mysqli comment with an apostrophe", "$db = new mysqli(\n    'h', // it's the host\n    'u', # the user's name\n    'S3cr3t!Demo-2024'\n);\n", true, true, true},
+	{"mysqli three levels of parentheses", "$db = new mysqli(f(g(h($a))), 'u', 'S3cr3t!Demo-2024', 'd');\n", true, true, true},
+	{"mysqli four levels of parentheses", "$db = new mysqli(f(g(h(i($a)))), 'u', 'S3cr3t!Demo-2024', 'd');\n", false, false, false},
 }
 
 func TestPHPArraySecretsAndConnectionPasswords(t *testing.T) {
@@ -82,8 +107,14 @@ func TestPHPArraySecretsAndConnectionPasswords(t *testing.T) {
 				t.Errorf("strong = %v, want %v (%+v)", strong, c.strong, hits)
 			}
 			out := New().Mask(c.text)
-			for _, leak := range []string{"Zz9#kLm2Qw", "S3cr3t,Demo", "Demo-2024)x"} {
-				if c.hit && strings.Contains(out, leak) {
+			if c.hit && !quotesBalanced(out) {
+				t.Errorf("quotes no longer balanced: %q", out)
+			}
+			if strings.HasPrefix(c.name, "chain stops") && !strings.Contains(out, "Zz9#knLm2Qw") {
+				t.Errorf("code after the statement was masked: %q", out)
+			}
+			for _, leak := range []string{"Zz9#", "kLm2Qw", "knLm2Qw", "nkLm2Qw", "Aa1nBb2n", "S3cr3t,Demo", "Demo-2024)x"} {
+				if c.hit && !strings.HasPrefix(c.name, "chain stops") && strings.Contains(out, leak) {
 					t.Errorf("part of the secret leaks (%q): %q", leak, out)
 				}
 			}
@@ -95,4 +126,24 @@ func TestPHPArraySecretsAndConnectionPasswords(t *testing.T) {
 			}
 		})
 	}
+}
+
+// quotesBalanced says every quote of the line that is not escaped, or inside a
+// comment, has its pair: the masked line must still close its strings.
+func quotesBalanced(s string) bool {
+	for _, line := range strings.Split(s, "\n") {
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
+		if i := strings.Index(line, " # "); i >= 0 {
+			line = line[:i]
+		}
+		line = strings.ReplaceAll(line, `\\`, "")
+		line = strings.ReplaceAll(line, `\'`, "")
+		line = strings.ReplaceAll(line, `\"`, "")
+		if strings.Count(line, "'")%2 != 0 || strings.Count(line, `"`)%2 != 0 {
+			return false
+		}
+	}
+	return true
 }

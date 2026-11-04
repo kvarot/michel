@@ -58,7 +58,13 @@ const (
 	phpStr    = `'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"`
 	phpParen1 = `\((?:[^()'"]|` + phpStr + `)*\)`
 	phpParen2 = `\((?:[^()'"]|` + phpStr + `|` + phpParen1 + `)*\)`
-	phpArg    = `(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|` + phpParen2 + `|[^,;'"()])+`
+	phpParen3 = `\((?:[^()'"]|` + phpStr + `|` + phpParen2 + `)*\)`
+	// phpComment is a block comment or a line comment: what it holds (a quote, a
+	// comma) is not code.
+	phpComment = `/\*(?:[^*]|\*+[^*/])*\*+/|(?://|#)[^\n]*`
+	phpArg     = `(?:` + phpComment + `|` + phpStr + `|` + phpParen3 + `|[^,;'"()])+`
+	// phpSep is the comma after an argument and what may follow it.
+	phpSep = `,(?:\s|` + phpComment + `)*`
 )
 
 var detectors = []detector{
@@ -79,7 +85,10 @@ var detectors = []detector{
 	// The same, read by arguments: strings and one or two levels of parentheses are
 	// skipped, so a comma inside them does not shift the password. A call that does
 	// not read this way is not matched at all, never matched on the wrong argument.
-	{KindAssignment, regexp.MustCompile(`(?i)\b(?:new[ 	]+\\?(?:mysqli|pdo)|mysqli_connect)[ 	]*\(` + phpArg + `,` + phpArg + `,\s*` + valueExpr), 0, true, true},
+	{KindAssignment, regexp.MustCompile(`(?i)\b(?:new[ 	]+\\?(?:mysqli|pdo)|mysqli_connect)[ 	]*\(` + phpArg + phpSep + phpArg + phpSep + valueExpr), 0, true, true},
+	// 'password' => 'a' . 'b': the tail of a chain after the first literal, which
+	// the generic detector above hides alone.
+	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["'][ 	]*=>[ 	]*` + valueExpr), 0, true, true},
 	// $config['password'] = '...': only a quoted index and a quoted value, so an
 	// index by a variable, a comparison or a call is left alone.
 	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["'][ 	]*\][ 	]*(?:\.=|\?\?=|=)[ 	]*` + valueExpr), 0, true, true},
@@ -173,7 +182,7 @@ func find(s, tokenPrefix string) []match {
 			a, b := loc[0], loc[1]
 			unquoted := false
 			value := ""
-			joined := false
+			var tails [][2]int
 			if len(loc) > 2 {
 				a, b = -1, -1
 				for g := 1 + d.skip; 2*g+1 < len(loc); g++ {
@@ -182,7 +191,7 @@ func find(s, tokenPrefix string) []match {
 						// The last group of valueExpr is the value without quotes.
 						unquoted = 2*g+3 >= len(loc)
 						if d.concat && g-d.skip <= 3 {
-							b, value, joined = joinLiterals(s, a, b)
+							tails = chainTails(s, b+1)
 						}
 						break
 					}
@@ -200,10 +209,16 @@ func find(s, tokenPrefix string) []match {
 			if (d.kind == KindEnvValue || d.kind == KindAssignment) && isNonValue(s[a:b]) {
 				continue
 			}
-			if !joined {
-				value = s[a:b]
+			// The value is judged as the literals of the chain put end to end; each
+			// literal is hidden inside its own quotes, so the line stays balanced.
+			value = s[a:b]
+			for _, t := range tails {
+				value += s[t[0]:t[1]]
 			}
 			all = append(all, match{a, b, d.kind, isStrong(d.kind, value, unquoted)})
+			for _, t := range tails {
+				all = append(all, match{t[0], t[1], d.kind, false})
+			}
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
@@ -284,30 +299,56 @@ func mustRel(base, target string) string {
 	return r
 }
 
-// literalTail is a dot and a quoted literal that follows a quoted value.
-var literalTail = regexp.MustCompile(`^[ 	]*\.[ 	]*(?:"((?:[^"\\n]|\.)*)"|'((?:[^'\\n]|\.)*)')`)
+// maxChain bounds how far a chain of literals is followed.
+const maxChain = 4096
 
-// joinLiterals extends the quoted value s[a:b] over the literals joined to it
-// by dots: 'abc' . "def". It returns the end of the chain (before its last
-// quote), the literals joined as one text for the judgement of strength, and
-// whether there was a chain. What follows a variable or a call is not a literal.
-func joinLiterals(s string, a, b int) (end int, value string, joined bool) {
-	value = s[a:b]
-	end = b
-	pos := b + 1 // after the closing quote
-	for pos <= len(s) {
-		loc := literalTail.FindStringSubmatchIndex(s[pos:])
-		if loc == nil {
-			break
-		}
-		ga, gb := loc[2], loc[3]
-		if ga < 0 {
-			ga, gb = loc[4], loc[5]
-		}
-		value += s[pos+ga : pos+gb]
-		end = pos + gb
-		pos = pos + loc[1]
-		joined = true
+// chainTails finds the literals joined, after a quoted value that ends just
+// before pos, by a dot: 'abc' . $x . "def". When the next sign is a dot (not
+// ".=") it reads on to the end of the statement or of the argument (a ";" or a
+// "," outside any bracket, or the bracket that closes the call), skipping the
+// strings, and returns the inside of every non-empty literal met. A literal
+// is hidden inside its own quotes, so the line stays balanced whatever the
+// quotes are. A line comment or a heredoc in the chain is not understood.
+func chainTails(s string, pos int) [][2]int {
+	i := pos
+	for i < len(s) && strings.ContainsRune(" \t\r\n", rune(s[i])) {
+		i++
 	}
-	return end, value, joined
+	if i >= len(s) || s[i] != '.' || (i+1 < len(s) && s[i+1] == '=') {
+		return nil
+	}
+	var tails [][2]int
+	depth := 0
+	limit := min(len(s), i+maxChain)
+	for ; i < limit; i++ {
+		switch c := s[i]; c {
+		case '\'', '"':
+			j := i + 1
+			for j < len(s) && s[j] != c && s[j] != '\n' {
+				if s[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(s) || s[j] != c {
+				return tails
+			}
+			if j > i+1 {
+				tails = append(tails, [2]int{i + 1, j})
+			}
+			i = j
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+			if depth < 0 {
+				return tails
+			}
+		case ';', ',':
+			if depth == 0 {
+				return tails
+			}
+		}
+	}
+	return tails
 }
