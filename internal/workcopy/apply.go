@@ -533,9 +533,15 @@ func Apply(ctx context.Context, d Deps, p project.Project, c Copy, sha, branch s
 	return nil
 }
 
-// IsMerged reports whether the commit sha is contained in the current
-// branch of the user's repository (git merge-base --is-ancestor sha HEAD),
-// reading only. A commit the repository does not know is not merged.
+// IsMerged reports whether the change of the commit sha is in the current branch
+// of the user's repository, reading only: the commit itself (git merge-base
+// --is-ancestor sha HEAD), or, because "Squash" and "Rebase" on a host's site
+// change the commit, the same patch id (git cherry HEAD sha sha^ marks it with
+// "-"). A patch id ignores whitespace and where the lines are: a squash needs that,
+// and the cost is a rare false "merged", the same lines indented otherwise or in
+// another identical block, which Prove's scan then has to agree with (R56). A
+// squash with other commits is not the same patch. A commit the repository does
+// not know is not merged.
 func IsMerged(ctx context.Context, d Deps, p project.Project, sha string) (bool, error) {
 	if !shaShape.MatchString(sha) {
 		return false, ErrInvalidCommit
@@ -555,8 +561,32 @@ func IsMerged(ctx context.Context, d Deps, p project.Project, sha string) (bool,
 	case err == nil:
 		return true, nil
 	case exitCode(err) == 1:
-		return false, nil
+		return h.sameChangeInHead(ctx, d, p, sha)
 	default:
 		return false, gitErr("merge-base", err, stderr)
 	}
+}
+
+// sameChangeInHead reports whether HEAD holds the same patch id as the commit sha:
+// git cherry answers in exactly one line, "- " and this very commit. A commit
+// without a parent has no change to compare, and an empty commit has none either:
+// any other empty commit would have its patch id.
+func (h home) sameChangeInHead(ctx context.Context, d Deps, p project.Project, sha string) (bool, error) {
+	parent := sha + "^"
+	if got, err := h.revParseCommit(ctx, d, p.Path, parent); err != nil || got == "" {
+		return false, err
+	}
+	changed, stderr, err := h.git(ctx, d, d.DataDir, p.Path, nil, nil, "diff", "--name-only", "--no-ext-diff", "--no-textconv", parent, sha)
+	if err != nil {
+		return false, gitErr("diff", err, stderr)
+	}
+	if len(changed) == 0 {
+		return false, nil
+	}
+	out, stderr, err := h.git(ctx, d, d.DataDir, p.Path, nil, nil, "cherry", "HEAD", sha, parent)
+	if err != nil {
+		return false, gitErr("cherry", err, stderr)
+	}
+	line, rest, _ := strings.Cut(string(out), "\n")
+	return rest == "" && line == "- "+sha, nil
 }

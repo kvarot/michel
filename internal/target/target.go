@@ -5,6 +5,8 @@ package target
 
 import (
 	"errors"
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/kvarot/michel/internal/policy"
@@ -100,6 +102,57 @@ type Inventory struct {
 	Unseen     []Unseen
 	// Site holds the HTTP headers of the site (SiteURL), when they were read.
 	Site SiteHeaders
+	// Listeners are the TCP services that listen on the server, address and
+	// port only. ListenersRead tells that the list is a complete answer: when
+	// it is false, nothing is known, and an empty list does not mean that
+	// nothing listens. An inventory stored before this reading has it false.
+	Listeners     []Listener
+	ListenersRead bool
+}
+
+// ListenScope is who an address listens for, by the address alone. It says
+// nothing about a firewall.
+type ListenScope string
+
+const (
+	// ScopeOpen is any other address: every network the server is on.
+	ScopeOpen ListenScope = "open"
+	// ScopeServer is the server itself (loopback).
+	ScopeServer ListenScope = "server"
+	// ScopePrivate is an address of a private network.
+	ScopePrivate ListenScope = "private"
+)
+
+// Listener is one TCP address and port where a service listens. It never
+// names the process.
+type Listener struct {
+	Address string
+	Port    int
+	Scope   ListenScope
+}
+
+// cgnat is 100.64.0.0/10; netip leaves it out of IsPrivate.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// ClassifyListen tells the scope of a listening address. An IPv4 address
+// written in IPv6 is unfolded first. A zone changes nothing: an address bound
+// to an interface keeps the scope of the address, since Michel does not know
+// what that interface reaches. What cannot be read counts as open: never
+// narrower than what is known.
+func ClassifyListen(addr string) ListenScope {
+	host, _, _ := strings.Cut(addr, "%")
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return ScopeOpen
+	}
+	a = a.Unmap()
+	switch {
+	case a.IsLoopback():
+		return ScopeServer
+	case a.IsPrivate(), cgnat.Contains(a), a.Is6() && a.IsLinkLocalUnicast():
+		return ScopePrivate
+	}
+	return ScopeOpen
 }
 
 // SiteHeaders are the headers of the site that name its software.

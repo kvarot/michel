@@ -20,6 +20,8 @@ bin/michel serve --open       # the Today page, on this computer only
 bin/michel audit verify
 ```
 
+Adding and checking a project also work from the page: My projects, "Add a project" and "Check this project" (the same pass as `michel scan`, run in the background). The test command and the classification stay on the command line.
+
 - Sources (registry, consent, KEV/EPSS, feeds, plugins, skills, MCP): `docs/sources.md`
 - Fix agent (levels, consent, work copy, proof, residual risks): `docs/fix.md`
 - Servers (SSH, scripts, levels, SMS, troubleshooting, logs): `docs/servers.md`
@@ -47,7 +49,7 @@ The kinds, what leaves for each host, plugins, skills and MCP servers: `docs/sou
 
 ## Fix
 
-On the page, the **Fix** button of a finding hands it to an agent (Claude Code, which you install and log in to yourself). It works on a copy of your project in Michel's data folder, without being able to run commands or use your settings; Michel runs the update, the install (Composer, npm) and the tests itself, then shows you the proposal in plain words. **Approve** creates a branch `michel/fix-…` in your repository, nothing else: you merge it, then deploy as usual. The first time, a consent screen (one per project) tells you what leaves your computer: the code of the copy, sent to Anthropic, and package names, sent to the package registries (Packagist, npm). It also says what runs on your computer; nothing goes to an AI without it, and never for a project classified `health`. Each project chooses its level: report, explain (default), prepare alone, or apply the safe minor updates you allowed.
+On the page, the **Fix** button of a finding hands it to an agent (Claude Code, which you install and log in to yourself). It works on a copy of your project in Michel's data folder, without being able to run commands or use your settings; Michel runs the update, the install (Composer, npm) and the tests itself, then shows you the proposal in plain words. Without attachment to a Git service, **Approve** creates a branch `michel/fix-…` in your repository, nothing else (see [docs/fix.md](docs/fix.md) for the attached case): you merge it, then deploy as usual. The first time, a consent screen (one per project) tells you what leaves your computer: the code of the copy, sent to Anthropic, and package names, sent to the package registries (Packagist, npm). It also says what runs on your computer; nothing goes to an AI without it, and never for a project classified `health`. Each project chooses its level: report, explain (default), prepare alone, or apply the safe minor updates you allowed.
 
 ```
 bin/michel serve --open                         # Today page, then "Fix" on a finding

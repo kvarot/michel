@@ -71,6 +71,7 @@ Michel runs a **closed list of read commands**, built by itself, in one SSH sess
 - PHP: `php -v`, `php -m`, `php --ini`, and the PHP settings, for the command line and for each `php-fpm` it finds;
 - web server: `nginx -v`, `apache2 -v` / `httpd -v`;
 - packages: `dpkg-query`, `rpm -qa`, `apk info` according to the system;
+- services that listen: `ss -tln`, and `/usr/sbin/ss -tln` only if the first answers that the command is not found (same program, installed elsewhere on some systems). Only the address and the port are kept, never the name of a process (that would need rights Michel does not ask for). TCP only. This runs on every kind of server, `hds` included, since it reads no file and no content ([What is exposed](#what-is-exposed));
 - configuration files: only those PHP and the web server name, the `.user.ini` of the linked deployment folders, and the ones you add (capped in size).
 
 What this check does **not** read, ever: data folders, databases, the homes of other users, logs, private keys, and anything that is not a configuration file. On a server of kind `hds` you cannot add any path to this check. Log files are a separate path: only the ones you declare, through their own filter, on every kind of server ([section 13](#13-server-logs-be-warned-without-copying-them)).
@@ -84,6 +85,26 @@ What this check does **not** read, ever: data folders, databases, the homes of o
 ### PHP of the command line is not always the PHP of the site
 
 The `php` in a terminal can be another version than the one serving the site (PHP-FPM, another `php.ini`, settings per site). Michel reads **both** when it finds them, and says when it only saw the command line. If you give the site address (`--site-url`), Michel also reads the `Server` and `X-Powered-By` headers with a plain GET, as a browser would. It cannot detect every case: see [limits](#12-limits-you-should-know).
+
+### What is exposed
+
+The **Exposure** part of the server sheet lists the services that wait for a connection, as the server itself sees them. Three columns:
+
+- **Open to all**: the service listens on every address of the server (or on an address that is not private). Whoever can reach the server could connect, **if** nothing blocks the way.
+- **Reserved**: the service listens only for the server itself (loopback), or only for a private network. It is not meant to be reached from outside.
+- **Not verified**: what Michel did not or could not check. Two lines are always there: **the firewall of the host**, and **the services in UDP** (Michel reads only the services in TCP, the most common way to connect to a service; a service in UDP, the other way, does not appear).
+
+How to read it:
+
+- **The list is read from inside the server. It does not prove that the service can be reached from outside**: Michel does not check the firewall of the host, and says so in the third column. A service "open to all" is reachable only if no firewall stands in front of it.
+- Michel judges a service by its **port number alone**; it never connects to it. A well-known database or cache port open to all opens a finding of medium severity, "to close", in the To do list, and never an alert. Any other port that is open is shown as "service not recognized, to check", without a finding. The port Michel uses to connect to the server counts as administration. The usual administration port (22), when Michel connects by another one, is "to check".
+- In simple mode, the access number appears only in **"What to do?"** and in the decision dialog, with a sentence that explains it: it is the one to give the person who manages the server. Advanced mode also shows numbers and addresses on each row.
+- On a server of kind `shared`, the services may be the host's or another customer's: they are shown, with a sentence that says so, and open no finding. On a server in a container or on shared infrastructure, the list can also show services that are not yours.
+- **"I know, it is blocked or wanted"** (on the finding) records your reason, which is required, and the audit log keeps it. The service stays in its column, with "You said: …. Michel did not check it". When the list is not read, the same button is on the finding, under "The flaws". To change your mind you need a command: `michel decide <id> defer --for 1d` (`defer` gives it back to you on the date you choose, here tomorrow). The decided row gives this command, with its id.
+- **When a service is no longer seen open**, Michel says exactly that: it **does not see it open to all any more**, and the date is the last time it saw it open. This is not a fix and not a verification: the service may have moved to another port, or stopped, and Michel does not know whether it was closed. A finding of this kind is never counted as "fixed", and its path has no such step: on the **Resolved problems** page it stands apart, under "No longer seen open to all". Michel does not start a fix for it either: closing a service is your job.
+- A service that stays open to all keeps its finding, even on a server where Michel would not open one today (a shared server, or a port that became the connection port), until it is no longer seen open, or you have marked it as blocked or wanted.
+- **Not read is not "nothing is open".** If `ss` is missing from the server, fails, gives an answer Michel cannot read, or lists no service at all (which cannot be: Michel has just come in through one), the list is **not read**. The sheet says "not read" and keeps a note that stays as long as it stays so. A server without `ss` is never "clean": the note is permanent. Nothing is opened or closed from a list that was not read. "No service seen" and "not read" are two different answers.
+- **The AI agent never receives this list** (nor the addresses and ports): the inventory sent to an agent has no listening service, and an exposure finding starts no agent.
 
 ### When
 
@@ -227,6 +248,7 @@ Michel shows these messages in your language; here is what to do.
 - A script you run yourself is outside Michel's control: it protects itself, but you decide when and as whom to run it.
 - nginx and Apache are reported and explained, never changed.
 - BSD systems are not supported.
+- The list of services that listen is read from inside, in TCP only, with `ss`: the firewall of the host and the services in UDP are not verified, and a server without `ss` stays "not read" ([What is exposed](#what-is-exposed)).
 - A Pageant agent is untested.
 - Debian records marked `unimportant` (no security impact in Debian, by its own security team) are not reported. Records with no verdict from Debian yet are.
 - The authors ran this once from end to end on a throwaway Debian 13 container with systemd, sshd, PHP-FPM and nginx. Not tried yet: a hosting provider's real settings, shared hosting, a real network, and the Windows OpenSSH agent (that run used a test agent through `ssh.agent_pipe`). Try it first on a test server.

@@ -17,7 +17,7 @@
         <p class="m-sheet__meta m-small">
           <span>{{ kindText }}</span>
           <span>{{ envText }}</span>
-          <span class="m-code">{{ view.user }}@{{ view.host }}:{{ view.port }}</span>
+          <span v-if="$ui.advanced" class="m-code">{{ view.user }}@{{ view.host }}:{{ view.port }}</span>
         </p>
         <p class="m-voice m-sheet__state">{{ sentence }}</p>
         <div class="m-sheet__actions">
@@ -36,6 +36,7 @@
           </v-btn>
           <v-btn variant="text" size="small" @click="removeOpen = true">{{ $t('servers.sheet.remove') }}</v-btn>
         </div>
+        <FieldHelp id="server.check" :field="$t('servers.sheet.check')" />
         <p v-if="view.checking || checking" class="m-muted m-small" role="status">{{ $t('servers.sheet.checking') }}</p>
         <v-alert v-if="lastFailure" type="warning" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert">
           <p>{{ lastFailure.error || $t('servers.sheet.last_failed') }}</p>
@@ -58,11 +59,24 @@
         </v-alert>
       </header>
 
+      <ServerExposure
+        ref="exposure"
+        class="m-sheet__block"
+        :exposure="exposure"
+        :failure="exposureFailure"
+        :target="view"
+        :finding="finding"
+        :checking="!!view.checking || checking"
+        @check="check"
+        @decided="onExposureDecided"
+        @retry="loadExposure"
+      />
+
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-flaws`">
-        <h3 :id="`srv-${id}-flaws`" class="m-sheet__title">{{ $t('servers.sheet.flaws') }}</h3>
-        <p v-if="!cards.length" class="m-muted">{{ view.last_check_at ? $t('servers.sheet.no_flaws') : $t('servers.sheet.no_flaws_unchecked') }}</p>
+        <h3 :id="`srv-${id}-flaws`" class="m-sheet__title" tabindex="-1">{{ $t('servers.sheet.flaws') }}</h3>
+        <p v-if="!cards.length" class="m-muted">{{ noFlawsText }}</p>
         <ul v-else class="m-sheet__flaws">
-          <li v-for="c in cards" :key="c.key" class="m-sheet__flaw">
+          <li v-for="c in cards" :id="`srv-flaw-${c.finding.id}`" :key="c.key" class="m-sheet__flaw" tabindex="-1">
             <div class="m-sheet__flaw-top">
               <span class="m-sev" :class="`m-sev--${sev(c.finding.severity)}`">{{ $t(`severity.${sev(c.finding.severity)}`) }}</span>
               <span v-if="c.finding.kev" class="m-tag m-tag--hot m-small">{{ $t('servers.sheet.kev') }}</span>
@@ -70,25 +84,31 @@
               <span v-if="c.finding.kind === 'server_config'" class="m-code m-small m-muted">{{ c.finding.package }}</span>
             </div>
             <p class="m-voice m-sheet__flaw-title">{{ title(c.finding) }}</p>
-            <p v-if="c.finding.explain" class="m-small">{{ c.finding.explain }}</p>
-            <p v-else-if="c.finding.rule === 'PHP-VERSION-UNKNOWN'" class="m-small">{{ $t('servers.finding.php_version_unknown_hint') }}</p>
+            <p v-if="risk(c.finding)" class="m-small">{{ risk(c.finding) }}</p>
             <p v-if="c.runtimes.length" class="m-muted m-small">{{ runtimesText(c) }}</p>
             <p v-if="c.finding.location" class="m-muted m-small">{{ $t('servers.sheet.where', { where: c.finding.location }) }}</p>
-            <div class="m-sheet__flaw-actions">
-              <v-btn v-if="attemptOf(c)" size="small" variant="tonal" color="primary" :href="fixHref(attemptOf(c).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
-              <v-btn
-                v-else-if="view.fix_level > 0"
-                size="small"
-                variant="flat"
-                color="primary"
-                :loading="startingFor === c.finding.id"
-                :disabled="!!startingFor"
-                @click="fix(c.finding)"
-              >
-                {{ $t('servers.sheet.fix') }}
-              </v-btn>
-              <span v-if="attemptOf(c)" class="m-small m-voice">{{ attemptLine(attemptOf(c)) }}</span>
+            <FailureGuide
+              class="m-sheet__guide"
+              card
+              server
+              :attempt="lastAttempt(c)"
+              :finding="c.finding"
+              :sheet="c.finding"
+              :target="view"
+              :tried="tried(c)"
+              :preprod-health="preprodHealth"
+              :preprod-target="preprodView"
+              :can-start="!startingFor"
+              :starting="startingFor === c.finding.id"
+              @start="fix(c.finding)"
+            />
+            <v-btn v-if="decisionTarget(c)" size="small" variant="outlined" color="primary" class="m-sheet__decide" @click="$refs.exposure.openDecision(decisionTarget(c))">{{ $t('expo.decision.open') }}</v-btn>
+            <p v-if="c.finding.kind === 'server_exposure' && c.finding.status === 'decided'" class="m-small m-muted m-sheet__undo">{{ $t('expo.decided_undo', { id: c.finding.id }) }}</p>
+            <div v-if="lastAttempt(c)" class="m-sheet__flaw-actions">
+              <v-btn size="small" variant="tonal" color="primary" :href="fixHref(lastAttempt(c).id)">{{ $t('servers.sheet.fix_open') }}</v-btn>
+              <span v-if="cardText(c)" class="m-small m-voice">{{ cardText(c) }}</span>
             </div>
+            <p v-if="provenNote(c)" class="m-small m-voice">{{ provenNote(c) }}</p>
             <!-- The answer of "Corriger" stays next to the card it was asked for. -->
             <v-alert v-if="actionError && errorFor === c.finding.id" type="error" variant="tonal" density="comfortable" class="m-sheet__alert" role="alert" closable @click:close="clearError">
               <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
@@ -103,7 +123,7 @@
           </li>
         </ul>
         <p v-if="cards.length && view.fix_level === 0" class="m-muted m-small">{{ $t('servers.sheet.fix_report_only') }}</p>
-        <p v-if="cards.length && view.fix_level === 3" class="m-muted m-small">{{ level3Warn }}</p>
+        <p v-if="cards.length && view.fix_level === 3 && !cards.some(planOnCard)" class="m-muted m-small">{{ level3Warn }}</p>
       </section>
 
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-logs`">
@@ -114,10 +134,10 @@
         <ServerLogs :id="id" :kind="view.kind" :env="view.env" @changed="refreshView" />
       </section>
 
-      <section class="m-sheet__block" :aria-labelledby="`srv-${id}-seen`">
-        <h3 :id="`srv-${id}-seen`" class="m-sheet__title">{{ $t('servers.sheet.seen') }}</h3>
-        <p v-if="!inv" class="m-muted">{{ $t('servers.sheet.seen_none') }}</p>
-        <ul v-else class="m-sheet__list m-small">
+      <section class="m-sheet__block" :aria-labelledby="$ui.advanced ? `srv-${id}-seen` : undefined">
+        <h3 v-if="$ui.advanced" :id="`srv-${id}-seen`" class="m-sheet__title">{{ $t('servers.sheet.seen') }}</h3>
+        <p v-if="$ui.advanced && !inv" class="m-muted">{{ $t('servers.sheet.seen_none') }}</p>
+        <ul v-else-if="$ui.advanced" class="m-sheet__list m-small">
           <li v-if="inv.os.pretty || inv.os.id">
             {{ $t('servers.sheet.os', { os: inv.os.pretty || `${inv.os.id} ${inv.os.version_id}` }) }}<span v-if="inv.os.kernel">, {{ $t('servers.sheet.kernel', { kernel: inv.os.kernel }) }}</span>
           </li>
@@ -128,7 +148,7 @@
           <li v-for="w in inv.web_servers" :key="w.name">{{ $t('servers.sheet.web', { name: w.name, version: w.version }) }}</li>
           <li v-if="inv.packages.length">{{ $t('servers.sheet.packages', { n: inv.packages.length }) }}</li>
         </ul>
-        <details v-if="inv && inv.directives.length" class="m-sheet__details">
+        <details v-if="$ui.advanced && inv && inv.directives.length" class="m-sheet__details">
           <summary class="m-small">{{ $t('servers.sheet.directives') }}</summary>
           <ul class="m-sheet__list m-small">
             <li v-for="(d, i) in inv.directives" :key="`${d.sapi}|${d.name}|${i}`">
@@ -137,7 +157,7 @@
             </li>
           </ul>
         </details>
-        <h4 class="m-sheet__sub">{{ $t('servers.sheet.projects') }}</h4>
+        <component :is="$ui.advanced ? 'h4' : 'h3'" :class="$ui.advanced ? 'm-sheet__sub' : 'm-sheet__title'">{{ $t('servers.sheet.projects') }}</component>
         <p v-if="!(view.projects || []).length" class="m-muted m-small">{{ $t('servers.sheet.no_projects') }}</p>
         <ul v-else class="m-sheet__list m-small">
           <li v-for="p in view.projects" :key="p.project">{{ $t('servers.sheet.project_dir', { project: p.project, dir: p.remote_dir }) }}</li>
@@ -155,7 +175,7 @@
         </template>
       </section>
 
-      <section class="m-sheet__block" :aria-labelledby="`srv-${id}-history`">
+      <section v-if="$ui.advanced" class="m-sheet__block" :aria-labelledby="`srv-${id}-history`">
         <h3 :id="`srv-${id}-history`" class="m-sheet__title">{{ $t('servers.sheet.history') }}</h3>
         <p v-if="!history.length" class="m-muted m-small">{{ $t('servers.sheet.history_none') }}</p>
         <ul v-else class="m-sheet__list m-small">
@@ -167,8 +187,9 @@
         <template v-if="view.backup_files">
           <p class="m-small">{{ $t('servers.sheet.backups', { n: view.backup_files, size: sizeText }) }}</p>
         </template>
-        <p class="m-muted m-small">{{ $t('servers.sheet.backups_server') }}</p>
       </section>
+
+      <p class="m-muted m-small">{{ $t('servers.sheet.backups_server') }}</p>
 
       <section class="m-sheet__block" :aria-labelledby="`srv-${id}-settings`">
         <h3 :id="`srv-${id}-settings`" class="m-sheet__title">{{ $t('servers.settings.title') }}</h3>
@@ -179,9 +200,11 @@
             <template #label><span class="m-sheet__radio"><strong>{{ l.title }}</strong> — {{ l.text }}</span></template>
           </v-radio>
         </v-radio-group>
+        <FieldHelp id="server.level" :field="$t('servers.settings.level')" />
         <template v-if="view.fix_level === 3">
           <v-checkbox :model-value="view.auto_config" :label="$t('servers.settings.auto')" color="primary" density="comfortable" hide-details :disabled="saving" @update:model-value="(v) => set('auto_config', !!v)" />
           <p class="m-muted m-small m-sheet__indent">{{ $t('servers.settings.auto_hint') }}</p>
+          <FieldHelp id="server.auto" :field="$t('servers.settings.auto')" />
         </template>
 
         <h4 :id="`srv-${id}-exec`" class="m-sheet__sub">{{ $t('servers.settings.executor') }}</h4>
@@ -189,12 +212,14 @@
           <v-radio value="user" color="primary" :label="$t('servers.settings.executor.user')" />
           <v-radio value="michel" color="primary" :label="$t('servers.settings.executor.michel')" />
         </v-radio-group>
+        <FieldHelp id="server.executor" :field="$t('servers.settings.executor')" />
 
         <h4 :id="`srv-${id}-sudo`" class="m-sheet__sub">{{ $t('servers.settings.sudo') }}</h4>
         <v-radio-group :model-value="view.sudo" :aria-labelledby="`srv-${id}-sudo`" hide-details density="comfortable" :disabled="saving" @update:model-value="(v) => set('sudo', v)">
           <v-radio value="none" color="primary" :label="$t('servers.settings.sudo.none')" />
           <v-radio value="nopasswd" color="primary" :label="$t('servers.settings.sudo.nopasswd')" />
         </v-radio-group>
+        <FieldHelp id="server.sudo" :field="$t('servers.settings.sudo')" />
 
         <h4 class="m-sheet__sub">{{ $t('servers.settings.site') }}</h4>
         <p class="m-small">{{ view.site_url ? $t('servers.settings.site_sentence', { url: view.site_url }) : $t('servers.settings.site_none') }}</p>
@@ -202,24 +227,34 @@
           <v-text-field v-model.trim="site" :label="$t('servers.settings.site')" placeholder="https://" autocomplete="off" spellcheck="false" hide-details="auto" density="compact" />
           <v-btn type="submit" size="small" variant="tonal" color="primary" :disabled="saving || site === (view.site_url || '')">{{ $t('servers.settings.site_save') }}</v-btn>
         </form>
+        <FieldHelp id="server.site" :field="$t('servers.settings.site')" />
 
         <h4 class="m-sheet__sub">{{ $t('servers.settings.interval') }}</h4>
         <p class="m-small">{{ $t('servers.settings.interval_sentence', { when: intervalText }) }}</p>
         <v-select :model-value="intervalValue" :items="intervalItems" :label="$t('servers.settings.interval')" density="compact" variant="outlined" hide-details class="m-sheet__select" :disabled="saving" @update:model-value="(v) => set('check_interval', v)" />
+        <FieldHelp id="server.interval" :field="$t('servers.settings.interval')" />
 
         <template v-if="view.env === 'prod'">
           <h4 class="m-sheet__sub">{{ $t('servers.settings.preprod') }}</h4>
           <p class="m-small">{{ view.preprod ? $t('servers.settings.preprod_sentence', { name: view.preprod.name }) : $t('servers.settings.preprod_empty') }}</p>
           <v-select :model-value="view.preprod ? view.preprod.id : ''" :items="preprodItems" :label="$t('servers.settings.preprod')" density="compact" variant="outlined" hide-details class="m-sheet__select" :disabled="saving" @update:model-value="(v) => set('preprod', v || '')" />
+          <FieldHelp id="server.preprod" :field="$t('servers.settings.preprod')" />
         </template>
 
         <h4 class="m-sheet__sub">{{ $t('servers.settings.kind_env') }}</h4>
         <div class="m-sheet__pair">
-          <v-select :model-value="view.kind" :items="kindItems" :label="$t('servers.discover.kind')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('kind', v)" />
-          <v-select :model-value="view.env" :items="envItems" :label="$t('servers.discover.env')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('env', v)" />
+          <div>
+            <v-select :model-value="view.kind" :items="kindItems" :label="$t('servers.discover.kind')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('kind', v)" />
+            <FieldHelp id="server.kind" :field="$t('servers.discover.kind')" />
+          </div>
+          <div>
+            <v-select :model-value="view.env" :items="envItems" :label="$t('servers.discover.env')" density="compact" variant="outlined" hide-details :disabled="saving" @update:model-value="(v) => set('env', v)" />
+            <FieldHelp id="server.env" :field="$t('servers.discover.env')" />
+          </div>
         </div>
         <p v-if="view.kind === 'hds'" class="m-muted m-small">{{ $t('servers.settings.hds_note') }}</p>
         <v-switch :model-value="view.active" :label="$t('servers.settings.active')" color="primary" density="comfortable" hide-details inset :disabled="saving" @update:model-value="(v) => set('active', !!v)" />
+        <FieldHelp id="server.active" :field="$t('servers.settings.active')" />
 
         <p v-if="saved" class="m-small m-sheet__saved" role="status">{{ $t('servers.settings.saved') }}</p>
         <p v-if="saveError" class="m-small m-sheet__error" role="alert">{{ saveError }}</p>
@@ -250,10 +285,10 @@
     <v-dialog v-model="unknownOpen" max-width="500">
       <v-card aria-labelledby="srv-unknown-title">
         <v-card-title id="srv-unknown-title" class="m-sheet__dialog-title">{{ $t('servers.unknown.title') }}</v-card-title>
-        <v-card-text><p class="m-sheet__dialog-body">{{ $t('servers.unknown.body') }}</p></v-card-text>
+        <v-card-text><p class="m-sheet__dialog-body">{{ unknownBody }}</p></v-card-text>
         <v-card-actions class="m-sheet__dialog-actions">
-          <v-btn variant="text" @click="prepareAnyway">{{ $t('servers.unknown.anyway') }}</v-btn>
-          <v-btn color="primary" variant="flat" :href="unknownAttempt ? fixHref(unknownAttempt.id) : undefined" @click="unknownOpen = false">{{ $t('servers.unknown.open') }}</v-btn>
+          <v-btn variant="text" @click="unknownOpen = false">{{ $t('app.close') }}</v-btn>
+          <v-btn color="primary" variant="flat" :href="blockingUnknown ? fixHref(blockingUnknown.id) : undefined" @click="unknownOpen = false">{{ $t('servers.unknown.open') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -278,6 +313,7 @@
 
     <v-dialog v-model="consentDialog.open" max-width="520" scrollable persistent>
       <AiConsentDialog
+        kind="server"
         :project="consent ? consent.target.name : ''"
         :lines="consentDialog.lines"
         :switch-mode="consentDialog.switchMode"
@@ -291,31 +327,40 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import AiConsentDialog from './AiConsentDialog.vue'
+import FailureGuide from './FailureGuide.vue'
 import HostKeyDialog from './HostKeyDialog.vue'
+import ServerExposure from './ServerExposure.vue'
 import ServerLogs from './ServerLogs.vue'
 import { api } from '../api.js'
 import { formatDate, severityOf } from '../lib/digestView.js'
+import { exposureDecisionTarget, exposureFindingIds } from '../lib/exposureView.js'
 import { fixHash } from '../lib/fixView.js'
+import { plainRisk, showsPlan } from '../lib/pathView.js'
 import { logBadges } from '../lib/serverLogsView.js'
 import {
-  envLabel, envs, findingTitle, intervalLabel, intervals, isServerFinal, kindLabel, kinds, levelLabel, mergeFindings, serverAttemptLine,
-  serverLevels, sortFindings, stateSentence,
+  canOfferAgent, cardLine, cardOfFinding, envLabel, envs, findingTitle, healthServer, intervalLabel, intervals, kindLabel, kinds, lastAttemptOf, levelLabel, provenOnlyOnPreprod,
+  mergeFindings, serverAttemptLine, serverLevels, sortFindings, stateSentence, triedOnPreprod,
 } from '../lib/serversView.js'
 
 // checkEvery is how often the sheet reads the server again while a check runs.
 const checkEvery = 3000
 
-// ServerSheet is a server's sheet: where it stands in one sentence, its
-// flaws with "Corriger", what Michel saw and could not see, the history of
+// ServerSheet is a server's sheet: where it stands in one sentence, what is
+// exposed, its flaws, each on its path, what Michel saw and could not see, the history of
 // checks and fixes, the settings in sentences, the AI consent (of the
 // preprod when one is linked: its inventory is what leaves) and "Retirer de
 // Michel".
 export default {
   name: 'ServerSheet',
-  components: { AiConsentDialog, HostKeyDialog, ServerLogs },
+  components: { AiConsentDialog, FailureGuide, FieldHelp, HostKeyDialog, ServerExposure, ServerLogs },
   props: {
     id: { type: String, required: true },
+    // finding is the flaw the address names: its card comes into view with the focus.
+    finding: { type: String, default: '' },
+    // settings: the address asks for the settings, far below on a long sheet.
+    settings: { type: Boolean, default: false },
   },
   emits: ['changed', 'removed'],
   data() {
@@ -324,7 +369,12 @@ export default {
       failure: null,
       view: null,
       inv: null,
+      // exposure: GET /targets/{id}/exposure, null when the page could not read it.
+      exposure: null,
+      exposureFailure: null,
       fixes: [],
+      // preprodFixes: a server with a preprod starts there first.
+      preprodFixes: [],
       others: [],
       consent: null,
       consentBusy: false,
@@ -346,11 +396,12 @@ export default {
       saveError: '',
       hostKeyOpen: false,
       unknownOpen: false,
-      pendingFix: null,
       removeOpen: false,
       removing: false,
       removeError: null,
       alive: true,
+      // focusedFor: the address already served, so that a reload leaves the keyboard alone.
+      focusedFor: '',
     }
   },
   computed: {
@@ -376,12 +427,36 @@ export default {
       const lc = this.view?.last_check
       return lc && !lc.ok ? lc : null
     },
+    // exposureIds: the flaws the exposure part shows, with their path and their decision.
+    exposureIds() {
+      return exposureFindingIds(this.exposure)
+    },
     flaws() {
-      return (this.view?.findings || []).filter((f) => f.status === 'new' || f.status === 'pending' || f.status === 'decided')
+      return (this.view?.findings || []).filter((f) => (f.status === 'new' || f.status === 'pending' || f.status === 'decided') && !this.exposureIds.has(f.id))
+    },
+    // noFlawsText: no card here does not mean no flaw when the exposure part holds them.
+    noFlawsText() {
+      if (this.exposureIds.size) return this.$t('expo.flaws_above')
+      return this.view?.last_check_at ? this.$t('servers.sheet.no_flaws') : this.$t('servers.sheet.no_flaws_unchecked')
     },
     // unknownAttempt is a fix of this server whose outcome Michel cannot tell.
     unknownAttempt() {
       return this.fixes.find((a) => a.state === 'unknown') || null
+    },
+    // blockingUnknown is what stops a new fix here: StartServer works on the preprod first.
+    blockingUnknown() {
+      return this.unknownAttempt || this.preprodFixes.find((a) => a.state === 'unknown') || null
+    },
+    unknownBody() {
+      const a = this.blockingUnknown
+      if (a && a !== this.unknownAttempt) return this.$t('servers.unknown.body_preprod', { name: a.server?.target?.name || '' })
+      return this.$t('servers.unknown.body')
+    },
+    preprodView() {
+      return this.others.find((o) => o.id === this.view?.preprod?.id) || null
+    },
+    preprodHealth() {
+      return healthServer(this.preprodView)
     },
     // cards are the flaws, the most severe first, one card per flaw.
     cards() {
@@ -450,10 +525,18 @@ export default {
       this.pollErrors = 0
       this.clearError()
       this.view = null
+      this.exposure = null
+      this.exposureFailure = null
       this.load()
     },
     lang() {
       this.load()
+    },
+    finding() {
+      this.focusFinding()
+    },
+    settings() {
+      this.focusSettings()
     },
   },
   created() {
@@ -476,19 +559,86 @@ export default {
     title(f) {
       return findingTitle(f, this.lang)
     },
+    decisionTarget(c) {
+      return exposureDecisionTarget(c.finding, this.title(c.finding))
+    },
     formatDate(iso) {
       return formatDate(iso, this.lang) || '?'
     },
     fixHref(attemptID) {
       return fixHash({ attempt: attemptID })
     },
-    attemptLine(a) {
-      return serverAttemptLine(a, this.lang)
+    /** lastAttempt is the newest fix of a card's flaws, here or on the preprod, whatever its state: the path starts from it. */
+    lastAttempt(c) {
+      return lastAttemptOf(this.fixes, c, this.preprodFixes)
     },
-    /** attemptOf is the newest fix of a card's findings still under way (GET /fixes is newest first). */
-    attemptOf(c) {
-      const a = this.fixes.find((x) => c.ids.includes(x.finding?.id))
-      return a && !isServerFinal(a.state) ? a : null
+    cardText(c) {
+      return cardLine(this.lastAttempt(c), this.lang, this.id)
+    },
+    /** provenNote says a flaw proven on the preprod has no fix prepared here, and what can be done. */
+    provenNote(c) {
+      const name = provenOnlyOnPreprod(this.fixes, this.preprodFixes, c)
+      if (!name) return ''
+      return `${this.$t('servers.line.proven_preprod_only', { name })} ${this.$t('servers.line.proven_preprod_only_do')}`
+    },
+    tried(c) {
+      return triedOnPreprod(this.preprodFixes, c)
+    },
+    /** risk says what a card's flaw means, and nothing when it would only repeat the title. */
+    risk(f) {
+      const text = plainRisk(f, null, this.lang, this.$ui.advanced)
+      return text === this.title(f) ? '' : text
+    },
+    /** planOnCard: the card shows the plan, so the level 3 warning is next to it. */
+    planOnCard(c) {
+      return showsPlan(this.lastAttempt(c), false)
+    },
+    /** focusSettings takes the keyboard and the view to who runs the scripts, once per address. */
+    focusSettings() {
+      const want = `${this.id}|settings`
+      if (!this.settings || this.focusedFor === want || !this.view) return
+      this.focusedFor = want
+      this.$nextTick(() => {
+        const el = document.getElementById(`srv-${this.id}-exec`)
+        if (!el) return
+        el.setAttribute('tabindex', '-1')
+        el.focus({ preventScroll: true })
+        el.scrollIntoView({ block: 'start' })
+      })
+    },
+    /** focusFinding takes the keyboard and the view to the flaw the address names, once. */
+    focusFinding() {
+      const want = `${this.id}|${this.finding}`
+      if (!this.finding || this.focusedFor === want || !this.view) return
+      const c = cardOfFinding(this.cards, this.finding)
+      // A flaw of the exposure part has its row there, under the same name.
+      if (!c && !this.exposureIds.has(this.finding)) return
+      const target = c ? c.finding.id : this.finding
+      this.focusedFor = want
+      this.$nextTick(() => {
+        const el = document.getElementById(`srv-flaw-${target}`)
+        if (!el) return
+        el.focus({ preventScroll: true })
+        el.scrollIntoView({ block: 'start' })
+      })
+    },
+    /**
+     * keepFocus: the card about to change holds the keyboard. If what is read
+     * takes its button or the card away, the keyboard goes to the flaws' title.
+     */
+    keepFocus() {
+      const el = document.activeElement
+      if (!el?.closest?.('.m-sheet__flaws')) return
+      this.$nextTick(() => {
+        if (!el.isConnected) document.getElementById(`srv-${this.id}-flaws`)?.focus()
+      })
+    },
+    /** focusCard brings back to its card a keyboard lost while a button was disabled. */
+    focusCard(id) {
+      this.$nextTick(() => {
+        const el = document.activeElement
+        if (!el || el === document.body) document.getElementById(`srv-flaw-${id}`)?.focus()
+      })
     },
     runtimesText(c) {
       const list = c.runtimes.map((r) => (r.binary ? this.$t('servers.sheet.runtime', r) : this.$t('servers.sheet.runtime_nobin', r)))
@@ -507,21 +657,26 @@ export default {
         if (!this.alive) return
         this.view = v
         this.site = v.site_url || ''
-        await Promise.all([this.loadInventory(), this.loadFixes(), this.loadOthers(), this.loadConsent()])
+        await Promise.all([this.loadInventory(), this.loadExposure(), this.loadFixes(), this.loadOthers(), this.loadConsent()])
         if (v.checking) this.follow()
       } catch (err) {
         if (err?.status !== 401) this.failure = err
       } finally {
         this.loading = false
+        this.$nextTick(this.focusFinding)
+        this.$nextTick(this.focusSettings)
       }
     },
-    /** refreshView reads the server again, quietly: the log badges follow what the Journaux block changed. */
+    /** refreshView reads the server again: the log badges follow what the Journaux block changed. A failure is shown, not swallowed. */
     async refreshView() {
       try {
         const v = await api.get(this.q(`/targets/${this.enc(this.id)}`))
         if (this.alive) this.view = v
-      } catch {
-        // The badge stays as it was; the next load tells.
+      } catch (err) {
+        if (this.alive && err?.status !== 401) {
+          this.errorFor = ''
+          this.actionError = err
+        }
       }
       this.$emit('changed')
     },
@@ -533,11 +688,37 @@ export default {
         this.inv = null
       }
     },
+    async loadExposure() {
+      const id = this.id
+      try {
+        const v = await api.get(this.q(`/targets/${this.enc(id)}/exposure`))
+        if (!this.alive || id !== this.id) return
+        this.exposure = v
+        this.exposureFailure = null
+      } catch (err) {
+        if (!this.alive || id !== this.id || err?.status === 401) return
+        // Not read by the page: the part says so, and the flaws stay in their list.
+        this.exposure = null
+        this.exposureFailure = err
+      }
+    },
+    /** onExposureDecided takes the view the decision answered, and reads the flaws again: this one has left the To-do list. */
+    onExposureDecided(v) {
+      this.exposure = v
+      this.exposureFailure = null
+      this.refreshView()
+    },
     async loadFixes() {
       try {
-        this.fixes = (await api.get(this.q(`/fixes?target=${this.enc(this.id)}`))) || []
+        const list = (await api.get(this.q(`/fixes?target=${this.enc(this.id)}`))) || []
+        const pre = this.view?.preprod?.id
+        const onPreprod = pre ? (await api.get(this.q(`/fixes?target=${this.enc(pre)}`))) || [] : []
+        this.keepFocus()
+        this.fixes = list
+        this.preprodFixes = onPreprod
       } catch {
         this.fixes = []
+        this.preprodFixes = []
       }
     },
     async loadOthers() {
@@ -567,6 +748,7 @@ export default {
         try {
           const v = await api.get(this.q(`/targets/${this.enc(this.id)}`))
           if (!this.alive) return
+          this.keepFocus()
           this.view = v
           if (v.checking) {
             this.follow()
@@ -574,7 +756,7 @@ export default {
           }
           this.checking = false
           this.pollErrors = 0
-          await Promise.all([this.loadInventory(), this.loadFixes()])
+          await Promise.all([this.loadInventory(), this.loadExposure(), this.loadFixes()])
           this.$emit('changed')
         } catch (err) {
           this.pollErrors += 1
@@ -608,16 +790,11 @@ export default {
     },
     /** fix prepares Michel's fix of a finding; a fix of unknown outcome on the server warns first. */
     fix(f) {
-      this.pendingFix = f
-      if (this.unknownAttempt) {
+      if (this.blockingUnknown) {
         this.unknownOpen = true
         return
       }
       this.startFix(f)
-    },
-    prepareAnyway() {
-      this.unknownOpen = false
-      if (this.pendingFix) this.startFix(this.pendingFix)
     },
     async startFix(f) {
       this.startingFor = f.id
@@ -633,14 +810,17 @@ export default {
         if (err?.status === 401) return
         this.actionError = err
         this.errorFor = f.id
-        // No ready-made fix: the agent may study it (never on an HDS server).
-        if (err?.data?.code === 'fix.server.needs_agent' && this.view.kind !== 'hds') this.agentOffer = f
+        this.focusCard(f.id)
+        // No ready-made fix: the agent may study it, where the API would not refuse it.
+        if (err?.data?.code === 'fix.server.needs_agent' && canOfferAgent(this.view, this.preprodView)) this.agentOffer = f
       } finally {
         this.startingFor = ''
       }
     },
     async startAgent(f) {
       this.startingFor = f.id
+      // The button is in the answer being cleared.
+      this.keepFocus()
       this.clearError()
       try {
         const r = await api.post(this.q(`/targets/${this.enc(this.id)}/agent-fix/${this.enc(f.id)}`))
@@ -658,6 +838,7 @@ export default {
         }
         this.actionError = err
         this.errorFor = f.id
+        this.focusCard(f.id)
       } finally {
         this.startingFor = ''
       }
@@ -704,6 +885,7 @@ export default {
         this.site = v.site_url || ''
         this.saved = true
         if (field === 'preprod' || field === 'kind') this.loadConsent()
+        if (field === 'kind') this.loadExposure()
         this.$emit('changed')
       } catch (err) {
         if (err?.status === 401) return
@@ -760,7 +942,12 @@ export default {
 .m-sheet__badges { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .m-sheet__sub { font-size: 0.95rem; font-weight: 650; margin: 0.6rem 0 0; }
 .m-sheet__flaws { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
-.m-sheet__flaw { display: grid; gap: 0.3rem; padding-top: 0.75rem; border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); }
+.m-sheet__flaw { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; padding-top: 0.75rem; border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); scroll-margin-top: 1rem; }
+.m-sheet__flaw:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 4px; border-radius: 4px; }
+.m-sheet__guide { margin-top: 0.4rem; }
+.m-sheet__decide { margin-top: 0.5rem; max-width: 100%; height: auto !important; min-height: 2rem; white-space: normal; }
+.m-sheet__decide :deep(.v-btn__content) { white-space: normal; padding: 0.3rem 0; line-height: 1.25; }
+.m-sheet__undo { margin-top: 0.4rem; overflow-wrap: anywhere; }
 .m-sheet__flaw:first-child { border-top: 0; padding-top: 0; }
 .m-sheet__flaw-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.75rem; }
 .m-sheet__flaw-title { font-size: 1.05rem; }

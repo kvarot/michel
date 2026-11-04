@@ -267,7 +267,9 @@ func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
 	for _, q := range []string{
 		`DELETE FROM fix_message WHERE attempt_id IN (SELECT id FROM fix_attempt WHERE project_id = ?)`,
 		`DELETE FROM fix_proposal WHERE attempt_id IN (SELECT id FROM fix_attempt WHERE project_id = ?)`,
+		`DELETE FROM fix_push WHERE attempt_id IN (SELECT id FROM fix_attempt WHERE project_id = ?)`,
 		`DELETE FROM fix_attempt WHERE project_id = ?`,
+		`DELETE FROM project_remote WHERE project_id = ?`,
 		`DELETE FROM fix_queue WHERE project_id = ?`,
 		`DELETE FROM fix_consent WHERE project_id = ?`,
 		`DELETE FROM decision WHERE project_id = ?`,

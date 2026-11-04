@@ -26,7 +26,7 @@
         <li v-for="s in sourceRows" :key="s.id" class="m-logs__item">
           <p>
             <span :id="`${uid}-src-${s.id}`" class="m-code">{{ s.path }}</span>
-            <span class="m-muted m-small"> — {{ formatText(s.format) }}</span>
+            <span v-if="$ui.advanced" class="m-muted m-small"> — {{ formatText(s.format) }}</span>
           </p>
           <v-switch
             :model-value="s.active"
@@ -65,36 +65,39 @@
       </div>
       <p class="m-muted m-small">{{ $t('logs.add.find_hint') }}</p>
       <p v-if="discovering" class="m-muted m-small" role="status">{{ $t('logs.add.finding') }}</p>
-      <p v-else-if="candidates && !candidates.length" class="m-small" role="status">{{ $t('logs.add.none') }}</p>
+      <p v-else-if="candidates && !candidates.length" class="m-small" role="status">{{ $t($ui.advanced ? 'logs.add.none' : 'logs.add.none_simple') }}</p>
       <ul v-if="candidates && candidates.length" class="m-logs__list" :aria-labelledby="`${uid}-add`">
         <li v-for="c in candidates" :key="candKey(c)" class="m-logs__item">
           <p>
-            <span :id="`${uid}-cand-${candKey(c)}`" class="m-code">{{ c.path }}</span>
-            <span class="m-muted m-small"> — {{ formatText(c.format) }}</span>
+            <span :id="`${uid}-cand-${domId(candKey(c))}`" class="m-code">{{ c.path }}</span>
+            <span v-if="$ui.advanced" class="m-muted m-small"> — {{ formatText(c.format) }}</span>
           </p>
           <p class="m-small">{{ c.text }}</p>
           <p v-if="c.note && !tries[candKey(c)]" class="m-muted m-small">{{ c.note }}</p>
           <p v-if="c.known" class="m-tag m-small m-logs__tag">{{ $t('logs.add.known') }}</p>
           <template v-else>
             <div class="m-logs__actions">
-              <v-btn size="small" variant="tonal" color="primary" :loading="trying === candKey(c)" :disabled="!!trying || busy" :aria-describedby="`${uid}-cand-${candKey(c)}`" @click="tryDraft(candKey(c), candDraft(c))">
+              <v-btn size="small" variant="tonal" color="primary" :loading="trying === candKey(c)" :disabled="!!trying || busy" :aria-describedby="`${uid}-cand-${domId(candKey(c))}`" @click="tryDraft(candKey(c), candDraft(c))">
                 {{ $t('logs.add.try') }}
               </v-btn>
-              <v-btn size="small" variant="flat" color="primary" :disabled="!!trying || busy" :aria-describedby="`${uid}-cand-${candKey(c)}`" @click="start(candDraft(c))">
+              <v-btn size="small" variant="flat" color="primary" :disabled="!!trying || busy" :aria-describedby="`${uid}-cand-${domId(candKey(c))}`" @click="start(candDraft(c))">
                 {{ $t('logs.add.start') }}
               </v-btn>
             </div>
             <p class="m-muted m-small">{{ $t('logs.add.try_hint') }} {{ $t('logs.add.start_hint') }}</p>
+            <FieldHelp id="logs.try" :field="$t('logs.add.try')" />
           </template>
           <TryResult v-if="tries[candKey(c)]" :result="tries[candKey(c)]" :lang="lang" @close="delete tries[candKey(c)]" />
         </li>
       </ul>
 
       <p v-if="trying" class="m-muted m-small" role="status">{{ $t('logs.add.trying') }}</p>
-      <h5 :id="`${uid}-manual`" class="m-logs__minor">{{ $t('logs.add.manual') }}</h5>
-      <form class="m-logs__form" :aria-labelledby="`${uid}-manual`" @submit.prevent="tryDraft('manual', manualDraft)">
+      <h5 v-if="$ui.advanced" :id="`${uid}-manual`" class="m-logs__minor">{{ $t('logs.add.manual') }}</h5>
+      <form v-if="$ui.advanced" class="m-logs__form" :aria-labelledby="`${uid}-manual`" @submit.prevent="tryDraft('manual', manualDraft)">
         <v-text-field v-model.trim="draft.path" :label="$t('logs.add.path')" :hint="$t('logs.add.path_hint')" persistent-hint autocomplete="off" spellcheck="false" density="compact" />
+        <FieldHelp id="logs.path" :field="$t('logs.add.path')" />
         <v-select v-model="draft.format" :items="formatItems" :label="$t('logs.add.format')" :hint="$t('logs.add.format_hint')" persistent-hint density="compact" variant="outlined" class="m-logs__select" />
+        <FieldHelp id="logs.format" :field="$t('logs.add.format')" />
         <template v-if="draft.format === 'json'">
           <v-text-field v-model.trim="draft.level_field" :label="$t('logs.add.level_field')" :hint="$t('logs.add.level_field_hint')" persistent-hint autocomplete="off" spellcheck="false" density="compact" />
           <v-text-field v-model.trim="draft.channel_field" :label="$t('logs.add.channel_field')" autocomplete="off" spellcheck="false" hide-details density="compact" />
@@ -104,9 +107,10 @@
           <v-btn type="submit" size="small" variant="tonal" color="primary" :loading="trying === 'manual'" :disabled="!draft.path || !!trying || busy">{{ $t('logs.add.try') }}</v-btn>
           <v-btn size="small" variant="flat" color="primary" :disabled="!draft.path || !!trying || busy" @click="start(manualDraft)">{{ $t('logs.add.start') }}</v-btn>
         </div>
+        <FieldHelp id="logs.try" :field="$t('logs.add.try')" />
         <p class="m-muted m-small">{{ $t('logs.add.try_hint') }} {{ $t('logs.add.start_hint') }}</p>
       </form>
-      <TryResult v-if="tries.manual" :result="tries.manual" :lang="lang" @close="delete tries.manual" />
+      <TryResult v-if="$ui.advanced && tries.manual" :result="tries.manual" :lang="lang" @close="delete tries.manual" />
 
       <!-- The errors -->
       <h4 :id="`${uid}-errors`" class="m-sheet__sub">{{ $t('logs.errors.title') }}</h4>
@@ -129,7 +133,7 @@
             <p class="m-muted m-small">{{ $t('logs.errors.when', { first: when(e.first_at), last: when(e.last_at) }) }}</p>
             <p v-if="e.text" class="m-small">{{ e.text }}</p>
             <div class="m-logs__actions">
-              <v-btn v-if="e.detail" size="small" variant="text" color="primary" :aria-expanded="open === e.id ? 'true' : 'false'" :aria-describedby="`${uid}-err-${e.id}`" @click="toggleDetail(e)">
+              <v-btn v-if="$ui.advanced && e.detail" size="small" variant="text" color="primary" :aria-expanded="open === e.id ? 'true' : 'false'" :aria-describedby="`${uid}-err-${e.id}`" @click="toggleDetail(e)">
                 {{ open === e.id ? $t('logs.errors.detail_hide') : $t('logs.errors.detail') }}
               </v-btn>
               <v-btn v-if="e.status !== 'seen' && e.status !== 'ignored'" size="small" variant="text" color="primary" :disabled="busy" :aria-describedby="`${uid}-err-${e.id}`" @click="mark(e, 'seen')">
@@ -142,7 +146,7 @@
                 {{ $t('logs.errors.unignore') }}
               </v-btn>
             </div>
-            <div v-if="open === e.id && e.detail" class="m-logs__detail">
+            <div v-if="$ui.advanced && open === e.id && e.detail" class="m-logs__detail">
               <p class="m-small">{{ $t('logs.errors.detail_help') }}</p>
               <pre class="m-logs__cmd m-code" tabindex="0">{{ e.detail }}</pre>
               <v-btn size="small" variant="tonal" color="primary" @click="copy(e.detail)">{{ $t('logs.copy') }}</v-btn>
@@ -168,6 +172,7 @@
           :disabled="busy"
           @update:model-value="(v) => change({ interval: v })"
         />
+        <FieldHelp id="logs.interval" :field="$t('logs.interval.title')" />
         <p v-if="intervalWarn" class="m-logs__warn m-small">{{ intervalWarn }}</p>
 
         <!-- Who is told -->
@@ -189,6 +194,7 @@
         </div>
         <v-switch :model-value="settings.sms" :label="$t('logs.alerts.sms')" color="primary" density="comfortable" hide-details inset :disabled="busy" @update:model-value="(v) => change({ sms: !!v })" />
         <p class="m-muted m-small">{{ $t('logs.alerts.sms_hint') }}</p>
+        <FieldHelp id="logs.sms" :field="$t('logs.alerts.sms')" />
         <p v-for="w in settingNotes" :key="w" class="m-logs__warn m-small">{{ w }}</p>
 
         <!-- What Michel keeps -->
@@ -198,6 +204,9 @@
           <p :id="`${uid}-p-${g.key}`" class="m-logs__q">{{ $t(`logs.privacy.${g.key}`) }}</p>
           <p v-if="g.key === 'alert_text'" class="m-muted m-small">{{ $t('logs.privacy.alert_text_hint') }}</p>
           <p v-if="g.key === 'retention'" class="m-muted m-small">{{ $t('logs.privacy.retention_hint') }}</p>
+          <FieldHelp v-if="g.key === 'store_text'" id="logs.store_text" :field="$t('logs.privacy.store_text')" />
+          <FieldHelp v-else-if="g.key === 'alert_text'" id="logs.alert_text" :field="$t('logs.privacy.alert_text')" />
+          <FieldHelp v-else-if="g.key === 'retention'" id="logs.retention" :field="$t('logs.privacy.retention')" />
           <v-radio-group
             :model-value="current(g)"
             :aria-labelledby="`${uid}-p-${g.key}`"
@@ -268,11 +277,12 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import TryResult from './LogTryResult.vue'
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
 import {
-  channelNotes, deviationWarning, errorGroups, formatLabel, formats, intervalChoices, intervalNote, levelLabel, levelOrder, levelSeverity,
+  channelNotes, deviationWarning, domId, errorGroups, formatLabel, formats, intervalChoices, intervalNote, levelLabel, levelOrder, levelSeverity, settingsSaveOutcome,
   privacyChoices, readState, routeChoices, statusLabel,
 } from '../lib/serverLogsView.js'
 
@@ -290,7 +300,7 @@ const settingField = { store_text: 'store_text', alert_text: 'alert_text', reten
 // returns it.
 export default {
   name: 'ServerLogs',
-  components: { TryResult },
+  components: { FieldHelp, TryResult },
   props: {
     id: { type: String, required: true },
     kind: { type: String, default: 'vps' },
@@ -323,6 +333,8 @@ export default {
       // confirm is a change waiting for the user's yes: {patch, deviations, health, titles}.
       confirm: null,
       now: new Date(),
+      loadSeq: 0,
+      clock: null,
       levels: levelOrder,
       settingField,
     }
@@ -347,10 +359,10 @@ export default {
       return intervalChoices(this.settings?.interval, this.lang)
     },
     intervalWarn() {
-      return intervalNote(this.settings?.interval, this.lang)
+      return intervalNote(this.settings, this.$ui.advanced, this.lang)
     },
     privacy() {
-      return privacyChoices(this.settings, this.kind, this.lang)
+      return privacyChoices(this.settings, this.lang)
     },
     settingNotes() {
       return channelNotes({ sms: !!this.settings?.sms }, this.lang)
@@ -368,8 +380,15 @@ export default {
   created() {
     this.load()
   },
+  mounted() {
+    // "il y a X min" must not go stale on a sheet left open.
+    this.clock = setInterval(() => {
+      this.now = new Date()
+    }, 60000)
+  },
   beforeUnmount() {
     this.alive = false
+    clearInterval(this.clock)
   },
   methods: {
     q(path) {
@@ -382,6 +401,7 @@ export default {
       return levelLabel(l, this.lang)
     },
     levelSeverity,
+    domId,
     formatText(f) {
       return formatLabel(f, this.lang)
     },
@@ -409,6 +429,8 @@ export default {
       this.actionError = err
     },
     async load() {
+      // Only the newest call counts: a slower, older answer is dropped.
+      const seq = ++this.loadSeq
       this.loading = !this.settings
       this.failure = null
       try {
@@ -417,7 +439,7 @@ export default {
           api.get(this.q('/errors')),
           api.get(this.q('/settings')),
         ])
-        if (!this.alive) return
+        if (!this.alive || seq !== this.loadSeq) return
         this.sources = sources || []
         this.errors = errors?.errors || []
         this.total = errors?.total || 0
@@ -425,9 +447,9 @@ export default {
         this.settings = settings
         this.now = new Date()
       } catch (err) {
-        if (err?.status !== 401) this.failure = err
+        if (this.alive && seq === this.loadSeq && err?.status !== 401) this.failure = err
       } finally {
-        this.loading = false
+        if (seq === this.loadSeq) this.loading = false
       }
     },
     /** done reloads the block after a change and tells the sheet (its badge). */
@@ -566,17 +588,17 @@ export default {
         this.confirm = null
         await this.done(this.$t('logs.sources.saved'))
       } catch (err) {
-        if (err?.status === 409 && err.data?.code === 'logs.confirm_needed') {
-          const devs = err.data.deviations || []
-          const local = devs.map((d) => deviationWarning(d.code, this.kind, this.lang))
+        const out = settingsSaveOutcome(err)
+        if (out.kind === 'confirm') {
+          const local = out.deviations.map((d) => deviationWarning(d.code, this.kind, this.lang))
           this.confirm = {
             patch,
-            deviations: devs,
+            deviations: out.deviations,
             titles: local.map((w) => w.title),
-            health: err.data.health || local.find((w) => w.health)?.health || '',
+            health: out.health || local.find((w) => w.health)?.health || '',
           }
         } else {
-          this.fail(err)
+          this.fail(out.error)
         }
         // The page shows what is saved, not what was tried.
         await this.load()

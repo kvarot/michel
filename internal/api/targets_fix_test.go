@@ -312,3 +312,124 @@ func TestTargetTildeKeepsOtherUsers(t *testing.T) {
 		t.Error("an empty user rewrote a path")
 	}
 }
+
+// No route starts a fix of an exposure, and no attempt comes out of trying:
+// closing a service is the person's job.
+func TestExposureCannotStartAFix(t *testing.T) {
+	tf := newTargetFixture(t)
+	v := tf.addNamed("srv-demo", "192.0.2.60")
+	const id = "fexposure0000001"
+	tf.seedServerFinding(v.ID, id, scan.KindServerExposure, "exposed_database")
+	for path, want := range map[string]struct {
+		status int
+		code   string
+	}{
+		"/api/v1/targets/" + v.ID + "/fix/" + id:       {http.StatusConflict, "api.target.exposure_no_fix"},
+		"/api/v1/targets/" + v.ID + "/agent-fix/" + id: {http.StatusConflict, "api.target.exposure_no_fix"},
+		"/api/v1/findings/" + id + "/fix":              {http.StatusNotFound, ""},
+	} {
+		code, body := tf.send("POST", path, "")
+		var eb FixErrorBody
+		_ = json.Unmarshal([]byte(body), &eb)
+		if code != want.status || eb.Code != want.code {
+			t.Errorf("%s = %d %s", path, code, body)
+		}
+	}
+	var attempts int
+	if err := tf.st.DB().QueryRow(`SELECT COUNT(*) FROM fix_attempt`).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 {
+		t.Errorf("%d attempts", attempts)
+	}
+}
+
+// B1 (R62): a validated fix the user was to run says whether the server's
+// settings now let Michel run it; the hand over route refuses a wrong hash
+// and, without the settings, refuses to run anything.
+func TestHandOverView(t *testing.T) {
+	tf := newTargetFixture(t)
+	tg := tf.addNamed("srv-hand", "192.0.2.61")
+	tf.seedServerFinding(tg.ID, "fsrv000000000002", scan.KindServerConfig, "expose_php")
+	a, p := tf.seedServerAttempt(tg, "fsrv000000000002", target.ExecUser, false)
+	var v AttemptView
+	if code, body := tf.send("POST", "/api/v1/fix/"+a.ID+"/hand-over", `{"hash":"`+p.Hash+`"}`); code != http.StatusConflict {
+		t.Fatalf("hand-over before approval = %d %s", code, body)
+	}
+	if code, body := tf.send("POST", "/api/v1/fix/"+a.ID+"/approve", `{"hash":"`+p.Hash+`"}`); code != http.StatusOK {
+		t.Fatalf("approve = %d %s", code, body)
+	}
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server == nil || v.Server.HandOver != "settings" {
+		t.Fatalf("hand over with the settings off = %+v", v.Server)
+	}
+	var eb FixErrorBody
+	if code, _ := tf.send("POST", "/api/v1/fix/"+a.ID+"/hand-over", `{}`); code != http.StatusBadRequest {
+		t.Errorf("hand-over without hash = %d", code)
+	}
+	if code, body := tf.send("PATCH", "/api/v1/targets/"+tg.ID, `{"executor":"michel"}`); code != http.StatusOK {
+		t.Fatalf("settings = %d %s", code, body)
+	}
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server == nil || v.Server.HandOver != "ready" {
+		t.Errorf("hand over with the settings on = %+v", v.Server)
+	}
+	code, body := tf.send("POST", "/api/v1/fix/"+a.ID+"/hand-over", `{"hash":"nope"}`)
+	_ = json.Unmarshal([]byte(body), &eb)
+	if code != http.StatusConflict || eb.Code != "fix.err.stale_proposal" {
+		t.Errorf("hand-over with a stale hash = %d %s", code, body)
+	}
+	// Set to report only: the button goes, the refusal says it.
+	if code, body := tf.send("PATCH", "/api/v1/targets/"+tg.ID, `{"fix_level":0}`); code != http.StatusOK {
+		t.Fatalf("settings = %d %s", code, body)
+	}
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server == nil || v.Server.HandOver != "settings" {
+		t.Errorf("hand over on report only = %+v", v.Server)
+	}
+}
+
+// I3: a fix a person approved for Michel that did not run offers to try again.
+func TestHandOverViewRetry(t *testing.T) {
+	tf := newTargetFixture(t)
+	tg := tf.addNamed("srv-retry", "192.0.2.63")
+	tf.seedServerFinding(tg.ID, "fsrv000000000004", scan.KindServerConfig, "expose_php")
+	a, p := tf.seedServerAttempt(tg, "fsrv000000000004", target.ExecMichel, false)
+	if err := fix.NewRepo(tf.st).Approve(context.Background(), a.ID, "user", p.ID, p.Hash); err != nil {
+		t.Fatal(err)
+	}
+	var v AttemptView
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server == nil || v.Server.HandOver != "retry" {
+		t.Errorf("hand over = %+v", v.Server)
+	}
+}
+
+// D-1: a fix the check could not judge names the source to turn on.
+func TestInconclusiveNamesTheSourceToEnable(t *testing.T) {
+	tf := newTargetFixture(t)
+	tg := tf.addNamed("srv-judge", "192.0.2.62")
+	tf.seedServerFinding(tg.ID, "fsrv000000000003", scan.KindServerPackage, "DSA-0000-1001")
+	a, p := tf.seedServerAttempt(tg, "fsrv000000000003", target.ExecMichel, false)
+	ctx := context.Background()
+	repo := fix.NewRepo(tf.st)
+	if err := target.NewRepo(tf.st).SaveInventory(ctx, target.Inventory{TargetID: tg.ID, At: now,
+		OS: target.OSInfo{ID: "debian", VersionID: "12"}, Packages: []target.Package{{Name: "openssl", Source: "openssl", Version: "3.0.15-1~deb12u1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetState(ctx, a.ID, []fix.State{fix.StateProposed}, fix.StateInconclusive, ""); err != nil {
+		t.Fatal(err)
+	}
+	var v AttemptView
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server.JudgeSource != "" {
+		t.Fatalf("source named for a fix with no such step: %q", v.Server.JudgeSource)
+	}
+	if err := repo.SetSteps(ctx, p.ID, []fix.StepResult{{Op: fix.StepRecollect, Detail: "the check could not judge everything"}}); err != nil {
+		t.Fatal(err)
+	}
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server.JudgeSource != "osv.debian" {
+		t.Errorf("judge source = %q", v.Server.JudgeSource)
+	}
+}

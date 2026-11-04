@@ -1,10 +1,13 @@
 // Package workcopy is the fix copy of a project: an isolated git clone in
 // Michel's data folder, where dependencies are installed without scripts,
 // the project's tests run and the change is committed, then applied to the
-// user's repository as a new branch fetched from the copy. It is the only
-// code allowed to write into the user's repository, and only in Apply:
-// git objects and one refs/heads/michel/fix-<id> ref, never the working
-// tree, the index or HEAD.
+// user's repository as a new branch fetched from the copy. Apply, Push and
+// UpdateFolder are its only writes. Apply writes in the user's repository git
+// objects and one refs/heads/michel/fix-<id> ref, never the working tree, the
+// index or HEAD. Push writes on the remote, one branch, on a click, and nothing
+// in the project. UpdateFolder, on a click, moves the current branch of the
+// user's folder forward, and is the only code that writes in its working tree,
+// its index or HEAD.
 package workcopy
 
 import (
@@ -20,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 )
 
@@ -41,6 +45,13 @@ type Deps struct {
 	ProxyAddr string
 	// Now dates the commits of the copy. Nil means time.Now.
 	Now func() time.Time
+	// AllowLocalRemote lets a push reach a remote on the local disk, whose
+	// hooks the local transport would run. It is the only source of ":file" in
+	// GIT_ALLOW_PROTOCOL: set by tests and by the trial build, nothing at run
+	// time opens it.
+	AllowLocalRemote bool
+	// assumeOldGit makes the runner behave as with a git older than 2.45: tests.
+	assumeOldGit bool
 }
 
 func (d Deps) exec() ExecFunc {
@@ -98,6 +109,7 @@ func defaultExec(ctx context.Context, name string, args, env []string, dir strin
 	out, errOut := &capped{max: maxGitOutput}, &capped{max: maxStream}
 	cmd.Stdout, cmd.Stderr = out, errOut
 	cmd.WaitDelay = 5 * time.Second
+	killTreeOnCancel(cmd)
 	err := cmd.Run()
 	return out.buf.Bytes(), errOut.buf.Bytes(), err
 }
@@ -185,8 +197,9 @@ func (h home) env(proxyAddr string, extra ...string) []string {
 		// composer installs in vendor next to the lockfile, whatever the
 		// project says (environment settings win over composer.json).
 		"COMPOSER_VENDOR_DIR=vendor", "COMPOSER_BIN_DIR=vendor/bin",
-		// Replacement refs of a repository never change what git reads.
-		"GIT_NO_REPLACE_OBJECTS=1")
+		// Replacement refs of a repository never change what git reads, and a
+		// missing object is never fetched on its own: see execGit.
+		"GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1")
 	return append(env, extra...)
 }
 
@@ -203,29 +216,7 @@ func Env(d Deps) (env []string, homeDir string, err error) {
 
 // allowedGit is the closed list of git subcommands Michel runs.
 var allowedGit = []string{"clone", "init", "archive", "add", "diff", "commit", "fetch", "merge-base", "rev-parse",
-	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree", "show"}
-
-// safeConfig neutralizes, for every git command, the settings of a
-// repository's own .git/config (the user's project is not trusted) that make
-// git run a program or write on its own: hooks (an empty folder of Michel's
-// outside the subprocesses' home, as core.hooksPath), the file system monitor, automatic gc and
-// maintenance, credential helpers, commit signing and an attributes file.
-// core.longpaths lets git on Windows handle paths over 260 characters (a
-// data folder deep in the profile); other systems ignore it.
-// System and global
-// configuration are not read at all (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL).
-func (h home) safeConfig() []string {
-	return []string{
-		"-c", "core.hooksPath=" + h.hooks,
-		"-c", "core.fsmonitor=false",
-		"-c", "gc.auto=0",
-		"-c", "maintenance.auto=false",
-		"-c", "credential.helper=",
-		"-c", "commit.gpgSign=false",
-		"-c", "core.attributesFile=",
-		"-c", "core.longpaths=true",
-	}
-}
+	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree", "show", "config", "symbolic-ref", "check-attr", "cherry"}
 
 // localTransport allows git's file transport, for the local clone and fetch only.
 var localTransport = []string{"-c", "protocol.file.allow=always"}
@@ -236,7 +227,7 @@ func gitSubcommand(args []string) string {
 		switch args[i] {
 		case "-C", "-c":
 			i++
-		case "--no-pager":
+		case "--no-pager", "--no-optional-locks":
 		default:
 			return args[i]
 		}
@@ -245,21 +236,54 @@ func gitSubcommand(args []string) string {
 }
 
 // git runs one git subcommand of the closed list on repo (git -C repo, or
-// no -C when repo is ""), from cwd, with the safe configuration plus extra
-// (-c pairs) and the fix environment plus env.
+// no -C when repo is ""), from cwd, with the fix environment plus env, extra (-c
+// pairs) and what runGit enforces. System and global configuration are not read
+// at all (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL). Only a command asking for
+// localTransport has a transport, and only that one.
 func (h home) git(ctx context.Context, d Deps, cwd, repo string, extra, env []string, sub string, args ...string) ([]byte, []byte, error) {
 	if !slices.Contains(allowedGit, sub) {
 		return nil, nil, fmt.Errorf("git %s is not a command Michel runs", sub)
 	}
-	argv := []string{"--no-pager"}
-	if repo != "" {
-		argv = append(argv, "-C", repo)
+	if slices.Contains(extra, localTransport[1]) {
+		env = append(slices.Clone(env), "GIT_ALLOW_PROTOCOL=file")
 	}
-	argv = append(argv, h.safeConfig()...)
-	argv = append(argv, extra...)
-	argv = append(argv, sub)
-	argv = append(argv, args...)
-	return d.exec()(ctx, "git", argv, h.env(d.ProxyAddr, env...), cwd)
+	return h.runGit(ctx, d, gitCommand{profile: gitIsolated, repo: repo, dir: cwd, env: h.env(d.ProxyAddr, env...), config: extra, sub: sub, args: args})
+}
+
+// workCommands are the only commands that run with the person's configuration on
+// their folder. status writes nothing there (--no-optional-locks), and check-attr
+// reads the attributes merge would read, core.attributesFile included.
+var workCommands = []string{"status", "merge", "check-attr"}
+
+// workGit runs git on the folder of project p with the person's configuration,
+// not the environment of git: that one ignores core.autocrlf and would rewrite
+// the line endings on Windows (R24). It reaches no network: the proxy is an
+// address where nothing listens, and a partial clone does not fetch what it lacks
+// (a project's core.sshCommand would run). The -c options turn off what the
+// folder's configuration could start. Git cannot turn a filter off that way: see
+// checkFolderConfig. Its output never leaves the caller.
+func (h home) workGit(ctx context.Context, d Deps, p project.Project, sub string, args ...string) ([]byte, []byte, error) {
+	if !slices.Contains(workCommands, sub) {
+		return nil, nil, fmt.Errorf("git %s is not a command Michel runs on a folder", sub)
+	}
+	c := folderCommand(ctx, d, p)
+	c.sub, c.args = sub, args
+	if sub == "status" {
+		c.options = []string{"--no-optional-locks"}
+	}
+	return h.runGit(ctx, d, c)
+}
+
+// folderCommand is the frame of a command on the person's folder: their
+// configuration, and a proxy where nothing answers.
+func folderCommand(ctx context.Context, d Deps, p project.Project) gitCommand {
+	env := userEnv(ctx, d)
+	const nowhere = "http://127.0.0.1:9" // discard port: nothing answers
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		env = append(env, k+"="+nowhere)
+	}
+	env = append(env, "NO_PROXY=", "no_proxy=")
+	return gitCommand{profile: gitFolder, repo: p.Path, dir: d.DataDir, env: env}
 }
 
 // gitErr is the error of a failed git command, with the first line of what

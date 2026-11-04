@@ -104,7 +104,10 @@ type Deps struct {
 	// Notify is called when a proposal waits for the user, with the number
 	// of proposals waiting over every project. Nil sends nothing.
 	Notify func(ctx context.Context, waiting int)
-	Now    func() time.Time
+	// NotifyHeld is called when a start Michel made alone stopped on a key and
+	// waits for a person's answer. Nil sends nothing.
+	NotifyHeld func(ctx context.Context, n int)
+	Now        func() time.Time
 	// Actor is the audit actor of the calls (cli, web, serve).
 	Actor string
 	// Sessions holds the running agents of this process; nil means a
@@ -146,6 +149,9 @@ type Deps struct {
 	// CheckTimeout one recollection (0: DefaultCheckTimeout).
 	SiteCheckTimeout time.Duration
 	CheckTimeout     time.Duration
+	// AllowLocalRemote lets a project attach to a remote on this disk: tests and
+	// the trial build only (R28, R33). No variable, option or setting opens it.
+	AllowLocalRemote bool
 	// BackupKeyWait is how long a process waits for the backup key another
 	// one is writing before it takes the key for lost (0: 10 s).
 	BackupKeyWait time.Duration
@@ -204,6 +210,7 @@ func (d Deps) actor() string {
 
 func (d Deps) work() workcopy.Deps {
 	w := d.Work
+	w.AllowLocalRemote = d.AllowLocalRemote
 	if w.DataDir == "" {
 		w.DataDir = d.DataDir
 	}
@@ -251,6 +258,10 @@ type Sessions struct {
 	m         map[string]*running
 	lock      map[string]*sync.Mutex
 	proposing map[string]*sync.Mutex
+	// gitLocks are the locks of a click on a remote, per project.
+	gitLocks map[string]*sync.Mutex
+	// gitRuleMu is the lock of the network rules of Git services (lockGitRules).
+	gitRuleMu sync.Mutex
 	// The level 3 runner's memory (ApplyAutoServer) and the agents' package
 	// simulations, per attempt.
 	autoErr     map[string]string
@@ -416,7 +427,7 @@ func (d Deps) find(ctx context.Context, id string) (scan.Finding, project.Projec
 // busy reports whether the project has an attempt being worked on or
 // waiting for the user.
 func (d Deps) busy(ctx context.Context, projectID string) (bool, error) {
-	return d.busyIn(ctx, projectID, StatePreparing, StateProposed, StateApproved, StateRunning)
+	return d.busyIn(ctx, projectID, StatePreparing, StateHeld, StateProposed, StateApproved, StateRunning)
 }
 
 // serverBusy is busy for a server: an applied attempt (its site check, undo
@@ -474,11 +485,14 @@ func Branch(attemptID string) string { return "michel/fix-" + strings.ToLower(at
 // policy (ErrStrictLocal), a project without AI consent
 // (ErrConsentRequired), a project with an attempt in progress (ErrBusy) and
 // an unusable Claude Code (ErrAgentUnavailable). It then prepares the work
-// copy, builds the masked brief and the skill, binds a token for michel mcp,
-// opens the agent's allow proxy, starts the agent with the initial prompt
-// and returns the attempt in state preparing. The session goes on in the
-// background: its events become messages, and the attempt ends failed when
-// the agent stops without a proposal.
+// copy. When the search of the copy finds a possible key, the attempt comes
+// back in state held: no agent, no update, nothing leaves the computer until a
+// person answers (ContinueHeld, WithdrawHeld). Otherwise it builds the masked
+// brief and the skill, binds a token for michel mcp, opens the agent's allow
+// proxy, starts the agent with the initial prompt and returns the attempt in
+// state preparing. The session goes on in the background: its events become
+// messages, and the attempt ends failed when the agent stops without a
+// proposal.
 func Start(ctx context.Context, d Deps, findingID string, origin string) (Attempt, error) {
 	fi, p, err := d.find(ctx, findingID)
 	if err != nil {
@@ -490,58 +504,104 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 	if !filepath.IsAbs(p.Path) || !workcopy.IsGitRepo(p.Path) {
 		return Attempt{}, ErrNotGit
 	}
-	if p.Classification == policy.ClassHealth {
-		return Attempt{}, ErrHealthForbidden
-	}
-	if d.Policy.Sovereignty.Mode == policy.ModeStrictLocal {
-		return Attempt{}, ErrStrictLocal
-	}
-	ok, err := d.consentOK(ctx, p)
-	if err != nil {
+	if err := d.policyGates(ctx, p); err != nil {
 		return Attempt{}, err
-	}
-	if !ok {
-		return Attempt{}, ErrConsentRequired
 	}
 	if busy, err := d.busy(ctx, p.ID); err != nil {
 		return Attempt{}, err
 	} else if busy {
 		return Attempt{}, ErrBusy
 	}
-	if st := d.agentStatus(ctx); st.Hint != "" {
-		return Attempt{}, &AgentUnavailableError{Status: st}
-	}
-	if d.Gateway == nil {
-		return Attempt{}, errors.New("the fix service needs the egress gateway")
+	if err := d.agentGates(ctx); err != nil {
+		return Attempt{}, err
 	}
 	repo := d.repo()
 	a, err := repo.CreateAttempt(ctx, Attempt{FindingID: fi.ID, ProjectID: p.ID, Origin: origin})
 	if err != nil {
 		return Attempt{}, err
 	}
-	lang := d.lang()
-	wd := d.work()
-	// c is the copy once prepared: until SetWork records it in the attempt,
-	// cleanup cannot find it, so fail removes it itself (final review I6).
-	var c workcopy.Copy
-	fail := func(key string, cause error) (Attempt, error) {
-		text := i18n.T(lang, plainCause(key, cause))
-		if repo.SetState(ctx, a.ID, []State{StatePreparing}, StateFailed, text) == nil {
-			_ = repo.SetCauseDetail(ctx, a.ID, auditDetail(d, cause))
-		}
-		got, _ := repo.GetAttempt(ctx, a.ID)
-		d.cleanup(ctx, got, true)
-		if got.Work.Copy.Dir == "" && c.Dir != "" {
-			_ = workcopy.Remove(wd, c)
-		}
-		return got, cause
-	}
-	c, err = workcopy.Prepare(ctx, wd, p, a.ID)
+	c, err := workcopy.Prepare(ctx, d.work(), p, a.ID)
 	if err != nil {
 		if errors.Is(err, workcopy.ErrNotGitRepo) {
 			err = fmt.Errorf("%w: %v", ErrNotGit, err)
 		}
-		return fail("fix.cause.prepare_failed", err)
+		return d.failStart(ctx, a, c, "fix.cause.prepare_failed", err)
+	}
+	if len(strongHits(c.SecretHits)) > 0 {
+		return d.hold(ctx, a, c)
+	}
+	return d.launch(ctx, a, fi, p, c)
+}
+
+// policyGates are the refusals of a project an external agent never works on,
+// or not yet: health, strict_local, no consent.
+func (d Deps) policyGates(ctx context.Context, p project.Project) error {
+	if p.Classification == policy.ClassHealth {
+		return ErrHealthForbidden
+	}
+	if d.Policy.Sovereignty.Mode == policy.ModeStrictLocal {
+		return ErrStrictLocal
+	}
+	ok, err := d.consentOK(ctx, p)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrConsentRequired
+	}
+	return nil
+}
+
+// agentGates says the agent can run now.
+func (d Deps) agentGates(ctx context.Context) error {
+	if st := d.agentStatus(ctx); st.Hint != "" {
+		return &AgentUnavailableError{Status: st}
+	}
+	if d.Gateway == nil {
+		return errors.New("the fix service needs the egress gateway")
+	}
+	return nil
+}
+
+// startGates are the gates a held attempt passes again at the person's yes.
+func (d Deps) startGates(ctx context.Context, p project.Project) error {
+	if err := d.policyGates(ctx, p); err != nil {
+		return err
+	}
+	return d.agentGates(ctx)
+}
+
+// failStart ends an attempt that has not reached its agent. c is the copy once
+// prepared: until SetWork records it in the attempt, cleanup cannot find it, so
+// it is removed here (final review I6).
+func (d Deps) failStart(ctx context.Context, a Attempt, c workcopy.Copy, key string, cause error) (Attempt, error) {
+	repo := d.repo()
+	text := i18n.T(d.lang(), plainCause(key, cause))
+	if repo.SetState(ctx, a.ID, []State{StatePreparing}, StateFailed, text) == nil {
+		_ = repo.SetCauseDetail(ctx, a.ID, auditDetail(d, cause))
+	}
+	got, _ := repo.GetAttempt(ctx, a.ID)
+	d.cleanup(ctx, got, true)
+	if got.Work.Copy.Dir == "" && c.Dir != "" {
+		_ = workcopy.Remove(d.work(), c)
+	}
+	return got, cause
+}
+
+// launch takes a prepared attempt to its agent: the brief, Michel's update,
+// the token, the allow proxy, the session. Here the code starts to leave the
+// computer: no search hit reaches it unanswered (Start, ContinueHeld).
+func (d Deps) launch(ctx context.Context, a Attempt, fi scan.Finding, p project.Project, c workcopy.Copy) (Attempt, error) {
+	repo := d.repo()
+	lang := d.lang()
+	wd := d.work()
+	origin := a.Origin
+	var err error
+	fail := func(key string, cause error) (Attempt, error) {
+		return d.failStart(ctx, a, c, key, cause)
+	}
+	if text := weakHitsMessage(lang, weakHits(c.SecretHits)); text != "" {
+		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: text})
 	}
 	m := mask.New()
 	b, err := brief.Build(ctx, brief.Deps{Store: d.Store, DataDir: d.DataDir, Policy: d.Policy, Lang: lang}, fi.ID, m)
@@ -639,9 +699,6 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 		closeProxy()
 		return fail("fix.cause.prepare_failed", err)
 	}
-	if text := secretHitsMessage(lang, c.SecretHits); text != "" {
-		_, _ = repo.AddMessage(ctx, Message{AttemptID: a.ID, Role: RoleMichel, Text: text})
-	}
 	r := &running{sess: sess, masker: m, saved: m.Len(), closeProxy: closeProxy, done: make(chan struct{})}
 	d.sessions().add(a.ID, r)
 	go d.run(a.ID, r)
@@ -652,19 +709,40 @@ func Start(ctx context.Context, d Deps, findingID string, origin string) (Attemp
 	return got, nil
 }
 
-// secretHitsMessage tells the user, in plain words, that secrets seem
-// written in the copy's files (at most five files named) and what to do:
-// move the secret out of the code, or exclude the folder that holds it
-// (project.Exclude takes folder names, not paths: the folders are named).
-// "" when there is none.
+// secretHitsMessage tells the user, in plain words, that the agent did not
+// start because keys seem written in the copy's files (at most five files
+// named) and what to do: move the key out of the code, or exclude the folder
+// that holds it (project.Exclude takes folder names, not paths: the folders
+// are named). "" when there is none.
 func secretHitsMessage(lang i18n.Lang, hits []mask.Hit) string {
 	n := len(hits)
 	if n == 0 {
 		return ""
 	}
-	files, folders := []string{}, []string{}
+	files, folders := hitPlaces(hits)
+	if len(folders) == 0 {
+		return i18n.N(lang, "fix.msg.secret_hits", n, strings.Join(files, ", "))
+	}
+	return i18n.N(lang, "fix.msg.secret_hits_folder", n, strings.Join(files, ", "), strings.Join(folders, ", "))
+}
+
+// weakHitsMessage is the warning about lines that talk about a key without one
+// that looks real: they do not stop the agent, and it can read them.
+func weakHitsMessage(lang i18n.Lang, hits []mask.Hit) string {
+	if len(hits) == 0 {
+		return ""
+	}
+	files, _ := hitPlaces(hits)
+	return i18n.N(lang, "fix.msg.weak_hits", len(hits), strings.Join(files, ", "))
+}
+
+// hitPlaces names the first files of hits and their folders, masked: a file
+// can be named like a key.
+func hitPlaces(hits []mask.Hit) (files, folders []string) {
+	m := mask.New()
+	files, folders = []string{}, []string{}
 	for _, h := range hits {
-		f := scan.SanitizeText(h.File)
+		f := m.Mask(scan.SanitizeText(h.File))
 		if !slices.Contains(files, f) && len(files) < 5 {
 			files = append(files, f)
 			if dir := path.Dir(f); dir != "." {
@@ -674,10 +752,7 @@ func secretHitsMessage(lang i18n.Lang, hits []mask.Hit) string {
 			}
 		}
 	}
-	if len(folders) == 0 {
-		return i18n.N(lang, "fix.msg.secret_hits", n, strings.Join(files, ", "))
-	}
-	return i18n.N(lang, "fix.msg.secret_hits_folder", n, strings.Join(files, ", "), strings.Join(folders, ", "))
+	return files, folders
 }
 
 // causeKey maps an error event of the agent to a catalog key.
@@ -1598,6 +1673,10 @@ func Refuse(ctx context.Context, d Deps, attemptID, reason string) error {
 	if err != nil {
 		return err
 	}
+	// Nothing was proposed to refuse: a held attempt ends as its "no" does.
+	if a.State == StateHeld {
+		return WithdrawHeld(ctx, d, attemptID)
+	}
 	if a.State != StatePreparing && a.State != StateProposed && a.State != StateApproved {
 		return fmt.Errorf("%w (the attempt is %s)", ErrBadTransition, a.State)
 	}
@@ -1632,13 +1711,35 @@ func Refuse(ctx context.Context, d Deps, attemptID, reason string) error {
 	})
 }
 
-// Prove settles the applied attempts of the project after a scan: an
-// attempt is proven_fixed when the scan no longer sees the finding and the
-// fix commit is in the current branch of the user's repository
-// (workcopy.IsMerged); gone without the merge, or merged but still seen, it
-// is inconclusive (the finding keeps the status the scan gave it). It
-// returns the number proven.
-func Prove(ctx context.Context, d Deps, projectID string) (int, error) {
+// Pass tells which tools looked at a project in one pass of michel scan. Only
+// a tool that looked can settle a fix of what it reports.
+type Pass struct {
+	// Scanned: the OSV scan read the lockfiles of the project. A scan that
+	// found none leaves the findings as they were and proves nothing.
+	Scanned bool
+	// Sources are the plugin sources that ran and stored their results in
+	// this pass. A plugin turned off, not meant to run, or failed is not one.
+	Sources map[string]bool
+}
+
+// looked tells whether the source of a finding looked in this pass ("" is the
+// OSV scan).
+func (p Pass) looked(sourceKey string) bool {
+	if sourceKey == "" {
+		return p.Scanned
+	}
+	return p.Sources[sourceKey]
+}
+
+// Prove settles the applied attempts of the project at the end of a pass,
+// once every tool of the pass has run: an attempt is proven_fixed when the
+// tool that reported the finding no longer sees it and the fix commit is in
+// the current branch of the user's repository (workcopy.IsMerged); gone
+// without the merge, or merged but still seen, it is inconclusive (the
+// finding keeps the status the tool gave it). When that tool did not look in
+// this pass (see Pass), the attempt stays applied, whatever the status says:
+// the status is older than this pass. It returns the number proven.
+func Prove(ctx context.Context, d Deps, projectID string, pass Pass) (int, error) {
 	repo := d.repo()
 	lang := d.lang()
 	applied, err := repo.ListAttempts(ctx, projectID, string(StateApplied))
@@ -1656,12 +1757,15 @@ func Prove(ctx context.Context, d Deps, projectID string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	status := map[string]string{}
+	status, sourceOf := map[string]string{}, map[string]string{}
 	for _, f := range findings {
-		status[f.ID] = f.Status
+		status[f.ID], sourceOf[f.ID] = f.Status, f.SourceKey
 	}
 	proven := 0
 	for _, a := range applied {
+		if !pass.looked(sourceOf[a.FindingID]) {
+			continue
+		}
 		prop, ok, err := repo.CurrentProposal(ctx, a.ID)
 		if err != nil {
 			return proven, err
@@ -1704,7 +1808,7 @@ var idFolder = regexp.MustCompile(`^[0-9A-Za-z]{1,64}$`)
 // finished are the states whose copy has no use any more.
 func finished(s State) bool {
 	switch s {
-	case StateRefused, StateFailed, StateApplied, StateProvenFixed, StateInconclusive, StateSuperseded, StateUnknown:
+	case StateRefused, StateFailed, StateWithdrawn, StateApplied, StateProvenFixed, StateInconclusive, StateSuperseded, StateUnknown:
 		return true
 	}
 	return false
@@ -1742,6 +1846,10 @@ func Sweep(ctx context.Context, d Deps) error {
 	if err := d.purge(ctx); err != nil {
 		return err
 	}
+	if err := d.expireHeld(ctx); err != nil {
+		return err
+	}
+	workcopy.SweepNetRepos(d.work(), d.now())
 	preparing, err := repo.ListAttempts(ctx, "", string(StatePreparing))
 	if err != nil {
 		return err
@@ -1865,8 +1973,12 @@ func (d Deps) purge(ctx context.Context) error {
 
 // PurgeProject forgets what the fix service keeps for a project outside its
 // tables: the mask tables and tokens of its attempts in the secret store,
-// its copies, mirrors and briefs. The rows go with project.Repo.Purge.
+// its copies, mirrors and briefs, and the network rule Michel wrote for its Git
+// service if no other attached project uses it. The rows go with
+// project.Repo.Purge.
 func PurgeProject(ctx context.Context, d Deps, projectID string) error {
+	// A rule that cannot be removed does not keep the files: said at the end.
+	ruleErr := ReleaseProjectRule(ctx, d, projectID)
 	attempts, err := d.repo().ListAttempts(ctx, projectID, "")
 	if err != nil {
 		return err
@@ -1884,9 +1996,9 @@ func PurgeProject(ctx context.Context, d Deps, projectID string) error {
 	// (Windows): a few tries.
 	for try := 0; try < 5; try++ {
 		if err = RemoveProjectFiles(d.DataDir, projectID); err == nil {
-			return nil
+			return ruleErr
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return err
+	return errors.Join(err, ruleErr)
 }

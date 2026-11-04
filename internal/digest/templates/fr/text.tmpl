@@ -33,6 +33,9 @@ failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevée
 {{- if .FixWaiting}}{{fixWaiting (len .FixWaiting)}} :
 {{range .FixWaiting}}  {{.Package}} {{.OSVID}}{{if .Target}} → {{.Target}}{{end}}
 {{end}}{{end}}
+{{- if .FixHeld}}{{fixHeld (len .FixHeld)}} :
+{{range .FixHeld}}  {{.Package}} {{.OSVID}}
+{{end}}{{end}}
 {{- if .FixApplied}}Corrigées dans ton code :
 {{range .FixApplied}}  {{fixProven .}}
 {{end}}{{end}}

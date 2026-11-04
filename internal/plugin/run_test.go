@@ -232,7 +232,8 @@ func TestEnvIsAnAllowlist(t *testing.T) {
 		name := strings.ToUpper(kv[:strings.IndexByte(kv, '=')])
 		switch name {
 		case "PATH", "SYSTEMROOT", "TEMP", "TMP", "HOME", "USERPROFILE", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-			"TRIVY_SKIP_DB_UPDATE", "SEMGREP_SEND_METRICS":
+			"TRIVY_SKIP_DB_UPDATE", "SEMGREP_SEND_METRICS",
+			"GIT_NO_LAZY_FETCH", "GIT_ALLOW_PROTOCOL", "GIT_TERMINAL_PROMPT", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0":
 		default:
 			t.Errorf("variable outside the allowlist: %s", kv)
 		}

@@ -8,6 +8,8 @@ import (
 
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/scan"
+	"github.com/kvarot/michel/internal/serverrules"
 	"github.com/kvarot/michel/internal/target"
 )
 
@@ -73,6 +75,75 @@ func TestDigestServersSection(t *testing.T) {
 	text, _ = RenderText(d)
 	if len(d.Servers) != 0 || strings.Contains(text, "Servers") {
 		t.Errorf("inactive servers listed: %+v", d.Servers)
+	}
+}
+
+// An exposure counts like any finding of the server, through the very rules
+// and the very store: a number in the digest, never a port or an address.
+func TestDigestServersCountsExposure(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	tg, err := target.NewRepo(f.st).Add(ctx, target.Target{Name: "srv-demo", Host: "192.0.2.10", Kind: target.KindVPS, Env: target.EnvProd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := serverrules.Rules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := func(at time.Time, fs []scan.Finding) {
+		t.Helper()
+		tx, err := f.st.DB().BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if _, _, _, _, err := scan.ApplyServerFindings(ctx, tx, tg.ID, "run", at, fs, scan.ServerApply{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const address = "203.0.113.7"
+	fs := serverrules.Evaluate(tg, target.Inventory{ListenersRead: true, Listeners: []target.Listener{
+		{Address: address, Port: 5432, Scope: target.ScopeOpen}, {Address: "0.0.0.0", Port: 6379, Scope: target.ScopeOpen}}}, set)
+	if len(fs) != 2 {
+		t.Fatalf("findings %+v", fs)
+	}
+	noDetail := func(d Digest) {
+		t.Helper()
+		text, err := RenderText(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, err := RenderHTML(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, out := range []string{text, page} {
+			for _, bad := range []string{"5432", "6379", address, "0.0.0.0", "exposed_", "exposure"} {
+				if strings.Contains(out, bad) {
+					t.Errorf("the digest names %q:\n%s", bad, out)
+				}
+			}
+		}
+	}
+	store(now.Add(-2*time.Hour), fs)
+	for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
+		d := f.compute(lang, Options{})
+		if len(d.Servers) != 1 || d.Servers[0] != (ServerDigest{Name: "srv-demo", New: 2}) {
+			t.Fatalf("new: servers = %+v", d.Servers)
+		}
+		noDetail(d)
+	}
+	store(now.Add(-time.Hour), nil)
+	for _, lang := range []i18n.Lang{i18n.EN, i18n.FR} {
+		d := f.compute(lang, Options{})
+		if len(d.Servers) != 1 || d.Servers[0] != (ServerDigest{Name: "srv-demo", NoLongerOpen: 2}) {
+			t.Fatalf("gone: servers = %+v", d.Servers)
+		}
+		noDetail(d)
 	}
 }
 

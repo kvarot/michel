@@ -27,9 +27,17 @@ var dynamicPrefixes = []string{
 	// collect.unseen.* are the reasons stored in an inventory's Unseen lines;
 	// collect.secret_value is shown in place of a masked directive value.
 	"collect.unseen.", "collect.secret_value",
+	// api.git.<class> and its _hint are named by the class of a GitFailure.
+	"api.git.",
 	// serverrules.<rule>.title/.explain are named by the Key of each rule in
 	// the embedded rules.yaml.
 	"serverrules.",
+	// These api.project.* are named by the refusals of the add and scan routes
+	// (the key and its _hint) and by how a scan from the page ended (codeOfScan).
+	// The other api.project.* are named literally.
+	"api.project.bad_name", "api.project.duplicate", "api.project.forbidden_path", "api.project.no_database",
+	"api.project.not_dir", "api.project.nothing_to_scan", "api.project.relative_path", "api.project.scan_failed",
+	"api.project.scan_running", "api.project.scan_unavailable",
 	// api.target.* are named by the refusals of the server routes (servererr.Key),
 	// their hints (the key and _hint) and the state of a server.
 	"api.target.",

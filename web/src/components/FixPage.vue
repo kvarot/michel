@@ -1,8 +1,12 @@
 <template>
   <div class="m-fix">
-    <header class="m-fix__head">
+    <template v-if="noList">
+      <a href="#/" class="m-fix__back">{{ $t('path.back') }}</a>
+      <p v-if="isServer" class="m-muted m-fix__intro">{{ $t('fix.intro_server') }}</p>
+    </template>
+    <header v-else class="m-fix__head">
       <h1 class="m-fix__title">{{ $t('fix.title') }}</h1>
-      <p class="m-muted m-fix__intro">{{ serverOnly ? $t('fix.intro_server') : $t('fix.intro') }}</p>
+      <p v-if="loading || failure || !isEmpty" class="m-muted m-fix__intro">{{ serverOnly ? $t('fix.intro_server') : $t('fix.intro') }}</p>
     </header>
 
     <v-alert v-if="agentProblem && !serverOnly" type="warning" variant="tonal" density="comfortable" class="m-fix__agent" role="status">
@@ -24,10 +28,13 @@
       <v-btn size="small" variant="tonal" color="primary" @click="loadAll">{{ $t('app.retry') }}</v-btn>
     </div>
 
-    <p v-else-if="isEmpty" class="m-fix__state m-voice m-fix__empty">{{ $t('fix.empty') }}</p>
+    <div v-else-if="isEmpty" class="m-fix__state m-fix__empty">
+      <p class="m-voice">{{ $t('empty.fix') }}</p>
+      <v-btn color="primary" variant="flat" href="#/">{{ $t('empty.fix_action') }}</v-btn>
+    </div>
 
-    <div v-else class="m-fix__grid">
-      <nav class="m-fix__list" :aria-label="$t('fix.list_label')">
+    <div v-else class="m-fix__grid" :class="{ 'm-fix__grid--guided': noList }">
+      <nav v-if="!noList" class="m-fix__list" :aria-label="$t('fix.list_label')">
         <section v-for="g in groups" :key="g.key" class="m-fix__group" :aria-labelledby="`fix-group-${g.key}`">
           <h2 :id="`fix-group-${g.key}`" class="m-fix__group-title">
             {{ $t(`fix.group.${g.key}`) }}
@@ -60,44 +67,31 @@
           {{ $t('fix.loading') }}
         </div>
         <p v-else-if="!selectedFinding" class="m-voice m-fix__pick">{{ $t('fix.pick') }}</p>
-        <template v-else>
-          <div v-if="viewLoading" class="m-fix__state m-muted" role="status">
-            <v-progress-circular indeterminate size="18" width="2" color="primary" />
-            {{ $t('fix.loading') }}
-          </div>
-          <div v-else-if="serverOnly" class="m-fix__server">
-            <h2 class="m-fix__server-title">{{ $t('srvfix.center_title', { name: current.server.target.name }) }}</h2>
-            <p class="m-muted m-small">{{ $t('srvfix.no_agent_chat') }}</p>
-            <template v-if="current.proposal && (current.proposal.steps_server || []).length">
-              <h3 class="m-fix__server-sub">{{ $t('srvfix.what') }}</h3>
-              <ol class="m-fix__server-list">
-                <li v-for="(line, i) in current.proposal.steps_server" :key="i" class="m-voice">{{ line }}</li>
-              </ol>
-            </template>
-            <template v-if="(current.server.steps || []).length">
-              <h3 class="m-fix__server-sub">{{ $t('srvfix.steps') }}</h3>
-              <ul class="m-fix__steps" aria-live="polite">
-                <li v-for="(st, i) in current.server.steps" :key="i" :class="st.ok ? 'm-fix__step--ok' : 'm-fix__step--bad'">
-                  <span aria-hidden="true">{{ st.ok ? '✓' : '✗' }}</span>
-                  {{ stepText(st) }}
-                </li>
-              </ul>
-            </template>
-          </div>
-          <FixChat
-            v-else
-            :attempt="current"
-            :messages="messages"
-            :activity="activity"
-            :can-start="canStart"
-            :starting="startingFor !== '' && startingFor === selectedFinding.id"
-            :sending="sending"
-            :reconnecting="reconnecting"
-            @start="start"
-            @send="send"
-          />
-        </template>
-        <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
+        <div v-else-if="viewLoading" class="m-fix__state m-muted" role="status">
+          <v-progress-circular indeterminate size="18" width="2" color="primary" />
+          {{ $t('fix.loading') }}
+        </div>
+        <FailureGuide
+          v-else-if="guided"
+          class="m-fix__guide"
+          :attempt="current"
+          :finding="selectedFinding"
+          :sheet="isServer ? serverFlaw : sheetOfSelected"
+          :project-view="projectOfSelected"
+          :server="isServer"
+          :target="isServer ? target : null"
+          :can-start="isServer || canStart"
+          :why-not="agentProblem ? agentProblem.text : ''"
+          :starting="isServer ? acting === 'again' : starting"
+          :hold-busy="holdBusy"
+          @start="isServer ? again() : start()"
+          @to-proposal="toProposal"
+          @hold-continue="holdContinue"
+          @hold-withdraw="holdWithdraw"
+          @refresh="refreshAttempt"
+        />
+        <!-- Here in the template as on the screen: it is read and tabbed to before what follows. -->
+        <v-alert v-if="actionError" ref="actionAlert" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
           <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
           <p v-if="actionError.hint" class="m-small">{{ actionError.hint }}</p>
           <details v-if="actionError.data && actionError.data.detail" class="m-fix__detail">
@@ -105,6 +99,55 @@
             <p class="m-code m-small">{{ actionError.data.detail }}</p>
           </details>
         </v-alert>
+        <div v-if="serverOnly && !waiting && !viewLoading" class="m-fix__server">
+          <h2 class="m-fix__server-title">{{ $t('srvfix.center_title', { name: current.server.target.name }) }}</h2>
+          <p class="m-muted m-small">{{ $t('srvfix.no_agent_chat') }}</p>
+          <template v-if="current.proposal && (current.proposal.steps_server || []).length">
+            <h3 class="m-fix__server-sub">{{ $t('srvfix.what') }}</h3>
+            <ol class="m-fix__server-list">
+              <li v-for="(line, i) in current.proposal.steps_server" :key="i" class="m-voice">{{ line }}</li>
+            </ol>
+          </template>
+          <template v-if="(current.server.steps || []).length">
+            <h3 class="m-fix__server-sub">{{ $t('srvfix.steps') }}</h3>
+            <ul class="m-fix__steps" aria-live="polite">
+              <li v-for="(st, i) in current.server.steps" :key="i" :class="st.ok ? 'm-fix__step--ok' : 'm-fix__step--bad'">
+                <span aria-hidden="true">{{ st.ok ? '✓' : '✗' }}</span>
+                {{ stepText(st) }}
+              </li>
+            </ul>
+          </template>
+        </div>
+        <template v-if="showsWork">
+          <DecisionPanel v-if="toDecide" :key="toDecide.id" :finding="toDecide" @decided="onDecided" />
+          <details v-if="noList && current" class="m-fix__chat" :open="hasConversation || undefined">
+            <summary>{{ $t('path.chat') }}</summary>
+            <FixChat
+              :attempt="current"
+              :messages="messages"
+              :activity="activity"
+              :can-start="canStart"
+              :starting="starting"
+              :sending="sending"
+              :reconnecting="reconnecting"
+              no-start
+              @send="send"
+            />
+          </details>
+          <FixChat
+            v-else-if="!noList"
+            :attempt="current"
+            :messages="messages"
+            :activity="activity"
+            :can-start="canStart"
+            :starting="starting"
+            :sending="sending"
+            :reconnecting="reconnecting"
+            :no-start="chatHidesStart"
+            @start="start"
+            @send="send"
+          />
+        </template>
       </div>
 
       <ServerProposal
@@ -121,22 +164,23 @@
         @refuse="refuse"
         @snapshot="serverAction('snapshot-done', 'snapshot')"
         @applied="serverAction('applied-by-me', 'applied')"
+        @handover="(hash) => serverAction('hand-over', 'handover', { hash })"
         @resolve="serverAction('resolve', 'resolve')"
         @again="again"
       />
-      <FixProposal
-        v-else-if="selectedFinding"
-        class="m-fix__right"
-        :attempt="current"
-        :finding="selectedFinding"
-        :sheet="sheet"
-        :sheet-loading="sheetLoading"
-        :approving="approving"
-        :refusing="refusing"
-        :updated="proposalUpdated"
-        @approve="approve"
-        @refuse="refuse"
-      />
+      <div v-else-if="selectedFinding" class="m-fix__right m-fix__side">
+        <FixProposal
+          :attempt="current"
+          :finding="selectedFinding"
+          :sheet="sheet"
+          :sheet-loading="sheetLoading"
+          :approving="approving"
+          :refusing="refusing"
+          :updated="proposalUpdated"
+          @approve="approve"
+          @refuse="refuse"
+        />
+      </div>
     </div>
 
     <v-dialog v-model="consent.open" max-width="520" scrollable persistent>
@@ -155,12 +199,15 @@
 
 <script>
 import AiConsentDialog from './AiConsentDialog.vue'
+import DecisionPanel from './DecisionPanel.vue'
+import FailureGuide from './FailureGuide.vue'
 import FixChat from './FixChat.vue'
 import FixProposal from './FixProposal.vue'
 import ServerProposal from './ServerProposal.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
-import { acceptResult, activityLine, fixHash, groupAttempts, isFinal, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
+import { acceptResult, activityLine, consentProjectOf, offersDecision, decidingAttempt, fixHash, groupAttempts, isFinal, isOpen, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
+import { chatNoStart, isGone } from '../lib/pathView.js'
 import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../lib/serversView.js'
 
 
@@ -168,18 +215,13 @@ import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../
 // attempt started alone (level 2) or proposed through michel mcp shows up.
 const listEvery = 15000
 
-/** isOpen tells whether a finding still has to be fixed: new, pending, or decided "fix". */
-function isOpen(f) {
-  if (f.status === 'new' || f.status === 'pending') return true
-  return f.status === 'decided' && f.decision?.action === 'fix'
-}
-
-// FixPage is the "Corriger" page: the list by state on the left, the
-// conversation with the agent in the middle, the flaw and the proposal on
-// the right. route is {attempt, finding} from the address.
+// FixPage is the "Corriger" page: the list by state on the left, the path of
+// the flaw and the conversation with the agent in the middle, the flaw and the
+// proposal on the right. In the simple mode, a chosen flaw has no list and
+// its conversation is folded. route is {attempt, finding} from the address.
 export default {
   name: 'FixPage',
-  components: { AiConsentDialog, FixChat, FixProposal, ServerProposal },
+  components: { AiConsentDialog, DecisionPanel, FailureGuide, FixChat, FixProposal, ServerProposal },
   props: {
     route: { type: Object, default: () => ({ attempt: '', finding: '' }) },
   },
@@ -190,6 +232,8 @@ export default {
       failure: null,
       attempts: [],
       findings: [],
+      // projects is GET /projects: FailureGuide says what will happen from it.
+      projects: [],
       agent: null,
       agentError: null,
       agentLoading: false,
@@ -207,9 +251,14 @@ export default {
       sheetLoading: false,
       // startingFor is the finding whose start is running ('' for none).
       startingFor: '',
+      // focusGuide: the start's button is gone with the start: the next attempt
+      // shown takes the keyboard to its heading.
+      focusGuide: false,
       approving: false,
       refusing: false,
-      // acting is the server fix action running: snapshot, applied, resolve, again.
+      // holdBusy is the answer to a held attempt running: withdraw, continue, or ''.
+      holdBusy: '',
+      // acting is the server fix action running: snapshot, applied, handover, resolve, again.
       acting: '',
       // target is the sheet of the server of the attempt shown (a server fix).
       target: null,
@@ -244,6 +293,47 @@ export default {
       if (this.sheet && this.sheet.id === this.route.finding) return this.sheet
       return { id: this.route.finding, package: '', severity: '' }
     },
+    // guided: a flaw under its path, of a project or of a server.
+    guided() {
+      return !!this.selectedFinding
+    },
+    isServer() {
+      return !!this.current?.server
+    },
+    // noList: the simple mode leaves a chosen flaw alone on the page, of a project or of a server.
+    noList() {
+      return !this.$ui.advanced && !!(this.route.attempt || this.route.finding)
+    },
+    starting() {
+      return this.startingFor !== '' && this.startingFor === this.selectedFinding?.id
+    },
+    sheetOfSelected() {
+      return this.sheet && this.sheet.id === this.selectedFinding?.id ? this.sheet : null
+    },
+    projectOfSelected() {
+      const name = this.current?.project || this.sheetOfSelected?.project || this.selectedFinding?.project
+      return (name && this.projects.find((p) => p.name === name)) || null
+    },
+    // showsWork: the middle is on the flaw itself, not on a wait or a server's own view.
+    showsWork() {
+      return !this.waiting && !!this.selectedFinding && !this.viewLoading && !this.serverOnly
+    },
+    chatHidesStart() {
+      return chatNoStart({
+        guided: this.guided,
+        project: this.projectOfSelected,
+        gone: isGone(this.selectedFinding, this.sheetOfSelected),
+      })
+    },
+    // hasConversation opens the folded conversation: the agent works or has spoken.
+    hasConversation() {
+      return !!this.messages.length || this.current?.state === 'preparing'
+    },
+    // toDecide is the flaw's sheet when the page offers its decision.
+    toDecide() {
+      const id = this.selectedFinding?.id
+      return id && this.sheet?.id === id && !this.startingFor && offersDecision(decidingAttempt(this.attempts, id, this.current), isGone(this.selectedFinding, this.sheet)) ? this.sheet : null
+    },
     agentProblem() {
       if (this.agentError) {
         // The server's own sentence (no fix service here, or offline).
@@ -273,11 +363,32 @@ export default {
     },
   },
   watch: {
+    // An answer that is a refusal shows at the top of the page: the person who clicked lower down
+    // must see it, or the click seems to have done nothing (B2).
+    actionError(e) {
+      if (!e) return
+      this.$nextTick(() => {
+        const el = this.$refs.actionAlert?.$el
+        if (el?.scrollIntoView) el.scrollIntoView({ block: 'center' })
+      })
+    },
     route: {
       handler() {
         this.select()
       },
       deep: true,
+    },
+    // A state that changes takes buttons away, also when no click asked for it
+    // (a poll, a rule): the keyboard never falls to nothing with them.
+    'current.state': {
+      flush: 'pre',
+      handler() {
+        const el = document.activeElement
+        if (!el || el === document.body) return
+        this.$nextTick(() => {
+          if (!el.isConnected) this.guardFocus()
+        })
+      },
     },
     lang() {
       // Michel's sentences (the flaw, the refusals) come in the page's language.
@@ -357,6 +468,7 @@ export default {
       try {
         const [attempts, projects] = await Promise.all([api.get(this.q('/fixes')), findings ? api.get('/projects') : null])
         if (findings) {
+          this.projects = projects || []
           const lists = await Promise.all((projects || []).map((p) =>
             api.get(this.q(`/projects/${encodeURIComponent(p.name)}/findings`)).catch(() => [])))
           this.findings = lists.flat().filter(isOpen)
@@ -390,6 +502,26 @@ export default {
       } finally {
         if (this.sheetFor === id) this.sheetLoading = false
       }
+    },
+
+    /** toProposal brings the proposal and its Valider into view, on a phone far below the path. */
+    toProposal() {
+      const el = document.getElementById('fix-proposal-title') || document.getElementById('sfix-proposal-title')
+      if (!el) return
+      el.setAttribute('tabindex', '-1')
+      el.focus({ preventScroll: true })
+      el.scrollIntoView({ block: 'start' })
+    },
+
+    /**
+     * onDecided takes the answer as the new sheet, as FindingSheet does: the
+     * panel stays on screen with its confirmation and its proof.
+     */
+    onDecided(view) {
+      this.sheet = view
+      this.sheetFor = view.id
+      this.$emit('changed')
+      this.loadList(true)
     },
 
     /** select shows the address's attempt or finding. */
@@ -480,13 +612,14 @@ export default {
       }
     },
     /** serverAction sends the user's word on a server fix: snapshot-done, applied-by-me, resolve. */
-    async serverAction(path, what) {
+    async serverAction(path, what, body) {
       if (!this.current || this.acting) return
       const id = this.current.id
       this.acting = what
       this.actionError = null
+      this.focusGuide = true
       try {
-        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/${path}`))
+        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/${path}`), body)
         if (!this.alive || this.current?.id !== id) return
         this.show(v)
         this.pollServer(id)
@@ -500,6 +633,7 @@ export default {
         }
       } finally {
         this.acting = ''
+        this.guardFocus()
       }
     },
     /** again prepares a new fix of the same server finding (after a failure or a refusal). */
@@ -508,6 +642,7 @@ export default {
       if (!a?.server || this.acting) return
       this.acting = 'again'
       this.actionError = null
+      this.focusGuide = true
       try {
         const r = await api.post(this.q(`/targets/${encodeURIComponent(a.server.target.id)}/fix/${encodeURIComponent(a.finding.id)}`))
         if (!this.alive) return
@@ -518,9 +653,42 @@ export default {
         }
       } catch (err) {
         if (err?.status !== 401) this.actionError = err
+        this.focusGuide = false
       } finally {
         this.acting = ''
+        this.guardFocus()
       }
+    },
+    /**
+     * refreshAttempt reads the attempt on screen again after a click on the Git buttons
+     * or during the check. final: the check ended, the flaw may have left: its sheet and
+     * the lists are read again too.
+     */
+    async refreshAttempt({ final = false, done } = {}) {
+      const id = this.current?.id
+      if (!id) return
+      try {
+        if (final) {
+          this.sheetFor = ''
+          await this.loadList(true)
+        }
+        const v = await api.get(this.q(`/fix/${encodeURIComponent(id)}`))
+        if (!this.alive || this.current?.id !== id) return
+        const was = this.current.state
+        this.show(v)
+        if (was !== v.state) this.$emit('changed')
+        done?.(true)
+      } catch {
+        // Tried again at the next look; the page keeps what it holds.
+        done?.(false)
+      }
+    },
+    /** guardFocus: when the button in focus went away with what it did, the keyboard goes to the flaw's heading. */
+    guardFocus() {
+      this.$nextTick(() => {
+        const el = document.activeElement
+        if (this.alive && (!el || el === document.body)) document.getElementById('fix-guide-title')?.focus()
+      })
     },
     /** show puts an AttemptView (in full) on screen. */
     show(v) {
@@ -533,6 +701,10 @@ export default {
       this.patchList(v)
       if (v.server) this.loadTarget(v.server.target?.id)
       else this.loadSheet(v.finding?.id)
+      if (this.focusGuide) {
+        this.focusGuide = false
+        this.guardFocus()
+      }
     },
     /** patchList updates the attempt's line in the list. */
     patchList(v) {
@@ -572,6 +744,8 @@ export default {
           const was = this.current.state
           this.current = { ...this.current, state: d.state, cause: d.cause, approved_by: d.approved_by, branch: d.branch || '', updated_at: d.updated_at }
           this.patchList(this.current)
+          // The state event has no list of keys: only the attempt read in full has it.
+          if (d.state === 'held' && !this.current.hold) this.openAttempt(id)
           if (isFinal(d.state)) {
             this.closeStream()
             this.activity = ''
@@ -589,7 +763,7 @@ export default {
       if (!f || this.startingFor) return
       this.startingFor = f.id
       this.actionError = null
-      const project = this.current?.project || this.sheet?.project || f.project || ''
+      let project = consentProjectOf({ current: this.current, sheet: this.sheetOfSelected, finding: f })
       try {
         const r = await api.post(this.q(`/findings/${encodeURIComponent(f.id)}/fix`))
         const a = r?.attempt
@@ -598,12 +772,21 @@ export default {
           this.attempts.unshift({ ...a, messages: null })
           this.$emit('changed')
           // Only while the user still looks at that finding.
-          if (this.selectedFinding?.id === f.id) window.location.hash = fixHash({ attempt: a.id })
+          if (this.selectedFinding?.id === f.id) {
+            this.focusGuide = true
+            window.location.hash = fixHash({ attempt: a.id })
+          }
         }
       } catch (err) {
         if (!this.alive || err?.status === 401) return
         const code = err?.data?.code
-        if (err?.status === 409 && code === 'fix.err.consent_required') {
+        // A click while the flaw's sheet loads (B2): the project's name is in it, and the consent needs it.
+        if (!project && ((err?.status === 409 && code === 'fix.err.consent_required') || (err?.status === 403 && code === 'fix.err.strict_local'))) {
+          await this.loadSheet(f.id)
+          if (!this.alive) return
+          project = consentProjectOf({ current: this.current, sheet: this.sheetOfSelected, finding: f })
+        }
+        if (err?.status === 409 && code === 'fix.err.consent_required' && project) {
           this.consent = { open: true, project, lines: err.data.consent || [], switchMode: false, busy: false, error: '', findingId: f.id }
           return
         }
@@ -663,6 +846,7 @@ export default {
       const id = this.current.id
       this.approving = true
       this.actionError = null
+      this.focusGuide = true
       try {
         const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/approve`), { hash: this.shownHash })
         if (!this.alive || this.current?.id !== id) return
@@ -683,6 +867,57 @@ export default {
         }
       } finally {
         this.approving = false
+        this.guardFocus()
+      }
+    },
+    /**
+     * holdContinue is the person's yes for the list on screen (its hash). When the
+     * code changed since, nothing starts: the attempt is read again with its refusal.
+     */
+    async holdContinue(hash) {
+      if (!this.current || this.holdBusy) return
+      const id = this.current.id
+      this.holdBusy = 'continue'
+      this.actionError = null
+      this.focusGuide = true
+      try {
+        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/continue`), { hash })
+        if (!this.alive || this.current?.id !== id) return
+        this.closeStream()
+        this.show(v)
+        if (!isFinal(v.state)) this.follow(id)
+        this.$emit('changed')
+      } catch (err) {
+        if (err?.status === 401) return
+        this.actionError = err
+        if (this.alive && err?.status === 409) {
+          await this.openAttempt(id)
+          if (this.alive) this.actionError = err
+          this.$emit('changed')
+        }
+      } finally {
+        this.holdBusy = ''
+        this.guardFocus()
+      }
+    },
+    /** holdWithdraw is the person's no: the attempt ends, no agent. */
+    async holdWithdraw() {
+      if (!this.current || this.holdBusy) return
+      const id = this.current.id
+      this.holdBusy = 'withdraw'
+      this.actionError = null
+      this.focusGuide = true
+      try {
+        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/withdraw`))
+        if (!this.alive || this.current?.id !== id) return
+        this.closeStream()
+        this.show(v)
+        this.$emit('changed')
+      } catch (err) {
+        if (err?.status !== 401) this.actionError = err
+      } finally {
+        this.holdBusy = ''
+        this.guardFocus()
       }
     },
     async refuse(reason) {
@@ -690,6 +925,7 @@ export default {
       const id = this.current.id
       this.refusing = true
       this.actionError = null
+      this.focusGuide = true
       try {
         const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/refuse`), reason ? { reason } : {})
         if (!this.alive || this.current?.id !== id) return
@@ -700,6 +936,7 @@ export default {
         if (err?.status !== 401) this.actionError = err
       } finally {
         this.refusing = false
+        this.guardFocus()
       }
     },
   },
@@ -709,6 +946,7 @@ export default {
 <style scoped>
 .m-fix { display: grid; gap: 1.25rem; }
 .m-fix__head { display: grid; gap: 0.4rem; }
+.m-fix__back { justify-self: start; color: rgb(var(--v-theme-primary)); font-weight: 600; font-size: 0.9rem; }
 .m-fix__title { font-family: var(--m-voice); font-size: 2rem; font-weight: 600; margin: 0; }
 .m-fix__intro { margin: 0; max-width: 70ch; line-height: 1.5; }
 .m-fix__agent p { margin: 0; }
@@ -716,7 +954,7 @@ export default {
 .m-fix__agent-btn { margin: 0.25rem 0 0 -0.6rem; }
 .m-fix__state { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
 .m-fix__state p { margin: 0; flex-basis: 100%; }
-.m-fix__empty { font-size: 1.2rem; }
+.m-fix__empty .m-voice { font-size: 1.2rem; }
 .m-fix__grid {
   display: grid;
   grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr) minmax(17rem, 24rem);
@@ -749,6 +987,7 @@ export default {
 .m-fix__item--on { background: rgba(var(--v-theme-primary), 0.1); border-color: rgba(var(--v-theme-primary), 0.35); }
 .m-fix__item-top { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
 .m-fix__pkg { font-weight: 600; min-width: 0; }
+.m-fix__side { display: grid; gap: 1rem; min-width: 0; }
 .m-fix__center {
   display: grid;
   gap: 1rem;
@@ -758,6 +997,9 @@ export default {
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
 }
+.m-fix__grid--guided { grid-template-columns: minmax(0, 1fr) minmax(17rem, 24rem); }
+.m-fix__grid--guided .m-fix__center { padding: 0; border: 0; background: none; }
+.m-fix__chat > summary { cursor: pointer; font-weight: 600; color: rgb(var(--v-theme-primary)); padding: 0.25rem 0; }
 .m-fix__pick { font-size: 1.1rem; margin: 0; }
 .m-fix__server { display: grid; gap: 0.6rem; }
 .m-fix__server p { margin: 0; }
@@ -773,6 +1015,14 @@ export default {
 @media (max-width: 1100px) {
   .m-fix__grid { grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr); }
   .m-fix__right { grid-column: 2; }
+}
+@media (max-width: 1100px) {
+  .m-fix__grid--guided { grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem); }
+  .m-fix__grid--guided .m-fix__right { grid-column: 2; }
+}
+@media (max-width: 900px) {
+  .m-fix__grid--guided { grid-template-columns: minmax(0, 1fr); }
+  .m-fix__grid--guided .m-fix__right { grid-column: auto; }
 }
 @media (max-width: 760px) {
   .m-fix__grid { grid-template-columns: 1fr; }

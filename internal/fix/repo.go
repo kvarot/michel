@@ -57,7 +57,7 @@ func parseTime(s string) (time.Time, error) {
 
 // busyStates are the states of an attempt that is still being worked on or
 // waits for the user: the project has no other attempt meanwhile.
-const busyStates = `('preparing','proposed','approved','running')`
+const busyStates = `('preparing','held','proposed','approved','running')`
 
 // serverBusyStates are busyStates for a server, plus applied (the steps
 // after the script: site check, undo, recollection) and unknown (what the
@@ -306,32 +306,7 @@ func stepsJSON(steps []StepResult) (string, error) {
 // on an approved or applied attempt). ID and CreatedAt are set here.
 func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	now := r.now()
-	id, err := r.newID(now)
-	if err != nil {
-		return Proposal{}, err
-	}
-	p.ID, p.CreatedAt, p.Superseded = id, now, false
-	p.Files, p.StepsServer = nonNil(p.Files), nonNil(p.StepsServer)
-	files, err := json.Marshal(p.Files)
-	if err != nil {
-		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
-	}
-	steps, err := json.Marshal(p.StepsServer)
-	if err != nil {
-		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
-	}
-	if p.Commands == nil {
-		p.Commands = []RanCommand{}
-	}
-	cmds, err := json.Marshal(p.Commands)
-	if err != nil {
-		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
-	}
-	scripts, err := scriptsJSON(p)
-	if err != nil {
-		return Proposal{}, err
-	}
-	stepsDone, err := stepsJSON(p.Steps)
+	p, insert, err := r.proposalInsert(p, now)
 	if err != nil {
 		return Proposal{}, err
 	}
@@ -355,12 +330,83 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 		}
 		return Proposal{}, fmt.Errorf("%w (a proposal needs an attempt that is preparing or proposed, not %s)", ErrBadTransition, state)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
+	if err := insert(ctx, tx); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)`,
-		p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
-		p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds), scripts, stepsDone); err != nil {
+	if err := tx.Commit(); err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	return p, nil
+}
+
+// proposalInsert prepares p for storing: its id and date, and the function
+// that, inside a transaction, supersedes the attempt's proposals and inserts it.
+func (r *Repo) proposalInsert(p Proposal, now time.Time) (Proposal, func(context.Context, *sql.Tx) error, error) {
+	id, err := r.newID(now)
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	p.ID, p.CreatedAt, p.Superseded = id, now, false
+	p.Files, p.StepsServer = nonNil(p.Files), nonNil(p.StepsServer)
+	files, err := json.Marshal(p.Files)
+	if err != nil {
+		return Proposal{}, nil, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	steps, err := json.Marshal(p.StepsServer)
+	if err != nil {
+		return Proposal{}, nil, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	if p.Commands == nil {
+		p.Commands = []RanCommand{}
+	}
+	cmds, err := json.Marshal(p.Commands)
+	if err != nil {
+		return Proposal{}, nil, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	scripts, err := scriptsJSON(p)
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	stepsDone, err := stepsJSON(p.Steps)
+	if err != nil {
+		return Proposal{}, nil, err
+	}
+	return p, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)`,
+			p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
+			p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds), scripts, stepsDone)
+		return err
+	}, nil
+}
+
+// ReplaceApproved swaps the proposal of an approved attempt for p, approved
+// by by, in one transaction: the attempt never leaves approved, so the worker
+// never sees it as proposed, and a failure leaves the old approval whole.
+// fromProposalID must be the approved proposal (ErrBadTransition otherwise).
+func (r *Repo) ReplaceApproved(ctx context.Context, id, fromProposalID string, p Proposal, by string) (Proposal, error) {
+	now := r.now()
+	p.AttemptID = id
+	p, insert, err := r.proposalInsert(p, now)
+	if err != nil {
+		return Proposal{}, err
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET approved_by = ?, approved_proposal = ?, approved_hash = ?, updated_at = ?
+		WHERE id = ? AND state = ? AND approved_proposal = ?`, by, p.ID, p.Hash, ts(now), id, string(StateApproved), fromProposalID)
+	if err != nil {
+		return Proposal{}, fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Proposal{}, fmt.Errorf("%w (the attempt is no longer approved on that proposal)", ErrBadTransition)
+	}
+	if err := insert(ctx, tx); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -950,4 +996,99 @@ func (r *Repo) TargetBlock(ctx context.Context, targetID string) (string, error)
 		}
 	}
 	return block, nil
+}
+
+// GitAnswerRow is one project's answer about its Git service. URL is
+// Remote.Address: no secret and no SSH user. RuleWritten says the network rule of
+// Host is Michel's to remove.
+type GitAnswerRow struct {
+	ProjectID, Answer, RemoteName, URL, Host, Provider string
+	RuleWritten                                        bool
+	AnsweredAt                                         time.Time
+}
+
+// FixPush is a fix branch that reached the remote, kept with its first date.
+type FixPush struct {
+	AttemptID, CommitSHA, Host string
+	PushedAt                   time.Time
+}
+
+// GitAnswer returns the project's answer; ok is false when it never answered.
+func (r *Repo) GitAnswer(ctx context.Context, projectID string) (GitAnswerRow, bool, error) {
+	row := GitAnswerRow{ProjectID: projectID}
+	var written int
+	var at string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT answer, remote_name, url, host, provider, rule_written, answered_at
+		FROM project_remote WHERE project_id = ?`, projectID).Scan(&row.Answer, &row.RemoteName, &row.URL, &row.Host, &row.Provider, &written, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GitAnswerRow{}, false, nil
+	}
+	if err != nil {
+		return GitAnswerRow{}, false, fmt.Errorf("cannot read the Git answer: %w", err)
+	}
+	row.RuleWritten = written != 0
+	if row.AnsweredAt, err = parseTime(at); err != nil {
+		return GitAnswerRow{}, false, err
+	}
+	return row, true, nil
+}
+
+// SetGitAnswer stores the project's answer in place of the last one.
+func (r *Repo) SetGitAnswer(ctx context.Context, row GitAnswerRow) error {
+	written := 0
+	if row.RuleWritten {
+		written = 1
+	}
+	_, err := r.s.DB().ExecContext(ctx, `INSERT INTO project_remote (project_id, answer, remote_name, url, host, provider, rule_written, answered_at)
+		VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT (project_id) DO UPDATE SET answer = excluded.answer, remote_name = excluded.remote_name, url = excluded.url,
+			host = excluded.host, provider = excluded.provider, rule_written = excluded.rule_written, answered_at = excluded.answered_at`,
+		row.ProjectID, row.Answer, row.RemoteName, row.URL, row.Host, row.Provider, written, ts(r.now()))
+	if err != nil {
+		return fmt.Errorf("cannot save the Git answer: %w", err)
+	}
+	return nil
+}
+
+// PassGitRule hands the rule of host over to the other projects attached to it, so
+// that the last one to leave removes it. It returns how many there are.
+func (r *Repo) PassGitRule(ctx context.Context, projectID, host string) (int, error) {
+	res, err := r.s.DB().ExecContext(ctx, `UPDATE project_remote SET rule_written = 1
+		WHERE answer = 'yes' AND host = ? AND project_id <> ?`, host, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("cannot read who uses the rule: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("cannot read who uses the rule: %w", err)
+	}
+	return int(n), nil
+}
+
+// RecordPush notes that a fix branch reached the remote. A second click keeps the
+// first date.
+func (r *Repo) RecordPush(ctx context.Context, p FixPush) error {
+	_, err := r.s.DB().ExecContext(ctx, `INSERT INTO fix_push (attempt_id, commit_sha, host, pushed_at) VALUES (?,?,?,?)
+		ON CONFLICT(attempt_id) DO NOTHING`, p.AttemptID, p.CommitSHA, p.Host, ts(p.PushedAt))
+	if err != nil {
+		return fmt.Errorf("cannot save the push: %w", err)
+	}
+	return nil
+}
+
+// Push returns what was sent for an attempt; ok is false when nothing was.
+func (r *Repo) Push(ctx context.Context, attemptID string) (FixPush, bool, error) {
+	p := FixPush{AttemptID: attemptID}
+	var at string
+	err := r.s.DB().QueryRowContext(ctx, `SELECT commit_sha, host, pushed_at FROM fix_push WHERE attempt_id = ?`, attemptID).Scan(&p.CommitSHA, &p.Host, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return FixPush{}, false, nil
+	}
+	if err != nil {
+		return FixPush{}, false, fmt.Errorf("cannot read the push: %w", err)
+	}
+	if p.PushedAt, err = parseTime(at); err != nil {
+		return FixPush{}, false, err
+	}
+	return p, true, nil
 }

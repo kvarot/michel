@@ -182,7 +182,11 @@ func (d Deps) startServerAgent(ctx context.Context, findingID, origin string) (A
 	if d.Policy.Sovereignty.Mode == policy.ModeStrictLocal {
 		return Attempt{}, ErrStrictLocal
 	}
-	on, of, w := t, f, ServerWork{TargetID: t.ID}
+	on, of := t, f
+	w, err := d.workOn(ctx, t, f)
+	if err != nil {
+		return Attempt{}, err
+	}
 	if t.PreprodID != "" {
 		pt, err := d.Targets.Get(ctx, t.PreprodID)
 		if err != nil {

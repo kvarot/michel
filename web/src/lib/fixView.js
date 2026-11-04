@@ -1,6 +1,7 @@
 // Pure functions behind the Fix page: no DOM, no fetch, no storage.
 // Vitest covers them (fixView.test.js).
 import { translate } from '../i18n/index.js'
+import { cameBack } from './pathView.js'
 
 /** The four groups of the page's list, in the order they show. */
 export const fixGroups = ['todo', 'running', 'review', 'done']
@@ -9,11 +10,66 @@ export const fixGroups = ['todo', 'running', 'review', 'done']
 export const levels = [0, 1, 2, 3]
 
 /** The states after which nothing more happens to an attempt. */
-const finals = ['refused', 'applied', 'proven_fixed', 'inconclusive', 'failed', 'superseded']
+const finals = ['refused', 'applied', 'proven_fixed', 'inconclusive', 'failed', 'superseded', 'withdrawn']
 
 /** @param {string} state @returns {boolean} whether the attempt is over (the stream can stop). */
 export function isFinal(state) {
   return finals.includes(state)
+}
+
+/** @param {object} f FindingView @returns {boolean} whether a finding still has to be fixed: new, pending, or decided "fix". */
+export function isOpen(f) {
+  if (f.status === 'new' || f.status === 'pending') return true
+  return f.status === 'decided' && f.decision?.action === 'fix'
+}
+
+/**
+ * canDecide tells whether the flaw view offers its decision: no fix yet, a
+ * project's fix that went nowhere, or one whose flaw came back. A fix under
+ * way or waiting has its own buttons; a server's flaw is decided on its server's sheet.
+ * @param {object|null} attempt AttemptView, null for a flaw without a fix
+ */
+export function canDecide(attempt) {
+  if (!attempt) return true
+  if (attempt.server) return false
+  return ['refused', 'failed', 'inconclusive', 'superseded', 'applied', 'withdrawn'].includes(attempt.state) || (!!attempt.finding && cameBack(attempt))
+}
+
+/**
+ * offersDecision says the page offers « Ta décision »: never on a flaw that is gone (the API
+ * refuses it, and the list of attempts it reads can be a little behind).
+ * @param {object|null} attempt
+ * @param {boolean} gone
+ */
+export function offersDecision(attempt, gone) {
+  return !gone && canDecide(attempt)
+}
+
+/**
+ * consentProjectOf is the project a flaw's AI consent is for: the attempt shown, the sheet
+ * of this very flaw (never a sheet left from another one), the flaw itself. '' while nothing
+ * loaded says it yet: the page loads the sheet before it answers (B2).
+ * @param {{current?: object|null, sheet?: object|null, finding?: object|null}} args
+ */
+export function consentProjectOf({ current, sheet, finding }) {
+  const own = sheet && sheet.id === finding?.id ? sheet : null
+  return current?.project || own?.project || finding?.project || ''
+}
+
+/**
+ * decidingAttempt is the newest attempt of a flaw (by created_at, whatever the
+ * list order), else the one shown, else null.
+ * @param {object[]} attempts
+ * @param {string} id finding id
+ * @param {object|null} shown
+ */
+export function decidingAttempt(attempts, id, shown) {
+  let best = null
+  for (const a of attempts || []) {
+    if (a?.finding?.id !== id) continue
+    if (!best || String(a.created_at || '') > String(best.created_at || '')) best = a
+  }
+  return best || shown || null
 }
 
 /**
@@ -30,6 +86,7 @@ export function groupOf(state) {
     case 'approved':
     case 'running':
       return 'running'
+    case 'held':
     case 'proposed':
     case 'unknown':
       return 'review'
@@ -101,14 +158,17 @@ export function proposalFacts(attempt, sheet) {
  * proposalSentence says the proposal in Michel's voice, e.g. « Je passe
  * guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; 12 endroits l'utilisent, les tests
  * passent. » Without a target it says the package is updated; without
- * analysis (sites null) the call sites are left out.
+ * analysis (sites null) the call sites are left out. A flaw with no package
+ * (found in the code by an external tool) has no version to speak of.
  * @param {{package: string, from: string, to: string, sites: number|null, tests: string}|null} facts
  * @param {string} lang
  */
 export function proposalSentence(facts, lang) {
   if (!facts) return ''
   const t = (key, params) => translate(lang, key, params)
-  const head = facts.to
+  const head = !facts.package
+    ? t('fix.proposal.code')
+    : facts.to
     ? t('fix.proposal.move', { package: facts.package, from: facts.from || '?', to: facts.to })
     : t('fix.proposal.update', { package: facts.package, from: facts.from || '?' })
   const parts = []
@@ -216,14 +276,30 @@ export function splitMasked(text) {
 }
 
 /**
- * stateLine says, under a line of the list, where it stands.
+ * causeSentence makes a sentence of an attempt's cause: Michel's causes may
+ * start in lower case and have no final period, to fit after a colon.
+ * @param {string|undefined} cause
+ * @returns {string}
+ */
+export function causeSentence(cause) {
+  const c = String(cause || '').trim()
+  if (!c) return ''
+  const up = c.charAt(0).toLocaleUpperCase() + c.slice(1)
+  return /[.!?…»]$/.test(up) ? up : `${up}.`
+}
+
+/**
+ * stateLine says, under a line of the list, where it stands. inconclusive is a
+ * result (fix.Prove), so it says why, and Michel does not check it again.
  * @param {{kind: string, attempt?: object}} item a line of groupAttempts
  * @param {string} lang
  */
 export function stateLine(item, lang) {
   if (!item || item.kind !== 'attempt') return translate(lang, 'fix.line.none')
   const a = item.attempt || {}
-  const known = ['preparing', 'proposed', 'approved', 'refused', 'applied', 'proven_fixed', 'inconclusive', 'failed', 'superseded']
+  if (a.state === 'inconclusive') return [translate(lang, 'fix.line.inconclusive'), causeSentence(a.cause)].filter(Boolean).join(' ')
+  if (a.finding && cameBack(a)) return translate(lang, 'fix.line.came_back')
+  const known = ['preparing', 'held', 'proposed', 'approved', 'running', 'refused', 'applied', 'proven_fixed', 'failed', 'withdrawn', 'superseded', 'unknown']
   return translate(lang, `fix.line.${known.includes(a.state) ? a.state : 'failed'}`, { branch: a.branch || '' })
 }
 

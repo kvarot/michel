@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'vitest'
+import fr from '../i18n/fr.json'
+import en from '../i18n/en.json'
 import {
-  backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, serverHeadline,
-  serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers,
+  backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, restoreNeeded,
+  canOfferAgent, handOverOf, serverSettingsHash, cardLine, cardOfFinding, doneKey, guideServerTitle, healthServer, lastAttemptOf, serverAttemptLine, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers, provenOnlyOnPreprod,
 } from './serversView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -103,21 +105,6 @@ describe('labels', () => {
 })
 
 describe('headline and order', () => {
-  test('serverHeadline: an urgent or critical server flaw is the headline, never "all calm" (B1)', () => {
-    const urgent = srv({ name: 'srv-demo', open_findings: 4, critical_open: 2, urgent_open: 2, state: { code: 'findings' } })
-    expect(serverHeadline([srv(), urgent], 'fr')).toEqual({
-      title: 'Le serveur srv-demo a une faille urgente.',
-      word: 'Ouvre sa fiche : elle dit quoi faire en premier.',
-    })
-    expect(serverHeadline([urgent, { ...urgent, id: 'b', name: 'srv-b' }], 'fr').title).toBe('2 serveurs ont une faille urgente.')
-    const critical = srv({ name: 'srv-demo', open_findings: 1, critical_open: 1, urgent_open: 0, state: { code: 'findings' } })
-    expect(serverHeadline([critical], 'fr').title).toBe('Le serveur srv-demo a une faille critique.')
-    expect(serverHeadline([critical], 'en').title).toBe('The server srv-demo has a critical flaw.')
-    expect(serverHeadline([srv({ open_findings: 2, state: { code: 'findings' } })], 'fr')).toBe(null)
-    expect(serverHeadline([{ ...urgent, active: false }], 'fr')).toBe(null)
-    expect(serverHeadline(null, 'fr')).toBe(null)
-  })
-
   test('touchedServers puts the urgent ones first', () => {
     const a = srv({ id: 'a', open_findings: 5, state: { code: 'findings' } })
     const b = srv({ id: 'b', open_findings: 1, urgent_open: 1, critical_open: 1, state: { code: 'findings' } })
@@ -183,7 +170,7 @@ describe('stepLine', () => {
   test('and in English, with a plain word for what it does not know', () => {
     expect(stepLine({ op: 'reload_service', ok: true, detail: 'done' }, 'en')).toBe('Reload of PHP: done.')
     expect(stepLine({ op: 'package_upgrade', ok: false, detail: 'the upgrade failed; the package may have changed' }, 'en'))
-      .toBe('Package upgrade: the upgrade failed, the package may have changed.')
+      .toBe('Software update: the update failed, the software may have changed.')
     expect(stepLine({ op: 'mystery', ok: false, detail: 'weird' }, 'en')).toBe('Step: failed.')
     expect(stepLine({ op: 'mystery', ok: true, detail: 'weird' }, 'fr')).toBe('Étape : faite.')
     expect(stepLine(null, 'fr')).toBe('')
@@ -229,9 +216,9 @@ describe('backupLine', () => {
 
 describe('routes', () => {
   test('reads and writes the Servers page addresses', () => {
-    expect(serversRoute('#/servers')).toEqual({ id: '' })
-    expect(serversRoute('#/servers/01SRV')).toEqual({ id: '01SRV' })
-    expect(serversRoute('#/servers/a%20b')).toEqual({ id: 'a b' })
+    expect(serversRoute('#/servers')).toEqual({ id: '', finding: '' })
+    expect(serversRoute('#/servers/01SRV')).toEqual({ id: '01SRV', finding: '' })
+    expect(serversRoute('#/servers/a%20b')).toEqual({ id: 'a b', finding: '' })
     expect(serversRoute('#/serversx')).toBe(null)
     expect(serversRoute('#/fix')).toBe(null)
     expect(serversHash('01SRV')).toBe('#/servers/01SRV')
@@ -247,5 +234,191 @@ describe('routes', () => {
     ]
     expect(touchedServers(list).map((t) => t.id)).toEqual(['c', 'b'])
     expect(touchedServers(null)).toEqual([])
+  })
+})
+
+describe('restoreNeeded', () => {
+  const attempt = (steps, extra = {}) => ({ state: 'failed', server: { needs_snapshot: true, steps, ...extra } })
+  test('a package upgrade that failed asks to restore', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: false, detail: 'failed' }]))).toBe(true)
+  })
+  test('a site that went down after the upgrade asks to restore', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: true, detail: '' }, { op: 'check_site', ok: false, detail: 'down' }]))).toBe(true)
+  })
+  test('a step that did not run does not', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: false, detail: 'not run' }]))).toBe(false)
+  })
+  test('a step that went well does not', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: true, detail: '' }]))).toBe(false)
+  })
+  test('another step that failed does not', () => {
+    expect(restoreNeeded(attempt([{ op: 'config_change', ok: false, detail: 'failed' }]))).toBe(false)
+  })
+  test('a fix without a snapshot does not', () => {
+    expect(restoreNeeded(attempt([{ op: 'package_upgrade', ok: false, detail: 'failed' }], { needs_snapshot: false }))).toBe(false)
+  })
+  test('another state does not', () => {
+    expect(restoreNeeded({ ...attempt([{ op: 'package_upgrade', ok: false, detail: 'failed' }]), state: 'applied' })).toBe(false)
+  })
+  test('no attempt, or a project fix, does not', () => {
+    expect(restoreNeeded(null)).toBe(false)
+    expect(restoreNeeded({ state: 'failed' })).toBe(false)
+  })
+})
+
+describe('the cards of a sheet', () => {
+  const cards = [{ key: 'a', finding: { id: 'f1' }, ids: ['f1', 'f2'] }, { key: 'b', finding: { id: 'f3' }, ids: ['f3'] }]
+  test('a chosen flaw finds its card, also through a merged runtime', () => {
+    expect(cardOfFinding(cards, 'f2').key).toBe('a')
+    expect(cardOfFinding(cards, 'f3').key).toBe('b')
+    expect(cardOfFinding(cards, 'nope')).toBe(null)
+    expect(cardOfFinding(cards, '')).toBe(null)
+  })
+  test('the last attempt is the newest, whatever its state (GET /fixes is newest first)', () => {
+    const fixes = [{ id: 'x', finding: { id: 'other' } }, { id: 'n', state: 'failed', finding: { id: 'f2' } }, { id: 'o', state: 'proven_fixed', finding: { id: 'f1' } }]
+    expect(lastAttemptOf(fixes, cards[0]).id).toBe('n')
+    expect(lastAttemptOf(fixes, cards[1])).toBe(null)
+  })
+})
+
+describe('the line of a card', () => {
+  const on = (state, extra = {}) => ({ id: 'a', state, server: { target: { id: 'srv', name: 'srv-demo' } }, ...extra })
+  test('a final attempt: the path says its state, no second sentence', () => {
+    for (const s of ['proven_fixed', 'failed', 'refused', 'inconclusive', 'superseded']) expect(cardLine(on(s), 'fr', 'srv'), s).toBe('')
+  })
+  test('an attempt under way keeps its line', () => {
+    expect(cardLine(on('proposed'), 'fr', 'srv')).toBe('Une correction attend ta validation.')
+  })
+  test('on its preprod: the line names where it runs', () => {
+    const pre = { id: 'p', state: 'proposed', server: { target: { id: 'pre', name: 'srv-pre' } } }
+    expect(cardLine(pre, 'fr', 'srv')).toBe('Sur ta préprod srv-pre : Une correction attend ta validation.')
+    expect(cardLine({ ...pre, state: 'failed' }, 'fr', 'srv')).toBe('Ce dernier essai a eu lieu sur ta préprod srv-pre.')
+  })
+})
+
+describe('the sentence under a server proposal', () => {
+  test('a flaw that came back is not said corrected', () => {
+    expect(doneKey({ state: 'proven_fixed', finding: { status: 'new' } })).toBe('')
+    expect(doneKey({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe('srvfix.done.proven_fixed')
+  })
+  test('the other final states', () => {
+    for (const s of ['inconclusive', 'refused', 'superseded']) expect(doneKey({ state: s, finding: {} })).toBe(`srvfix.done.${s}`)
+    expect(doneKey({ state: 'failed', cause: '' })).toBe('srvfix.done.failed')
+    expect(doneKey({ state: 'failed', cause: 'x' })).toBe('')
+    expect(doneKey({ state: 'proposed' })).toBe('')
+  })
+})
+
+describe('an agent at work is named', () => {
+  test('preparing, by origin', () => {
+    expect(serverAttemptLine({ state: 'preparing', origin: 'agent' }, 'fr')).toContain("agent d'IA")
+    expect(serverAttemptLine({ state: 'preparing', origin: 'agent.auto' }, 'fr')).toContain("agent d'IA")
+    expect(serverAttemptLine({ state: 'preparing', origin: 'michel.server' }, 'fr')).toBe('Michel prépare les scripts.')
+  })
+})
+
+describe('the attempt on a production card', () => {
+  const cards = [{ key: 'a', finding: { id: 'f1' }, ids: ['f1', 'f2'] }]
+  const pre = (state, extra = {}) => ({ id: 'p', state, created_at: '2026-11-03T10:00:00Z', finding: { id: 'pf', status: 'new' }, server: { prod_finding_id: 'f2' }, ...extra })
+  const own = { id: 'o', state: 'failed', created_at: '2026-11-02T10:00:00Z', finding: { id: 'f1' } }
+  test('the preprod attempt tried for this flaw shows', () => {
+    expect(lastAttemptOf([], cards[0], [pre('proposed')]).id).toBe('p')
+    expect(lastAttemptOf([], cards[0], [pre('failed')]).id).toBe('p')
+    expect(lastAttemptOf([], cards[0], [{ ...pre('proposed'), server: { prod_finding_id: 'other' } }])).toBe(null)
+  })
+  test('the newest of the two', () => {
+    expect(lastAttemptOf([own], cards[0], [pre('proposed')]).id).toBe('p')
+    expect(lastAttemptOf([{ ...own, created_at: '2026-11-04T10:00:00Z' }], cards[0], [pre('proposed')]).id).toBe('o')
+  })
+  test('proven or gone on the preprod says nothing of the production: never « Vérifiée » here', () => {
+    expect(lastAttemptOf([], cards[0], [pre('proven_fixed')])).toBe(null)
+    expect(lastAttemptOf([], cards[0], [pre('failed', { finding: { id: 'pf', status: 'gone' } })])).toBe(null)
+    expect(lastAttemptOf([], cards[0], [pre('superseded')])).toBe(null)
+  })
+  test('only the newest preprod attempt counts: an older failure does not come back', () => {
+    expect(lastAttemptOf([], cards[0], [pre('proven_fixed'), pre('failed', { id: 'older' })])).toBe(null)
+  })
+})
+
+describe('who may be offered an agent', () => {
+  test('never when the API refuses for health', () => {
+    expect(healthServer({ kind: 'hds' })).toBe(true)
+    expect(healthServer({ kind: 'vps', classification: 'health' })).toBe(true)
+    expect(healthServer({ kind: 'vps', classification: 'sensitive' })).toBe(false)
+    expect(healthServer(null)).toBe(false)
+    expect(canOfferAgent({ kind: 'vps' }, null)).toBe(true)
+    expect(canOfferAgent({ kind: 'hds' }, null)).toBe(false)
+    expect(canOfferAgent({ kind: 'vps', classification: 'health' }, null)).toBe(false)
+    expect(canOfferAgent({ kind: 'vps' }, { kind: 'hds' })).toBe(false)
+  })
+})
+
+describe('the title of a verified fix', () => {
+  const f = { osv_id: 'expose_php', summary: 'expose_php is risky; advised: Off', package: 'expose_php' }
+  test('the flaw is gone from the sheet: the proposal has the translated words', () => {
+    expect(guideServerTitle(f, null, { proposal: { summary: 'Régler expose_php sur Off.' } }, 'fr')).toBe('Régler expose_php sur Off.')
+  })
+  test('the sheet has the flaw: its title', () => {
+    expect(guideServerTitle(f, { rule: 'r', title: 'PHP dit sa version' }, { proposal: { summary: 'x' } }, 'fr')).toBe('PHP dit sa version')
+  })
+  test('nothing else known: the finding', () => {
+    expect(guideServerTitle(f, null, null, 'fr')).toBe('expose_php is risky; advised: Off')
+  })
+})
+
+describe('proven on the preprod, nothing prepared here', () => {
+  const card = { ids: ['f1', 'f2'] }
+  const pre = (state, extra = {}) => ({ id: 'p', state, created_at: '2026-11-03T10:00:00Z', finding: { id: 'pf', status: 'new' }, server: { prod_finding_id: 'f2', target: { id: 'tp', name: 'srv-pre' } }, ...extra })
+  const own = { id: 'o', state: 'failed', created_at: '2026-11-02T10:00:00Z', finding: { id: 'f1' } }
+  test('says it, with the name', () => {
+    expect(provenOnlyOnPreprod([], [pre('proven_fixed')], card)).toBe('srv-pre')
+    expect(provenOnlyOnPreprod([], [pre('proven_fixed'), pre('failed', { id: 'older' })], card)).toBe('srv-pre')
+  })
+  test('not when the production has an attempt, or the preprod attempt is another state', () => {
+    expect(provenOnlyOnPreprod([own], [pre('proven_fixed')], card)).toBe('')
+    expect(provenOnlyOnPreprod([], [pre('failed')], card)).toBe('')
+    expect(provenOnlyOnPreprod([], [pre('proven_fixed', { server: { prod_finding_id: 'zz', target: { name: 'x' } } })], card)).toBe('')
+    expect(provenOnlyOnPreprod([], [], card)).toBe('')
+  })
+  test('the words say what to do', () => {
+    expect(fr['servers.line.proven_preprod_only']).toBe("Prouvée sur ta préprod {name} ; la correction de ce serveur n'a pas pu être préparée.")
+    expect(fr['servers.line.proven_preprod_only_do']).toContain('Vérifie à nouveau la préprod')
+    expect(fr['servers.line.proven_preprod_only_do']).toContain('délie-la')
+    expect(en['servers.line.proven_preprod_only']).toContain('{name}')
+    expect(en['servers.line.proven_preprod_only_do']).toContain('unlink')
+  })
+})
+
+describe('the hand over to Michel (R62)', () => {
+  const approved = (hand, executor = 'user', state = 'approved') => ({ state, server: { executor, hand_over: hand } })
+  test('offered only for an approved fix the user was to run', () => {
+    expect(handOverOf(approved('ready'))).toBe('ready')
+    expect(handOverOf(approved('settings'))).toBe('settings')
+    expect(handOverOf(approved('ready', 'user', 'proposed'))).toBe('')
+    expect(handOverOf(approved('ready', 'michel'))).toBe('')
+    expect(handOverOf(approved(undefined))).toBe('')
+    expect(handOverOf(approved('retry', 'michel'))).toBe('retry')
+    expect(handOverOf(approved('retry', 'michel', 'running'))).toBe('')
+    expect(handOverOf(null)).toBe('')
+  })
+  test('the words exist in both catalogs, and the confirmation says administrator rights', () => {
+    for (const k of ['srvfix.handover.ready', 'srvfix.handover.action', 'srvfix.handover.title', 'srvfix.handover.body', 'srvfix.handover.yes', 'srvfix.handover.no', 'srvfix.handover.settings', 'srvfix.handover.settings_link']) {
+      expect(fr[k], k).toBeTruthy()
+      expect(en[k], k).toBeTruthy()
+    }
+    expect(fr['srvfix.handover.body']).toContain('administrateur')
+    expect(en['srvfix.handover.body']).toContain('administrator')
+    expect(fr['srvfix.handover.settings']).toContain('personne qui s')
+    expect(fr['srvfix.handover.settings']).toContain('Qui lance les scripts')
+  })
+})
+
+describe('the link to a server\'s settings (D-2)', () => {
+  test('its address says so, and reads back', () => {
+    expect(serverSettingsHash('a b')).toBe('#/servers/a%20b?settings=1')
+    expect(serversRoute('#/servers/a%20b?settings=1')).toEqual({ id: 'a b', finding: '', settings: true })
+    expect(serversRoute('#/servers/a')).toEqual({ id: 'a', finding: '' })
+    expect(serversRoute('#/servers/a?finding=f1')).toEqual({ id: 'a', finding: 'f1' })
+    expect(serverSettingsHash('')).toBe('#/servers')
   })
 })

@@ -2,7 +2,7 @@
 
 🇫🇷 Version française : [fix.fr.md](fix.fr.md)
 
-Michel finds the flaws and explains them. With plan 5 it can also have them fixed: Claude Code works on a **copy** of your project, Michel checks what it did, runs the tests itself, and shows you a proposal in plain words. Nothing reaches your repository before you click **Approve**, and even then Michel only creates a branch: you merge it and deploy as usual (with PhpStorm, for example).
+Michel finds the flaws and explains them. With plan 5 it can also have them fixed: Claude Code works on a **copy** of your project, Michel checks what it did, runs the tests itself, and shows you a proposal in plain words. Nothing reaches your repository before you click **Approve**, and even then, without attachment to a Git service, Michel only creates a branch (see "Attach your project to GitHub, Bitbucket or GitLab" below): you merge it and deploy as usual (with PhpStorm, for example).
 
 Why: for a flaw such as Php2shell, you had to read articles to understand you were affected, look for others to learn how to fix it, hand them to an AI, then fix it yourself. Three steps by hand: **find** (am I affected, where), **understand** (in plain words, why me), **fix** (what to change, then check). The fix agent does these steps for you, and you keep the last word.
 
@@ -48,9 +48,9 @@ Otherwise the proposal waits for you. "Apply" means "create the branch", never m
 
 Claude Code sends what it reads to Anthropic: it is an external AI provider in the sense of the [sovereignty policy](security/sovereignty-policy.md). So the first **Fix** on a project shows a consent screen, one per project. It says:
 
-- what leaves: the code of the copy the agent reads, the brief (secrets masked) and your messages; not the excluded files, not the masked secrets;
+- what leaves: the files of the copy the agent reads, the flaw's sheet (secrets masked) and your messages; when Michel recognises a possible key in these files, the agent does not start until you answer (see "The work copy"); a key Michel does not recognise, or one you choose to leave, goes with them; the excluded files do not leave;
 - what runs: "Michel runs composer/npm and your tests on a copy, with your Windows rights; the code written by the agent runs." (see "Residual risks");
-- that the project is classified sensitive, when it is (the default): the masking is on and the excluded files are not copied;
+- that the project is classified sensitive, when it is (the default): secrets are masked in the flaw's sheet and in what Michel shows, not in the files the agent reads, and the excluded files are not copied;
 - each host that has no allow rule yet:
   - Anthropic, purpose `agent.claude`: `api.anthropic.com` (the API) and `platform.claude.com` (where a subscription login renews its token);
   - the package registries, purpose `fix.install`: `repo.packagist.org`, `packagist.org`, `api.github.com`, `codeload.github.com` (the archives Composer downloads), `registry.npmjs.org`;
@@ -79,7 +79,34 @@ The agent never works in your folder. For each attempt Michel makes, in its data
 
 The copy holds only the files of your last commit. So left out are: whatever git ignores or does not track, `.env*`, `*.pem`, `*.key`, `id_*` files (in every folder, ignoring case), the folders you excluded (`michel project set <name> --exclude <folder>`), symbolic links and special files. A copy is capped at 30,000 files, 256 MiB per file and 4 GiB in all; a larger project is refused (see "Troubleshooting"). During the preparation Michel writes nothing in your project (checked by a test).
 
-Before the agent starts, Michel runs its secret detectors on the files of the copy. A secret written in your code is reported in the conversation ("2 secrets seem written in your code (…): the agent can read them") with the relative files, so that you can keep them out: take the secret out of the code (into an environment variable or a `.env` file, which is never copied), or exclude the folder or folders that hold it (the message names them; `--exclude` takes folder names, not files).
+Before anything leaves your computer, Michel runs its secret detectors on the files of the copy. When they find what has the shape of a key (a known format, such as an AWS key, or a value written out that looks like a secret on a sensitive name, such as `password` or `token`), the attempt stops in the state `held`, at every level and for every start, automatic ones included: no agent, no update, nothing leaves. The page, `michel fix prepare` and `michel fix status` say how many possible keys, in which files and on which lines, never the value.
+
+Michel judges by the shape of what is written, without knowing whether the key is real. This judgement only decides the stop: Michel masks as much as ever on the page and in the sheet.
+
+What stops the agent:
+
+- a known format: AWS key, GitHub token, private key, Stripe live secret key (`sk_live_`, `rk_live_`), JSON Web Token, Slack token (`xoxb-` and its kin). Always, even when it is an example written in that format (`xoxb-your-bot-token`);
+- a value of at least 8 characters, without a space, on a sensitive name (`password`, `token`, `api_key`, `DB_PASSWORD=`…), when it is not made of plain words: letters mixed with digits or signs, or letters that make no word (scattered capitals, 6 consonants in a row);
+- the same in PHP: `define('DB_PASSWORD', '…')`, `'key' => 'base64:…'`, an array key such as `$config['password'] = '…'`, the third argument of `new PDO(…)` or `new mysqli(…)` and the same for `mysqli_connect(…)`, when written in quotes (these calls may span several lines, and a password written in pieces `'a' . 'b'` is read whole, even when a variable or a call comes between the pieces; comments between the arguments are skipped); and a password in a connection address;
+- a default word with digits, in quotes or in an address (`password = 'admin123'`).
+
+What does not stop the agent, even if it is a real key. Michel says so in a message for a line it saw, and the agent can read it:
+
+- a line that talks about a password without showing one: a type, a variable, a call, a sentence, a value that is a template from end to end (`${X}`, `{{ x }}`, `<x>`, `%x%`, `$x`, `[x]`, `{x}`), an example such as `your-key-here`;
+- a value without quotes read as code: holding `(`, `)`, `;`, `<`, `>` or a quote after `NAME=`, holding a bracket, a brace, `(`, `)`, `;`, `<`, `>` or `->` after `name:`. So `DB_PASSWORD=aB3;xY9!qZ` passes;
+- a plain word, a sentence, plain words joined by dashes (`cheval-correct-batterie`), a value under 8 characters, a default word (`password = 'password'`), a default word with digits without quotes (`password: admin123`);
+- a value with a part that is exactly `test`, `fake`, `mock`, `stub` or `dummy` (`sk_test_…`, `mock-kP9mW2xQ7vT`), or a placeholder (`your`, `example`, `xxx`…) with only words and numbers beside it;
+- a value starting with `npm:`, `workspace:`, `file:`, `link:`, `^`, `~` or a validation word (`required|`, `nullable|`, `string|`, `sometimes|`), a value holding `://`, a path of short lowercase words (`/etc/ssl/private/server.key`), and the public hash of Laravel's old `UserFactory`;
+- a value with no sensitive name beside it Michel can read: the arguments of a call other than those named above (for example `ldap_bind($c, 'uid', '…')`, `mysqli_real_connect(…)`, `->real_connect(…)`), a `new mysqli(…)`, `new PDO(…)` or `mysqli_connect(…)` call with an argument before the password that is nested deeper than three parentheses or holds an unclosed quote, a password built from a variable or a call, after `?:` or `??` or inside a function call, written in a heredoc or in a string over several lines (also when it is a piece of a chain of strings), a chain of strings that goes on after a line break not marked by a dot, or on the line after the `=`, a plain `key:`. In a chain of strings, Michel reads the pieces after the first only for an array key (`$c['password'] = 'a' . 'b'`), `'password' => …`, `define(…)` and the calls named above: after a plain name (`$password = 'a' . 'b'`, `password: 'a' . 'b'`) only the first piece is masked. Outside PHP, a dot followed by a number, or directly by a name, ends the chain (`d['password'] = 'a'.b.'c'`). A chain longer than 64 KiB is masked up to the end of the line where this limit falls, not beyond. A comma in the first argument of `new PDO(…)` can make Michel read the user name as the password, and hold on it by mistake.
+
+When the attempt stops, you choose:
+
+- **I will remove them first** (`michel fix withdraw <attempt>`): the attempt ends in the state `withdrawn`, its copy is removed and no agent starts. Take the key out of the code (into an environment variable or a `.env` file, which is never copied), commit, and start the fix again: the copy holds your last commit, so a key removed without a commit is still there. Excluding the folder that holds it works too (Michel's message names it; `--exclude` takes folder names, not files). A new start without any key found starts directly. After this no, automatic starts do not ask again while your last commit and your excluded folders stay the same, for any flaw of this project. Your own start searches and asks again.
+- **Continue anyway** (`michel fix continue <attempt>`, in a terminal: Michel shows the list again and waits for you to type `yes`): the agent starts, can read those files, and what it reads reaches Anthropic.
+
+The yes holds for that attempt only and is never stored: the next attempt searches and asks again. The audit log keeps counts only (`fix.hold`, `fix.hold.continue`, `fix.hold.withdraw`). The yes is refused, and the attempt ends `failed`, if the copy changed, if the search finds other hits, if your project has a new commit or another excluded folder, or if the flaw has left: start the fix again, Michel searches again. Michel never answers for you: no level 3 rule, worker or `michel mcp` session can, and `michel fix continue` needs a terminal. Michel cannot stop a person or a program running with your rights from going around that: faking a terminal, or calling the page in your place (see "Residual risks").
+
+While an attempt waits, the project takes no other fix, its copy and its Git mirror stay in Michel's data folder, and its line stays in To do, ranked "Yours". The digest and, for an automatic start, a notification say it waits for your answer. With no answer after 14 days, the attempt ends as a no (`withdrawn`, copy removed, `fix.hold.withdraw` with `author: expired`): never as a yes.
 
 ## What the agent can and cannot do
 
@@ -118,7 +145,7 @@ Only **Composer and npm** are installed. A yarn or pnpm project is read and can 
 
 ## The proposal and the validation by fingerprint
 
-A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy, the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
+A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy (a flaw found by an external tool (Semgrep, Trivy…) cannot be re-scanned on the copy: the page says Michel could not check it), the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
 
 Michel refuses a change that touches a file outside the copy (`..`, absolute path, link), a protected file or an excluded file: the attempt is `failed`, the cause is said in plain words, nothing is applied.
 
@@ -126,27 +153,59 @@ Michel refuses a change that touches a file outside the copy (`..`, absolute pat
 
 ## The branch, then you deploy
 
-Applying = Michel builds **one commit** of its own in the mirror (author Michel, parent = your real commit, the agent's own commits are ignored), then fetches it from your repository into the branch `michel/fix-<short id>`. No checkout, no merge: your current branch, your working tree and your index do not move (checked by a test, even with modified files or another branch checked out). It is the only write Michel makes in your project, and only after your approval: objects and one ref in its `.git`.
+Applying = Michel builds **one commit** of its own in the mirror (author Michel, parent = your real commit, the agent's own commits are ignored), then fetches it from your repository into the branch `michel/fix-<short id>`. No checkout, no merge: your current branch, your working tree and your index do not move (checked by a test, even with modified files or another branch checked out). Without attachment, it is the only write Michel makes in your project, and only after your approval: objects and one ref in its `.git`.
 
 The page then says: "The branch michel/fix-… is ready. Merge it, then deploy with PhpStorm as usual." Michel never merges and never deploys.
+
+## Attach your project to GitHub, Bitbucket or GitLab
+
+Michel asks one question on the project's page: is this project on a Git service? **Nothing happens without a yes.** What Michel offers first is only a suggestion, never an answer. As long as you have not said yes, everything above stands: you merge and you send with your own tool.
+
+To ask, Michel reads your project's address from its Git settings, without network. If that address holds a password or a token, Michel tells you so, and neither shows, keeps nor uses it. Your yes holds for that address only. It writes one network rule, for that host only. Answering no or "I don't know" later removes the rule, if Michel wrote it and no other attached project uses it. If the address changes, nothing leaves until you answer again.
+
+A yes gives you two buttons. Nothing else starts them: no level, no scan, no background work and no command line.
+
+**Send the fix**, on a fix with its branch:
+
+- it sends only the branch `michel/fix-…` and the commits it needs, to your remote. Your main branch does not move;
+- Michel never overwrites what is already on the service: if it refuses, Michel says so and stops;
+- one click, one send. A second click sends nothing more when the branch is already there;
+- it sends from a temporary copy in Michel's data folder (`<data>/fix-net/`), removed afterwards. That copy does not read your project's settings, so they can start no program. In your project, this button writes nothing;
+- on GitHub, Bitbucket and GitLab (`github.com`, `bitbucket.org`, `gitlab.com`), the page then gives a link to ask for the merge. On any other service, it gives the branch's name. You accept on the site.
+
+Michel stores no token. It uses the Git access already on this computer, and it cannot ask you for any: if it finds none, it says so, and you send once with your usual Git tool.
+
+**Update my folder**, once the merge is accepted:
+
+- it fetches the main branch of the remote, then moves your folder forward to that version (this is the command `git merge --ff-only`): nothing is mixed, your folder is only brought up to date;
+- only when your folder is on its main branch, with no change in the files Git follows, and no merge in progress;
+- no hook and no file conversion program (Git LFS for example) runs. If the update would need one, Michel refuses and leaves your files alone. It also refuses rather than overwrite a file that Git does not follow or ignores;
+- what it writes in your project: the commits that arrive, your main branch, the mark Git keeps of the remote's state (`<remote>/<branch>`) and the files changed. When it refuses after fetching, the commits and that mark may already be written: your files and your branch have not moved.
+
+**These two buttons lift, for an attached project and on your click, the rule "Michel does not push and runs nothing in your folder".** Without attachment, that rule stands entirely. Each click is recorded in the audit log, refusals included (`project.git.answer`, `project.git.push`, `project.git.update`). What git prints is neither shown nor kept, since it can hold private data: you see a sentence, and for more detail you use your usual Git tool.
+
+**Michel still never accepts your fix**: you merge it, on the site or with your tool. It never deploys either. Updating your folder is not merging your fix: it brings back what you already accepted.
+
+A partial copy of a repository (a "partial clone") cannot be attached: Git would fetch what it lacks on its own, so Michel neither sends nor updates there, and says so.
 
 ## The proof
 
 - Tests `passed` and a clean re-scan **in the copy** are required for an automatic application (level 3), and shown for the others.
-- **`proven_fixed`**: after you merged, a scan of your project (`michel scan`) no longer sees the flaw **and** the branch's commit is in the current branch of your repository (Michel checks it read-only, `git merge-base --is-ancestor`).
-- The flaw gone without that commit, or the commit merged while the flaw is still seen: the attempt is `inconclusive`, with the reason.
-- Michel does not rerun the tests after the merge, because it never runs anything in your folder: the tests ran on the copy, before the merge. A local scan sees the merge, not the deployment: Michel says "fixed in your code" and reminds you to deploy; it does not claim the server is up to date.
+- **`proven_fixed`**: after you merged, during a `michel scan` of your project, the tool that found the flaw looks again and no longer sees it **and** the branch's change is in the current branch of your repository. Michel checks it read-only: the commit itself (`git merge-base --is-ancestor`), or, after a "Squash" or a "Rebase" on the host's site, which change the commit, the same patch (`git cherry`). That comparison ignores whitespace and where the lines are, so the same lines indented otherwise, or in another identical block, also count: a rare false "merged", and the tool below must still stop seeing the flaw. That tool is the scan of your dependencies for a dependency; for a flaw found by an external tool (Semgrep, Trivy…), it is that tool, which runs at the end of the scan.
+- The flaw gone without that commit, or the commit merged while the tool still sees the flaw: the attempt is `inconclusive`, with the reason.
+- If that tool did not look during this scan (off, not set to run during the scan, failed; for a dependency, a folder with no dependency file), Michel concludes nothing: the attempt stays `applied` until a scan where it looks. Running the tool alone (`michel source run`, or an imported report) concludes nothing either.
+- Michel does not rerun the tests after the merge: it runs no program of your project, and "Update my folder" only brings the files there. The tests ran on the copy, before the merge. A local scan sees the merge, not the deployment: Michel says "fixed in your code" and reminds you to deploy; it does not claim the server is up to date.
 
-The states you will see on the page: `preparing` → `proposed` → `approved` or `refused` → `applied` → `proven_fixed` or `inconclusive`; `failed` from `preparing`, `proposed` or `approved` (with its cause: the agent stopped, Michel refused the change or could not create the branch); `superseded` when a newer proposal replaces one.
+The states you will see on the page: `held` (possible keys in the code: Michel waits for your answer) → `withdrawn` or `preparing`; `preparing` → `proposed` → `approved` or `refused` → `applied` → `proven_fixed` or `inconclusive`; `failed` from `preparing`, `held`, `proposed` or `approved` (with its cause: the agent stopped, Michel refused the change or could not create the branch, your project changed since the search); `superseded` when a newer proposal replaces one.
 
 ## Masking, and its limit
 
-Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks secrets: AWS keys, GitHub tokens, PEM keys, `.env`-style values, password/secret/token/key assignments, passwords in connection URLs; the absolute paths of your computer become relative paths. Each secret is replaced by a token `[secret-<random>-N]`. The table linking the tokens to the real values stays in Michel's secret store (DPAPI-encrypted on Windows, a file readable by you only elsewhere) and is never sent. The audit records how many values were masked and of which kind, never the values.
+Before anything Michel gives reaches the agent (brief, MCP answers) Michel masks secrets: AWS keys, GitHub tokens, Stripe live keys, JSON Web Tokens, Slack tokens, PEM keys, `.env`-style values, password/secret/token/key assignments, passwords in connection URLs; the absolute paths of your computer become relative paths. Each secret is replaced by a token `[secret-<random>-N]`. The table linking the tokens to the real values stays in Michel's secret store (DPAPI-encrypted on Windows, a file readable by you only elsewhere) and is never sent. The audit records how many values were masked and of which kind, never the values.
 
 - The page and the API never unmask: a secret shows as a token there.
 - Michel **never** unmasks into a commit: a change that holds a token is refused (the agent may have copied it from the brief). At the proposal, the agent is told and can propose again; should one reach the branch step, Michel creates no branch and the attempt is `failed` with that cause (it is Michel's refusal, not yours). If a fix really needs a secret value in code, you add it by hand.
 - The diff shown on the page is masked, but the branch holds the change as written: a password-like line of your own code is not a reason to refuse the change.
-- **The limit**: the files of the copy are **not** masked. The copy holds your real code, and Claude Code reads it, so it goes to Anthropic. What protects your secrets is that the excluded files are not copied; a secret written in a committed file is read by the agent. That is why Michel reports those before the agent starts. Secret detection is never perfect: some forms (XML `<password>`, YAML block values, a password with an unencoded `@` in a URL…) can slip through.
+- **The limit**: the files of the copy are **not** masked. The copy holds your real code, and Claude Code reads it, so it goes to Anthropic. What protects your secrets is that the excluded files are not copied, and that the agent waits for your answer when Michel recognises a key in the others; a secret written in a committed file is read by the agent if Michel does not recognise it or if you choose to go on. Secret detection is never perfect: some forms (XML `<password>`, YAML block values, a password with an unencoded `@` in a URL…) can slip through. Michel does not search files over 1 MiB or binary files either. And what it recognises stops the agent only if the value has the shape of a key (see "The work copy").
 
 ## Server fixes (plan 6)
 
@@ -164,7 +223,9 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 - **Claude Code changes.** Michel relies on options of Claude Code to keep the agent away from your settings. It refuses a version that lacks them, but cannot guarantee that a future version honours them the same way. Claude Code still reads its login in your user folder (your profile).
   - Options used (tested with version 2.1.314): `--setting-sources ""`, `--strict-mcp-config`, `--restricted`, `--tools`, the permission rules, and the variables that turn off `CLAUDE.md`, memory and the non-essential traffic.
 - **Anthropic reads the copy's code**, as said on the consent screen.
+- **The answer about a key found is no proof that a person read it.** Michel takes this yes only through the page or a terminal, and its own automation never gives it. But a person or a program running with your rights (a script, a test of the project, code the agent wrote on another project) can fake a terminal or call the page with its token. That program could read the key directly anyway.
 - **The agent's text must not be taken at its word.** It is shown, never executed; its proposal is checked by Michel, and you decide.
+- **On an attached project, the SSH connection and your Git access manager are outside the proxy.** Over SSH, git and ssh open their own connection: Michel decides and records before git starts, but does not route it through itself and does not stop it. A Git access manager (Git Credential Manager, for example: the program that remembers your Git passwords) is a program of yours that git starts: it can open its own connections too. See [security/network-egress.md](security/network-egress.md).
 
 ## Troubleshooting
 
@@ -176,7 +237,7 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 | "…Michel needs your agreement…" | Read the consent screen and accept, or `michel fix consent <project> --yes`. |
 | "Your policy is strict_local" | Use the button of the consent screen on the page, or set `sovereignty.mode: standard` yourself (see above). |
 | "This project is classified health" | Never sent to an external AI. Read the brief and fix by hand. |
-| "This project is not tracked by git" / "no commit yet" | Michel copies with git: put the project in git (and make a first commit). The brief stays available. |
+| "This project is not tracked by git" / "no commit yet" | Michel copies with git: the folder you added must be the main folder of a repository, with a first commit. The check and the brief stay available. |
 | "Your project is too large" | Exclude big folders (`--exclude`), or fix by hand from the brief. |
 | "…would make the install run programs from the project itself" | A setting of your project (npm, Composer) would run code during the install; Michel does not accept it, so nothing ran. Fix by hand, or remove that setting. |
 | "Tests: not run", no test command | Set one: `michel project set <name> --test-cmd "…"`. |
@@ -185,7 +246,36 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 | "Michel refused the agent's change" | The agent touched a file outside the copy or a protected file. Nothing was applied; try again. |
 | "Michel did not create the branch: the change held a placeholder…" | The change held a `[secret-…]` token instead of a secret. Nothing was applied; start a new fix. |
 | "The proposal changed since you read it" | Read the new one, then approve it. |
-| "A fix is already in progress on this project" | Finish or refuse it first. |
+| "A fix is already in progress on this project, or waits for your answer" | Answer it first, or finish it. It is in the list of fixes. |
 | Level 2: nothing starts | `michel serve` must run; the project needs its AI consent; at most 3 attempts started alone per day and per project. |
+| "This folder is not a Git repository" | Michel can check it and explain its flaws, but cannot prepare a fix or send one. |
+| "This Git repository holds nothing saved yet" | Make a first commit: Michel needs it to prepare a fix or send one. |
+| "Michel finds no usable address in this project" | It needs one https or SSH address, or one named `origin`. |
+| "This folder is a partial copy of a repository" | Use your usual Git tool. For Michel to do it, it needs a full copy of the repository. |
+| "This project is not attached to a Git service" | Answer yes on the project's page if you want to send your fixes there. |
+| "The project's address changed since you agreed" | Look at the project's page and answer again. |
+| "The network rule that allows this service was removed" | Answer the question again on the project's page. |
+| "This fix has no branch to send" | A branch exists only after your approval, and until the fix is finished. |
+| "This fix's branch changed or no longer exists" | Michel only sends what you approved. Start a new fix, or send the branch yourself. |
+| "Michel is already working on this folder" | Wait for it to end, then try again. |
+| "The service refused access, or Michel found no Git access on this computer" | Send once with your usual Git tool to save your access, then try again. |
+| "This computer does not recognise this service, or its identity changed" | Connect once with your usual Git tool. If you already used to connect, ask for help: this change can be an attack. |
+| "The service does not find this project, or your account has no access" | Check the address shown and that your account has access. |
+| "The service refused this branch" | A branch of the same name may exist with other content, or a rule of the service forbids it. Look on the site. Michel never forces a send. |
+| "Michel could not reach the service" | Check your Internet connection, then try again. A company proxy can also prevent it. Over https, Michel only reaches port 443 (the usual door of secure websites). |
+| "The service did not answer in time" | Click again: if everything is already there, Michel sees it and sends nothing more. |
+| "It failed for a reason Michel does not recognise" | Try with your usual Git tool. Michel does not show the detail, which may hold private data. |
+| "Your folder is on branch …, not on the main branch …" | Go back to the main branch, then try again. |
+| "Your folder is on no branch" | Put it back on its main branch, then try again. |
+| "Michel does not know your folder's main branch" | Update with your usual Git tool. |
+| "Your folder holds changes not saved yet" | Save them or set them aside, then try again. |
+| "A merge or a pick is in progress in your folder" | Finish or cancel it, then try again. |
+| "Your folder holds saved work that is not on the site" | Send it or settle this with your usual Git tool, then try again. Michel mixes nothing. |
+| "A file in your folder would be overwritten by this update" | Move that file elsewhere, then try again. |
+| "A file or folder that Git ignores … stands where this update writes" | Move it elsewhere, then try again. Careful: an update made by hand with Git can overwrite it without warning. |
+| "This update would remove or replace a subfolder Git manages apart" | Move its content elsewhere, empty this subfolder without deleting it, then try again. Careful: an update made by hand with Git can erase what it holds. |
+| "This update would run a file conversion program" | Update with your usual Git tool, then click **Check this project**. |
+| "The update failed: Git stopped it" | Check your folder's state with your usual Git tool. |
+| "The update stopped halfway" | Close any program that may hold a file open (an editor, an antivirus). Your folder held no change before the update: with your usual Git tool, cancel these changes, then try again. |
 
 What leaves the computer, host by host: [security/network-egress.md](security/network-egress.md).

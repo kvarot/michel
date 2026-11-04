@@ -6,14 +6,14 @@
       <template v-else>
         <p class="m-prop__id">
           <span class="m-code">{{ finding.package }}</span>
-          <span v-if="finding.osv_id" class="m-code m-muted">{{ finding.osv_id }}</span>
+          <span v-if="$ui.advanced && finding.osv_id" class="m-code m-muted">{{ finding.osv_id }}</span>
           <span class="m-sev" :class="`m-sev--${severity}`">{{ $t(`severity.${severity}`) }}</span>
         </p>
         <p v-if="project" class="m-muted m-small m-prop__project">{{ $t('fix.in_project', { project }) }}</p>
         <div v-if="sentences.length" class="m-prop__sentences">
           <section v-for="s in sentences" :key="s.key">
             <h3 class="m-prop__label">{{ $t(s.label) }}</h3>
-            <p class="m-voice m-prop__sentence">{{ s.text }}</p>
+            <p class="m-voice m-prop__sentence">{{ $ui.advanced ? s.text : strip(s.text) }}</p>
           </section>
         </div>
         <p v-else-if="finding.summary" class="m-small">{{ finding.summary }}</p>
@@ -30,7 +30,7 @@
           <h3 class="m-prop__label">{{ $t('fix.proposal.agent_says') }}</h3>
           <p class="m-prop__summary"><MaskedText :text="p.summary" /></p>
         </div>
-        <p class="m-small">{{ $t(p.rescan_clean ? 'fix.proposal.rescan_clean' : 'fix.proposal.rescan_dirty') }}</p>
+        <p class="m-small">{{ $t(rescanText) }}</p>
         <p v-if="p.tests_status === 'not_run'" class="m-prop__warn m-small">{{ $t('fix.proposal.tests_not_run_hint') }}</p>
         <p v-else-if="p.tests_status === 'failed'" class="m-prop__warn m-small">{{ $t('fix.proposal.tests_failed_hint') }}</p>
         <p v-if="p.risk > 0" class="m-muted m-small">{{ $t('fix.proposal.risk', { risk: p.risk }) }}</p>
@@ -44,6 +44,8 @@
               {{ $t('fix.proposal.refuse') }}
             </v-btn>
           </div>
+          <FieldHelp named id="fix.approve" :field="$t('fix.proposal.approve')" />
+          <FieldHelp named id="fix.refuse" :field="$t('fix.proposal.refuse')" />
           <p v-if="approving" class="m-voice m-prop__busy" role="status">
             <v-progress-circular indeterminate size="16" width="2" color="primary" />
             {{ $t('fix.proposal.approving') }}
@@ -51,7 +53,10 @@
           <p v-else class="m-muted m-small">{{ $t('fix.proposal.approve_hint') }}</p>
         </template>
 
-        <details class="m-prop__detail">
+        <v-btn v-if="!$ui.advanced && !showChange" variant="text" size="small" class="m-prop__see" @click="showChange = true">
+          {{ $t('fix.proposal.see_change') }}
+        </v-btn>
+        <details v-if="$ui.advanced || showChange" class="m-prop__detail" :open="showChange || undefined">
           <summary>{{ $t('fix.proposal.detail') }}</summary>
           <h3 class="m-prop__label">{{ $t('fix.proposal.files') }}</h3>
           <ul class="m-prop__files">
@@ -65,7 +70,7 @@
           <p class="m-small">{{ $t(`fix.proposal.tests_${testsKey}`) }}</p>
           <pre v-if="p.tests_output" class="m-code m-prop__pre"><MaskedText :text="p.tests_output" /></pre>
           <p v-else-if="p.tests_status !== 'not_run'" class="m-muted m-small">{{ $t('fix.proposal.tests_output_none') }}</p>
-          <template v-if="commands.length">
+          <template v-if="$ui.advanced && commands.length">
             <h3 class="m-prop__label">{{ $t('fix.proposal.commands') }}</h3>
             <ul class="m-prop__files">
               <li v-for="(c, i) in commands" :key="`${c.what}-${i}`" class="m-small">
@@ -75,8 +80,8 @@
             </ul>
           </template>
           <h3 class="m-prop__label">{{ $t('fix.proposal.rescan') }}</h3>
-          <p class="m-small">{{ $t(p.rescan_clean ? 'fix.proposal.rescan_clean' : 'fix.proposal.rescan_dirty') }}</p>
-          <p class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
+          <p class="m-small">{{ $t(rescanText) }}</p>
+          <p v-if="$ui.advanced" class="m-muted m-small">{{ $t('fix.proposal.hash', { hash: shortHash }) }}</p>
         </details>
       </template>
       <p v-else class="m-muted">{{ $t(attempt.state === 'preparing' ? 'fix.proposal.none' : 'fix.proposal.none_idle') }}</p>
@@ -112,16 +117,19 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
 import { canApprove, proposalFacts, proposalSentence } from '../lib/fixView.js'
+import { plainSentence } from '../lib/modeView.js'
+import { cameBack, rescanKey } from '../lib/pathView.js'
 
 // FixProposal is the right of the Fix page: the flaw in plain words (the
 // three sentences of its sheet), then the proposal in plain words with
 // Valider / Refuser, and "Voir le détail" folded (diff, tests, re-scan).
 export default {
   name: 'FixProposal',
-  components: { MaskedText },
+  components: { FieldHelp, MaskedText },
   props: {
     attempt: { type: Object, default: null },
     // finding is the attempt's FixFindingView, or the open finding chosen.
@@ -136,7 +144,8 @@ export default {
   },
   emits: ['approve', 'refuse'],
   data() {
-    return { refuseOpen: false, reason: '' }
+    // showChange opens the diff and the test output in the simple mode.
+    return { refuseOpen: false, reason: '', showChange: false }
   },
   computed: {
     p() {
@@ -159,6 +168,9 @@ export default {
     sentence() {
       return proposalSentence(proposalFacts(this.attempt, this.sheet), this.$ui.lang)
     },
+    rescanText() {
+      return rescanKey(this.attempt)
+    },
     approvable() {
       return canApprove(this.attempt)
     },
@@ -180,6 +192,7 @@ export default {
         case 'applied':
           return this.$t('fix.chat.applied', { branch: a.branch })
         case 'proven_fixed':
+          if (cameBack(a)) return this.$t('fix.done.came_back')
           return `${this.$t('fix.chat.applied', { branch: a.branch })} ${this.$t('fix.done.proven')}`
         case 'inconclusive':
           return this.$t('fix.done.inconclusive', { branch: a.branch })
@@ -188,6 +201,7 @@ export default {
         case 'refused':
         case 'failed':
         case 'superseded':
+        case 'withdrawn':
           return this.$t(`fix.done.${a.state}`)
         default:
           return ''
@@ -201,6 +215,10 @@ export default {
     },
   },
   methods: {
+    // strip removes identifiers and file names from a sentence shown in the simple mode.
+    strip(text) {
+      return plainSentence(text, this.sheet)
+    },
     refuse() {
       this.refuseOpen = false
       this.$emit('refuse', this.reason.trim())
@@ -238,6 +256,7 @@ export default {
   font-size: 0.78rem;
   background: rgba(var(--v-theme-on-surface), 0.05);
 }
+.m-prop__see { justify-self: start; margin-left: -0.6rem; }
 .m-prop__stop { justify-self: start; margin-left: -0.6rem; }
 .m-prop__done { font-size: 1.05rem; line-height: 1.5; }
 .m-prop__dialog-title { white-space: normal; font-family: var(--m-voice); font-weight: 600; }

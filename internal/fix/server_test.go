@@ -346,7 +346,11 @@ func (f *serverFixture) check(ctx context.Context, id string) (servercheck.Check
 	if err := tx.Commit(); err != nil {
 		return servercheck.CheckResult{}, err
 	}
-	return servercheck.CheckResult{New: n, Still: still, Gone: gone, Touched: true, ReleaseKnown: true}, nil
+	seen := make([]string, 0, len(fs))
+	for _, x := range fs {
+		seen = append(seen, x.ID)
+	}
+	return servercheck.CheckResult{New: n, Still: still, Gone: gone, Touched: true, ReleaseKnown: true, Seen: seen}, nil
 }
 
 // finding is the finding of rule (an OSV id) on s, checking first when

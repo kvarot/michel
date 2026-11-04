@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  acceptResult, activityLine, canApprove, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, levelLabel, levels, mergeMessages,
+  acceptResult, consentProjectOf, offersDecision, activityLine, canApprove, canDecide, decidingAttempt, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
   proposalFacts, proposalSentence, splitMasked, stateLine,
 } from './fixView.js'
 
@@ -83,6 +83,14 @@ describe('proposalSentence', () => {
     expect(proposalSentence({ ...facts, sites: null }, 'fr')).toBe('Je passe guzzlehttp/guzzle de 7.4.0 à 7.4.5 ; les tests passent.')
     expect(proposalSentence({ ...facts, to: '' }, 'en')).toBe('I update guzzlehttp/guzzle (installed: 7.4.0); 12 places in your code use it, the tests pass.')
     expect(proposalSentence(null, 'fr')).toBe('')
+  })
+
+  test('a change of code names no package and no version', () => {
+    const code = { package: '', from: '', to: '', sites: null, tests: 'not_run' }
+    expect(proposalSentence(code, 'fr')).toBe("Je propose une modification de ton code ; les tests n'ont pas pu être lancés.")
+    expect(proposalSentence({ ...code, tests: 'passed' }, 'en')).toBe('I propose a change to your code; the tests pass.')
+    const fromAttempt = proposalFacts({ finding: { package: '', ecosystem: '' }, proposal: { tests_status: 'passed' } }, null)
+    expect(proposalSentence(fromAttempt, 'fr')).not.toContain('?')
   })
 
   test('proposalFacts reads the attempt and the finding sheet', () => {
@@ -212,5 +220,90 @@ describe('acceptResult', () => {
     expect(acceptResult({ alive: false, pending: 'a1' }, 'a1')).toBe(false)
     expect(acceptResult({ alive: true, pending: 'b1' }, 'a1')).toBe(false)
     expect(acceptResult({ alive: true, pending: null }, 'a1')).toBe(false)
+  })
+})
+
+describe('what can still be decided', () => {
+  test('isOpen: new, pending, or decided to fix', () => {
+    expect(isOpen({ status: 'new', decision: null })).toBe(true)
+    expect(isOpen({ status: 'pending', decision: null })).toBe(true)
+    expect(isOpen({ status: 'decided', decision: { action: 'fix' } })).toBe(true)
+    expect(isOpen({ status: 'decided', decision: { action: 'defer' } })).toBe(false)
+    expect(isOpen({ status: 'decided', decision: { action: 'ignore' } })).toBe(false)
+    expect(isOpen({ status: 'gone', decision: null })).toBe(false)
+  })
+  test('decidingAttempt: the newest attempt of the flaw, not the one shown', () => {
+    const old = { id: 'a1', state: 'failed', created_at: '2026-11-01T00:00:00Z', finding: { id: 'f' } }
+    const fresh = { id: 'a2', state: 'running', created_at: '2026-11-02T00:00:00Z', finding: { id: 'f' } }
+    const other = { id: 'a3', state: 'running', created_at: '2026-11-03T00:00:00Z', finding: { id: 'g' } }
+    expect(decidingAttempt([old, other, fresh], 'f', old)).toBe(fresh)
+    expect(decidingAttempt([fresh, old], 'f', old)).toBe(fresh)
+    expect(decidingAttempt([other], 'f', old)).toBe(old)
+    expect(decidingAttempt([], 'f', null)).toBe(null)
+  })
+  test('canDecide: a flaw without a fix, or a fix of a project that went nowhere', () => {
+    expect(canDecide(null)).toBe(true)
+    for (const state of ['refused', 'failed', 'inconclusive', 'superseded']) expect(canDecide({ state }), state).toBe(true)
+    for (const state of ['preparing', 'running', 'proposed', 'approved', 'proven_fixed']) expect(canDecide({ state }), state).toBe(false)
+    expect(canDecide({ state: 'applied' }), 'applied').toBe(true)
+    expect(canDecide({ state: 'failed', server: { target: { id: 'a' } } })).toBe(false)
+  })
+})
+
+describe('stateLine after the attempt', () => {
+  const line = (a, lang = 'fr') => stateLine({ kind: 'attempt', attempt: a }, lang)
+  test('inconclusive is a result, with its cause', () => {
+    expect(line({ state: 'inconclusive', cause: 'la branche est fusionnée, mais la faille apparaît encore au scan' }))
+      .toBe("Michel n'a pas pu confirmer la correction. La branche est fusionnée, mais la faille apparaît encore au scan.")
+    expect(line({ state: 'inconclusive', cause: '' })).toBe("Michel n'a pas pu confirmer la correction.")
+    expect(line({ state: 'inconclusive', cause: 'the branch is merged.' }, 'en')).toBe('Michel could not confirm the fix. The branch is merged.')
+    expect(line({ state: 'inconclusive', cause: 'x' })).not.toContain('prochain scan')
+  })
+  test('running and unknown are named', () => {
+    expect(line({ state: 'running' })).toBe('Michel applique la correction.')
+    expect(line({ state: 'unknown' })).toBe('Michel ne sait pas si la correction a abouti. Regarde si ton site marche normalement, puis clique sur « J\'ai vérifié le serveur ».')
+    expect(line({ state: 'running' }, 'en')).toBe('Michel is applying the fix.')
+    expect(line({ state: 'unknown' }, 'en')).toBe('Michel does not know whether the fix went through. Check that your site works normally, then click "I checked the server".')
+  })
+  test('a proven fix of a flaw that came back does not say it has gone', () => {
+    expect(line({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe('Corrigée : la faille a disparu.')
+    expect(line({ state: 'proven_fixed', finding: { status: 'new' } })).toBe('Cette faille est revenue depuis la correction.')
+  })
+})
+
+describe('canDecide after the flaw came back', () => {
+  test('a proven fix whose flaw is seen again leaves the decision open', () => {
+    expect(canDecide({ state: 'proven_fixed', finding: { status: 'new' } })).toBe(true)
+    expect(canDecide({ state: 'proven_fixed', finding: { status: 'gone' } })).toBe(false)
+    expect(canDecide({ state: 'proven_fixed', finding: { status: 'new' }, server: { target: { id: 'a' } } })).toBe(false)
+  })
+})
+
+describe('consentProjectOf (B2)', () => {
+  const finding = { id: 'f1', project: '' }
+  test('nothing loaded yet: no name, the page must load the sheet before it answers', () => {
+    expect(consentProjectOf({ finding })).toBe('')
+  })
+  test('the sheet of this flaw names the project', () => {
+    expect(consentProjectOf({ sheet: { id: 'f1', project: 'demo' }, finding })).toBe('demo')
+  })
+  test('the sheet of another flaw never names the consent', () => {
+    expect(consentProjectOf({ sheet: { id: 'f2', project: 'other' }, finding })).toBe('')
+  })
+  test('the attempt shown comes first, then the flaw itself', () => {
+    expect(consentProjectOf({ current: { project: 'a' }, sheet: { id: 'f1', project: 'b' }, finding })).toBe('a')
+    expect(consentProjectOf({ finding: { id: 'f1', project: 'c' } })).toBe('c')
+  })
+})
+
+describe('offersDecision (D-5)', () => {
+  test('a flaw gone has no decision to take, whatever the list still says of its attempt', () => {
+    expect(offersDecision({ state: 'applied' }, true)).toBe(false)
+    expect(offersDecision({ state: 'proven_fixed', finding: { status: 'gone' } }, true)).toBe(false)
+    expect(offersDecision(null, true)).toBe(false)
+  })
+  test('an open flaw: as canDecide', () => {
+    expect(offersDecision(null, false)).toBe(true)
+    expect(offersDecision({ state: 'proposed' }, false)).toBe(false)
   })
 })

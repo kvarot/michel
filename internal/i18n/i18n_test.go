@@ -31,6 +31,35 @@ func TestCatalogsHaveSameKeys(t *testing.T) {
 	}
 }
 
+// A hold speaks of this fix only: an earlier one may have let things out. And
+// the answer can be given on the page too; weak lines still reach Anthropic.
+func TestTheWordsOfAHold(t *testing.T) {
+	for _, k := range []string{"cli.fix.hold.head", "fix.msg.secret_hits.one", "fix.msg.secret_hits.other", "fix.msg.secret_hits_folder.one", "fix.msg.secret_hits_folder.other", "fix.cause.hold_stale", "fix.cause.hold_withdrawn"} {
+		if !strings.Contains(catalogs[FR][k], "pour cette correction, rien n'est sorti de ton ordinateur") {
+			t.Errorf("fr %s: %q", k, catalogs[FR][k])
+		}
+		if !strings.Contains(catalogs[EN][k], "for this fix, nothing") {
+			t.Errorf("en %s: %q", k, catalogs[EN][k])
+		}
+	}
+	if got := catalogs[FR]["cli.fix.continue.need_terminal"]; got != "Cette réponse se donne à la main, dans un terminal comme PowerShell, ou sur la page. Michel ne l'accepte pas d'un script." {
+		t.Errorf("fr need_terminal: %q", got)
+	}
+	if got := catalogs[EN]["cli.fix.continue.need_terminal"]; !strings.Contains(got, "or on the page") {
+		t.Errorf("en need_terminal: %q", got)
+	}
+	for _, k := range []string{"fix.msg.weak_hits.one", "fix.msg.weak_hits.other"} {
+		for _, want := range []string{"sans rien qui ressemble à une vraie clé.", "et ce qu'il lit part chez Anthropic."} {
+			if !strings.Contains(catalogs[FR][k], want) {
+				t.Errorf("fr %s lacks %q", k, want)
+			}
+		}
+		if !strings.Contains(catalogs[EN][k], "what it reads reaches Anthropic.") {
+			t.Errorf("en %s: %q", k, catalogs[EN][k])
+		}
+	}
+}
+
 var verb = regexp.MustCompile(`%(\[\d+\])?[-+# 0]*\d*(\.\d+)?[a-zA-Z%]`)
 
 func TestCatalogsUseSameFormatVerbs(t *testing.T) {
@@ -191,5 +220,52 @@ func TestTemplateIsCachedPerLanguage(t *testing.T) {
 	}
 	if _, err := Template("de", "what", fm); err == nil {
 		t.Error("unsupported language must fail")
+	}
+}
+
+// A key written in code is in the copy: mask.ScanFiles only detects it, and the
+// agent reads the file. The consent must not say the secrets stay.
+func TestConsentDoesNotPromiseThatSecretsStay(t *testing.T) {
+	for lang, want := range map[Lang]struct{ false1, false2, leaves, sensitive string }{
+		FR: {"pas les secrets", "secrets sont masqués et", "part avec eux", "pas dans les fichiers que l'agent lit"},
+		EN: {"not the secrets", "secrets are masked and", "goes with them", "not in the files the agent reads"},
+	} {
+		leaves, sensitive := T(lang, "fix.consent.what_leaves"), T(lang, "fix.consent.sensitive")
+		if strings.Contains(strings.ToLower(leaves), want.false1) {
+			t.Errorf("%s what_leaves still says the secrets stay: %q", lang, leaves)
+		}
+		if !strings.Contains(leaves, want.leaves) {
+			t.Errorf("%s what_leaves does not say a written key leaves: %q", lang, leaves)
+		}
+		if strings.Contains(sensitive, want.false2) || !strings.Contains(sensitive, want.sensitive) {
+			t.Errorf("%s sensitive does not bound the masking: %q", lang, sensitive)
+		}
+	}
+}
+
+// B4: the message left in the conversation when the branch exists does not
+// tell what to do next (the page does, and what it says depends on whether
+// the project is attached to a Git service) and names no editor.
+func TestBranchReadyMessageGivesNoNextStep(t *testing.T) {
+	for lang, bad := range map[Lang][]string{FR: {"PhpStorm", "Fusionne", "déploie", "d'habitude"}, EN: {"PhpStorm", "Merge it", "deploy", "as usual"}} {
+		got := catalogs[lang]["fix.msg.applied"]
+		for _, w := range bad {
+			if strings.Contains(got, w) {
+				t.Errorf("%s fix.msg.applied still says %q: %q", lang, w, got)
+			}
+		}
+	}
+}
+
+// T16 words: root and PHP-FPM are explained in the sentence of the script's steps.
+func TestServerStepWordsAreExplained(t *testing.T) {
+	if got := catalogs[FR]["fix.server.explain.root"]; !strings.Contains(got, "droits d'administrateur") {
+		t.Errorf("fr explain.root: %q", got)
+	}
+	if got := catalogs[EN]["fix.server.explain.root"]; !strings.Contains(got, "administrator rights") {
+		t.Errorf("en explain.root: %q", got)
+	}
+	if got := catalogs[FR]["fix.server.explain.test_fpm"]; !strings.Contains(got, "(la partie de PHP qui sert ton site)") {
+		t.Errorf("fr explain.test_fpm: %q", got)
 	}
 }

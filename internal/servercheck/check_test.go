@@ -23,6 +23,7 @@ import (
 
 	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/collect"
+	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/policy"
@@ -46,6 +47,8 @@ type host struct {
 	// makes its -v run past the time limit; findBroken makes command -v
 	// fail.
 	fpm, fpmSlow, findBroken bool
+	// fpmDisplayOn makes PHP-FPM report display_errors on (a plain setting).
+	fpmDisplayOn bool
 	// noCommand is a login shell without `command` (tcsh): exit 1, nothing
 	// printed.
 	noCommand bool
@@ -53,7 +56,23 @@ type host struct {
 	// userIniDenied makes it unreadable for the SSH user.
 	userIni       string
 	userIniDenied bool
+	// ss is what `ss -tln` prints and ssExit its exit code. Neither set: no
+	// such command, as on the servers of the older tests.
+	ss     string
+	ssExit int
 }
+
+const (
+	ssHeader = "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process\n"
+	// ssOpenDB shows a database on all addresses, beside the usual services.
+	ssOpenDB = ssHeader + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" +
+		"LISTEN 0 128 0.0.0.0:5432 0.0.0.0:*\nLISTEN 0 128 [::]:5432 [::]:*\n"
+	// ssClosedDB is the same server once the database listens for itself only.
+	ssClosedDB = ssHeader + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n" +
+		"LISTEN 0 128 127.0.0.1:5432 0.0.0.0:*\n"
+	// ssQuiet shows other services only, not a word about the database port.
+	ssQuiet = ssHeader + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+)
 
 const demoUserIni = "/var/www/demo/.user.ini"
 
@@ -125,6 +144,15 @@ func (h *host) commands() map[string]sshtest.Handler {
 		return 1
 	}
 	out["uname"] = func(e sshtest.Exec) int { io.WriteString(e.Stdout, "6.1.0-21-amd64\n"); return 0 }
+	out["ss"] = func(e sshtest.Exec) int {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.ss == "" && h.ssExit == 0 {
+			return 127
+		}
+		io.WriteString(e.Stdout, h.ss)
+		return h.ssExit
+	}
 	out["command"] = func(e sshtest.Exec) int {
 		fpm, _, broken := h.flags()
 		if broken {
@@ -161,7 +189,13 @@ func (h *host) commands() map[string]sshtest.Handler {
 			}
 			io.WriteString(e.Stdout, fpmFixture("php-fpm8.2-v"))
 		case "-i":
-			io.WriteString(e.Stdout, fpmFixture("php-fpm8.2-i"))
+			out := fpmFixture("php-fpm8.2-i")
+			h.mu.Lock()
+			if h.fpmDisplayOn {
+				out = strings.Replace(out, "display_errors => Off => Off", "display_errors => On => On", 1)
+			}
+			h.mu.Unlock()
+			io.WriteString(e.Stdout, out)
 		case "-tt":
 			io.WriteString(e.Stderr, fpmFixture("php-fpm8.2-tt"))
 		case "-m":
@@ -242,6 +276,8 @@ func testRules() (serverrules.Set, error) {
 				Context: []string{"prod", "sapi:fpm"}, Key: "serverrules.display_errors_prod"}},
 		Upstream: []serverrules.UpstreamAdvisory{{ID: "PHP2SHELL", Aliases: []string{"CVE-2026-109618", "CVE-2026-109619"}, Severity: "critical",
 			CVSS: 9.2, Key: "serverrules.php2shell", Branches: []serverrules.BranchFix{{Branch: "8.3", Fixed: "8.3.36"}}}},
+		Listen: []serverrules.ListenRule{{Ports: []int{5432}, Service: serverrules.ServiceDatabase, Verdict: serverrules.VerdictClose,
+			Rule: "exposed_database", Severity: "medium", Key: "serverrules.exposed_database"}},
 	}, nil
 }
 
@@ -1088,5 +1124,378 @@ func TestCheckStopsQuietlyWhenTheServerLeftWhileItWaited(t *testing.T) {
 	}
 	if n := srv.Accepted(); n != 0 {
 		t.Errorf("the removed server was reached %d times", n)
+	}
+}
+
+// A server without ss is not "clean", but a fix on it can still be proven: the
+// services that listen say nothing about PHP or the packages.
+func TestMissingSsBlocksNoProof(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	h.set("8.3.36", `{"allow_url_include":"0","display_errors":"0"}`)
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	inv, ok, err := e.deps.Repo.LatestInventory(context.Background(), tg.ID)
+	if err != nil || !ok || inv.ListenersRead || res.Clean() {
+		t.Fatalf("inventory %v %v, read %v, result %+v", ok, err, inv.ListenersRead, res)
+	}
+	fs := e.findings(tg.ID)
+	if res.Gone != 2 || fs["PHP2SHELL"].Status != scan.StatusGone {
+		t.Fatalf("result %+v, findings %+v", res, fs)
+	}
+}
+
+const exposedDB = "exposed_database"
+
+// R9: Michel does not know whether the service can be reached, so it never
+// sends a message about it, even on a production server.
+func TestExposureIsNeverUrgent(t *testing.T) {
+	prod := target.Target{Env: target.EnvProd, Kind: target.KindVPS}
+	for _, r := range []func() (serverrules.Set, error){testRules, serverrules.Rules} {
+		set, err := r()
+		if err != nil {
+			t.Fatal(err)
+		}
+		inv := target.Inventory{ListenersRead: true, Listeners: []target.Listener{{Address: "0.0.0.0", Port: 5432, Scope: target.ScopeOpen}}}
+		fs := serverrules.Evaluate(prod, inv, set)
+		if len(fs) != 1 || fs[0].Kind != scan.KindServerExposure {
+			t.Fatalf("findings %+v", fs)
+		}
+		if Urgent(prod, fs[0]) || grave(prod, fs[0]) {
+			t.Errorf("%+v: urgent %v, grave %v", fs[0], Urgent(prod, fs[0]), grave(prod, fs[0]))
+		}
+	}
+	e := newEnv(t)
+	h := newHost()
+	h.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	res := e.check(tg.ID)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusNew || res.New == 0 {
+		t.Fatalf("result %+v, status %q", res, st)
+	}
+	for _, a := range e.takeAlerts() {
+		for _, f := range a.New {
+			if f.Kind == scan.KindServerExposure {
+				t.Errorf("alert on %+v", f)
+			}
+		}
+	}
+}
+
+// Nothing but a complete read closes the finding: not a missing command, a
+// failure, a read with no row, nor a rematch of an inventory without the list.
+func TestUnreadListenersKeepExposureOpen(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	h.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	if res := e.check(tg.ID); res.New == 0 {
+		t.Fatalf("result %+v", res)
+	}
+	stillOpen := func(name string, gone int) {
+		t.Helper()
+		if st := e.status(tg.ID, exposedDB); gone != 0 || st != scan.StatusNew {
+			t.Errorf("%s: gone %d, status %q", name, gone, st)
+		}
+	}
+	for name, c := range map[string]struct {
+		out  string
+		exit int
+	}{
+		"no command":   {"", 0},
+		"failed":       {ssOpenDB, 1},
+		"zero rows":    {ssHeader, 0},
+		"no header":    {"LISTEN 0 128 127.0.0.1:5432 0.0.0.0:*\n", 0},
+		"forged line":  {ssHeader + "LISTEN 0 128 127.0.0.1:99999 0.0.0.0:*\n", 0},
+		"empty output": {"\n", 0},
+	} {
+		h.change(func(h *host) { h.ss, h.ssExit = c.out, c.exit })
+		e.advance(time.Hour)
+		res := e.check(tg.ID)
+		if res.Unseen == 0 {
+			t.Errorf("%s: nothing told as not read: %+v", name, res)
+		}
+		stillOpen(name, res.Gone)
+	}
+	// An inventory from before this version, then one that says read with no
+	// row (stored by the first version of the reading).
+	ctx := context.Background()
+	for name, inv := range map[string]target.Inventory{
+		"old inventory": {TargetID: tg.ID},
+		"zero rows":     {TargetID: tg.ID, ListenersRead: true},
+	} {
+		e.advance(time.Hour)
+		inv.At = e.now()
+		if err := e.deps.Repo.SaveInventory(ctx, inv); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Rematch(ctx, e.deps); err != nil {
+			t.Fatal(err)
+		}
+		stillOpen("rematch, "+name, 0)
+	}
+}
+
+// A complete read that shows the service no longer open closes the finding,
+// and it says so; the service coming back reopens it.
+func TestClosedServiceBecomesGone(t *testing.T) {
+	for name, closed := range map[string]string{"for itself only": ssClosedDB, "not listed at all": ssQuiet} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			h := newHost()
+			h.change(func(h *host) { h.ss = ssOpenDB })
+			_, tg := e.server("srv-demo", h, target.EnvProd)
+			e.check(tg.ID)
+			if st := e.status(tg.ID, exposedDB); st != scan.StatusNew {
+				t.Fatalf("status %q", st)
+			}
+			h.change(func(h *host) { h.ss = closed })
+			e.advance(time.Hour)
+			res := e.check(tg.ID)
+			if res.Gone != 1 || e.status(tg.ID, exposedDB) != scan.StatusGone {
+				t.Fatalf("result %+v, status %q", res, e.status(tg.ID, exposedDB))
+			}
+			h.change(func(h *host) { h.ss = ssOpenDB })
+			e.advance(time.Hour)
+			if res := e.check(tg.ID); res.Gone != 0 || e.status(tg.ID, exposedDB) == scan.StatusGone {
+				t.Fatalf("back: result %+v, status %q", res, e.status(tg.ID, exposedDB))
+			}
+		})
+	}
+}
+
+// A finding Michel would no longer open is not closed either while the read
+// still shows the service open: gone would say something that did not happen.
+func TestStillOpenServiceIsNeverGone(t *testing.T) {
+	for name, change := range map[string]func(tg *target.Target){
+		"the server became shared": func(tg *target.Target) { tg.Kind = target.KindShared },
+		"it became the login port": func(tg *target.Target) { tg.Port = 5432 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			h := newHost()
+			h.change(func(h *host) { h.ss = ssOpenDB })
+			_, tg := e.server("srv-demo", h, target.EnvProd)
+			e.check(tg.ID)
+			ctx := context.Background()
+			inv, ok, err := e.deps.Repo.LatestInventory(ctx, tg.ID)
+			if err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+			got, err := e.deps.Repo.Get(ctx, tg.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			change(&got)
+			if err := e.deps.Repo.Update(ctx, got); err != nil {
+				t.Fatal(err)
+			}
+			e.advance(time.Hour)
+			inv.At = e.now()
+			if err := e.deps.Repo.SaveInventory(ctx, inv); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Rematch(ctx, e.deps); err != nil {
+				t.Fatal(err)
+			}
+			if st := e.status(tg.ID, exposedDB); st != scan.StatusNew {
+				t.Fatalf("status %q though the read shows it open", st)
+			}
+			// Once the read no longer shows it, it can go.
+			inv.Listeners = []target.Listener{{Address: "0.0.0.0", Port: 22, Scope: target.ScopeOpen}}
+			e.advance(time.Hour)
+			inv.At = e.now()
+			if err := e.deps.Repo.SaveInventory(ctx, inv); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Rematch(ctx, e.deps); err != nil {
+				t.Fatal(err)
+			}
+			if st := e.status(tg.ID, exposedDB); st != scan.StatusGone {
+				t.Fatalf("status %q once closed", st)
+			}
+		})
+	}
+}
+
+// A shared server gets no finding from a complete read (R8).
+func TestSharedServerOpensNoExposure(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	h.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	ctx := context.Background()
+	got, err := e.deps.Repo.Get(ctx, tg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Kind = target.KindShared
+	if err := e.deps.Repo.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	e.check(tg.ID)
+	if st := e.status(tg.ID, exposedDB); st != "absent" {
+		t.Fatalf("status %q", st)
+	}
+}
+
+// A flaw kept open on a server that became shared is still waiting: the check
+// counts it, so it never says that nothing is left.
+func TestKeptExposureKeepsTheCheckNotClean(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	h.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg := e.server("vps-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	e.advance(time.Hour)
+	before := e.check(tg.ID)
+	ctx := context.Background()
+	got, err := e.deps.Repo.Get(ctx, tg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Kind = target.KindShared
+	if err := e.deps.Repo.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusPending {
+		t.Fatalf("status %q", st)
+	}
+	// The kept flaw is still counted, as it was while the rules opened it.
+	if before.Still == 0 || res.Still != before.Still || res.Clean() {
+		t.Errorf("before %+v, after %+v, clean %v", before, res, res.Clean())
+	}
+}
+
+// A decision on an exposure holds from one check to the next, survives the
+// service coming back, and a due deferral makes the flaw pending again.
+func TestDecisionHoldsOnExposure(t *testing.T) {
+	e := newEnv(t)
+	h := newHost()
+	h.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	ctx := context.Background()
+	id := e.findings(tg.ID)[exposedDB].ID
+	repo := decide.NewRepo(e.st)
+	d, err := repo.Set(ctx, decide.Decision{FindingID: id, Action: decide.Ignore, Justification: "behind the firewall", Author: "cli"}, e.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := func(ss string) {
+		t.Helper()
+		h.change(func(h *host) { h.ss = ss })
+		e.advance(time.Hour)
+		e.check(tg.ID)
+	}
+	next(ssOpenDB)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusDecided {
+		t.Fatalf("next check: %q", st)
+	}
+	next(ssQuiet)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusGone {
+		t.Fatalf("closed: %q", st)
+	}
+	e.takeAlerts()
+	next(ssOpenDB)
+	if st := e.status(tg.ID, exposedDB); st != scan.StatusDecided {
+		t.Fatalf("back: %q", st)
+	}
+	if cur, ok, err := repo.Current(ctx, id); err != nil || !ok || cur.ID != d.ID {
+		t.Errorf("decision replaced: %+v %v %v", cur, ok, err)
+	}
+	if a := e.takeAlerts(); len(a) != 0 {
+		t.Errorf("alerts %+v", a)
+	}
+
+	// A deferral that falls due on a flaw kept by a shared server.
+	e2 := newEnv(t)
+	h2 := newHost()
+	h2.change(func(h *host) { h.ss = ssOpenDB })
+	_, tg2 := e2.server("vps-demo", h2, target.EnvProd)
+	e2.check(tg2.ID)
+	id2 := e2.findings(tg2.ID)[exposedDB].ID
+	repo2 := decide.NewRepo(e2.st)
+	if _, err := repo2.Set(ctx, decide.Decision{FindingID: id2, Action: decide.Defer, DueAt: e2.now().Add(48 * time.Hour), Author: "cli"}, e2.now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e2.deps.Repo.Get(ctx, tg2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Kind = target.KindShared
+	if err := e2.deps.Repo.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	e2.advance(24 * time.Hour)
+	e2.check(tg2.ID)
+	if st := e2.status(tg2.ID, exposedDB); st != scan.StatusDecided {
+		t.Fatalf("before the date: %q", st)
+	}
+	e2.advance(48 * time.Hour)
+	if _, err := repo2.ExpireDue(ctx, e2.now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if st := e2.status(tg2.ID, exposedDB); st != scan.StatusPending {
+		t.Fatalf("due: %q", st)
+	}
+}
+
+// D-1: the distribution advisories protect only what depends on them. A plain
+// php.ini setting of a packaged runtime, read completely, closes with the
+// Debian source off; the mitigation and the package finding, which cannot be
+// judged without it, stay open.
+func TestPlainSettingClosesWithoutTheDistributionSource(t *testing.T) {
+	e := newEnv(t)
+	writeDB(t, e.deps.OSVRoot, phpDB())
+	h := fpmHost()
+	h.fpmDisplayOn = true
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	e.takeAlerts()
+	for _, id := range []string{"display_errors_prod", "session_upload_progress_off", "DSA-0000-2001"} {
+		if st := e.status(tg.ID, id); st != scan.StatusNew {
+			t.Fatalf("%s before: %s", id, st)
+		}
+	}
+	if err := e.srcs.SetEnabled(context.Background(), "osv.debian", false); err != nil {
+		t.Fatal(err)
+	}
+	// Still risky: seen, never closed.
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	if st := e.status(tg.ID, "display_errors_prod"); st == scan.StatusGone {
+		t.Fatalf("a setting still risky closed: %+v", res)
+	}
+	seen := e.findings(tg.ID)["display_errors_prod"].ID
+	if !slices.Contains(res.Seen, seen) {
+		t.Errorf("a setting still risky is not said to be seen: %v", res.Seen)
+	}
+	// The setting is fixed: it closes, the source being off changes nothing.
+	h.change(func(h *host) { h.fpmDisplayOn = false })
+	e.advance(time.Hour)
+	res = e.check(tg.ID)
+	if st := e.status(tg.ID, "display_errors_prod"); st != scan.StatusGone {
+		t.Fatalf("the plain setting did not close with the source off: %s %+v", st, res)
+	}
+	if slices.Contains(res.Seen, seen) {
+		t.Errorf("a closed setting is said to be seen: %v", res.Seen)
+	}
+	if res.SourceToEnable != "osv.debian" {
+		t.Errorf("source to enable %q", res.SourceToEnable)
+	}
+	// What cannot be judged without the source stays, and is not said seen.
+	for _, id := range []string{"session_upload_progress_off", "DSA-0000-2001"} {
+		f := e.findings(tg.ID)[id]
+		if f.Status == scan.StatusGone {
+			t.Errorf("%s closed for lack of a source", id)
+		}
+		if slices.Contains(res.Seen, f.ID) {
+			t.Errorf("%s is said to be seen", id)
+		}
 	}
 }

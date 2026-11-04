@@ -1,6 +1,6 @@
 <template>
-  <v-card class="m-settings">
-    <v-card-title class="m-settings__title">{{ $t('settings.title') }}</v-card-title>
+  <v-card class="m-settings" :variant="dialog ? 'elevated' : 'flat'">
+    <h1 class="m-settings__title">{{ $t('settings.title') }}</h1>
     <v-card-text class="m-settings__body">
       <section class="m-settings__group" aria-labelledby="settings-lang">
         <h3 id="settings-lang" class="m-settings__label">{{ $t('settings.lang') }}</h3>
@@ -18,6 +18,7 @@
           </v-btn>
         </div>
         <p v-if="meta && meta.lang" class="m-muted m-small">{{ $t('settings.lang_default', { lang: $t(`lang.${metaLang}`) }) }}</p>
+        <FieldHelp id="settings.lang" :field="$t('settings.lang')" />
       </section>
 
       <section class="m-settings__group" aria-labelledby="settings-theme">
@@ -34,12 +35,29 @@
             {{ $t(`settings.theme_${t}`) }}
           </v-btn>
         </div>
+        <FieldHelp id="settings.theme" :field="$t('settings.theme')" />
+      </section>
+
+      <section class="m-settings__group" aria-labelledby="settings-advanced">
+        <h3 id="settings-advanced" class="m-settings__label">{{ $t('settings.advanced') }}</h3>
+        <v-switch
+          :model-value="$ui.advanced"
+          color="primary"
+          :label="$ui.advanced ? $t('settings.advanced_on') : $t('settings.advanced_off')"
+          :aria-describedby="'settings-advanced-hint'"
+          hide-details
+          inset
+          @update:model-value="setAdvanced"
+        />
+        <p id="settings-advanced-hint" class="m-muted m-small">{{ $t('settings.advanced_hint') }}</p>
+        <FieldHelp id="settings.advanced" :field="$t('settings.advanced')" />
       </section>
 
       <section class="m-settings__group" aria-labelledby="settings-token">
         <h3 id="settings-token" class="m-settings__label">{{ $t('settings.token') }}</h3>
         <p class="m-small">{{ hasToken ? $t('settings.token_saved') : $t('settings.token_missing') }}</p>
         <p class="m-muted m-small">{{ $t('auth.why') }}</p>
+        <FieldHelp id="settings.token" :field="$t('settings.token')" />
         <form class="m-settings__token" @submit.prevent="useToken">
           <v-text-field v-model="pasted" :label="$t('settings.token_paste')" type="password" autocomplete="off" spellcheck="false" hide-details />
           <div class="m-settings__row">
@@ -49,9 +67,19 @@
         </form>
       </section>
 
+      <section class="m-settings__group" aria-labelledby="settings-guide">
+        <h3 id="settings-guide" class="m-settings__label">{{ $t('settings.guide') }}</h3>
+        <v-btn variant="tonal" color="primary" href="#/" @click="showGuide">{{ $t('settings.guide_open') }}</v-btn>
+      </section>
+
+      <section class="m-settings__group" aria-labelledby="settings-sources">
+        <h3 id="settings-sources" class="m-settings__label">{{ $t('settings.sources') }}</h3>
+        <v-btn variant="tonal" color="primary" href="#/sources">{{ $t('settings.sources_open') }}</v-btn>
+      </section>
+
       <p v-if="meta && meta.version" class="m-muted m-small m-settings__version">{{ $t('settings.version', { version: meta.version }) }}</p>
     </v-card-text>
-    <v-card-actions>
+    <v-card-actions v-if="dialog">
       <v-spacer />
       <v-btn variant="text" @click="$emit('close')">{{ $t('app.close') }}</v-btn>
     </v-card-actions>
@@ -59,14 +87,20 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import { api } from '../api.js'
 import { languages } from '../i18n/index.js'
+import { showGuideAgain } from '../lib/guideView.js'
+import { keys, save } from '../lib/storage.js'
 
 export default {
   name: 'SettingsPanel',
+  components: { FieldHelp },
   props: {
     meta: { type: Object, default: null },
     theme: { type: String, default: 'light' },
+    // dialog is true when the panel sits in a box: only then does it offer to close.
+    dialog: { type: Boolean, default: false },
   },
   emits: ['lang', 'theme', 'token-forgotten', 'token-saved', 'close'],
   data() {
@@ -81,6 +115,14 @@ export default {
     },
   },
   methods: {
+    showGuide() {
+      showGuideAgain(this.$ui.guide, save)
+    },
+    // setAdvanced turns the advanced mode on or off and remembers the choice here.
+    setAdvanced(on) {
+      this.$ui.advanced = !!on
+      save(keys.advanced, on ? '1' : '')
+    },
     useToken() {
       api.setToken(this.pasted)
       this.pasted = ''
@@ -95,7 +137,7 @@ export default {
 </script>
 
 <style scoped>
-.m-settings__title { font-family: var(--m-voice); font-weight: 600; font-size: 1.4rem; padding-top: 1.25rem; }
+.m-settings__title { font-family: var(--m-voice); font-weight: 600; font-size: 1.4rem; margin: 0; padding: 1.25rem 1rem 0.5rem; }
 .m-settings__body { display: grid; gap: 1.5rem; }
 .m-settings__group { display: grid; gap: 0.5rem; justify-items: start; }
 .m-settings__group p { margin: 0; }

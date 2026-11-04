@@ -1,6 +1,7 @@
 // Package collect reads what runs on a server, read only, through a closed
 // list of commands (commands.go): operating system, PHP runtimes (command
-// line and FPM, reported apart), web servers, packages and PHP directives.
+// line and FPM, reported apart), web servers, packages, PHP directives and
+// the TCP services that listen (address and port, never the process).
 // Nothing is installed or written on the server and sudo is never used. A
 // read that fails becomes an Unseen line, never a second try by another
 // means.
@@ -63,6 +64,9 @@ const (
 	// time limit. Unlike ReasonPHP or ReasonFPM (nothing found), what it asks
 	// about may be there: its absence proves nothing.
 	ReasonProbe = "collect.unseen.probe"
+	// ReasonListeners: `ss` is missing, failed or gave an answer Michel cannot
+	// take as complete. What listens on the server is not known.
+	ReasonListeners = "collect.unseen.listeners"
 )
 
 // SecretValueKey is the i18n key of the text shown instead of a secret
@@ -193,6 +197,7 @@ func Run(ctx context.Context, d Deps, r Runner, t target.Target, links []target.
 	c.cli(found, files)
 	c.fpm(found, files)
 	c.web(found)
+	c.listeners()
 	c.userInis(links, files)
 	c.extras(d.ExtraPaths, links, files)
 	if c.err == nil {
@@ -567,6 +572,7 @@ func record(d Deps, t target.Target, inv target.Inventory, stop error) error {
 			"packages":         len(inv.Packages),
 			"directives":       len(inv.Directives),
 			"files":            len(inv.Files),
+			"listeners":        len(inv.Listeners),
 			"unseen":           len(inv.Unseen),
 			"inventory_sha256": hex.EncodeToString(sum[:]),
 		},

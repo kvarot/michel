@@ -171,6 +171,18 @@ func newProjectRemoveCmd(deps *Deps) *cobra.Command {
 				// (the attempts are still listed): mask tables, tokens,
 				// copies, mirrors, briefs.
 				if p0, gerr := repo.Get(ctx, arg); gerr == nil {
+					// The rule of its Git service goes before all that, and needs no
+					// secret: once the row is deleted, nobody would own it.
+					if rerr := fix.ReleaseProjectRule(ctx, fixDeps(cmd, deps, nil, "cli"), p0.ID); rerr != nil {
+						msg := deps.T("cli.project.remove.rule_failed", p0.Name, rerr)
+						if _, aerr := deps.Audit.Record(ctx, audit.Event{
+							Actor: "cli", Action: "project.remove", Target: arg, Result: "error",
+							Evidence: map[string]any{"mode": mode, "reason": i18n.T(i18n.EN, "cli.project.remove.rule_failed", p0.Name, rerr)},
+						}); aerr != nil {
+							return deps.Wrapf("cli.common.audit_also", aerr, msg)
+						}
+						return errors.New(msg)
+					}
 					secrets, serr := openSecrets(cmd, deps)
 					if serr == nil {
 						serr = fix.PurgeProject(ctx, fixDeps(cmd, deps, secrets, "cli"), p0.ID)

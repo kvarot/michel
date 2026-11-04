@@ -89,6 +89,11 @@ func validationError(deps *Deps, d decide.Decision, why string, err error) error
 // any) and the decision.set event id.
 func decideOne(ctx context.Context, deps *Deps, repo *decide.Repo, d decide.Decision, fi scan.Finding, p project.Project) (decide.Decision, *decide.Decision, string, error) {
 	pkg, osv := safe(fi.Package), safe(fi.OSVID)
+	// Michel cannot close an open service: "fix" would only hide the finding
+	// from the list of what is left to do, with nobody to fix it.
+	if d.Action == decide.Fix && fi.Kind == scan.KindServerExposure {
+		return decide.Decision{}, nil, "", deps.Errorf("cli.decide.exposure_no_fix")
+	}
 	d.FindingID = fi.ID
 	stored, replaced, evID, err := decide.Apply(ctx, repo, deps.Audit, decideAuthor, d, fi.Package, fi.OSVID, deps.Now())
 	var auditErr *decide.AuditError

@@ -20,6 +20,7 @@
           {{ $t(`decision.action.${a}`) }}
         </v-btn>
       </div>
+      <FieldHelp id="decision.action" :field="$t('decision.title')" />
 
       <v-text-field
         v-if="action === 'defer'"
@@ -32,6 +33,7 @@
         :error-messages="untilError"
         class="m-decision__until"
       />
+      <FieldHelp v-if="action === 'defer'" id="decision.until" :field="$t('decision.until')" />
 
       <v-textarea
         v-model="why"
@@ -43,6 +45,7 @@
         counter="1000"
         :error-messages="whyError"
       />
+      <FieldHelp id="decision.why" :field="$t('decision.why')" />
 
       <p v-if="action && check.ok" class="m-decision__will" aria-live="polite">{{ will }}</p>
 
@@ -71,6 +74,7 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import { api } from '../api.js'
 import { decisionLabel, formatDate, isoDay, validateDecision } from '../lib/digestView.js'
 
@@ -78,6 +82,7 @@ let seq = 0
 
 export default {
   name: 'DecisionPanel',
+  components: { FieldHelp },
   props: {
     finding: { type: Object, required: true },
   },

@@ -175,7 +175,7 @@ func jsonList(s []string) string {
 // Only the OSV findings of the project (source_key "") are read and closed:
 // a scan never touches what a plugin reported.
 func applyScan(ctx context.Context, tx *sql.Tx, projectID, scanID string, now time.Time, findings []Finding, unread map[string]bool, current map[string]decisionView, enriched bool) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
-	return apply(ctx, tx, projectID, "", scanID, now, findings, unread, current, enriched)
+	return apply(ctx, tx, projectID, "", scanID, now, findings, unread, nil, current, enriched)
 }
 
 // ApplyExternal records the findings of one plugin run (sourceKey, runID)
@@ -194,7 +194,7 @@ func ApplyExternal(ctx context.Context, tx *sql.Tx, projectID, sourceKey, runID 
 			return 0, 0, 0, nil, err
 		}
 	}
-	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, projectID, sourceKey, runID, now, findings, nil, current, false)
+	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, projectID, sourceKey, runID, now, findings, nil, nil, current, false)
 	return newN, still + reappeared, gone, superseded, err
 }
 
@@ -206,10 +206,16 @@ func ApplyExternal(ctx context.Context, tx *sql.Tx, projectID, sourceKey, runID 
 // UnreadPrefixes protects, the same way, every stored manifest of the
 // server that starts with one of them ("cli:", "fpm:"): the check could not
 // even tell which runtimes are there.
+//
+// UnreadAdvisories lists manifests whose findings that depend on the
+// advisories only (a mitigation, a package finding) are protected: the runtime
+// was read, but whether a flaw is open could not be judged. Its plain settings
+// are judged on what was read, and close as usual.
 type ServerApply struct {
-	Unread         []string
-	UnreadPrefixes []string
-	Enriched       bool
+	Unread           []string
+	UnreadPrefixes   []string
+	UnreadAdvisories []string
+	Enriched         bool
 }
 
 // ApplyServerFindings records the findings of one check of a server
@@ -224,7 +230,7 @@ func ApplyServerFindings(ctx context.Context, tx *sql.Tx, targetID, runID string
 		return 0, 0, 0, nil, errors.New("a server finding needs the id of its server")
 	}
 	for _, f := range fs {
-		if f.ProjectID != targetID || (f.Kind != KindServerPackage && f.Kind != KindServerConfig) {
+		if f.ProjectID != targetID || (f.Kind != KindServerPackage && f.Kind != KindServerConfig && f.Kind != KindServerExposure) {
 			return 0, 0, 0, nil, fmt.Errorf("finding %s is not a finding of server %s", label(f), targetID)
 		}
 	}
@@ -259,35 +265,42 @@ func ApplyServerFindings(ctx context.Context, tx *sql.Tx, targetID, runID string
 			return 0, 0, 0, nil, err
 		}
 	}
-	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, targetID, "", runID, now, fs, unread, current, o.Enriched)
+	unreadAdvisories := map[string]bool{}
+	for _, m := range o.UnreadAdvisories {
+		unreadAdvisories[m] = true
+	}
+	newN, still, reappeared, gone, superseded, err := apply(ctx, tx, targetID, "", runID, now, fs, unread, unreadAdvisories, current, o.Enriched)
 	return newN, still + reappeared, gone, superseded, err
 }
 
 // apply is applyScan for the findings of one source: "" for the OSV scan, a
 // plugin key for a plugin run. Only the findings of that source are read and
 // closed; the findings are stored with that source key.
-func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string, now time.Time, findings []Finding, unread map[string]bool, current map[string]decisionView, enriched bool) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
+func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string, now time.Time, findings []Finding, unread, unreadAdvisories map[string]bool, current map[string]decisionView, enriched bool) (newN, still, reappeared, gone int, superseded []Superseded, err error) {
 	ts := now.UTC().Format(time.RFC3339)
-	rows, err := tx.QueryContext(ctx, `SELECT id, manifest_rel_path, status, kev, kev_added, epss, epss_percentile, cvss_enriched
+	rows, err := tx.QueryContext(ctx, `SELECT id, manifest_rel_path, status, kev, kev_added, epss, epss_percentile, cvss_enriched, mitigation, kind
 		FROM finding WHERE project_id = ? AND source_key = ?`, projectID, sourceKey)
 	if err != nil {
 		return 0, 0, 0, 0, nil, fmt.Errorf("cannot read the existing findings: %w", err)
 	}
 	type known struct {
 		manifest, status string
+		kind             string
+		mitigation       bool
 		enrichment       Enrichment
 	}
 	existing := map[string]known{}
 	for rows.Next() {
 		var id string
 		var k known
-		var kev int
+		var kev, mitigation int
 		if err := rows.Scan(&id, &k.manifest, &k.status, &kev, &k.enrichment.KEVAdded, &k.enrichment.EPSS,
-			&k.enrichment.EPSSPercentile, &k.enrichment.CVSS); err != nil {
+			&k.enrichment.EPSSPercentile, &k.enrichment.CVSS, &mitigation, &k.kind); err != nil {
 			rows.Close()
 			return 0, 0, 0, 0, nil, err
 		}
 		k.enrichment.KEV = kev != 0
+		k.mitigation = mitigation != 0
 		existing[id] = k
 	}
 	if err := rows.Err(); err != nil {
@@ -385,7 +398,7 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 	sort.Strings(ids)
 	for _, id := range ids {
 		k := existing[id]
-		if present[id] || k.status == StatusGone || unread[k.manifest] {
+		if present[id] || k.status == StatusGone || unread[k.manifest] || ((k.mitigation || k.kind == KindServerPackage) && unreadAdvisories[k.manifest]) {
 			continue
 		}
 		if _, err := closeStmt.ExecContext(ctx, StatusGone, StatusGone, ts, id); err != nil {
@@ -431,7 +444,7 @@ func scanFinding(rows *sql.Rows) (Finding, error) {
 // (EffectiveSeverity). An empty status means everything except "gone"; "all"
 // means everything; "actionable" means new or pending.
 func (r *Repo) ListFindings(ctx context.Context, projectID, status string) ([]Finding, error) {
-	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ? AND kind NOT IN ('server_package', 'server_config')`
+	q := `SELECT ` + findingColumns + ` FROM finding WHERE project_id = ? AND kind NOT IN ('server_package', 'server_config', 'server_exposure')`
 	args := []any{projectID}
 	switch status {
 	case "all":
@@ -508,7 +521,7 @@ func (r *Repo) FindByIDPrefix(ctx context.Context, prefix string) ([]Finding, er
 
 // ListServerFindings returns every finding of a server (any status), by id.
 func (r *Repo) ListServerFindings(ctx context.Context, targetID string) ([]Finding, error) {
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+findingColumns+` FROM finding WHERE project_id = ? AND source_key = '' AND kind IN ('server_package', 'server_config') ORDER BY id`, targetID)
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT `+findingColumns+` FROM finding WHERE project_id = ? AND source_key = '' AND kind IN ('server_package', 'server_config', 'server_exposure') ORDER BY id`, targetID)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the findings of the server: %w", err)
 	}

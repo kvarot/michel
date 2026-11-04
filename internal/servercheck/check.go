@@ -102,6 +102,9 @@ type CheckResult struct {
 	Unjudged          int
 	ReleaseKnown      bool
 	SkippedAdvisories int
+	// Seen lists the findings this check really saw. A finding that stays
+	// open without being in it could not be judged: it is only kept.
+	Seen []string
 }
 
 // Clean tells that the server was fully judged and nothing is open: the
@@ -236,13 +239,17 @@ func judge(ctx context.Context, d CheckDeps, t target.Target, inv target.Invento
 	}
 	fs := serverrules.EvaluateWith(t, inv, set, serverrules.Options{DistroOpen: open})
 	fs = append(fs, vulnmatch.Findings(t, m)...)
-	var prefixes []string
+	for _, f := range fs {
+		res.Seen = append(res.Seen, f.ID)
+	}
+	var prefixes, unreadAdvisories []string
 	if slices.Contains(unread, osPackages) {
 		// The PHP2Shell mitigations of a packaged runtime depend on the
-		// distribution advisories, which could not be judged.
+		// distribution advisories, which could not be judged. Only they do:
+		// a plain setting of that runtime is judged on what was read.
 		for _, rt := range inv.PHP {
 			if rt.FromPackage != "" {
-				unread = append(unread, rt.SAPI+":"+rt.Binary)
+				unreadAdvisories = append(unreadAdvisories, rt.SAPI+":"+rt.Binary)
 			}
 		}
 	}
@@ -258,6 +265,15 @@ func judge(ctx context.Context, d CheckDeps, t target.Target, inv target.Invento
 			// A .user.ini line counts for the FPM runtimes.
 			prefixes = append(prefixes, "fpm:")
 		}
+	}
+	// An exposure closes only on a complete read that no longer shows the
+	// service open. Without that list, nothing is known of any port; with it,
+	// a port still open keeps its finding even when no rule would open it
+	// today (the server became shared, the port became the connection one).
+	if serverrules.ListenersKnown(inv) {
+		unread = append(unread, serverrules.OpenPortKeys(inv)...)
+	} else {
+		prefixes = append(prefixes, serverrules.ExposurePrefix)
 	}
 	enriched := d.Lookup != nil
 	if enriched {
@@ -277,7 +293,7 @@ func judge(ctx context.Context, d CheckDeps, t target.Target, inv target.Invento
 			fs[i] = scan.WithEnrichment(fs[i], scan.CombineEnrichment(known, scan.CVEsOf(fs[i])))
 		}
 	}
-	fresh, superseded, stale, err := storeFindings(ctx, d, t, inv.At, fs, scan.ServerApply{Unread: unread, UnreadPrefixes: prefixes, Enriched: enriched}, &res)
+	fresh, superseded, stale, err := storeFindings(ctx, d, t, inv.At, fs, scan.ServerApply{Unread: unread, UnreadPrefixes: prefixes, UnreadAdvisories: unreadAdvisories, Enriched: enriched}, &res)
 	if err != nil {
 		return res, err
 	}

@@ -73,6 +73,8 @@ michel audit verify
 michel audit list --last 20
 ```
 
+On a machine with `michel serve`, the page does the first two commands too: My projects, "Add a project" and "Check this project". The check is the same pass as `michel scan` and needs the same databases.
+
 `scan` looks for `composer.lock`, `package-lock.json`, `yarn.lock` and `pnpm-lock.yaml` files, skipping any `vendor/` and `node_modules/` directory. A folder without any lockfile is recorded as `empty`, not as a failure. A missing OSV database makes the scan fail before anything else, with the command to fix it. A corrupt manifest is recorded as failed (scan status `partial`) and the other manifests are still scanned. `audit verify` checks the hash chain of the audit log. `audit list` must not show any `egress.attempt` event after an offline scan.
 
 ## Analysis

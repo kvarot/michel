@@ -485,7 +485,7 @@ func TestAPIResponsesHaveNoAbsolutePathsNorCommands(t *testing.T) {
 
 	banned := []string{f.proj.Path, filepath.ToSlash(f.proj.Path), strings.ReplaceAll(f.proj.Path, `\`, `\\`),
 		f.dir, filepath.ToSlash(f.dir), strings.ReplaceAll(f.dir, `\`, `\\`), `D:\\Data`, "/home/demo", "report_path", "install_dir",
-		testCmdMarker, installCmdMarker, "phpunit-secret-marker", "test_cmd", "install_cmd", testToken}
+		testCmdMarker, installCmdMarker, "phpunit-secret-marker", `"test_cmd"`, `"install_cmd"`, testToken}
 	for _, body := range bodies {
 		for _, s := range banned {
 			if strings.Contains(body, s) {
@@ -627,5 +627,80 @@ func TestPatchProjectLevels(t *testing.T) {
 	}
 	if resp, _ := f.do("PATCH", "/api/v1/projects/demo", "", `{"fix_level":1}`); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("no token: %d", resp.StatusCode)
+	}
+}
+
+func TestProjectViewSaysIfTestsAreDeclared(t *testing.T) {
+	f := newFixture(t, nil)
+	var raw string
+	get := func() ProjectView {
+		resp, body := f.do("GET", "/api/v1/projects", testToken, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d: %s", resp.StatusCode, body)
+		}
+		raw = body
+		var list []ProjectView
+		if err := json.Unmarshal([]byte(body), &list); err != nil || len(list) != 1 {
+			t.Fatalf("projects = %s, %v", body, err)
+		}
+		return list[0]
+	}
+	if !get().HasTestCmd {
+		t.Errorf("a project with a test command says it has none: %s", raw)
+	}
+	if !strings.Contains(raw, `"has_test_cmd":true`) {
+		t.Errorf("no has_test_cmd in the answer: %s", raw)
+	}
+	if strings.Contains(raw, testCmdMarker) || strings.Contains(raw, installCmdMarker) {
+		t.Errorf("the answer gives the command itself: %s", raw)
+	}
+	if _, err := f.st.DB().Exec(`UPDATE project SET test_cmd = '' WHERE id = ?`, f.proj.ID); err != nil {
+		t.Fatal(err)
+	}
+	if get().HasTestCmd {
+		t.Errorf("a project without a test command says it has one: %s", raw)
+	}
+}
+
+func TestProjectViewSaysIfInGit(t *testing.T) {
+	f := newFixture(t, nil)
+	get := func() ProjectView {
+		var list []ProjectView
+		f.get("/api/v1/projects", &list)
+		if len(list) != 1 {
+			t.Fatalf("projects = %+v", list)
+		}
+		return list[0]
+	}
+	if get().GitRepo {
+		t.Error("a folder without .git says it is a Git repository")
+	}
+	if err := os.MkdirAll(filepath.Join(f.proj.Path, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.proj.Path, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !get().GitRepo {
+		t.Error("a folder with .git says it is not a Git repository")
+	}
+}
+
+// The shared answers of the decision route stay those of the project route:
+// a finding no longer seen is a conflict, and nothing is audited.
+func TestPostDecisionOnGoneFindingIsConflict(t *testing.T) {
+	f := newFixture(t, nil)
+	id := f.ids["ACME-2026-0002"]
+	if _, err := f.st.DB().Exec(`UPDATE finding SET status = 'gone' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	resp, b := f.do("POST", "/api/v1/findings/"+id+"/decision", testToken, `{"action":"ignore","why":"known"}`)
+	var eb ErrorBody
+	_ = json.Unmarshal([]byte(b), &eb)
+	if resp.StatusCode != http.StatusConflict || eb.Error != i18n.T(i18n.EN, "api.decision.gone") {
+		t.Errorf("%d %s", resp.StatusCode, b)
+	}
+	if rows := f.auditRows("decision.set"); len(rows) != 0 {
+		t.Errorf("audited: %+v", rows)
 	}
 }

@@ -434,7 +434,7 @@ func TestStartNeedsConsent(t *testing.T) {
 			t.Errorf("%s has no French text", k)
 		}
 	}
-	if fr := i18n.T(i18n.FR, "fix.consent.runs_code"); !strings.Contains(fr, "composer/npm") || !strings.Contains(fr, "droits Windows") || !strings.Contains(fr, "s'exécute") {
+	if fr := i18n.T(i18n.FR, "fix.consent.runs_code"); !strings.Contains(fr, "composer, npm") || !strings.Contains(fr, "droits Windows") || !strings.Contains(fr, "s'y exécute") {
 		t.Errorf("ruling 30 sentence missing: %q", fr)
 	}
 }
@@ -880,7 +880,7 @@ func TestProveNeedsMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Still seen by the scan: nothing to prove.
-	if n, err := Prove(context.Background(), f.d, f.proj.ID); err != nil || n != 0 {
+	if n, err := Prove(context.Background(), f.d, f.proj.ID, Pass{Scanned: true}); err != nil || n != 0 {
 		t.Fatalf("Prove while the finding is still open: %d, %v", n, err)
 	}
 	if got := f.attempt(a.ID); got.State != StateApplied {
@@ -888,7 +888,7 @@ func TestProveNeedsMerge(t *testing.T) {
 	}
 	// Gone without the merge: inconclusive, the finding stays gone.
 	f.setFindingStatus(f.finding.ID, scan.StatusGone)
-	if n, err := Prove(context.Background(), f.d, f.proj.ID); err != nil || n != 0 {
+	if n, err := Prove(context.Background(), f.d, f.proj.ID, Pass{Scanned: true}); err != nil || n != 0 {
 		t.Fatalf("Prove without the merge: %d, %v", n, err)
 	}
 	if got := f.attempt(a.ID); got.State != StateInconclusive {
@@ -911,7 +911,7 @@ func TestProveNeedsMerge(t *testing.T) {
 	}
 	gitT(t, f.env, f.proj.Path, "merge", "-q", "--no-edit", Branch(b.ID))
 	f.setFindingStatus(f.finding.ID, scan.StatusGone)
-	if n, err := Prove(context.Background(), f.d, f.proj.ID); err != nil || n != 1 {
+	if n, err := Prove(context.Background(), f.d, f.proj.ID, Pass{Scanned: true}); err != nil || n != 1 {
 		t.Fatalf("Prove after the merge: %d, %v", n, err)
 	}
 	if got := f.attempt(b.ID); got.State != StateProvenFixed {
@@ -1283,5 +1283,21 @@ func TestConsentSwitchesStrictLocalOnlyOnTheClick(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(f.policy); string(b) != strict {
 		t.Errorf("the policy changed for a health project:\n%s", b)
+	}
+}
+
+// The page reads an empty ecosystem as "no rescan could run" (pathView.js): it
+// rests on this, that a rescan of such a finding fails instead of reporting a
+// clean copy.
+func TestRescanOfAFlawWithoutEcosystemCannotReportClean(t *testing.T) {
+	f := newFixture(t)
+	f.d.Rescan = nil
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "composer.lock"), []byte(`{"packages":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clean, err := f.d.rescan(context.Background(), dir, scan.Finding{Kind: "code", Package: "", OSVID: "rule.x"}, project.Project{})
+	if err == nil || clean {
+		t.Fatalf("rescan = %v, %v; want an error and not clean", clean, err)
 	}
 }

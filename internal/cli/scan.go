@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +34,8 @@ func newScanCmd(deps *Deps) *cobra.Command {
 			"The scan itself never uses the network; run 'michel db update' to refresh the databases, or add --update to read every " +
 			"enabled source first (as 'michel source update'; a source that cannot be read does not stop the scan). A folder without any lockfile " +
 			"is reported as having nothing to scan: an error with --project, not with --all. After the scan and the analysis of a project, every enabled plugin " +
-			"set to run (michel source list --kind plugin) runs on it, as michel source run does; a plugin that fails is a warning.",
+			"set to run (michel source list --kind plugin) runs on it, as michel source run does; a plugin that fails is a warning. " +
+			"Then the applied fixes are settled: only the tool that reported a flaw, if it looked in this scan, can prove its fix.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -95,16 +97,10 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					fmt.Fprintln(deps.Stdout)
 				}
 			}
-			root := dbRoot(cmd, deps)
-			ecos, err := osvdb.Enabled(ctx, source.NewRepo(deps.Store), deps.allowed)
+			env, err := newScanEnv(ctx, cmd, deps, noAnalyze)
 			if err != nil {
 				return err
 			}
-			dataDir, _ := cmd.Flags().GetString("data-dir")
-			sdeps := scan.Deps{Store: deps.Store, Audit: deps.Audit, Gateway: deps.Gateway, Now: deps.Now,
-				Version: buildinfo.Version, DataDir: dataDir,
-				// Scanner warnings (unknown config keys, unused ignores) reach the user.
-				LogHandler: scannerLogHandler(deps.Stderr)}
 
 			results := []scan.Result{}
 			analysis := map[string]string{} // project name -> summary suffix
@@ -114,32 +110,8 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				Error   string `json:"error"`
 			}
 			failures := []failure{}
-			// The plugins run after each project's scan and analysis; a
-			// plugin that fails is a warning, as the analysis.
-			pluginEntries, err := source.NewRepo(deps.Store).List(ctx, source.KindPlugin, false)
-			if err != nil {
-				return err
-			}
-			plugins := []pluginRunView{}
-			pluginLines := []string{}
-			runPlugins := func(p project.Project) {
-				for _, e := range scanPlugins(pluginEntries, deps.allowed, p.Name) {
-					res, err := plugin.RunPlugin(ctx, pluginDeps(cmd, deps), e, p, "")
-					if err != nil {
-						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_plugin_failed", p.Name, pluginErr(deps, e, p.Name, err), e.Key, p.Name))
-						if !errors.Is(err, plugin.ErrAudit) {
-							continue
-						}
-					}
-					plugins = append(plugins, pluginRunView{Project: p.Name, Key: e.Key, RunResult: res})
-					pluginLines = append(pluginLines, pluginSummary(deps, e, p.Name, res))
-				}
-			}
 			for _, p := range targets {
-				// The enrichment (KEV, EPSS) is read from the store for the CVEs of
-				// each scan only.
-				r, err := scan.Run(ctx, sdeps, p, scan.Options{OSVRoot: root, Exclude: scan.EffectiveExclude(p), Ecosystems: ecos,
-					Lookup: enrich.LookupFunc(deps.Store.DB())})
+				r, summary, err := env.runOne(ctx, cmd, deps, p, all)
 				if err != nil {
 					if errors.Is(err, osvdb.ErrDatabaseMissing) && !all {
 						return err
@@ -156,8 +128,6 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					if !all {
 						problems = true
 					}
-					// A folder without lockfile still has code and settings to check.
-					runPlugins(p)
 					continue
 				}
 				// A lockfile left out because its ecosystem is disabled is the
@@ -166,32 +136,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 				if len(manifestProblems(r)) > 0 {
 					problems = true
 				}
-				analysis[p.Name] = deps.T("cli.scan.summary.analysis_skipped")
-				// The applied fixes of the project are settled by this scan
-				// (proven when merged and gone), and its eligible findings
-				// queued for michel serve at level 2.
-				fd := scanFixDeps(cmd, deps)
-				if _, err := fix.Prove(ctx, fd, p.ID); err != nil {
-					fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
-				}
-				if all {
-					if _, err := fix.QueueEligible(ctx, fd, p.ID); err != nil {
-						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
-					}
-				}
-				if !noAnalyze && (r.Status == scan.ScanOK || r.Status == scan.ScanPartial) {
-					// Analysis problems are warnings: they never change the scan's exit code.
-					ar, aerr := analyzeProject(cmd, deps, p, false)
-					if aerr != nil {
-						fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_failed", p.Name, aerr, p.Name))
-					} else {
-						for _, e := range ar.Errors {
-							fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_error", p.Name, e, p.Name))
-						}
-						analysis[p.Name] = deps.N("cli.scan.summary.analyzed", ar.Analyzed+ar.Skipped)
-					}
-				}
-				runPlugins(p)
+				analysis[p.Name] = summary
 			}
 			if asJSON {
 				if err := json.NewEncoder(deps.Stdout).Encode(struct {
@@ -199,7 +144,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					Failures []failure            `json:"failures"`
 					Plugins  []pluginRunView      `json:"plugins"`
 					Update   *sourceupdate.Report `json:"update,omitempty"`
-				}{results, failures, plugins, updated}); err != nil {
+				}{results, failures, env.plugins, updated}); err != nil {
 					return err
 				}
 			} else {
@@ -223,7 +168,7 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					scanned = append(scanned, r)
 				}
 				printScan(deps, scanned, analysis)
-				for _, l := range pluginLines {
+				for _, l := range env.pluginLines {
 					fmt.Fprintln(deps.Stdout, l)
 				}
 				switch {
@@ -285,6 +230,125 @@ func newScanCmd(deps *Deps) *cobra.Command {
 	f.BoolVar(&update, "update", false, "read every enabled source before scanning (as 'michel source update')")
 	f.String("osv-db", "", "directory of the offline databases (default: from the policy)")
 	return c
+}
+
+// scanEnv is what the scans of one michel scan share, and what they leave for
+// its report: the plugin runs.
+type scanEnv struct {
+	sdeps         scan.Deps
+	root          string
+	ecos          []string
+	pluginEntries []source.Entry
+	noAnalyze     bool
+	plugins       []pluginRunView
+	pluginLines   []string
+}
+
+func newScanEnv(ctx context.Context, cmd *cobra.Command, deps *Deps, noAnalyze bool) (*scanEnv, error) {
+	root := dbRoot(cmd, deps)
+	ecos, err := osvdb.Enabled(ctx, source.NewRepo(deps.Store), deps.allowed)
+	if err != nil {
+		return nil, err
+	}
+	dataDir, _ := cmd.Flags().GetString("data-dir")
+	sdeps := scan.Deps{Store: deps.Store, Audit: deps.Audit, Gateway: deps.Gateway, Now: deps.Now,
+		Version: buildinfo.Version, DataDir: dataDir,
+		// Scanner warnings (unknown config keys, unused ignores) reach the user.
+		LogHandler: scannerLogHandler(deps.Stderr)}
+	// The plugins run after each project's scan and analysis; a
+	// plugin that fails is a warning, as the analysis.
+	pluginEntries, err := source.NewRepo(deps.Store).List(ctx, source.KindPlugin, false)
+	if err != nil {
+		return nil, err
+	}
+	return &scanEnv{sdeps: sdeps, root: root, ecos: ecos, pluginEntries: pluginEntries, noAnalyze: noAnalyze,
+		plugins: []pluginRunView{}, pluginLines: []string{}}, nil
+}
+
+// scanOneProject is one pass on one project, the same as michel scan: the scan,
+// the analysis, the plugins, then the proof of the applied fixes, and the queue
+// of the automatic fixes when queue is true. Warnings go to deps.Stderr, as in
+// michel scan; it prints nothing else. It returns the scan and the end of its
+// summary sentence (the analysis). A failed plugin or analysis is a warning; an
+// error means the scan itself failed.
+func scanOneProject(ctx context.Context, cmd *cobra.Command, deps *Deps, p project.Project, queue bool) (scan.Result, string, error) {
+	env, err := newScanEnv(ctx, cmd, deps, false)
+	if err != nil {
+		return scan.Result{}, "", err
+	}
+	return env.runOne(ctx, cmd, deps, p, queue)
+}
+
+// runOne is the body of scanOneProject. michel scan calls it directly: its
+// report needs the plugin runs kept in e, and it reads the databases once.
+func (e *scanEnv) runOne(ctx context.Context, cmd *cobra.Command, deps *Deps, p project.Project, queue bool) (scan.Result, string, error) {
+	// The enrichment (KEV, EPSS) is read from the store for the CVEs of
+	// each scan only.
+	r, err := scan.Run(ctx, e.sdeps, p, scan.Options{OSVRoot: e.root, Exclude: scan.EffectiveExclude(p), Ecosystems: e.ecos,
+		Lookup: enrich.LookupFunc(deps.Store.DB())})
+	if err != nil {
+		return r, "", err
+	}
+	if r.Status == scan.ScanEmpty {
+		// A folder without lockfile still has code and settings to check.
+		// The scan read nothing: it settles no fix of a dependency.
+		looked := e.runPlugins(ctx, cmd, deps, p)
+		proveFixes(ctx, deps, scanFixDeps(cmd, deps), p, fix.Pass{Sources: looked})
+		return r, "", nil
+	}
+	analysis := deps.T("cli.scan.summary.analysis_skipped")
+	if !e.noAnalyze && (r.Status == scan.ScanOK || r.Status == scan.ScanPartial) {
+		// Analysis problems are warnings: they never change the scan's exit code.
+		ar, aerr := analyzeProjectIn(ctx, deps, p, false)
+		if aerr != nil {
+			fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_failed", p.Name, aerr, p.Name))
+		} else {
+			for _, line := range ar.Errors {
+				fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_analysis_error", p.Name, line, p.Name))
+			}
+			analysis = deps.N("cli.scan.summary.analyzed", ar.Analyzed+ar.Skipped)
+		}
+	}
+	looked := e.runPlugins(ctx, cmd, deps, p)
+	// The applied fixes of the project are settled by this pass
+	// (proven when merged and gone), and its eligible findings
+	// queued for michel serve at level 2.
+	fd := scanFixDeps(cmd, deps)
+	proveFixes(ctx, deps, fd, p, fix.Pass{Scanned: true, Sources: looked})
+	if queue {
+		if _, err := fix.QueueEligible(ctx, fd, p.ID); err != nil {
+			fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
+		}
+	}
+	return r, analysis, nil
+}
+
+// runPlugins returns the plugins that ran without any failure: the
+// only ones whose word settles a fix (fix.Prove).
+func (e *scanEnv) runPlugins(ctx context.Context, cmd *cobra.Command, deps *Deps, p project.Project) map[string]bool {
+	looked := map[string]bool{}
+	for _, s := range scanPlugins(e.pluginEntries, deps.allowed, p.Name) {
+		res, err := plugin.RunPlugin(ctx, pluginDeps(cmd, deps), s, p, "")
+		if err != nil {
+			fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_plugin_failed", p.Name, pluginErr(deps, s, p.Name, err), s.Key, p.Name))
+			if !errors.Is(err, plugin.ErrAudit) {
+				continue
+			}
+		} else {
+			looked[s.Key] = true
+		}
+		e.plugins = append(e.plugins, pluginRunView{Project: p.Name, Key: s.Key, RunResult: res})
+		e.pluginLines = append(e.pluginLines, pluginSummary(deps, s, p.Name, res))
+	}
+	return looked
+}
+
+// proveFixes settles the applied fixes of the project, once every tool
+// of this pass has run: a plugin's findings change in runPlugins.
+func proveFixes(ctx context.Context, deps *Deps, fd fix.Deps, p project.Project, pass fix.Pass) {
+	if _, err := fix.Prove(ctx, fd, p.ID, pass); err != nil {
+		fmt.Fprintln(deps.Stderr, deps.T("cli.scan.warn_fix_failed", p.Name, err))
+	}
 }
 
 // manifestProblems are the errors of r except the lockfiles left out because
@@ -376,5 +440,9 @@ func scannerLogHandler(w io.Writer) slog.Handler {
 // store and the user's repository only, so the secret store is not opened
 // (a scan creates nothing in the data folder besides its own rows).
 func scanFixDeps(cmd *cobra.Command, deps *Deps) fix.Deps {
-	return fixDeps(cmd, deps, nil, "cli")
+	actor := "cli"
+	if cmd.Name() == "serve" {
+		actor = "serve"
+	}
+	return fixDeps(cmd, deps, nil, actor)
 }

@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -219,5 +221,112 @@ func TestServeStartsAndStopsLogScheduler(t *testing.T) {
 	}
 	if started.Load() != 1 || stopped.Load() != 1 {
 		t.Errorf("after serve: started %d, stopped %d", started.Load(), stopped.Load())
+	}
+}
+
+// The real michel serve, its real scan and real folders: no fake here, the
+// API tests hold one.
+func TestServeGivesScanProject(t *testing.T) {
+	dir := t.TempDir()
+	path, empty := copyProject(t, "project-a"), t.TempDir()
+	before := treeContent(t, path)
+	_, err := runServe(t, dir, func(base *url.URL, token string) {
+		call := func(method, p, body string) (int, string) {
+			t.Helper()
+			var rd io.Reader
+			if body != "" {
+				rd = strings.NewReader(body)
+			}
+			req, _ := http.NewRequest(method, base.String()+strings.TrimPrefix(p, "/"), rd)
+			req.Header.Set("Authorization", "Bearer "+token)
+			if body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			b, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, string(b)
+		}
+		add := func(folder, name string) {
+			t.Helper()
+			body, _ := json.Marshal(map[string]string{"path": folder, "name": name})
+			if code, b := call("POST", "/api/v1/projects", string(body)); code != http.StatusCreated {
+				t.Fatalf("add %s = %d %s", name, code, b)
+			}
+		}
+		type view struct {
+			Name        string         `json:"name"`
+			Total       int            `json:"total"`
+			Scanning    bool           `json:"scanning"`
+			Status      string         `json:"last_scan_status"`
+			LastFailure map[string]any `json:"last_failure"`
+		}
+		// check starts a scan and returns the project once it ended.
+		check := func(name string) view {
+			t.Helper()
+			if code, b := call("POST", "/api/v1/projects/"+name+"/scan", ""); code != http.StatusAccepted {
+				t.Fatalf("scan %s = %d %s", name, code, b)
+			}
+			deadline := time.Now().Add(30 * time.Second)
+			for time.Now().Before(deadline) {
+				_, b := call("GET", "/api/v1/projects", "")
+				var list []view
+				if err := json.Unmarshal([]byte(b), &list); err != nil {
+					t.Fatalf("%v: %s", err, b)
+				}
+				for _, v := range list {
+					if v.Name == name && !v.Scanning {
+						return v
+					}
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			t.Fatalf("the scan of %s did not end", name)
+			return view{}
+		}
+		add(path, "demo")
+		add(empty, "nothing")
+		if v := check("demo"); v.LastFailure["code"] != "api.project.no_database" {
+			t.Errorf("no database: %+v", v)
+		}
+		if err := os.CopyFS(filepath.Join(dir, "osv"), os.DirFS(buildTestOSVDB(t))); err != nil {
+			t.Fatal(err)
+		}
+		if v := check("nothing"); v.LastFailure["code"] != "api.project.nothing_to_scan" || v.Status != "empty" {
+			t.Errorf("nothing to scan: %+v", v)
+		}
+		v := check("demo")
+		if v.LastFailure != nil || v.Status != "ok" || v.Total != 3 {
+			t.Errorf("scan: %+v", v)
+		}
+		// The analysis ran, as with michel scan.
+		_, b := call("GET", "/api/v1/projects/demo/findings", "")
+		var findings []map[string]any
+		if err := json.Unmarshal([]byte(b), &findings); err != nil || len(findings) != 3 {
+			t.Fatalf("findings = %v %s", err, b)
+		}
+		_, b = call("GET", "/api/v1/findings/"+findings[0]["id"].(string), "")
+		var one map[string]any
+		if err := json.Unmarshal([]byte(b), &one); err != nil || one["analysis"] == nil {
+			t.Errorf("no analysis: %v %s", err, b)
+		}
+		// The page's list of projects holds it too.
+		_, b = call("GET", "/api/v1/today", "")
+		if !strings.Contains(b, `"name":"demo"`) {
+			t.Errorf("today: %s", b)
+		}
+	})
+	if err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	compareTrees(t, before, treeContent(t, path))
+	if rows := auditRows(t, dir, "project.add"); len(rows) != 2 || rows[0].result != "ok" {
+		t.Errorf("project.add = %+v", rows)
+	}
+	if rows := auditRows(t, dir, "scan.finish"); len(rows) != 2 {
+		t.Errorf("scan.finish = %+v", rows)
 	}
 }

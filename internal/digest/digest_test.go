@@ -473,3 +473,46 @@ func TestDigestCountsEmptyApartFromFailed(t *testing.T) {
 		t.Errorf("count changed: empty %d show %t", d.EmptyProjects, d.ShowEmpty)
 	}
 }
+
+// I9: the row knows how many flaws must not stay folded (urgent or critical),
+// and the urgent one comes first.
+func TestPackageCountsWhatMustShow(t *testing.T) {
+	f := newFixture(t)
+	recent := now.Add(-2 * time.Hour)
+	seed := func(osv, sev string) string {
+		return f.seed(finding{pkg: "acme/lib", osv: osv, severity: sev, firstSeen: recent, fixed: []string{"1.3.0"}})
+	}
+	seed("ACME-1", "low")
+	seed("ACME-2", "critical")
+	seed("ACME-3", "high")
+	kev := seed("ACME-4", "medium")
+	seed("ACME-5", "critical")
+	if _, err := f.st.DB().Exec(`UPDATE finding SET kev = 1 WHERE id = ?`, kev); err != nil {
+		t.Fatal(err)
+	}
+	p := projectNamed(t, f.compute(i18n.EN, Options{}), "demo")
+	if len(p.New) != 1 || p.New[0].MustShow != 3 {
+		t.Fatalf("new = %+v", p.New)
+	}
+	if ids := p.New[0].FindingIDs; len(ids) != 5 || ids[0] != kev {
+		t.Errorf("the urgent one is not first: %v", ids)
+	}
+}
+
+// D-3: the digest tells the page which gone flaws Michel proved fixed.
+func TestGoneNamesWhatWasProvenFixed(t *testing.T) {
+	f := newFixture(t)
+	recent := now.Add(-time.Hour)
+	proven := f.seed(finding{pkg: "acme/lib", osv: "ACME-1", severity: "high", status: "gone", firstSeen: now.Add(-48 * time.Hour), changed: recent})
+	other := f.seed(finding{pkg: "acme/lib", osv: "ACME-2", severity: "high", status: "gone", firstSeen: now.Add(-48 * time.Hour), changed: recent})
+	if _, err := f.st.DB().Exec(`INSERT INTO fix_attempt (id, finding_id, project_id, origin, state, created_at, updated_at) VALUES ('a1', ?, ?, 'agent', 'proven_fixed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, proven, f.proj.ID); err != nil {
+		t.Fatal(err)
+	}
+	p := projectNamed(t, f.compute(i18n.EN, Options{}), "demo")
+	if len(p.Gone) != 1 || len(p.Gone[0].FindingIDs) != 2 {
+		t.Fatalf("gone = %+v", p.Gone)
+	}
+	if ids := p.Gone[0].ProvenIDs; len(ids) != 1 || ids[0] != proven || ids[0] == other {
+		t.Errorf("proven = %v", ids)
+	}
+}

@@ -1,6 +1,6 @@
 # Embedded server rules. Bump `version` here and Version in rules.go together
 # whenever a rule, an advisory or a branch changes.
-version: 2
+version: 3
 
 # Risky PHP settings. risky: "on" | "off" | "empty". A directive that is not
 # set anywhere is judged only when missing_is_risky is true (PHP's own
@@ -101,3 +101,14 @@ eol:
   - {branch: "7.4"}
   - {branch: "8.0"}
   - {branch: "8.1"}
+
+# What the services that listen are, by port. A rule with the verdict close
+# opens a finding when the service listens on all addresses; its severity is
+# medium, because Michel does not know whether a firewall blocks it (no alert).
+# Any other port is not recognized. The port Michel connects to is the
+# administration one, whatever its number.
+listen:
+  - {ports: [80, 443], service: web, verdict: normal}
+  - {ports: [22], service: admin, verdict: normal}
+  - {ports: [3306, 5432, 27017, 9200], service: database, verdict: close, rule: exposed_database, severity: medium, key: serverrules.exposed_database}
+  - {ports: [6379, 11211], service: cache, verdict: close, rule: exposed_cache, severity: medium, key: serverrules.exposed_cache}

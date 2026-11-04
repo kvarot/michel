@@ -57,6 +57,7 @@ func funcs(d Digest) map[string]any {
 			return i18n.N(lang, "digest.exploited_decided", d.ExploitedDecided)
 		},
 		"fixWaiting":          func(n int) string { return i18n.N(lang, "digest.fix.waiting", n) },
+		"fixHeld":             func(n int) string { return i18n.N(lang, "digest.fix.held", n) },
 		"fixProven":           func(l FixLine) string { return i18n.T(lang, "digest.fix.proven", l.Package, l.OSVID, l.Branch) },
 		"serversTitle":        func() string { return i18n.T(lang, "digest.servers.title") },
 		"serverLine":          func(s ServerDigest) string { return serverLine(lang, s) },

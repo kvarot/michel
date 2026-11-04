@@ -27,6 +27,7 @@ import (
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
+	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/secret"
 	"github.com/kvarot/michel/internal/store"
 )
@@ -61,6 +62,11 @@ type Deps struct {
 	// Close stops it.
 	Fix       *fix.Deps
 	FixWorker bool
+	// ScanProject runs the same pass as michel scan on one project (scan,
+	// analysis, plugins, proof of the applied fixes); nil answers 503 on POST
+	// /projects/{name}/scan. ErrNothingToScan and osvdb.ErrDatabaseMissing
+	// have their own sentence, any other error reads "the check failed".
+	ScanProject func(ctx context.Context, p project.Project) error
 	// Servers is what the server routes need (the check service, the folder
 	// discovery reads).
 	Servers Servers
@@ -134,6 +140,8 @@ type server struct {
 	runs   sync.WaitGroup
 	// agentSt keeps the last detection of Claude Code.
 	agentSt agentCache
+	// scans follows the project scans started from the page.
+	scans checkTracker
 	// checks follows the server checks started from the page.
 	checks checkTracker
 }
@@ -207,7 +215,9 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/v1/meta", s.meta)
 	m.HandleFunc("GET /api/v1/today", s.today)
 	m.HandleFunc("GET /api/v1/projects", s.projects)
+	m.HandleFunc("POST /api/v1/projects", s.addProject)
 	m.HandleFunc("PATCH /api/v1/projects/{name}", s.patchProject)
+	m.HandleFunc("POST /api/v1/projects/{name}/scan", s.scanProject)
 	m.HandleFunc("GET /api/v1/projects/{name}/findings", s.projectFindings)
 	m.HandleFunc("GET /api/v1/findings/{id}", s.finding)
 	m.HandleFunc("POST /api/v1/findings/{id}/decision", s.decision)

@@ -65,6 +65,8 @@ func (s *server) targetRoutes() {
 	m.HandleFunc("GET /api/v1/targets/{id}/inventory", s.targetInventory)
 	m.HandleFunc("POST /api/v1/targets/{id}/fix/{finding}", s.targetFix)
 	m.HandleFunc("POST /api/v1/targets/{id}/agent-fix/{finding}", s.targetAgentFix)
+	m.HandleFunc("GET /api/v1/targets/{id}/exposure", s.targetExposure)
+	m.HandleFunc("POST /api/v1/targets/{id}/exposure/{finding}/decision", s.targetExposureDecision)
 	m.HandleFunc("GET /api/v1/targets/{id}/ai-consent", s.targetConsent)
 	m.HandleFunc("POST /api/v1/targets/{id}/ai-consent", s.targetConsentGive)
 	m.HandleFunc("DELETE /api/v1/targets/{id}/ai-consent", s.targetConsentRevoke)
@@ -97,6 +99,7 @@ type TargetFindingView struct {
 	Fixed      []string `json:"fixed_versions"`
 	SAPI       string   `json:"sapi,omitempty"`
 	Location   string   `json:"location,omitempty"`
+	Ecosystem  string   `json:"ecosystem"`
 	Severity   string   `json:"severity"`
 	Title      string   `json:"title"`
 	Explain    string   `json:"explain,omitempty"`
@@ -109,8 +112,11 @@ type TargetFindingView struct {
 	LastSeen  string `json:"last_seen_at"`
 }
 
-// TargetUnseenView is something the last check could not read, and why.
+// TargetUnseenView is something the last check could not read, and why. Key
+// names the lines the exposure page words itself (firewall, udp): it does not
+// have to recognize them by their text.
 type TargetUnseenView struct {
+	Key    string `json:"key,omitempty"`
 	What   string `json:"what"`
 	Reason string `json:"reason"`
 }
@@ -579,12 +585,17 @@ var ruleKeys = sync.OnceValue(func() map[string]string {
 			out[al] = a.Key
 		}
 	}
+	for _, r := range set.Listen {
+		if r.Key != "" {
+			out[r.Rule] = r.Key
+		}
+	}
 	return out
 })
 
 func targetFindingView(lang i18n.Lang, user string, f scan.Finding) TargetFindingView {
 	sev, _ := scan.EffectiveSeverity(f)
-	v := TargetFindingView{ID: f.ID, Kind: f.Kind, Rule: srvText(user, f.OSVID), Package: srvText(user, f.Package),
+	v := TargetFindingView{ID: f.ID, Kind: f.Kind, Ecosystem: f.Ecosystem, Rule: srvText(user, f.OSVID), Package: srvText(user, f.Package),
 		Installed: srvText(user, f.InstalledVersion), Fixed: srvTexts(user, f.FixedVersions), SAPI: srvText(user, f.SAPI),
 		Location: srvText(user, f.Location), Severity: severityOf(sev), Title: srvText(user, f.Summary), Status: f.Status,
 		Mitigation: f.Mitigation, KEV: f.KEV, FirstSeen: f.FirstSeenAt, LastSeen: f.LastSeenAt}

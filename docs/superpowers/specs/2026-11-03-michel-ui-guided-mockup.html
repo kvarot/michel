@@ -1,0 +1,82 @@
+<style>
+.d{--ink:#14304f;--sky:#e6eef6;--line:#d3dde8;--mut:#566879;--red:#b3261e;--redb:#fbeaea;--amb:#9a5b00;--ambb:#fdf2de;--grn:#0f6b52;--grnb:#e3f4ee;--blue:#1b62b5;
+ font-family:"Segoe UI",system-ui,sans-serif;color:var(--ink);background:#f4f7fa;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:0 0 26px;display:flex;min-height:420px}
+.d *{box-sizing:border-box}
+.side{width:170px;background:var(--ink);color:#fff;padding:16px 10px;flex:none;font-size:14px}
+.side b{display:block;font:600 19px "Palatino Linotype",Georgia,serif;padding:0 8px 16px}
+.side span{display:block;padding:8px;border-radius:6px;color:#c9d7e5}
+.side .on{background:#264a70;color:#fff;font-weight:600}
+.side small{display:block;margin-top:26px;padding:8px;color:#c9d7e5;border-top:1px solid #36587c;font-size:12.5px}
+.main{flex:1;padding:20px 24px;min-width:0}
+.say{font:600 25px/1.25 "Palatino Linotype",Georgia,serif;margin:0 0 4px;max-width:30ch}
+.sub{color:var(--mut);font-size:14px;margin:0 0 16px}
+.todo{background:#fff;border:1px solid var(--line);border-radius:8px}
+.row{display:flex;gap:12px;align-items:center;padding:12px 14px;border-top:1px solid var(--line);font-size:14px}
+.row:first-child{border-top:0}
+.row div{flex:1;min-width:0}
+.row em{display:block;font-style:normal;color:var(--mut);font-size:13px}
+.tag{font-size:12.5px;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.r{color:var(--red);background:var(--redb)}.a{color:var(--amb);background:var(--ambb)}.g{color:var(--grn);background:var(--grnb)}.n{color:var(--mut);background:var(--sky)}
+.btn{background:var(--blue);color:#fff;border-radius:6px;padding:7px 12px;font-size:13.5px;font-weight:600;white-space:nowrap;border:0}
+.ghost{background:#fff;color:var(--blue);border:1px solid var(--blue)}
+.path{display:flex;margin:6px 0 18px;font-size:13.5px;font-weight:600}
+.path span{flex:1;padding:9px 8px 9px 22px;background:var(--sky);color:var(--mut);clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%,12px 50%)}
+.path span:first-child{clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%);padding-left:12px}
+.path .done{background:var(--grn);color:#fff}.path .now{background:var(--blue);color:#fff}
+.two{display:flex;gap:14px;flex-wrap:wrap}.two>section{flex:1 1 240px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:14px}
+.two h4{margin:0 0 6px;font-size:14.5px}.two p{margin:0 0 8px;line-height:1.45}
+.q{display:inline-block;width:17px;height:17px;line-height:16px;text-align:center;border:1px solid var(--blue);color:var(--blue);border-radius:50%;font-size:11.5px;margin-left:4px}
+.wall{display:flex;gap:14px;flex-wrap:wrap}
+.wall>section{flex:1 1 240px;border-radius:8px;padding:12px 14px;font-size:14px;background:#fff;border:1px solid var(--line)}
+.wall h4{margin:0 0 8px;font-size:14.5px}
+.wall .out{border-top:4px solid var(--red)}.wall .ins{border-top:4px solid var(--grn)}.wall .unk{border-top:4px solid var(--mut)}
+.wall li{list-style:none;padding:6px 0;border-top:1px solid var(--line)}.wall li:first-child{border:0}.wall ul{margin:0;padding:0}
+.wall em{display:block;font-style:normal;color:var(--mut);font-size:12.5px}
+.adv{float:right;font-size:13px;color:var(--mut)}
+@media(max-width:640px){.side{display:none}}
+</style>
+
+<h2>La direction que je retiens</h2>
+<p class="subtitle">Trois écrans, exemples fictifs. Dis-moi seulement ce qui te gêne.</p>
+
+<h3>Accueil : ce qu'il y a à faire, dans l'ordre</h3>
+<div class="d">
+ <nav class="side"><b>Michel</b><span class="on">À faire</span><span>Mes projets</span><span>Mes serveurs</span><span>Résolu</span><small>Besoin d'aide ?<br>Revoir le guide</small></nav>
+ <div class="main">
+  <span class="adv">Mode avancé : non</span>
+  <p class="say">Bonjour. 2 choses demandent ton attention.</p>
+  <p class="sub">1 projet et 1 serveur. Le reste va bien.</p>
+  <div class="todo">
+   <div class="row"><span class="tag r">Urgent</span><div>Une faille dans la boutique permet de prendre la main sur le site<em>Projet demo-boutique. Des attaques sont déjà connues.</em></div><button class="btn">Voir la solution</button></div>
+   <div class="row"><span class="tag a">À regarder</span><div>Ta base de données répond à tout le monde<em>Serveur demo-prod. Elle devrait répondre seulement au serveur.</em></div><button class="btn ghost">Comprendre</button></div>
+   <div class="row"><span class="tag g">Résolu hier</span><div>Mise à jour de sécurité de la boutique appliquée<em>Vérifiée par un nouveau contrôle.</em></div></div>
+  </div>
+ </div>
+</div>
+
+<h3>Une faille : où on en est, et ce que l'IA va faire</h3>
+<div class="d">
+ <nav class="side"><b>Michel</b><span>À faire</span><span class="on">Mes projets</span><span>Mes serveurs</span><span>Résolu</span></nav>
+ <div class="main">
+  <p class="say">Une faille permet de prendre la main sur le site</p>
+  <div class="path"><span class="done">Trouvée</span><span class="now">Solution proposée</span><span>Ton accord</span><span>Corrigée</span><span>Vérifiée</span></div>
+  <div class="two">
+   <section><h4>Ce que ça veut dire</h4><p>Quelqu'un pourrait envoyer une requête piégée à ta boutique et y exécuter ses propres commandes.</p><p class="sub">Détail technique visible en mode avancé.</p></section>
+   <section><h4>Ce que l'IA va faire<span class="q">?</span></h4><p>Mettre à jour un composant vers sa version corrigée, sur une copie à part, lancer tes tests, puis te montrer le résultat. Ton site ne change pas sans ton accord.</p><button class="btn">Lancer la correction</button></section>
+  </div>
+ </div>
+</div>
+
+<h3>Un serveur : ce qui est exposé ou non</h3>
+<div class="d">
+ <nav class="side"><b>Michel</b><span>À faire</span><span>Mes projets</span><span class="on">Mes serveurs</span><span>Résolu</span></nav>
+ <div class="main">
+  <p class="say">demo-prod : 3 portes ouvertes vers l'extérieur, dont une de trop</p>
+  <p class="sub">Une porte, c'est un service que ton serveur laisse joindre depuis le réseau.</p>
+  <div class="wall">
+   <section class="out"><h4>Ouvert à tous</h4><ul><li>Site web<em>Normal, c'est ton site.</em></li><li>Connexion d'administration (SSH)<em>Normal, à protéger par une clé.</em></li><li><span class="tag a">À fermer</span> Base de données<em>Personne dehors n'en a besoin.</em></li></ul></section>
+   <section class="ins"><h4>Réservé au serveur</h4><ul><li>Cache<em>Injoignable de l'extérieur.</em></li><li>Traitement PHP<em>Injoignable de l'extérieur.</em></li></ul></section>
+   <section class="unk"><h4>Non vérifié</h4><ul><li>Pare-feu de l'hébergeur<em>Michel ne le voit pas depuis le serveur. Il peut fermer une porte listée ici.</em></li></ul></section>
+  </div>
+ </div>
+</div>

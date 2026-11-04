@@ -3,9 +3,11 @@ package cli
 import (
 	"archive/zip"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -315,5 +317,157 @@ func TestFindingsHelpSaysGoneIsNotAFix(t *testing.T) {
 	_, out, _, err := run(t, t.TempDir(), "findings", "--help")
 	if err != nil || !strings.Contains(out, "no longer seen at the last scan, not proof of a fix") || strings.Contains(out, "fixed or removed") {
 		t.Errorf("out=%q err=%v", out, err)
+	}
+}
+
+// scanOutputWas is the output of michel scan captured on the code before
+// scanOneProject was extracted (commit ebed3cf), then pasted here: comparing
+// with a run of the new code would prove nothing.
+var scanOutputWas = map[string]string{
+	"first": `exit 0 
+--- stdout
+project  manifests  packages  findings  critical/high/medium/low/unknown  new/gone
+demo     2          3         3         1/1/1/0/0                         3/0
+Michel found 3 new findings in demo, 1 critical, analyzed 3 findings. Next: michel findings --project demo --severity critical
+--- stderr
+`,
+	"again_no_analyze": `exit 0 
+--- stdout
+project  manifests  packages  findings  critical/high/medium/low/unknown  new/gone
+demo     2          3         3         1/1/1/0/0                         0/0
+Michel found no new findings in demo, analysis skipped. Next: michel findings --project demo
+--- stderr
+`,
+	"empty": `exit 1 the scan did not complete cleanly
+--- stdout
+Nothing to scan in nothing: Michel found no composer.lock, package-lock.json, yarn.lock or pnpm-lock.yaml under <EMPTY>. This is not an error, and the earlier findings of the project are kept. If the project has dependencies, check the path with 'michel project list', and check that the lockfile is not under an excluded folder (node_modules, vendor, .git).
+--- stderr
+`,
+	"corrupt": `exit 1 the scan did not complete cleanly
+--- stdout
+project  manifests  packages  findings  critical/high/medium/low/unknown  new/gone
+broken   1          0         0         0/0/0/0/0                         0/0
+Michel found no new findings in broken, analyzed 0 findings. Next: michel findings --project broken
+--- stderr
+warning: broken: cannot parse composer.lock: invalid character 't' looking for beginning of object key string. Fix or remove the file, then scan again; its earlier findings were kept.
+`,
+	"all": `exit 1 the scan did not complete cleanly
+--- stdout
+Nothing to scan in nothing: Michel found no composer.lock, package-lock.json, yarn.lock or pnpm-lock.yaml under <EMPTY>. This is not an error, and the earlier findings of the project are kept. If the project has dependencies, check the path with 'michel project list', and check that the lockfile is not under an excluded folder (node_modules, vendor, .git).
+project  manifests  packages  findings  critical/high/medium/low/unknown  new/gone
+broken   1          0         0         0/0/0/0/0                         0/0
+demo     2          3         3         1/1/1/0/0                         0/0
+Michel found no new findings in broken, analyzed 0 findings. Next: michel findings --project broken
+Michel found no new findings in demo, analyzed 3 findings. Next: michel findings --project demo
+--- stderr
+warning: broken: cannot parse composer.lock: invalid character 't' looking for beginning of object key string. Fix or remove the file, then scan again; its earlier findings were kept.
+`,
+	"all_json": `exit 1 the scan did not complete cleanly
+--- stdout
+{"results":[{"scan_id":"<ID>","project":"broken","status":"partial","manifests":[{"rel_path":"composer.lock","ecosystem":"Packagist","lock_sha256":"<SHA>","packages":0,"findings":0,"error":"cannot parse composer.lock: invalid character 't' looking for beginning of object key string"}],"new":0,"still":0,"reappeared":0,"gone":0,"superseded":0,"by_severity":{},"errors":["cannot parse composer.lock: invalid character 't' looking for beginning of object key string"]},{"scan_id":"<ID>","project":"demo","status":"ok","manifests":[{"rel_path":"composer.lock","ecosystem":"Packagist","lock_sha256":"<SHA>","packages":2,"findings":2},{"rel_path":"web/package-lock.json","ecosystem":"npm","lock_sha256":"<SHA>","packages":1,"findings":1}],"new":0,"still":3,"reappeared":0,"gone":0,"superseded":0,"by_severity":{"critical":1,"high":1,"medium":1}},{"scan_id":"<ID>","project":"nothing","status":"empty","manifests":null,"new":0,"still":0,"reappeared":0,"gone":0,"superseded":0,"by_severity":{}}],"failures":[],"plugins":[]}
+--- stderr
+`,
+	"no_database": `exit 1 Michel cannot scan demo: offline database missing for Packagist: run "michel db update". A scan never downloads anything; fetch the databases first
+--- stdout
+--- stderr
+`,
+	"french": `exit 0 
+--- stdout
+project  manifests  packages  findings  critical/high/medium/low/unknown  new/gone
+demo     2          3         3         1/1/1/0/0                         0/0
+Michel n'a trouvé aucune nouvelle faille dans demo, 3 failles analysées. Ensuite : michel findings --project demo
+--- stderr
+`,
+	"plugin": `exit 0 
+--- stdout
+project  manifests  packages  findings  critical/high/medium/low/unknown  new/gone
+demo     2          3         3         1/1/1/0/0                         3/0
+Michel found 3 new findings in demo, 1 critical, analyzed 3 findings. Next: michel findings --project demo --severity critical
+trivy found 1 new finding in demo. Next: michel findings --project demo
+--- stderr
+`,
+	"plugin_json": `exit 0 
+--- stdout
+{"results":[{"scan_id":"<ID>","project":"demo","status":"ok","manifests":[{"rel_path":"composer.lock","ecosystem":"Packagist","lock_sha256":"<SHA>","packages":2,"findings":2},{"rel_path":"web/package-lock.json","ecosystem":"npm","lock_sha256":"<SHA>","packages":1,"findings":1}],"new":0,"still":3,"reappeared":0,"gone":0,"superseded":0,"by_severity":{"critical":1,"high":1,"medium":1}}],"failures":[],"plugins":[{"project":"demo","key":"plugin.trivy","run_id":"<ID>","new":0,"still":1,"gone":0,"skipped_known":0}]}
+--- stderr
+`,
+}
+
+// normScanOutput takes out what changes from one run to the next: the temporary
+// folders, the ids and the times.
+func normScanOutput(s string, folders map[string]string) string {
+	for f, name := range folders {
+		s = strings.ReplaceAll(s, f, name)
+		s = strings.ReplaceAll(s, strings.ReplaceAll(f, "\\", "\\\\"), name)
+	}
+	s = regexp.MustCompile(`[0-9A-HJKMNP-TV-Z]{26}`).ReplaceAllString(s, "<ID>")
+	s = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T[0-9:.]+Z`).ReplaceAllString(s, "<TIME>")
+	s = regexp.MustCompile(`"lock_sha256":"[0-9a-f]{64}"`).ReplaceAllString(s, `"lock_sha256":"<SHA>"`)
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	var kept []string
+	for _, l := range strings.SplitAfter(s, "\n") {
+		// The scanner's own log lines and the policy line hold a time or a path
+		// of this computer.
+		if !strings.HasPrefix(l, "time=") && !strings.HasPrefix(l, "policy:") && !strings.HasPrefix(l, "politique") {
+			kept = append(kept, l)
+		}
+	}
+	return strings.Join(kept, "")
+}
+
+// With a plugin turned on, whose lines come after the summaries.
+func TestScanOutputUnchangedWithAPlugin(t *testing.T) {
+	dir, db, path := provableProject(t, true)
+	folders := map[string]string{path: "<A>", db: "<DB>", dir: "<DATA>"}
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"plugin", []string{"scan", "--project", "demo", "--osv-db", db}},
+		{"plugin_json", []string{"scan", "--project", "demo", "--osv-db", db, "--json"}},
+	} {
+		_, out, errOut, err := run(t, dir, c.args...)
+		code, message := 0, ""
+		if err != nil {
+			code, message = ExitCode(err), normScanOutput(err.Error(), folders)
+		}
+		got := fmt.Sprintf("exit %d %s\n--- stdout\n%s--- stderr\n%s", code, message, normScanOutput(out, folders), normScanOutput(errOut, folders))
+		if want := scanOutputWas[c.name]; got != want {
+			t.Errorf("%s changed:\n%s\n--- it was\n%s", c.name, got, want)
+		}
+	}
+}
+
+func TestScanOutputUnchanged(t *testing.T) {
+	dir, db := t.TempDir(), buildTestOSVDB(t)
+	a, b, empty := copyProject(t, "project-a"), copyProject(t, "project-b"), t.TempDir()
+	folders := map[string]string{a: "<A>", b: "<B>", empty: "<EMPTY>", db: "<DB>", dir: "<DATA>"}
+	for name, path := range map[string]string{"demo": a, "broken": b, "nothing": empty} {
+		if _, _, _, err := run(t, dir, "project", "add", path, "--name", name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"first", []string{"scan", "--project", "demo", "--osv-db", db}},
+		{"again_no_analyze", []string{"scan", "--project", "demo", "--osv-db", db, "--no-analyze"}},
+		{"empty", []string{"scan", "--project", "nothing", "--osv-db", db}},
+		{"corrupt", []string{"scan", "--project", "broken", "--osv-db", db}},
+		{"all", []string{"scan", "--all", "--osv-db", db}},
+		{"all_json", []string{"scan", "--all", "--osv-db", db, "--json"}},
+		{"no_database", []string{"scan", "--project", "demo", "--osv-db", t.TempDir()}},
+		{"french", []string{"--lang", "fr", "scan", "--project", "demo", "--osv-db", db}},
+	} {
+		_, out, errOut, err := run(t, dir, c.args...)
+		code, message := 0, ""
+		if err != nil {
+			code, message = ExitCode(err), normScanOutput(err.Error(), folders)
+		}
+		got := fmt.Sprintf("exit %d %s\n--- stdout\n%s--- stderr\n%s", code, message, normScanOutput(out, folders), normScanOutput(errOut, folders))
+		if want := scanOutputWas[c.name]; got != want {
+			t.Errorf("%s changed:\n%s\n--- it was\n%s", c.name, got, want)
+		}
 	}
 }

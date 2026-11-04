@@ -10,6 +10,7 @@ import (
 )
 
 func TestInstallDirsSkipsTrackedFolders(t *testing.T) {
+	parallel(t)
 	got := installDirs([]string{
 		"composer.json", "composer.lock", "README.md",
 		"web/package.json", "web/package-lock.json",
@@ -29,6 +30,7 @@ func TestInstallDirsSkipsTrackedFolders(t *testing.T) {
 // and the lockfile, and the tree equals the snapshot when the agent did
 // nothing.
 func TestUpdateOutputNeverJoinsTheChange(t *testing.T) {
+	parallel(t)
 	f := newFixture(t)
 	f.deps.Exec = func(ctx context.Context, name string, args, env []string, dir string) ([]byte, []byte, error) {
 		if name != "composer" {

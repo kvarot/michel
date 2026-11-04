@@ -44,6 +44,8 @@ var fixStatus = map[string]int{
 	"fix.err.change_refused":    http.StatusUnprocessableEntity,
 	"fix.err.bad_state":         http.StatusConflict,
 	"fix.err.not_found":         http.StatusNotFound,
+	"fix.err.hold_stale":        http.StatusConflict,
+	"fix.err.hold_person":       http.StatusForbidden,
 }
 
 // FixErrorBody is the answer to a refusal of the fix service: the sentence
@@ -146,6 +148,54 @@ type AttemptView struct {
 	Messages    []MessageView `json:"messages"`
 	// Server is set for a fix of a server (Project is then the server's name).
 	Server *ServerAttemptView `json:"server,omitempty"`
+	// Hold is set while the attempt waits for the person's answer about the
+	// possible keys found in its copy: files and lines, never a value.
+	Hold *HoldView `json:"hold,omitempty"`
+	// Push is how the branch stands with the Git service the project is attached
+	// to: null for a server, a project not attached now, and in lists, which run
+	// no git for each attempt.
+	Push *AttemptPushView `json:"push"`
+}
+
+// AttemptPushView is the send button of an attempt. MergeURL and PushedAt are set
+// once the branch left; a site without a link leaves MergeURL empty.
+type AttemptPushView struct {
+	Provider string `json:"provider"`
+	Display  string `json:"display"`
+	Branch   string `json:"branch"`
+	MergeURL string `json:"merge_url"`
+	PushedAt string `json:"pushed_at"`
+	Pushed   bool   `json:"pushed"`
+	CanPush  bool   `json:"can_push"`
+}
+
+// HoldFileView is one file with a possible key, and its lines.
+type HoldFileView struct {
+	File  string `json:"file"`
+	Lines []int  `json:"lines"`
+}
+
+// HoldView is what a held attempt asks about. More is how many other files
+// hold one; Hash goes back with the yes.
+type HoldView struct {
+	Count int            `json:"count"`
+	Files []HoldFileView `json:"files"`
+	More  int            `json:"more"`
+	Hash  string         `json:"hash"`
+}
+
+// holdView renders the hold of a, nil when it waits for nothing. A file name
+// goes through the display masker like every other stored text.
+func holdView(m *mask.Masker, a fix.Attempt) *HoldView {
+	h, ok := fix.HoldOf(a)
+	if !ok {
+		return nil
+	}
+	v := &HoldView{Count: h.Count, Files: []HoldFileView{}, More: h.More, Hash: h.Hash}
+	for _, f := range h.Files {
+		v.Files = append(v.Files, HoldFileView{File: shown(m, f.File), Lines: f.Lines})
+	}
+	return v
 }
 
 // ConsentLineView is one line of the AI consent screen: its catalog key,
@@ -200,6 +250,9 @@ type (
 	FixRefuseRequest struct {
 		Reason string `json:"reason"`
 	}
+	FixContinueRequest struct {
+		Hash string `json:"hash"`
+	}
 )
 
 // agentCache keeps the last detection of Claude Code.
@@ -217,13 +270,20 @@ func (s *server) fixRoutes() {
 	m.HandleFunc("POST /api/v1/fix/{attempt}/message", s.fixMessage)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/approve", s.fixApprove)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/refuse", s.fixRefuse)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/continue", s.fixContinue)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/withdraw", s.fixWithdraw)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/snapshot-done", s.fixSnapshotDone)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/applied-by-me", s.fixAppliedByMe)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/hand-over", s.fixHandOver)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/resolve", s.fixResolve)
 	m.HandleFunc("GET /api/v1/fixes", s.fixList)
 	m.HandleFunc("GET /api/v1/agent/status", s.agentStatus)
 	m.HandleFunc("GET /api/v1/projects/{name}/ai-consent", s.aiConsent)
 	m.HandleFunc("POST /api/v1/projects/{name}/ai-consent", s.aiConsentGive)
+	m.HandleFunc("GET /api/v1/projects/{name}/git", s.projectGit)
+	m.HandleFunc("POST /api/v1/projects/{name}/git/answer", s.projectGitAnswer)
+	m.HandleFunc("POST /api/v1/projects/{name}/git/update", s.projectGitUpdate)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/push", s.fixPush)
 }
 
 // fixDeps are the fix service's collaborators for one request: serve's,
@@ -235,6 +295,11 @@ func (s *server) fixDeps(w http.ResponseWriter, r *http.Request, lang i18n.Lang)
 		s.fail(w, http.StatusServiceUnavailable, i18n.T(lang, "api.fix.unavailable"), "")
 		return fix.Deps{}, false
 	}
+	return s.liveFixDeps(lang), true
+}
+
+// liveFixDeps is the fix service's collaborators for a request; s.deps.Fix is set.
+func (s *server) liveFixDeps(lang i18n.Lang) fix.Deps {
 	d := *s.deps.Fix
 	d.Policy = s.currentPolicy()
 	d.LivePolicy = s.currentPolicy
@@ -243,7 +308,7 @@ func (s *server) fixDeps(w http.ResponseWriter, r *http.Request, lang i18n.Lang)
 	if s.deps.Reload != nil {
 		d.Reload = s.reload
 	}
-	return d, true
+	return d
 }
 
 // fixWorker is serve's loop of the level 2 queue, on the server's
@@ -368,7 +433,7 @@ func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool, lang
 	m := s.displayMasker(a.ID)
 	st := stateView(m, a, lang)
 	v := AttemptView{ID: a.ID, Origin: a.Origin, State: st.State, Cause: st.Cause, CauseDetail: st.CauseDetail, ApprovedBy: a.ApprovedBy, Branch: st.Branch,
-		CreatedAt: stamp(a.CreatedAt), UpdatedAt: stamp(a.UpdatedAt)}
+		CreatedAt: stamp(a.CreatedAt), UpdatedAt: stamp(a.UpdatedAt), Hold: holdView(m, a)}
 	repo := fix.NewRepo(s.deps.Store)
 	prop, ok, err := repo.CurrentProposal(ctx, a.ID)
 	if err != nil {
@@ -393,6 +458,11 @@ func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool, lang
 				Package: scan.SanitizeText(fi.Package), OSVID: scan.SanitizeText(fi.OSVID), Severity: severityOf(effective(fi)),
 				InstalledVersion: scan.SanitizeText(fi.InstalledVersion), FixedVersions: sanitizeAll(fi.FixedVersions),
 				Summary: scan.SanitizeText(fi.Summary), Status: fi.Status}
+			if full && s.deps.Fix != nil {
+				if v.Push, err = s.attemptPush(ctx, a, p, lang); err != nil {
+					return AttemptView{}, err
+				}
+			}
 		} else {
 			v.Finding = FixFindingView{ID: a.FindingID, FixedVersions: []string{}}
 		}
@@ -409,6 +479,19 @@ func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool, lang
 		for _, msg := range msgs {
 			v.Messages = append(v.Messages, messageView(m, msg))
 		}
+	}
+	return v, nil
+}
+
+// attemptPush is the send button of a project's attempt, read without network.
+func (s *server) attemptPush(ctx context.Context, a fix.Attempt, p project.Project, lang i18n.Lang) (*AttemptPushView, error) {
+	st, err := fix.AttemptPush(ctx, s.liveFixDeps(lang), a, p)
+	if err != nil || st == nil {
+		return nil, err
+	}
+	v := &AttemptPushView{Provider: st.Provider, Display: st.Display, Branch: st.Branch, MergeURL: st.MergeURL, Pushed: st.Pushed, CanPush: st.CanPush}
+	if st.Pushed {
+		v.PushedAt = stamp(st.PushedAt)
 	}
 	return v, nil
 }
@@ -616,10 +699,68 @@ func (s *server) fixRefuse(w http.ResponseWriter, r *http.Request) {
 	s.answerAttempt(w, r, http.StatusOK, a.ID)
 }
 
+// fixContinue is the person's yes to a held attempt, for the list of keys the
+// page showed (its hash): 202 with the attempt, its agent working in the
+// background (the attempt may already be failed, with its cause, when the
+// agent could not start). 409 when the code changed since: nothing started.
+func (s *server) fixContinue(w http.ResponseWriter, r *http.Request) {
+	lang, ok := s.requestLang(w, r)
+	if !ok {
+		return
+	}
+	var req FixContinueRequest
+	if !s.readJSONHint(w, r, &req, i18n.T(lang, "api.fix.continue_hint")) {
+		return
+	}
+	if strings.TrimSpace(req.Hash) == "" {
+		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.fix.continue_need_hash"), i18n.T(lang, "api.fix.continue_hint"))
+		return
+	}
+	d, ok := s.fixDeps(w, r, lang)
+	if !ok {
+		return
+	}
+	a, ok := s.attempt(w, r, lang)
+	if !ok {
+		return
+	}
+	// As at a start: Michel's update may outlast the server's write timeout.
+	extend(w)
+	ctx, cancel := s.detached(r)
+	defer cancel()
+	got, err := fix.ContinueHeld(ctx, d, a.ID, strings.TrimSpace(req.Hash))
+	if err != nil && (fix.ErrorKey(err) != "" || got.ID == "") {
+		s.fixRefused(w, r, lang, err, nil)
+		return
+	}
+	s.answerAttempt(w, r, http.StatusAccepted, a.ID)
+}
+
+// fixWithdraw is the person's no to a held attempt: no agent, the attempt ends.
+func (s *server) fixWithdraw(w http.ResponseWriter, r *http.Request) {
+	lang, ok := s.requestLang(w, r)
+	if !ok {
+		return
+	}
+	d, ok := s.fixDeps(w, r, lang)
+	if !ok {
+		return
+	}
+	a, ok := s.attempt(w, r, lang)
+	if !ok {
+		return
+	}
+	if err := fix.WithdrawHeld(r.Context(), d, a.ID); err != nil {
+		s.fixRefused(w, r, lang, err, nil)
+		return
+	}
+	s.answerAttempt(w, r, http.StatusOK, a.ID)
+}
+
 // fixStates are the accepted values of GET /fixes?state= (several, comma
 // separated).
-var fixStates = []string{string(fix.StatePreparing), string(fix.StateProposed), string(fix.StateApproved), string(fix.StateRefused),
-	string(fix.StateApplied), string(fix.StateProvenFixed), string(fix.StateInconclusive), string(fix.StateFailed), string(fix.StateSuperseded),
+var fixStates = []string{string(fix.StatePreparing), string(fix.StateHeld), string(fix.StateProposed), string(fix.StateApproved), string(fix.StateRefused),
+	string(fix.StateApplied), string(fix.StateProvenFixed), string(fix.StateInconclusive), string(fix.StateFailed), string(fix.StateWithdrawn), string(fix.StateSuperseded),
 	string(fix.StateRunning), string(fix.StateUnknown)}
 
 // fixList lists the attempts, newest first, without their conversation:

@@ -36,6 +36,9 @@ type ServerAttemptView struct {
 	BackupList     []string   `json:"backup_list"`
 	// ForProduction names the production server a preprod fix is tried for.
 	ForProduction *TargetRef `json:"for_production,omitempty"`
+	// ProdFindingID is the production flaw it is tried for: its card finds the
+	// attempt by this id.
+	ProdFindingID string `json:"prod_finding_id,omitempty"`
 	// Scripts are the two scripts the user validates, exactly as they run
 	// (the full view only): to read, and to copy when the user runs them.
 	Scripts *ScriptsView `json:"scripts,omitempty"`
@@ -45,6 +48,15 @@ type ServerAttemptView struct {
 	// Backups are the copies of the server files kept on this computer, and
 	// whether each one still opens (the full view only).
 	Backups []BackupView `json:"backups,omitempty"`
+	// HandOver is set on a fix the user validated to run themselves, still
+	// waiting for them: "ready" when the server's settings now let Michel run
+	// the same scripts (the page offers one button for it), "settings" when
+	// they do not (the page says what to do). "retry" is a fix a person approved
+	// for Michel whose run could not start: nothing runs unless they click again.
+	HandOver string `json:"hand_over,omitempty"`
+	// JudgeSource is the source to turn on so Michel can judge a fix the check
+	// could not judge (the page links to the Sources page); "" otherwise.
+	JudgeSource string `json:"judge_source,omitempty"`
 }
 
 // ScriptsView is the apply and the undo script of a server fix. They hold
@@ -74,6 +86,7 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 	if err != nil && !errors.Is(err, target.ErrNotFound) {
 		return err
 	}
+	known := err == nil
 	user := t.User
 	sv := &ServerAttemptView{Target: TargetRef{ID: a.Work.Server.TargetID, Name: srvText("", t.Name)}, Steps: []StepView{}, BackupList: []string{}}
 	v.Project = sv.Target.Name
@@ -96,6 +109,7 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 			ref.Name = srvText("", pt.Name)
 		}
 		sv.ForProduction = ref
+		sv.ProdFindingID = w.ProdFindingID
 	}
 	if at, _, ok, err := fix.NewRepo(s.deps.Store).SnapshotAck(ctx, a.ID); err != nil {
 		return err
@@ -111,6 +125,24 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 		}
 		if prop.Scripts != nil {
 			sv.RunAsRoot = prop.Scripts.RunAsRoot
+		}
+		if a.State == fix.StateApproved && sv.Executor == string(target.ExecUser) && prop.Scripts != nil && known {
+			sv.HandOver = "settings"
+			if fix.MichelRuns(t, prop.Scripts.RunAsRoot) {
+				sv.HandOver = "ready"
+			}
+		}
+		if a.State == fix.StateApproved && sv.Executor == string(target.ExecMichel) && a.ApprovedBy != fix.ActorAuto && prop.Scripts != nil && known {
+			sv.HandOver = "retry"
+		}
+		if a.State == fix.StateInconclusive && fix.CouldNotJudge(*prop) && known {
+			if inv, ok, err := repo.LatestInventory(ctx, t.ID); err != nil {
+				return err
+			} else if ok {
+				if sv.JudgeSource, err = s.sourceToEnable(ctx, inv); err != nil {
+					return err
+				}
+			}
 		}
 		sv.BackupList = srvTexts(user, fix.BackupList(*prop))
 		if sv.BackupList == nil {
@@ -206,6 +238,11 @@ func (s *server) targetFixStart(w http.ResponseWriter, r *http.Request, withAgen
 	if !ok {
 		return
 	}
+	// An open service is the person's to close: say so, start nothing.
+	if f.Kind == scan.KindServerExposure {
+		s.failedBody(w, http.StatusConflict, lang, "api.target.exposure_no_fix", "")
+		return
+	}
 	s.runServerFix(w, r, lang, d, f.ID, withAgent)
 }
 
@@ -229,10 +266,33 @@ func (s *server) runServerFix(w http.ResponseWriter, r *http.Request, lang i18n.
 			s.answerStarted(w, r, a)
 			return
 		}
+		if errors.Is(err, fix.ErrBusy) {
+			s.serverBusyRefused(ctx, w, r, lang, d, findingID, err)
+			return
+		}
 		s.fixRefused(w, r, lang, err, nil)
 		return
 	}
 	s.answerStarted(w, r, a)
+}
+
+// serverBusyRefused says where the fix waits or runs. A server with a preprod
+// starts there first, so only its preprod can be the busy one.
+func (s *server) serverBusyRefused(ctx context.Context, w http.ResponseWriter, r *http.Request, lang i18n.Lang, d fix.Deps, findingID string, busy error) {
+	t, err := fix.ServerOfFinding(ctx, d, findingID)
+	if err != nil {
+		s.fixRefused(w, r, lang, busy, nil)
+		return
+	}
+	key, text := "fix.server.busy", i18n.T(lang, "fix.server.busy")
+	if t.PreprodID != "" {
+		name := t.PreprodID
+		if pt, err := s.targets().Get(ctx, t.PreprodID); err == nil {
+			name = srvText("", pt.Name)
+		}
+		key, text = "fix.server.busy_preprod", i18n.T(lang, "fix.server.busy_preprod", name)
+	}
+	writeJSON(w, http.StatusConflict, FixErrorBody{Error: text, Code: key})
 }
 
 // ---- the server's AI consent -----------------------------------------------------
@@ -428,6 +488,41 @@ func (s *server) fixResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := fix.ResolveUnknown(r.Context(), d, a.ID, fixActor); err != nil {
 		s.fixRefused(w, r, lang, err, nil)
+		return
+	}
+	s.answerAttempt(w, r, http.StatusOK, a.ID)
+}
+
+// fixHandOver is the user's click on « Michel lance ce script » for a fix
+// they validated to run themselves (R62): the same scripts, run by Michel
+// under a new approval of who runs them. hash is the fingerprint of the
+// approval being replaced.
+func (s *server) fixHandOver(w http.ResponseWriter, r *http.Request) {
+	lang, ok := s.requestLang(w, r)
+	if !ok {
+		return
+	}
+	var req FixApproveRequest
+	if !s.readJSONHint(w, r, &req, i18n.T(lang, "api.fix.approve_hint")) {
+		return
+	}
+	if strings.TrimSpace(req.Hash) == "" {
+		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.fix.need_hash"), i18n.T(lang, "api.fix.approve_hint"))
+		return
+	}
+	d, ok := s.fixDeps(w, r, lang)
+	if !ok {
+		return
+	}
+	a, ok := s.attempt(w, r, lang)
+	if !ok {
+		return
+	}
+	extend(w)
+	ctx, cancel := s.detached(r)
+	defer cancel()
+	if err := fix.HandOverToMichel(ctx, d, a.ID, strings.TrimSpace(req.Hash)); err != nil {
+		s.applyFailed(w, r, lang, a, err)
 		return
 	}
 	s.answerAttempt(w, r, http.StatusOK, a.ID)

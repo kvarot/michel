@@ -22,17 +22,30 @@ import (
 // them: Open by severity (new, pending, decided fix or defer), Decided by
 // action of the decisions in force, Total = open + ignored.
 type ProjectView struct {
-	Name           string         `json:"name"`
-	Classification string         `json:"classification"`
-	FixLevel       int            `json:"fix_level"`
-	AutoFixMinor   bool           `json:"auto_fix_minor"`
-	Open           map[string]int `json:"open"`
-	Decided        map[string]int `json:"decided"`
-	Total          int            `json:"total"`
+	Name           string `json:"name"`
+	Classification string `json:"classification"`
+	FixLevel       int    `json:"fix_level"`
+	AutoFixMinor   bool   `json:"auto_fix_minor"`
+	// HasTestCmd says a test command is declared, never which one. GitRepo says
+	// the folder holds a Git repository (read on disk, git does not run).
+	HasTestCmd bool `json:"has_test_cmd"`
+	GitRepo    bool `json:"git_repo"`
+	// GitAnswer is the stored answer to the Git question, "" if none. GitAttached
+	// says it is yes. Both come from the database, git does not run, so an address
+	// changed since is not seen here: GET /projects/{name}/git and each click see it.
+	GitAnswer   string         `json:"git_answer"`
+	GitAttached bool           `json:"git_attached"`
+	Open        map[string]int `json:"open"`
+	Decided     map[string]int `json:"decided"`
+	Total       int            `json:"total"`
 	// LastScanAt is the start of the newest scan, RFC 3339, "" when never
 	// scanned; LastScanStatus is its status, or "never".
 	LastScanAt     string `json:"last_scan_at"`
 	LastScanStatus string `json:"last_scan_status"`
+	// Scanning says a scan started from the page is running; LastFailure is how
+	// the last one failed, if it did. Both live in the memory of this process.
+	Scanning    bool             `json:"scanning"`
+	LastFailure *TargetLastCheck `json:"last_failure"`
 }
 
 // FindingView is a finding with its project's name instead of its id, the

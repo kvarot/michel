@@ -2,6 +2,7 @@
 // fix proposal: no DOM, no fetch, no storage. Vitest covers them
 // (serversView.test.js).
 import { translate } from '../i18n/index.js'
+import { cameBack } from './pathView.js'
 import { agoText } from './sourcesView.js'
 
 /** The fix levels of a server (target.fix_level), see the spec § 9. */
@@ -121,28 +122,6 @@ export function touchedServers(list) {
       n(b, 'open_findings') - n(a, 'open_findings'))
 }
 
-/**
- * serverHeadline is the Today headline when a server has an urgent (else a
- * critical) open flaw: it comes before the projects' "all calm". null when
- * no server has one.
- * @param {object[]|null} list GET /targets
- * @param {string} lang
- * @returns {{title: string, word: string}|null}
- */
-export function serverHeadline(list, lang) {
-  const active = (Array.isArray(list) ? list : []).filter((t) => t && t.active !== false)
-  for (const kind of ['urgent', 'critical']) {
-    const hit = active.filter((t) => Number(t[`${kind}_open`]) > 0)
-    if (!hit.length) continue
-    const one = hit.length === 1
-    return {
-      title: one ? translate(lang, `servers.headline.${kind}_one`, { name: hit[0].name }) : translate(lang, `servers.headline.${kind}_many`, { n: hit.length }),
-      word: translate(lang, one ? 'servers.headline.word_one' : 'servers.headline.word_many'),
-    }
-  }
-  return null
-}
-
 const severityOrder = ['critical', 'high', 'medium', 'low']
 
 /**
@@ -187,6 +166,130 @@ export function mergeFindings(list, inv) {
     if (f.sapi && !c.runtimes.some((r) => r.sapi === f.sapi)) c.runtimes.push({ sapi: f.sapi, binary: bins[f.sapi] || '' })
   }
   return cards
+}
+
+/**
+ * cardOfFinding is the card of a chosen flaw (#/servers/<id>?finding=<fid>),
+ * also when the flaw was merged into a card of several runtimes.
+ * @param {{ids: string[]}[]} cards mergeFindings()
+ * @param {string} id
+ */
+export function cardOfFinding(cards, id) {
+  return (id && (cards || []).find((c) => c.ids.includes(id))) || null
+}
+
+/**
+ * preprodAttemptOf is the newest attempt on the preprod tried for one of a
+ * card's flaws, or null when that one says nothing of the production: proven or
+ * gone there, this server's flaw is still open and never « Vérifiée » for it.
+ */
+function preprodAttemptOf(preprodFixes, card) {
+  const a = (preprodFixes || []).find((x) => card.ids.includes(x.server?.prod_finding_id))
+  if (!a || ['proven_fixed', 'superseded'].includes(a.state) || a.finding?.status === 'gone') return null
+  return a
+}
+
+/**
+ * provenOnlyOnPreprod is the name of the preprod when its newest attempt for one
+ * of a card's flaws is proven and the production has none: the production's fix
+ * could not be prepared (fix.server.preprod_missing on a click), and nothing else
+ * on the card says so. '' otherwise.
+ * @param {object[]} fixes GET /fixes?target=
+ * @param {object[]} preprodFixes GET /fixes?target=<preprod>, newest first
+ * @param {{ids: string[]}} card
+ */
+export function provenOnlyOnPreprod(fixes, preprodFixes, card) {
+  if ((fixes || []).some((a) => card.ids.includes(a.finding?.id))) return ''
+  const a = (preprodFixes || []).find((x) => card.ids.includes(x.server?.prod_finding_id))
+  return a && a.state === 'proven_fixed' ? a.server?.target?.name || '' : ''
+}
+
+/**
+ * triedOnPreprod says an attempt on the preprod was made for a card's flaws,
+ * which serverTried (internal/fix/server_auto.go) counts: Michel will not try
+ * alone again.
+ * @param {object[]} preprodFixes GET /fixes?target=<preprod>
+ * @param {{ids: string[]}} card
+ */
+export function triedOnPreprod(preprodFixes, card) {
+  return (preprodFixes || []).some((x) => card.ids.includes(x.server?.prod_finding_id))
+}
+
+/**
+ * lastAttemptOf is the newest fix of a card's flaws, whatever its state: the
+ * card's path starts from it. A server with a preprod starts there first, so its
+ * attempt counts as well.
+ * @param {object[]} fixes GET /fixes?target=, newest first
+ * @param {{ids: string[]}} card
+ * @param {object[]} [preprodFixes] GET /fixes?target=<preprod>, newest first
+ */
+export function lastAttemptOf(fixes, card, preprodFixes = []) {
+  const own = (fixes || []).find((a) => card.ids.includes(a.finding?.id)) || null
+  const pre = preprodAttemptOf(preprodFixes, card)
+  if (!pre || !own) return own || pre
+  return String(pre.created_at) > String(own.created_at) ? pre : own
+}
+
+/**
+ * cardLine is the sentence next to a card's attempt. A final attempt has none:
+ * the path's note says its state (« Corrigée » next to « revenue » was both). An
+ * attempt on the preprod says so, as the card is the production's.
+ * @param {object} attempt
+ * @param {string} lang
+ * @param {string} targetId the card's server
+ */
+export function cardLine(attempt, lang, targetId) {
+  const on = attempt.server?.target
+  const elsewhere = !!on?.id && on.id !== targetId
+  if (isServerFinal(attempt.state)) return elsewhere ? translate(lang, 'servers.line.on_preprod_done', { name: on.name }) : ''
+  const line = serverAttemptLine(attempt, lang)
+  return elsewhere ? translate(lang, 'servers.line.on_preprod', { name: on.name, line }) : line
+}
+
+/**
+ * doneKey is the sentence under a server proposal once it is over ('' for none).
+ * A flaw that came back has its note on the path, and is not said corrected.
+ * @param {object} attempt
+ */
+export function doneKey(attempt) {
+  if (cameBack(attempt)) return ''
+  const s = attempt.state
+  if (['proven_fixed', 'inconclusive', 'refused', 'superseded'].includes(s)) return `srvfix.done.${s}`
+  return s === 'failed' && !attempt.cause ? 'srvfix.done.failed' : ''
+}
+
+/**
+ * healthServer says a server holds health data: healthTarget (internal/fix),
+ * for which startServerAgent refuses.
+ * @param {object|null} target TargetView
+ */
+export function healthServer(target) {
+  return !!target && (target.kind === 'hds' || target.classification === 'health')
+}
+
+/**
+ * canOfferAgent says the agent can be asked: the API refuses on a health server,
+ * and on a server whose preprod is one (the agent would start there).
+ * @param {object|null} target TargetView
+ * @param {object|null} preprod its preprod's TargetView, if known
+ */
+export function canOfferAgent(target, preprod) {
+  return !healthServer(target) && !healthServer(preprod)
+}
+
+/**
+ * guideServerTitle is the title of a server's flaw on the Fix page. A verified
+ * flaw has left the sheet (targetView keeps open flaws) and the finding only has
+ * Go's English: the proposal's summary is translated.
+ * @param {object} finding the attempt's FixFindingView
+ * @param {object|null} sheet the TargetFindingView
+ * @param {object|null} attempt
+ * @param {string} lang
+ */
+export function guideServerTitle(finding, sheet, attempt, lang) {
+  if (!sheet && attempt?.proposal?.summary) return attempt.proposal.summary
+  const f = finding || {}
+  return findingTitle(sheet || { rule: f.osv_id, title: f.summary, package: f.package }, lang)
 }
 
 /**
@@ -281,6 +384,16 @@ export function needsSnapshot(p) {
 }
 
 /**
+ * restoreNeeded tells whether the user must restore their snapshot: a package
+ * upgrade failed, or the site went down after it, on a fix that needs a snapshot.
+ * @param {object|null} attempt AttemptView
+ */
+export function restoreNeeded(attempt) {
+  if (!needsSnapshot(attempt) || attempt.state !== 'failed') return false
+  return (attempt.server?.steps || []).some((s) => (s.op === 'package_upgrade' || s.op === 'check_site') && !s.ok && s.detail !== 'not run')
+}
+
+/**
  * canApproveServer tells whether Valider may be offered for a server fix: a
  * proposed attempt with its proposal, scripts the page can show (never
  * validated unseen), and the snapshot done when it needs one (never without
@@ -320,6 +433,8 @@ export function serverAttemptLine(attempt, lang) {
       if (s.executor === 'user') return t('approved_user')
       return a.approved_by === 'auto' ? t('approved_auto') : t('approved')
     case 'preparing':
+      // Only an agent stays in preparing: Michel's own fix is proposed in one call.
+      return t(String(a.origin || '').startsWith('agent') ? 'preparing_agent' : 'preparing')
     case 'running':
     case 'unknown':
     case 'applied':
@@ -346,22 +461,50 @@ export function backupLine(b, lang) {
 }
 
 /**
- * serversRoute reads the Servers page's address: "#/servers" (the list) or
- * "#/servers/<id>" (a server's sheet). null when the hash is not the page.
+ * serversRoute reads the Servers page's address: "#/servers" (the list),
+ * "#/servers/<id>" (a server's sheet) or "#/servers/<id>?finding=<fid>" (the
+ * sheet, with one flaw chosen). null when the hash is not the page.
  * @param {string} hash
- * @returns {{id: string}|null}
+ * @returns {{id: string, finding: string}|null}
  */
 export function serversRoute(hash) {
-  const m = String(hash || '').match(/^#\/servers(?:\/([^/?#]+))?\/?$/)
+  const m = String(hash || '').match(/^#\/servers(?:\/([^/?#]+))?\/?(?:\?finding=([^&#]+)|\?(settings)=1)?$/)
   if (!m) return null
-  try {
-    return { id: decodeURIComponent(m[1] || '') }
-  } catch {
-    return { id: '' }
+  const dec = (s) => {
+    try {
+      return decodeURIComponent(s || '')
+    } catch {
+      return ''
+    }
   }
+  const route = { id: dec(m[1]), finding: dec(m[2]) }
+  return m[3] ? { ...route, settings: true } : route
 }
 
-/** serversHash is the address of a server's sheet ("" for the list). */
-export function serversHash(id) {
-  return id ? `#/servers/${encodeURIComponent(id)}` : '#/servers'
+/** serverSettingsHash is the address of a server's sheet, opened at its settings. */
+export function serverSettingsHash(id) {
+  return id ? `#/servers/${encodeURIComponent(id)}?settings=1` : '#/servers'
+}
+
+/** serversHash is the address of a server's sheet ("" for the list), with a flaw chosen when finding is given. */
+export function serversHash(id, finding = '') {
+  if (!id) return '#/servers'
+  const base = `#/servers/${encodeURIComponent(id)}`
+  return finding ? `${base}?finding=${encodeURIComponent(finding)}` : base
+}
+
+/**
+ * handOverOf says whether a fix the user validated to run themselves can now be
+ * run by Michel (R62): 'ready' when the server's settings let him, 'settings' when
+ * they do not, 'retry' when he was to run it and could not start (nothing ran), '' for
+ * any other fix. The server decides.
+ * @param {object|null} attempt AttemptView with server
+ * @returns {'ready'|'settings'|'retry'|''}
+ */
+export function handOverOf(attempt) {
+  if (!attempt || attempt.state !== 'approved') return ''
+  const h = attempt.server?.hand_over
+  if (attempt.server?.executor === 'michel') return h === 'retry' ? h : ''
+  if (attempt.server?.executor !== 'user') return ''
+  return h === 'ready' || h === 'settings' ? h : ''
 }

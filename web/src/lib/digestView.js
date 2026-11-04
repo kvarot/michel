@@ -55,7 +55,7 @@ export function groupAttention(digest) {
         kind: 'new', package: pkg.name, severity: severityOf(pkg.worst_severity), text: pkg.what || '',
         findingIds: pkg.finding_ids || [], osvIds: pkg.osv_ids || [], installed: pkg.installed || '', target: pkg.target || '',
         decided: pkg.decided || '', kev: !!pkg.kev, malicious: !!pkg.malicious, epss: pkg.epss || 0,
-        findingKind: pkg.kind || 'dependency',
+        findingKind: pkg.kind || 'dependency', mustShow: pkg.must_show || 0,
       })
     }
     for (const s of p.superseded || []) {
@@ -96,6 +96,21 @@ export function formatDate(iso, lang) {
   const mo = String(t.getUTCMonth() + 1).padStart(2, '0')
   const d = String(t.getUTCDate()).padStart(2, '0')
   return lang === 'fr' ? `${d}/${mo}/${y}` : `${y}-${mo}-${d}`
+}
+
+/**
+ * localDay writes the calendar day of a time on the user's clock: the API sends
+ * UTC, and the day a person remembers is their own. A date alone stays as it is.
+ * @param {string} iso @param {string} lang @returns {string}
+ */
+export function localDay(iso, lang) {
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(String(iso || ''))) return formatDate(iso, lang)
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const y = String(d.getFullYear()).padStart(4, '0')
+  const mo = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return lang === 'fr' ? `${day}/${mo}/${y}` : `${y}-${mo}-${day}`
 }
 
 /**

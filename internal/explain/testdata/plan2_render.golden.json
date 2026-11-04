@@ -2,92 +2,92 @@
   "en": {
     "explanations": {
       "absent": {
-        "what": "acme/lib 1.2.0 was not found in your code. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 was not found in your code. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "breaking_one": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). 1 breaking change mentioned in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "breaking_two": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). 2 breaking changes mentioned in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "by_name_absent": {
-        "what": "acme/lib 1.2.0 was not found in your code (searched by name only). The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 was not found in your code (searched by name only). The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "certainty_low": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel could not check whether it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "certainty_medium": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is not sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "constraint_blocks": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Your constraint (^1.2) blocks it: the constraint must change."
       },
       "constraint_free": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved)."
       },
       "critical": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw could let an attacker take control. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "fix_level_one": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel could fix this automatically at level 2; this project is at level 1, so it stays a proposal. Constraint allows it: a plain update is enough."
       },
       "handoff": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Best handed to you or your coding assistant with a brief. Constraint allows it: a plain update is enough."
       },
       "low": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is minor. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "major": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A major update that may change how the package works (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "medium": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is moderate. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "minor": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A minor update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "no_analysis": {
-        "what": "acme/lib 1.2.0 has not been searched for in your code yet. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 has not been searched for in your code yet. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel has not checked yet whether it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "no_changelog": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). Changelog not available offline. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "no_example": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
@@ -97,67 +97,67 @@
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "no_target": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "No fixed version exists yet: nothing to update, keep watching."
       },
       "odd_severity": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw has no rating yet. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "one_place": {
-        "what": "acme/lib 1.2.0 is used in 1 place in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 1 place in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "quality_low": {
-        "what": "acme/lib 1.2.0 could not be searched for in your code (search not possible: dependency files are not installed locally). The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 could not be searched for in your code (search not possible: dependency files are not installed locally). The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "quality_noauto": {
-        "what": "acme/lib 1.2.0 could not be searched for in your code (search not possible: the package has no namespace to look for). The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 could not be searched for in your code (search not possible: the package has no namespace to look for). The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "report_only": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Nothing to update for now. Constraint allows it: a plain update is enough."
       },
       "sample": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "tests_three": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 3 test files cover the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "tests_zero": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. No test covers that code. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "transitive": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you. It reaches you through vendor/parent.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "unknown_jump": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "Michel could not tell how big the update is (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Best handed to you or your coding assistant with a brief. Constraint allows it: a plain update is enough."
       },
       "unrated": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw has no rating yet. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). No breaking change found in the changelog. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       },
       "versions_unread": {
-        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The advisory says: \"Path traversal in acme/lib\"",
+        "what": "acme/lib 1.2.0 is used in 2 places in your code, for example src/Foo.php:12. The original text says: \"Path traversal in acme/lib\"",
         "impact": "This flaw is serious. Michel is fairly sure it matters to you.",
         "cost": "A small patch update (1.2.0 → 1.2.5). Changelog found but its versions could not be read; breaking changes not assessed. 1 test file covers the code that uses it. Michel can try this fix for you (level 2: automatic fix, to be approved). Constraint allows it: a plain update is enough."
       }
@@ -243,92 +243,92 @@
   "fr": {
     "explanations": {
       "absent": {
-        "what": "acme/lib 1.2.0 n'a pas été trouvé dans ton code. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 n'a pas été trouvé dans ton code. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "breaking_one": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). 1 changement incompatible signalé dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "breaking_two": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). 2 changements incompatibles signalés dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "by_name_absent": {
-        "what": "acme/lib 1.2.0 n'a pas été trouvé dans ton code (recherche par le nom seulement). L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 n'a pas été trouvé dans ton code (recherche par le nom seulement). Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "certainty_low": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel n'a pas pu vérifier si ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "certainty_medium": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel ne sait pas si ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "constraint_blocks": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte (^1.2) la bloque : il faut d'abord la modifier."
       },
       "constraint_free": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider)."
       },
       "critical": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille peut permettre à un attaquant de prendre le contrôle. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "fix_level_one": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel pourrait corriger ça automatiquement au niveau 2 ; ce projet est au niveau 1, donc ça reste une proposition. Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "handoff": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. À faire par toi ou ton assistant de code, avec une description précise de la tâche. Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "low": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est mineure. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "major": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une mise à jour majeure, qui peut changer le fonctionnement du paquet (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "medium": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est modérée. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "minor": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une mise à jour mineure (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "no_analysis": {
-        "what": "Michel n'a pas encore cherché acme/lib 1.2.0 dans ton code. L'avis dit : « Path traversal in acme/lib »",
+        "what": "Michel n'a pas encore cherché acme/lib 1.2.0 dans ton code. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel n'a pas encore vérifié si ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "no_changelog": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Journal des modifications indisponible hors ligne. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "no_example": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
@@ -338,67 +338,67 @@
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "no_target": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Aucune version corrigée n'existe encore : rien à mettre à jour, Michel continue de surveiller."
       },
       "odd_severity": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille n'a pas encore de note de gravité. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "one_place": {
-        "what": "acme/lib 1.2.0 est utilisé à 1 endroit de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 1 endroit de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "quality_low": {
-        "what": "Michel n'a pas pu chercher acme/lib 1.2.0 dans ton code (recherche impossible : les paquets dont ton projet dépend ne sont pas installés sur cette machine). L'avis dit : « Path traversal in acme/lib »",
+        "what": "Michel n'a pas pu chercher acme/lib 1.2.0 dans ton code (recherche impossible : les paquets dont ton projet dépend ne sont pas installés sur cette machine). Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "quality_noauto": {
-        "what": "Michel n'a pas pu chercher acme/lib 1.2.0 dans ton code (recherche impossible : le paquet n'a pas d'espace de noms à chercher). L'avis dit : « Path traversal in acme/lib »",
+        "what": "Michel n'a pas pu chercher acme/lib 1.2.0 dans ton code (recherche impossible : le paquet n'a pas d'espace de noms à chercher). Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "report_only": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Rien à mettre à jour pour l'instant. Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "sample": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "tests_three": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 3 fichiers de test couvrent le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "tests_zero": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. Aucun test ne couvre ce code. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "transitive": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne. Elle te parvient via vendor/parent.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "unknown_jump": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Michel n'a pas pu mesurer l'ampleur de la mise à jour (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. À faire par toi ou ton assistant de code, avec une description précise de la tâche. Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "unrated": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille n'a pas encore de note de gravité. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Aucun changement incompatible repéré dans le journal des modifications. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       },
       "versions_unread": {
-        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. L'avis dit : « Path traversal in acme/lib »",
+        "what": "acme/lib 1.2.0 est utilisé à 2 endroits de ton code, par exemple src/Foo.php:12. Le texte d'origine, souvent en anglais, dit : « Path traversal in acme/lib »",
         "impact": "Cette faille est grave. Michel est plutôt sûr que ça te concerne.",
         "cost": "Une petite mise à jour corrective (1.2.0 → 1.2.5). Journal des modifications trouvé mais ses versions sont illisibles ; changements incompatibles non évalués. 1 fichier de test couvre le code qui l'utilise. Michel peut tenter cette correction pour toi (niveau 2 : correction automatique, à valider). Ta contrainte l'autorise : une simple mise à jour suffit."
       }

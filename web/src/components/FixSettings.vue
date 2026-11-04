@@ -25,6 +25,7 @@
             </template>
           </v-radio>
         </v-radio-group>
+        <FieldHelp id="project.level" :field="$t('fixset.code')" />
         <p v-if="view.fix_level >= 2 && consent && !consent.ready" class="m-fixset__note m-small">{{ $t('fixset.ai_levels') }}</p>
         <v-checkbox
           :model-value="view.auto_fix_minor"
@@ -36,10 +37,12 @@
           @update:model-value="setAuto"
         />
         <p class="m-muted m-small m-fixset__hint">{{ $t('fixset.auto_hint') }}</p>
+        <FieldHelp id="project.auto" :field="$t('fixset.auto')" />
       </section>
 
       <section class="m-fixset__group" :aria-labelledby="`${uid}-ai`">
         <h4 :id="`${uid}-ai`" class="m-fixset__label">{{ $t('fixset.ai') }}</h4>
+        <FieldHelp id="project.ai" :field="$t('fixset.ai')" />
         <template v-if="consent">
           <template v-if="consent.switch_mode">
             <p class="m-small">{{ $t('fixset.ai_strict') }}</p>
@@ -52,6 +55,16 @@
             <v-btn size="small" variant="tonal" color="primary" class="m-fixset__give" @click="dialog = true">{{ $t('fixset.ai_give') }}</v-btn>
           </template>
         </template>
+      </section>
+
+      <section class="m-fixset__group" :aria-labelledby="`${uid}-git`">
+        <h4 :id="`${uid}-git`" class="m-fixset__label">{{ $t('git.title') }}</h4>
+        <GitQuestion v-if="git" :name="name" :view="git" heading="h5" @answered="$emit('git-answered', $event)" @reload="$emit('need-git')" />
+        <div v-else-if="gitFailure" role="alert" class="m-fixset__failure">
+          <p>{{ gitFailure.offline ? $t('offline.hint') : gitFailure.error || $t('error.generic') }}</p>
+          <v-btn size="small" variant="tonal" color="primary" @click="$emit('need-git')">{{ $t('app.retry') }}</v-btn>
+        </div>
+        <p v-else class="m-muted m-small" role="status">{{ $t('fixset.loading') }}</p>
       </section>
 
       <section class="m-fixset__group" :aria-labelledby="`${uid}-server`">
@@ -86,7 +99,9 @@
 </template>
 
 <script>
+import FieldHelp from './FieldHelp.vue'
 import AiConsentDialog from './AiConsentDialog.vue'
+import GitQuestion from './GitQuestion.vue'
 import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
 import { levelLabel, levels } from '../lib/fixView.js'
@@ -97,13 +112,18 @@ let seq = 0
 // FixSettings is the fix part of a project's card, read when it is opened:
 // "Corriger le code" (the four levels in sentences), the rule of the
 // automatic minor updates, the AI consent, and the servers the project is
-// deployed on (each one's fix settings live on its own sheet).
+// deployed on (each one's fix settings live on its own sheet). The card holds the
+// Git view, which it shares with its own question and button: need-git asks for it.
 export default {
   name: 'FixSettings',
-  components: { AiConsentDialog },
+  components: { AiConsentDialog, FieldHelp, GitQuestion },
   props: {
     name: { type: String, required: true },
+    // git is the GitView or refusedView(), null until read; gitFailure a failed look.
+    git: { type: Object, default: null },
+    gitFailure: { type: Object, default: null },
   },
+  emits: ['need-git', 'git-answered'],
   data() {
     seq += 1
     return {
@@ -142,6 +162,7 @@ export default {
     },
     onToggle(e) {
       if (e.target.open && !this.loaded) this.load()
+      if (e.target.open && !this.git) this.$emit('need-git')
     },
     async load() {
       this.loading = !this.view

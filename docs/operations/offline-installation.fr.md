@@ -73,6 +73,8 @@ michel audit verify
 michel audit list --last 20
 ```
 
+Avec `michel serve`, la page fait aussi les deux premières commandes : Mes projets, « Ajouter un projet » puis « Contrôler ce projet ». Le contrôle fait la même chose que `michel scan` et demande les mêmes bases.
+
 `scan` cherche les fichiers `composer.lock`, `package-lock.json`, `yarn.lock` et `pnpm-lock.yaml`, en ignorant tout dossier `vendor/` et `node_modules/`. Un dossier sans aucun lockfile est noté `empty` (vide) et non comme un échec. Une base OSV absente fait échouer le scan avant tout le reste, en indiquant la commande pour y remédier. Un manifeste corrompu est consigné comme échoué (statut de scan `partial`) et les autres manifestes sont quand même analysés. `audit verify` contrôle la chaîne de hachage du journal d'audit. Après un scan hors ligne, `audit list` ne doit montrer aucun événement `egress.attempt`.
 
 ## Analyse

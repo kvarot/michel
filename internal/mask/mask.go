@@ -84,7 +84,9 @@ func (m *Masker) Mask(s string) string {
 	for _, f := range found {
 		b.WriteString(s[pos:f.start])
 		pos = f.end
-		m.counts[string(f.kind)]++
+		if !f.tail {
+			m.counts[string(f.kind)]++
+		}
 		if f.kind == KindAbsPath {
 			b.WriteString(pathPlaceholder)
 			continue

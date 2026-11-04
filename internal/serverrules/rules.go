@@ -1,6 +1,7 @@
 // Package serverrules holds the embedded, versioned rules Michel applies to
 // the inventory of a server: risky PHP settings, upstream PHP advisories
-// (judged on the version number) and end-of-life branches.
+// (judged on the version number), end-of-life branches and the services that
+// listen on all addresses.
 package serverrules
 
 import (
@@ -17,7 +18,7 @@ import (
 
 // Version is the version of the embedded rules. It must equal the version:
 // line of rules.yaml; bump both whenever a rule changes.
-const Version = 2
+const Version = 3
 
 //go:embed rules.yaml
 var rulesYAML []byte
@@ -70,6 +71,8 @@ type Set struct {
 	EOL      []Branch           `yaml:"eol"`
 	// EOLBefore is the oldest branch still supported: older ones are end of life.
 	EOLBefore string `yaml:"eol_before"`
+	// Listen says what the services that listen are, by port (exposure.go).
+	Listen []ListenRule `yaml:"listen"`
 }
 
 type rulesFile struct {
@@ -147,6 +150,12 @@ func parse(raw []byte) (Set, error) {
 				return Set{}, fmt.Errorf("server rule %q mitigates the unknown advisory %q", r.ID, m)
 			}
 		}
+	}
+	for _, a := range f.Upstream {
+		ids[a.ID] = true
+	}
+	if err := checkListen(f.Listen, ids); err != nil {
+		return Set{}, fmt.Errorf("the embedded server rules are invalid: %w", err)
 	}
 	return f.Set, nil
 }

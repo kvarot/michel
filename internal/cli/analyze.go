@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,12 @@ func analyzeDeps(deps *Deps) analyze.Deps {
 
 // analyzeProject analyzes the actionable (new or pending) findings of p.
 func analyzeProject(cmd *cobra.Command, deps *Deps, p project.Project, force bool) (analyze.RunResult, error) {
-	ctx := cmd.Context()
+	return analyzeProjectIn(cmd.Context(), deps, p, force)
+}
+
+// analyzeProjectIn is analyzeProject on a context of its own: a scan started
+// from the page stops with michel serve, not with the command.
+func analyzeProjectIn(ctx context.Context, deps *Deps, p project.Project, force bool) (analyze.RunResult, error) {
 	findings, err := scan.NewRepo(deps.Store).ListFindings(ctx, p.ID, "actionable")
 	if err != nil {
 		return analyze.RunResult{}, err

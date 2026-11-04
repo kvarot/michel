@@ -118,3 +118,44 @@ func TestServerFindingMitigationRefreshedOnUpdate(t *testing.T) {
 		t.Fatalf("mitigation %d sapi %q err %v", m, sapi, err)
 	}
 }
+
+// D-1: without the advisories, a runtime's plain setting closes; what depends
+// on them (a mitigation, a package finding) stays, whatever the source says.
+func TestUnreadAdvisoriesProtectOnlyWhatDependsOnThem(t *testing.T) {
+	e := newEnv(t, "project-a")
+	st, srv := e.st, e.proj.ID
+	ctx := context.Background()
+	const key = "fpm:/usr/sbin/php-fpm8.2"
+	base := func(id string, kind string, mitigation bool) Finding {
+		return Finding{ID: id, ProjectID: srv, ManifestRelPath: key, Ecosystem: "php-config", Package: id, OSVID: id, Kind: kind, Mitigation: mitigation}
+	}
+	apply := func(fs []Finding, o ServerApply) {
+		t.Helper()
+		tx, err := st.DB().BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if _, _, _, _, err := ApplyServerFindings(ctx, tx, srv, "run", time.Now(), fs, o); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply([]Finding{base("plain", KindServerConfig, false), base("mitig", KindServerConfig, true), base("pkg", KindServerPackage, false)}, ServerApply{})
+	apply(nil, ServerApply{UnreadAdvisories: []string{key}})
+	list, err := NewRepo(st).ListServerFindings(ctx, srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"plain": true, "mitig": false, "pkg": false}
+	for _, f := range list {
+		if got := f.Status == StatusGone; got != want[f.OSVID] {
+			t.Errorf("%s: status %s", f.OSVID, f.Status)
+		}
+	}
+	if len(list) != 3 {
+		t.Fatalf("findings: %d", len(list))
+	}
+}

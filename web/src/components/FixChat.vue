@@ -22,7 +22,7 @@
       </p>
       <p v-else-if="state === 'proposed'" class="m-chat__line m-voice">{{ $t('fix.chat.proposed') }}</p>
       <p v-else-if="attempt && attempt.branch" class="m-chat__line m-voice">{{ $t('fix.chat.applied', { branch: attempt.branch }) }}</p>
-      <div v-if="attempt && attempt.cause && ['failed', 'refused', 'superseded', 'inconclusive'].includes(state)" class="m-chat__cause m-small">
+      <div v-if="attempt && attempt.cause && ['failed', 'refused', 'superseded', 'inconclusive', 'withdrawn'].includes(state)" class="m-chat__cause m-small">
         <p><MaskedText :text="$t('fix.chat.cause', { cause: attempt.cause })" /></p>
         <details v-if="attempt.cause_detail" class="m-chat__detail">
           <summary>{{ $t('fix.proposal.detail') }}</summary>
@@ -54,7 +54,7 @@
         />
         <v-btn type="submit" color="primary" variant="tonal" :loading="sending" :disabled="sending || !draft.trim()">{{ $t('fix.chat.send') }}</v-btn>
       </template>
-      <p v-else class="m-muted m-small">{{ $t('fix.chat.closed') }}</p>
+      <p v-else class="m-muted m-small">{{ $t(['held', 'withdrawn'].includes(state) ? 'fix.chat.not_started' : 'fix.chat.closed') }}</p>
     </form>
   </section>
 </template>
@@ -78,6 +78,8 @@ export default {
     starting: { type: Boolean, default: false },
     sending: { type: Boolean, default: false },
     reconnecting: { type: Boolean, default: false },
+    // noStart: the page's guide holds the button (a project's flaw).
+    noStart: { type: Boolean, default: false },
   },
   emits: ['start', 'send'],
   data() {
@@ -89,7 +91,7 @@ export default {
     },
     // showStart: nothing started, or the last attempt ended without a fix.
     showStart() {
-      return !this.attempt || ['failed', 'refused', 'superseded'].includes(this.state)
+      return !this.noStart && (!this.attempt || ['failed', 'refused', 'superseded', 'withdrawn'].includes(this.state))
     },
     // open: the agent may still read a message.
     open() {

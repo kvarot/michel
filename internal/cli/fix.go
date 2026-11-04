@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kvarot/michel/internal/fix"
+	"github.com/kvarot/michel/internal/mask"
 	"github.com/kvarot/michel/internal/notify"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
@@ -78,7 +80,74 @@ func fixDeps(cmd *cobra.Command, deps *Deps, secrets secret.Store, actor string)
 		}
 		notify.SendFixWaiting(ctx, ns, waiting, deps.Policy.Notify.PageURL)
 	}
+	d.NotifyHeld = func(ctx context.Context, n int) {
+		nd, err := notifyDeps(cmd, deps, false)
+		if err != nil {
+			return
+		}
+		nd.Secrets = secrets
+		ns, err := notify.Build(deps.Policy.Notify, nd)
+		if err != nil {
+			return
+		}
+		notify.SendFixHeld(ctx, ns, n, deps.Policy.Notify.PageURL)
+	}
 	return d
+}
+
+// maskedHold is what a hold shows at the command line: a file can be named like
+// a key, and a key is never shown.
+func maskedHold(hold fix.HoldInfo) fix.HoldInfo {
+	m := mask.New()
+	files := make([]fix.HoldFile, len(hold.Files))
+	for i, f := range hold.Files {
+		files[i] = fix.HoldFile{File: m.Mask(f.File), Lines: f.Lines}
+	}
+	hold.Files = files
+	return hold
+}
+
+// printHold writes how many possible keys, in which files and at which lines.
+func printHold(deps *Deps, hold fix.HoldInfo) {
+	w := deps.Stdout
+	fmt.Fprintln(w, deps.T("cli.fix.hold.head", hold.Count))
+	for _, f := range hold.Files {
+		lines := make([]string, 0, len(f.Lines))
+		for _, n := range f.Lines {
+			lines = append(lines, strconv.Itoa(n))
+		}
+		fmt.Fprintln(w, deps.T("cli.fix.hold.file", f.File, strings.Join(lines, ", ")))
+	}
+	if hold.More > 0 {
+		fmt.Fprintln(w, deps.T("cli.fix.hold.more", hold.More))
+	}
+}
+
+// hasTerminal says a person can type here. It says nothing of who is typing.
+func hasTerminal(deps *Deps) bool {
+	if deps.TypedLine != nil {
+		_, ok := deps.TypedLine()
+		return ok
+	}
+	_, terminal := stdinTerminal(deps)
+	return terminal
+}
+
+// typedLine reads one line a person types; ok is false without a terminal.
+func typedLine(deps *Deps) (line string, ok bool, err error) {
+	if deps.TypedLine != nil {
+		line, ok = deps.TypedLine()
+		return line, ok, nil
+	}
+	r, terminal := stdinTerminal(deps)
+	if !terminal {
+		return "", false, nil
+	}
+	line, err = r.ReadString('\n')
+	if err != nil && line == "" {
+		return "", true, err
+	}
+	return line, true, nil
 }
 
 func newFixCmd(deps *Deps) *cobra.Command {
@@ -91,7 +160,7 @@ func newFixCmd(deps *Deps) *cobra.Command {
 			"copies Michel no longer needs, and consent gives a project's AI consent. None of them is needed to use the page.",
 	}
 	c.AddCommand(newFixPrepareCmd(deps), newFixStatusCmd(deps), newFixApproveCmd(deps), newFixRefuseCmd(deps), newFixResolveCmd(deps),
-		newFixCleanCmd(deps), newFixConsentCmd(deps))
+		newFixCleanCmd(deps), newFixConsentCmd(deps), newFixContinueCmd(deps), newFixWithdrawCmd(deps))
 	return c
 }
 
@@ -204,10 +273,20 @@ func printAttempt(cmd *cobra.Command, deps *Deps, a fix.Attempt, withDiff bool) 
 			return err
 		}
 	}
+	hold, held := fix.HoldOf(a)
+	if held {
+		if err := writeFileAtomic(shownFile(cmd, a.ID), []byte(hold.Hash+"\n")); err != nil {
+			return err
+		}
+		hold = maskedHold(hold)
+	}
 	if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
 		out := map[string]any{"attempt": a, "proposal": nil, "messages": msgs}
 		if hasProp {
 			out["proposal"] = prop
+		}
+		if held {
+			out["hold"] = hold
 		}
 		return json.NewEncoder(deps.Stdout).Encode(out)
 	}
@@ -223,6 +302,10 @@ func printAttempt(cmd *cobra.Command, deps *Deps, a fix.Attempt, withDiff bool) 
 	}
 	if a.Cause != "" {
 		fmt.Fprintln(w, deps.T("cli.fix.status.cause", scan.SanitizeText(a.Cause)))
+	}
+	if held {
+		printHold(deps, hold)
+		fmt.Fprintln(w, deps.T("cli.fix.hold.how", a.ID))
 	}
 	if hasProp {
 		fmt.Fprintln(w, deps.T("cli.fix.status.proposal", scan.SanitizeText(prop.Summary)))
@@ -258,8 +341,10 @@ func newFixPrepareCmd(deps *Deps) *cobra.Command {
 		Short: "Start Claude Code on a copy of the project to fix one finding, and follow it",
 		Long: "Prepare starts a fix attempt like the Fix button of the page: Michel copies the project into its data folder, " +
 			"runs its own update, and starts Claude Code on the copy with the brief of the finding. It then prints the " +
-			"conversation as it comes, until the agent ends (Ctrl+C stops the agent). The project needs its AI consent " +
-			"first (michel fix consent). Nothing is written in your project: michel fix approve does that.",
+			"conversation as it comes, until the agent ends (Ctrl+C stops the agent). When Michel finds a possible key in " +
+			"the copy, no agent starts and nothing leaves your computer: it lists the files and lines and waits for michel " +
+			"fix continue or michel fix withdraw. The project needs its AI consent first (michel fix consent). Nothing is " +
+			"written in your project: michel fix approve does that.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
@@ -286,38 +371,133 @@ func newFixPrepareCmd(deps *Deps) *cobra.Command {
 				}
 				return fixError(deps, err, hint)
 			}
+			// A key in the code: no agent. printAttempt says how to answer.
+			if a.State == fix.StateHeld {
+				return printAttempt(cmd, deps, a, false)
+			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.fix.prepare.started", a.ID, scan.SanitizeText(fi.Package), p.Name))
-			repo := fix.NewRepo(deps.Store)
-			seen := map[string]bool{}
-			show := func() {
-				msgs, err := repo.ListMessages(context.WithoutCancel(ctx), a.ID)
-				if err != nil {
-					return
-				}
-				for _, m := range msgs {
-					if !seen[m.ID] {
-						seen[m.ID] = true
-						printMessage(deps, m)
-					}
-				}
+			return followAttempt(ctx, cmd, deps, d, a.ID)
+		},
+	}
+}
+
+// followAttempt prints the conversation of the attempt as it comes, until its
+// agent ends (Ctrl+C stops it), then the attempt.
+func followAttempt(ctx context.Context, cmd *cobra.Command, deps *Deps, d fix.Deps, id string) error {
+	repo := fix.NewRepo(deps.Store)
+	seen := map[string]bool{}
+	show := func() {
+		msgs, err := repo.ListMessages(context.WithoutCancel(ctx), id)
+		if err != nil {
+			return
+		}
+		for _, m := range msgs {
+			if !seen[m.ID] {
+				seen[m.ID] = true
+				printMessage(deps, m)
 			}
-			for {
-				show()
-				if d.Sessions.Wait(a.ID, time.Second) {
-					break
-				}
-				if ctx.Err() != nil {
-					d.Sessions.Close(a.ID)
-					break
-				}
-			}
-			show()
-			fmt.Fprintln(deps.Stdout, deps.T("cli.fix.prepare.ended"))
-			got, err := repo.GetAttempt(context.WithoutCancel(ctx), a.ID)
+		}
+	}
+	for {
+		show()
+		if d.Sessions.Wait(id, time.Second) {
+			break
+		}
+		if ctx.Err() != nil {
+			d.Sessions.Close(id)
+			break
+		}
+	}
+	show()
+	fmt.Fprintln(deps.Stdout, deps.T("cli.fix.prepare.ended"))
+	got, err := repo.GetAttempt(context.WithoutCancel(ctx), id)
+	if err != nil {
+		return err
+	}
+	return printAttempt(cmd, deps, got, false)
+}
+
+func newFixContinueCmd(deps *Deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "continue <attempt-id-or-prefix>",
+		Short: "Start the agent although Michel found possible keys in the code, for this attempt only",
+		Long: "Continue is your yes to a fix attempt that waits (state held) because Michel found possible keys in the code: the " +
+			"agent starts, can read them, and they reach Anthropic. It answers the list michel fix status or michel fix prepare " +
+			"last showed, for this attempt only. It needs a terminal: Michel shows the list again and you type the word it asks; " +
+			"it does not take this answer from a script. Michel refuses when the code changed since: start the fix again, Michel searches again.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			defer stop()
+			a, err := resolveAttempt(ctx, deps, args[0])
 			if err != nil {
 				return err
 			}
-			return printAttempt(cmd, deps, got, false)
+			if !hasTerminal(deps) {
+				return deps.Errorf("cli.fix.continue.need_terminal")
+			}
+			b, err := os.ReadFile(shownFile(cmd, a.ID))
+			if err != nil {
+				return deps.Errorf("cli.fix.continue.status_first", a.ID)
+			}
+			if hold, held := fix.HoldOf(a); held {
+				word := deps.T("cli.fix.continue.word")
+				printHold(deps, maskedHold(hold))
+				fmt.Fprint(deps.Stderr, deps.T("cli.fix.continue.ask", word))
+				line, terminal, err := typedLine(deps)
+				if err != nil || !terminal {
+					return deps.Errorf("cli.fix.continue.need_terminal")
+				}
+				if !strings.EqualFold(strings.TrimSpace(line), word) {
+					return deps.Errorf("cli.fix.continue.not_confirmed", word)
+				}
+			}
+			d, err := fixService(cmd, deps)
+			if err != nil {
+				return err
+			}
+			got, err := fix.ContinueHeld(ctx, d, a.ID, strings.TrimSpace(string(b)))
+			if err != nil {
+				hint := ""
+				if errors.Is(err, fix.ErrHoldStale) {
+					hint = deps.T("cli.fix.continue.stale_hint")
+				}
+				if got.ID != "" && fix.ErrorKey(err) == "" {
+					if perr := printAttempt(cmd, deps, got, false); perr != nil {
+						return perr
+					}
+				}
+				return fixError(deps, err, hint)
+			}
+			_ = os.Remove(shownFile(cmd, a.ID))
+			return followAttempt(ctx, cmd, deps, d, a.ID)
+		},
+	}
+}
+
+func newFixWithdrawCmd(deps *Deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "withdraw <attempt-id-or-prefix>",
+		Short: "End a fix attempt that waits because of possible keys in the code: no agent starts",
+		Long: "Withdraw is your no to a fix attempt that waits (state held) because Michel found possible keys in the code: the " +
+			"attempt ends, its copy is removed and no agent starts. Take the keys out of the code, commit, then start the fix again.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			a, err := resolveAttempt(ctx, deps, args[0])
+			if err != nil {
+				return err
+			}
+			d, err := fixService(cmd, deps)
+			if err != nil {
+				return err
+			}
+			if err := fix.WithdrawHeld(ctx, d, a.ID); err != nil {
+				return fixError(deps, err, "")
+			}
+			_ = os.Remove(shownFile(cmd, a.ID))
+			fmt.Fprintln(deps.Stdout, deps.T("cli.fix.withdraw.done", a.ID))
+			return nil
 		},
 	}
 }
@@ -413,7 +593,7 @@ func newFixApproveCmd(deps *Deps) *cobra.Command {
 				return deps.Wrapf("cli.fix.approve.apply_failed", err)
 			}
 			_ = os.Remove(shownFile(cmd, a.ID))
-			fmt.Fprintln(deps.Stdout, deps.T("fix.msg.applied", fix.Branch(a.ID)))
+			fmt.Fprintln(deps.Stdout, deps.T("fix.msg.applied", fix.Branch(a.ID)), deps.T("cli.fix.approve.merge_next"))
 			return nil
 		},
 	}

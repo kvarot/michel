@@ -184,6 +184,9 @@ const (
 const (
 	PurposeFixInstall  = "fix.install"
 	PurposeAgentClaude = "agent.claude"
+	// PurposeProjectGit is a click on an attached project: send a fix branch,
+	// or update the folder from its remote.
+	PurposeProjectGit = "project.git"
 )
 
 // Purposes of the servers checked over SSH: the SSH session itself, the GET

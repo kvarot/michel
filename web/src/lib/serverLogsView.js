@@ -60,18 +60,16 @@ export function errorGroups(errors) {
  * privacyChoices lists, for each privacy setting, the choices a person can
  * pick: the recommended one first and marked « recommandé », then the others.
  * The choice in force is marked current (a retention outside the list is
- * added). A choice away from the recommendation is strong on a health (hds)
- * server. The text of alerts is disabled while no text is kept.
+ * added). The text of alerts is disabled while no text is kept.
  * @param {{store_text: boolean, alert_text: boolean, retention_days: number}} settings GET /logs/settings
- * @param {string} kind the kind of the server (vps, shared, hds)
  * @param {string} lang
- * @returns {{key: string, choices: {value: boolean|number, label: string, recommended: boolean, current: boolean, strong: boolean, disabled: boolean}[]}[]}
+ * @returns {{key: string, choices: {value: boolean|number, label: string, recommended: boolean, current: boolean, disabled: boolean}[]}[]}
  */
-export function privacyChoices(settings, kind, lang) {
+export function privacyChoices(settings, lang) {
   const st = settings || {}
   const mark = (label, recommended) => (recommended ? `${label} (${t(lang, 'recommended')})` : label)
   const make = (value, label, recommended, current, extra = {}) => ({
-    value, label: mark(label, recommended), recommended, current, strong: kind === 'hds' && !recommended, disabled: false, ...extra,
+    value, label: mark(label, recommended), recommended, current, disabled: false, ...extra,
   })
   const text = [
     make(false, t(lang, 'choice.store_text.no'), true, !st.store_text),
@@ -124,15 +122,50 @@ function minutesOf(duration) {
 }
 
 /**
- * intervalNote says in plain words what a reading interval costs: above 10
- * minutes, an error can wait longer than the target before you hear of it; by
- * hand, nobody is warned in between. "" when there is nothing to say.
- * @param {string} duration "5m", "2h" or "manual"
+ * intervalNote says in plain words what a reading interval costs: by hand,
+ * nobody is warned in between, and the sentence follows the mode (the
+ * command's name in advanced mode, the plain words otherwise: the page has
+ * no button for it). Otherwise the API's own note wins, and above 10 minutes
+ * a local sentence stands in when the API sent none. "" when there is nothing
+ * to say.
+ * @param {{interval?: string, interval_note?: string}} settings GET /logs/settings
+ * @param {boolean} advanced the advanced mode
  * @param {string} lang
  */
-export function intervalNote(duration, lang) {
-  if (String(duration) === 'manual') return t(lang, 'interval.manual')
-  return minutesOf(duration) > slowAfterMinutes ? t(lang, 'interval.slow') : ''
+export function intervalNote(settings, advanced, lang) {
+  const st = settings || {}
+  if (String(st.interval) === 'manual') return t(lang, advanced ? 'interval.manual_advanced' : 'interval.manual_simple')
+  if (st.interval_note) return st.interval_note
+  return minutesOf(st.interval) > slowAfterMinutes ? t(lang, 'interval.slow') : ''
+}
+
+/**
+ * domId makes a string safe to use inside an id and in aria-describedby
+ * (which splits on spaces): letters, digits, - and _ only, and a hash of the
+ * original so two different paths never share one.
+ * @param {string} text
+ * @returns {string}
+ */
+export function domId(text) {
+  const s = String(text ?? '')
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0
+  return `${s.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40)}-${h.toString(36)}`
+}
+
+/**
+ * settingsSaveOutcome reads the failure of a settings save: a 409
+ * logs.confirm_needed is a question for the user (the risk comes with it), any
+ * other failure is an error, none is ok.
+ * @param {any} err what api.patch threw, or nothing
+ * @returns {{kind: 'ok'} | {kind: 'confirm', deviations: object[], health: string} | {kind: 'error', error: any}}
+ */
+export function settingsSaveOutcome(err) {
+  if (!err) return { kind: 'ok' }
+  if (err.status === 409 && err.data?.code === 'logs.confirm_needed') {
+    return { kind: 'confirm', deviations: err.data.deviations || [], health: err.data.health || '' }
+  }
+  return { kind: 'error', error: err }
 }
 
 /** @param {string} value "5m", "2h", "manual" @param {string} lang @returns {string} the interval in words. */
