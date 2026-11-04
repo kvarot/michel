@@ -1,11 +1,13 @@
 // Package workcopy is the fix copy of a project: an isolated git clone in
 // Michel's data folder, where dependencies are installed without scripts,
 // the project's tests run and the change is committed, then applied to the
-// user's repository as a new branch fetched from the copy. Apply and Push are
-// its only writes. Apply is the only code allowed to write into the user's
-// repository: git objects and one refs/heads/michel/fix-<id> ref, never the
-// working tree, the index or HEAD. Push writes on the remote, one branch, on a
-// click, and nothing in the project.
+// user's repository as a new branch fetched from the copy. Apply, Push and
+// UpdateFolder are its only writes. Apply writes in the user's repository git
+// objects and one refs/heads/michel/fix-<id> ref, never the working tree, the
+// index or HEAD. Push writes on the remote, one branch, on a click, and nothing
+// in the project. UpdateFolder, on a click, moves the current branch of the
+// user's folder forward, and is the only code that writes in its working tree,
+// its index or HEAD.
 package workcopy
 
 import (
@@ -21,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 )
 
@@ -209,7 +212,7 @@ func Env(d Deps) (env []string, homeDir string, err error) {
 
 // allowedGit is the closed list of git subcommands Michel runs.
 var allowedGit = []string{"clone", "init", "archive", "add", "diff", "commit", "fetch", "merge-base", "rev-parse",
-	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree", "show", "config"}
+	"read-tree", "apply", "write-tree", "commit-tree", "ls-tree", "show", "config", "symbolic-ref", "check-attr", "cherry"}
 
 // safeConfig neutralizes, for every git command, the settings of a
 // repository's own .git/config (the user's project is not trusted) that make
@@ -242,7 +245,7 @@ func gitSubcommand(args []string) string {
 		switch args[i] {
 		case "-C", "-c":
 			i++
-		case "--no-pager":
+		case "--no-pager", "--no-optional-locks":
 		default:
 			return args[i]
 		}
@@ -266,6 +269,46 @@ func (h home) git(ctx context.Context, d Deps, cwd, repo string, extra, env []st
 	argv = append(argv, sub)
 	argv = append(argv, args...)
 	return d.exec()(ctx, "git", argv, h.env(d.ProxyAddr, env...), cwd)
+}
+
+// workCommands are the only commands that run with the person's configuration on
+// their folder, and status writes nothing there (--no-optional-locks).
+var workCommands = []string{"status", "merge"}
+
+// workGit runs git on the folder of project p with the person's configuration,
+// not the environment of git: that one ignores core.autocrlf and would rewrite
+// the line endings on Windows (R24). It reaches no network: the proxy is an
+// address where nothing listens, and a partial clone does not fetch what it lacks
+// (a project's core.sshCommand would run). The -c options turn off what the
+// folder's configuration could start. Git cannot turn a filter off that way: see
+// checkFolderConfig. Its output never leaves the caller.
+func (h home) workGit(ctx context.Context, d Deps, p project.Project, sub string, args ...string) ([]byte, []byte, error) {
+	if !slices.Contains(workCommands, sub) {
+		return nil, nil, fmt.Errorf("git %s is not a command Michel runs on a folder", sub)
+	}
+	env := userEnv(ctx, d)
+	const nowhere = "http://127.0.0.1:9" // discard port: nothing answers
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		env = append(env, k+"="+nowhere)
+	}
+	env = append(env, "NO_PROXY=", "no_proxy=", "GIT_NO_LAZY_FETCH=1")
+	argv := []string{"--no-pager"}
+	if sub == "status" {
+		argv = append(argv, "--no-optional-locks")
+	}
+	argv = append(argv, "-C", p.Path,
+		"-c", "core.hooksPath="+h.hooks,
+		"-c", "core.fsmonitor=false",
+		"-c", "gc.auto=0",
+		"-c", "maintenance.auto=false",
+		"-c", "credential.helper=",
+		"-c", "commit.gpgSign=false",
+		"-c", "core.longpaths=true",
+		"-c", "submodule.recurse=false",
+		"-c", "merge.verifySignatures=false",
+		sub)
+	argv = append(argv, args...)
+	return d.exec()(ctx, "git", argv, env, d.DataDir)
 }
 
 // gitErr is the error of a failed git command, with the first line of what
