@@ -147,6 +147,16 @@ func TestAttemptPushIsNotForServersNorLists(t *testing.T) {
 	if err != nil || state != nil {
 		t.Errorf("server: %+v %v", state, err)
 	}
+	// An attempt that cannot hold a branch yet costs no git.
+	gf.forgetGits()
+	b := fix.Attempt{ID: id, ProjectID: gf.proj.ID, State: fix.StatePreparing}
+	state, err = fix.AttemptPush(context.Background(), *gf.fd, b, gf.proj)
+	if err != nil || state != nil {
+		t.Errorf("preparing: %+v %v", state, err)
+	}
+	if got := gf.ranGit(); len(got) != 0 {
+		t.Errorf("a preparing attempt ran git: %v", got)
+	}
 }
 
 // The list of projects says what was answered from the database alone: looking at

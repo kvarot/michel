@@ -2,7 +2,7 @@
 
 🇫🇷 Version française : [fix.fr.md](fix.fr.md)
 
-Michel finds the flaws and explains them. With plan 5 it can also have them fixed: Claude Code works on a **copy** of your project, Michel checks what it did, runs the tests itself, and shows you a proposal in plain words. Nothing reaches your repository before you click **Approve**, and even then Michel only creates a branch: you merge it and deploy as usual (with PhpStorm, for example).
+Michel finds the flaws and explains them. With plan 5 it can also have them fixed: Claude Code works on a **copy** of your project, Michel checks what it did, runs the tests itself, and shows you a proposal in plain words. Nothing reaches your repository before you click **Approve**, and even then, without attachment to a Git service, Michel only creates a branch (see "Attach your project to GitHub, Bitbucket or GitLab" below): you merge it and deploy as usual (with PhpStorm, for example).
 
 Why: for a flaw such as Php2shell, you had to read articles to understand you were affected, look for others to learn how to fix it, hand them to an AI, then fix it yourself. Three steps by hand: **find** (am I affected, where), **understand** (in plain words, why me), **fix** (what to change, then check). The fix agent does these steps for you, and you keep the last word.
 
@@ -168,23 +168,23 @@ A yes gives you two buttons. Nothing else starts them: no level, no scan, no bac
 **Send the fix**, on a fix with its branch:
 
 - it sends only the branch `michel/fix-…` and the commits it needs, to your remote. Your main branch does not move;
-- never forced: if the service refuses, Michel says so and stops;
+- Michel never overwrites what is already on the service: if it refuses, Michel says so and stops;
 - one click, one send. A second click sends nothing more when the branch is already there;
-- it sends from a temporary repository in Michel's data folder (`<data>/fix-net/`), removed afterwards. That repository does not read your project's settings, so they can start no program. In your project, this button writes nothing;
+- it sends from a temporary copy in Michel's data folder (`<data>/fix-net/`), removed afterwards. That copy does not read your project's settings, so they can start no program. In your project, this button writes nothing;
 - on GitHub, Bitbucket and GitLab (`github.com`, `bitbucket.org`, `gitlab.com`), the page then gives a link to ask for the merge. On any other service, it gives the branch's name. You accept on the site.
 
 Michel stores no token. It uses the Git access already on this computer, and it cannot ask you for any: if it finds none, it says so, and you send once with your usual Git tool.
 
 **Update my folder**, once the merge is accepted:
 
-- it brings the main branch of the remote into your folder, with `git merge --ff-only`: your folder only moves forward, nothing is mixed;
+- it fetches the main branch of the remote, then moves your folder forward to that version (this is the command `git merge --ff-only`): nothing is mixed, your folder is only brought up to date;
 - only when your folder is on its main branch, with no change in the files Git follows, and no merge in progress;
 - no hook and no file conversion program (Git LFS for example) runs. If the update would need one, Michel refuses and leaves your files alone. It also refuses rather than overwrite a file that Git does not follow or ignores;
-- what it writes in your project: the commits that arrive, your main branch, its tracking reference (`<remote>/<branch>`) and the files changed. When it refuses after fetching, the commits and the tracking reference may already be written: your files and your branch have not moved.
+- what it writes in your project: the commits that arrive, your main branch, the mark Git keeps of the remote's state (`<remote>/<branch>`) and the files changed. When it refuses after fetching, the commits and that mark may already be written: your files and your branch have not moved.
 
 **These two buttons lift, for an attached project and on your click, the rule "Michel does not push and runs nothing in your folder".** Without attachment, that rule stands entirely. Each click is recorded in the audit log, refusals included (`project.git.answer`, `project.git.push`, `project.git.update`). What git prints is neither shown nor kept, since it can hold private data: you see a sentence, and for more detail you use your usual Git tool.
 
-**Michel still never merges**, and never deploys. Merging is your step, on the site or with your tool.
+**Michel still never accepts your fix**: you merge it, on the site or with your tool. It never deploys either. Updating your folder is not merging your fix: it brings back what you already accepted.
 
 A partial copy of a repository (a "partial clone") cannot be attached: Git would fetch what it lacks on its own, so Michel neither sends nor updates there, and says so.
 
@@ -225,7 +225,7 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 - **Anthropic reads the copy's code**, as said on the consent screen.
 - **The answer about a key found is no proof that a person read it.** Michel takes this yes only through the page or a terminal, and its own automation never gives it. But a person or a program running with your rights (a script, a test of the project, code the agent wrote on another project) can fake a terminal or call the page with its token. That program could read the key directly anyway.
 - **The agent's text must not be taken at its word.** It is shown, never executed; its proposal is checked by Michel, and you decide.
-- **On an attached project, the SSH connection and your Git access manager are outside the proxy.** Over SSH, git and ssh open their own connection: Michel decides and records before git starts, but neither carries nor stops it. A Git access manager (Git Credential Manager, for example) is a program of yours that git starts: it can open its own connections too. See [security/network-egress.md](security/network-egress.md).
+- **On an attached project, the SSH connection and your Git access manager are outside the proxy.** Over SSH, git and ssh open their own connection: Michel decides and records before git starts, but does not route it through itself and does not stop it. A Git access manager (Git Credential Manager, for example: the program that remembers your Git passwords) is a program of yours that git starts: it can open its own connections too. See [security/network-egress.md](security/network-egress.md).
 
 ## Troubleshooting
 

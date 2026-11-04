@@ -87,13 +87,35 @@ func TestDefaultBuildRefusesALocalRemote(t *testing.T) {
 
 // What is shipped is built without the tag of the trial.
 func TestShippedBuildsDoNotUseTheTag(t *testing.T) {
-	for _, name := range []string{"Makefile", "README.md", "README.fr.md", ".github/workflows/ci.yml"} {
-		b, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(name)))
+	root := filepath.Join("..", "..")
+	skipDir := map[string]bool{".git": true, ".superpowers": true, "docs": true, "node_modules": true, "bin": true}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if skipDir[name] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(name, "_test.go") || strings.HasPrefix(name, "localremote") {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
 		}
 		if strings.Contains(string(b), "michel_local_remote") {
-			t.Errorf("%s uses the tag michel_local_remote", name)
+			t.Errorf("%s uses the tag michel_local_remote", path)
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

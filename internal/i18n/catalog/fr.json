@@ -69,7 +69,7 @@
   "api.git.host_key_hint": "Connecte-toi une fois avec ton outil Git habituel. Si tu t'y connectais déjà, demande de l'aide : ce changement peut être une attaque.",
   "api.git.ignored": "Un fichier ou un dossier que Git ignore (souvent des réglages) est à l'endroit où cette mise à jour écrit : Michel n'a pas touché à tes fichiers.",
   "api.git.ignored_hint": "Mets-le ailleurs, puis réessaie. Attention : une mise à jour faite à la main avec Git peut l'écraser sans prévenir.",
-  "api.git.in_progress": "Une fusion ou une reprise est en cours dans ton dossier : Michel n'y touche pas.",
+  "api.git.in_progress": "Une opération de Git (fusion, reprise) est restée à moitié dans ton dossier : Michel n'y touche pas.",
   "api.git.in_progress_hint": "Termine-la ou annule-la, puis réessaie.",
   "api.git.in_the_way": "Ce qui gêne : « %s ».",
   "api.git.network": "Michel n'a pas réussi à joindre le service. Rien n'a changé.",

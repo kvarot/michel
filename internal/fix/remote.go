@@ -274,6 +274,12 @@ func AttemptPush(ctx context.Context, d Deps, a Attempt, p project.Project) (*Pu
 	if a.Work.Server != nil {
 		return nil, nil
 	}
+	// Only these states can hold a branch (as stateView): no git for the others.
+	switch a.State {
+	case StateApplied, StateProvenFixed, StateInconclusive:
+	default:
+		return nil, nil
+	}
 	row, answered, err := d.repo().GitAnswer(ctx, p.ID)
 	if err != nil {
 		return nil, err
