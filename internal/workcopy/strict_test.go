@@ -149,7 +149,6 @@ func TestStrictJSONRefusesAmbiguousDocuments(t *testing.T) {
 }
 
 func TestInstallRefusesJunctionedLockfileDir(t *testing.T) {
-	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -306,7 +305,6 @@ func TestComposerPackageNamesAreChecked(t *testing.T) {
 }
 
 func TestNpmWorkspaceFoldersStayInTheCopy(t *testing.T) {
-	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)
@@ -450,7 +448,6 @@ func TestPrepareOfTreeWithOnlyExcludedFiles(t *testing.T) {
 }
 
 func TestCheckBinaryRefusesUnreadableFiles(t *testing.T) {
-	parallel(t)
 	dir := t.TempDir()
 	writeFile(t, dir, "b.bin", "\x00\x01\x02")
 	// A changed file that is not on disk and not deleted.
@@ -519,7 +516,6 @@ func TestLockKeysAreLiteral(t *testing.T) {
 // Ruling 29: the target of a linked package is checked like a key: a
 // link or junction at any of its folders refuses the install.
 func TestLinkTargetsAreChecked(t *testing.T) {
-	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)

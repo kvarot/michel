@@ -11,7 +11,6 @@ import (
 )
 
 func TestUpdateUsesInstallChecks(t *testing.T) {
-	parallel(t)
 	rec := &recorder{}
 	d := Deps{DataDir: t.TempDir(), Exec: rec.exec}
 	c := fakeCopy(t, d)

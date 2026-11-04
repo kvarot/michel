@@ -242,7 +242,6 @@ func TestUpdateLeavesWhatIsInTheWay(t *testing.T) {
 
 // A file named in another case on a disk that does not tell them apart.
 func TestUpdateLeavesAnIgnoredFileInAnotherCase(t *testing.T) {
-	parallel(t)
 	if runtime.GOOS != "windows" {
 		t.Skip("needs a disk that does not tell the case of a name")
 	}
@@ -416,7 +415,6 @@ func TestConfigCheckReadsWhatStatusReads(t *testing.T) {
 
 // The attributes of core.attributesFile count for the refusal as they do for merge.
 func TestUpdateSeesTheFilterOfAnAttributesFile(t *testing.T) {
-	parallel(t)
 	for _, where := range []string{"global", "local"} {
 		t.Run(where, func(t *testing.T) {
 			f := newFolderFixture(t)
@@ -557,7 +555,6 @@ func TestUpdateFailureSaysWhetherFilesChanged(t *testing.T) {
 
 // The real thing: another program holds a file open, git stops halfway.
 func TestUpdateLockedFileSaysPartial(t *testing.T) {
-	parallel(t)
 	if runtime.GOOS != "windows" {
 		t.Skip("only Windows refuses to replace a file another program holds")
 	}

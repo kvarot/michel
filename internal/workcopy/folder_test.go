@@ -202,7 +202,6 @@ func refusals() []refusal {
 }
 
 func TestUpdateFastForwards(t *testing.T) {
-	parallel(t)
 	f := newFolderFixture(t)
 	r := f.record()
 	from := gitT(t, f.env, f.proj.Path, "rev-parse", "HEAD")
@@ -460,7 +459,6 @@ func TestUpdateNeedsTheSeamForALocalRemote(t *testing.T) {
 }
 
 func TestUpdateKeepsAutocrlf(t *testing.T) {
-	parallel(t)
 	f := newFolderFixture(t)
 	writeFile(t, f.home, ".gitconfig", "[core]\n\tautocrlf = true\n")
 	writeFile(t, f.proj.Path, "README.md", "demo\r\n") // what Git for Windows leaves in a folder
@@ -503,7 +501,6 @@ func TestUntrackedFileIsNotDirty(t *testing.T) {
 }
 
 func TestUpdateRunsNoHookNorFilter(t *testing.T) {
-	parallel(t)
 	t.Run("hooks", func(t *testing.T) {
 		f := newFolderFixture(t)
 		script, mark := witness(t)
@@ -798,7 +795,6 @@ func TestCheckAttrGoesByBatches(t *testing.T) {
 }
 
 func TestUpdateMergeSurvivesAClosedPage(t *testing.T) {
-	parallel(t)
 	f := newFolderFixture(t)
 	to := f.advance(t, map[string]string{"merged.txt": "x\n"})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -991,7 +987,6 @@ func TestIsMergedFalseForACommitWithoutParent(t *testing.T) {
 }
 
 func TestPrepareAndApplyNeverPushNorMerge(t *testing.T) {
-	parallel(t)
 	f := newFixture(t)
 	r := &gitRecorder{}
 	f.deps.Exec = r.exec
