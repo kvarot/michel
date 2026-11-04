@@ -1023,6 +1023,8 @@
   "fix.server.busy_preprod": "A fix is already waiting or running on your preprod %s, and this fix must go through the preprod first. Wait for it to end, or find it in To do: finish it or refuse it first.",
   "fix.server.check_failed": "The fix ran, but checking the server again did not work: Michel cannot prove it.",
   "fix.server.check_partial": "The fix ran, but the check could not look at everything: Michel cannot prove it.",
+  "fix.server.cannot_judge_db": "The fix ran, but Michel cannot tell whether the problem is solved: the public list of flaws called %s is not downloaded yet. Update it in the Sources page, then check the server again.",
+  "fix.server.cannot_judge_source": "The fix ran, but Michel cannot tell whether the problem is solved: to judge it, he needs the public list of flaws called %s, which is turned off for now. Turn it on in the Sources page, then check the server again.",
   "fix.server.explain.append": "Add the line %s = %s at the end of %s.",
   "fix.server.explain.backup": "Save a copy of %s on the server (in %s). Michel never deletes it.",
   "fix.server.explain.check_site": "Then Michel checks from your computer that the site still answers.",

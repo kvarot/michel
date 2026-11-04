@@ -380,3 +380,32 @@ func TestHandOverView(t *testing.T) {
 		t.Errorf("hand-over with a stale hash = %d %s", code, body)
 	}
 }
+
+// D-1: a fix the check could not judge names the source to turn on.
+func TestInconclusiveNamesTheSourceToEnable(t *testing.T) {
+	tf := newTargetFixture(t)
+	tg := tf.addNamed("srv-judge", "192.0.2.62")
+	tf.seedServerFinding(tg.ID, "fsrv000000000003", scan.KindServerPackage, "DSA-0000-1001")
+	a, p := tf.seedServerAttempt(tg, "fsrv000000000003", target.ExecMichel, false)
+	ctx := context.Background()
+	repo := fix.NewRepo(tf.st)
+	if err := target.NewRepo(tf.st).SaveInventory(ctx, target.Inventory{TargetID: tg.ID, At: now,
+		OS: target.OSInfo{ID: "debian", VersionID: "12"}, Packages: []target.Package{{Name: "openssl", Source: "openssl", Version: "3.0.15-1~deb12u1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetState(ctx, a.ID, []fix.State{fix.StateProposed}, fix.StateInconclusive, ""); err != nil {
+		t.Fatal(err)
+	}
+	var v AttemptView
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server.JudgeSource != "" {
+		t.Fatalf("source named for a fix with no such step: %q", v.Server.JudgeSource)
+	}
+	if err := repo.SetSteps(ctx, p.ID, []fix.StepResult{{Op: fix.StepRecollect, Detail: "the check could not judge everything"}}); err != nil {
+		t.Fatal(err)
+	}
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server.JudgeSource != "osv.debian" {
+		t.Errorf("judge source = %q", v.Server.JudgeSource)
+	}
+}

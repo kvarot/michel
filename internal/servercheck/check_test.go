@@ -47,6 +47,8 @@ type host struct {
 	// makes its -v run past the time limit; findBroken makes command -v
 	// fail.
 	fpm, fpmSlow, findBroken bool
+	// fpmDisplayOn makes PHP-FPM report display_errors on (a plain setting).
+	fpmDisplayOn bool
 	// noCommand is a login shell without `command` (tcsh): exit 1, nothing
 	// printed.
 	noCommand bool
@@ -187,7 +189,13 @@ func (h *host) commands() map[string]sshtest.Handler {
 			}
 			io.WriteString(e.Stdout, fpmFixture("php-fpm8.2-v"))
 		case "-i":
-			io.WriteString(e.Stdout, fpmFixture("php-fpm8.2-i"))
+			out := fpmFixture("php-fpm8.2-i")
+			h.mu.Lock()
+			if h.fpmDisplayOn {
+				out = strings.Replace(out, "display_errors => Off => Off", "display_errors => On => On", 1)
+			}
+			h.mu.Unlock()
+			io.WriteString(e.Stdout, out)
 		case "-tt":
 			io.WriteString(e.Stderr, fpmFixture("php-fpm8.2-tt"))
 		case "-m":
@@ -1434,5 +1442,60 @@ func TestDecisionHoldsOnExposure(t *testing.T) {
 	}
 	if st := e2.status(tg2.ID, exposedDB); st != scan.StatusPending {
 		t.Fatalf("due: %q", st)
+	}
+}
+
+// D-1: the distribution advisories protect only what depends on them. A plain
+// php.ini setting of a packaged runtime, read completely, closes with the
+// Debian source off; the mitigation and the package finding, which cannot be
+// judged without it, stay open.
+func TestPlainSettingClosesWithoutTheDistributionSource(t *testing.T) {
+	e := newEnv(t)
+	writeDB(t, e.deps.OSVRoot, phpDB())
+	h := fpmHost()
+	h.fpmDisplayOn = true
+	_, tg := e.server("srv-demo", h, target.EnvProd)
+	e.check(tg.ID)
+	e.takeAlerts()
+	for _, id := range []string{"display_errors_prod", "session_upload_progress_off", "DSA-0000-2001"} {
+		if st := e.status(tg.ID, id); st != scan.StatusNew {
+			t.Fatalf("%s before: %s", id, st)
+		}
+	}
+	if err := e.srcs.SetEnabled(context.Background(), "osv.debian", false); err != nil {
+		t.Fatal(err)
+	}
+	// Still risky: seen, never closed.
+	e.advance(time.Hour)
+	res := e.check(tg.ID)
+	if st := e.status(tg.ID, "display_errors_prod"); st == scan.StatusGone {
+		t.Fatalf("a setting still risky closed: %+v", res)
+	}
+	seen := e.findings(tg.ID)["display_errors_prod"].ID
+	if !slices.Contains(res.Seen, seen) {
+		t.Errorf("a setting still risky is not said to be seen: %v", res.Seen)
+	}
+	// The setting is fixed: it closes, the source being off changes nothing.
+	h.change(func(h *host) { h.fpmDisplayOn = false })
+	e.advance(time.Hour)
+	res = e.check(tg.ID)
+	if st := e.status(tg.ID, "display_errors_prod"); st != scan.StatusGone {
+		t.Fatalf("the plain setting did not close with the source off: %s %+v", st, res)
+	}
+	if slices.Contains(res.Seen, seen) {
+		t.Errorf("a closed setting is said to be seen: %v", res.Seen)
+	}
+	if res.SourceToEnable != "osv.debian" {
+		t.Errorf("source to enable %q", res.SourceToEnable)
+	}
+	// What cannot be judged without the source stays, and is not said seen.
+	for _, id := range []string{"session_upload_progress_off", "DSA-0000-2001"} {
+		f := e.findings(tg.ID)[id]
+		if f.Status == scan.StatusGone {
+			t.Errorf("%s closed for lack of a source", id)
+		}
+		if slices.Contains(res.Seen, f.ID) {
+			t.Errorf("%s is said to be seen", id)
+		}
 	}
 }

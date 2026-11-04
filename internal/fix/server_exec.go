@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"slices"
 	"strings"
 	"time"
 
@@ -869,6 +870,17 @@ func (r *serverRun) prove(ctx context.Context) error {
 			"finding_id": r.sf.FindingID, "hash": r.prop.Hash, "correction_id": r.sf.CorrectionID, "mitigation": r.sf.Mitigation})
 		r.promote(ctx)
 		return nil
+	case !gone && f.ID != "" && f.Kind != scan.KindServerExposure && !slices.Contains(res.Seen, f.ID):
+		// Kept open, not seen: the check could not judge it. It says so, and
+		// what would let it judge, not that it still sees the problem.
+		cause := i18n.T(lang, "fix.server.check_partial")
+		switch {
+		case res.DatabaseMissing:
+			cause = i18n.T(lang, "fix.server.cannot_judge_db", res.SourceToEnable)
+		case res.SourceToEnable != "":
+			cause = i18n.T(lang, "fix.server.cannot_judge_source", res.SourceToEnable)
+		}
+		return end(detailPartial, false, StateInconclusive, cause)
 	case !gone:
 		return end(detailStillSeen, false, StateInconclusive, i18n.T(lang, "fix.server.still_seen"))
 	case !siteChecked:
@@ -1109,4 +1121,15 @@ func HandOverToMichel(ctx context.Context, d Deps, attemptID, hash string) error
 		return err
 	}
 	return d.applyServer(ctx, a)
+}
+
+// CouldNotJudge tells that the check after this fix could not judge its
+// finding: the fix ran, nothing says the problem is still there.
+func CouldNotJudge(p Proposal) bool {
+	for _, s := range p.Steps {
+		if s.Op == StepRecollect && s.Detail == detailPartial {
+			return true
+		}
+	}
+	return false
 }

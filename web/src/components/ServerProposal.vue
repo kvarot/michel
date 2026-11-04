@@ -107,6 +107,7 @@
         </v-alert>
 
         <p v-if="attempt.cause" class="m-small">{{ $t('fix.chat.cause', { cause: attempt.cause }) }}</p>
+        <p v-if="server.judge_source" class="m-small"><a href="#/sources">{{ $t('servers.sheet.source_open') }}</a></p>
         <p v-if="doneText" class="m-sprop__done m-voice">{{ doneText }}</p>
 
         <section class="m-sprop__sub">

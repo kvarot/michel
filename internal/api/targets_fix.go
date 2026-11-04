@@ -53,6 +53,9 @@ type ServerAttemptView struct {
 	// the same scripts (the page offers one button for it), "settings" when
 	// they do not (the page says what to do).
 	HandOver string `json:"hand_over,omitempty"`
+	// JudgeSource is the source to turn on so Michel can judge a fix the check
+	// could not judge (the page links to the Sources page); "" otherwise.
+	JudgeSource string `json:"judge_source,omitempty"`
 }
 
 // ScriptsView is the apply and the undo script of a server fix. They hold
@@ -126,6 +129,15 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 			sv.HandOver = "settings"
 			if fix.MichelRuns(t, prop.Scripts.RunAsRoot) {
 				sv.HandOver = "ready"
+			}
+		}
+		if a.State == fix.StateInconclusive && fix.CouldNotJudge(*prop) && known {
+			if inv, ok, err := repo.LatestInventory(ctx, t.ID); err != nil {
+				return err
+			} else if ok {
+				if sv.JudgeSource, err = s.sourceToEnable(ctx, inv); err != nil {
+					return err
+				}
 			}
 		}
 		sv.BackupList = srvTexts(user, fix.BackupList(*prop))
