@@ -90,7 +90,7 @@
           @refresh="refreshAttempt"
         />
         <!-- Here in the template as on the screen: it is read and tabbed to before what follows. -->
-        <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
+        <v-alert v-if="actionError" ref="actionAlert" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
           <p>{{ actionError.offline ? $t('offline.hint') : actionError.error || $t('error.generic') }}</p>
           <p v-if="actionError.hint" class="m-small">{{ actionError.hint }}</p>
           <details v-if="actionError.data && actionError.data.detail" class="m-fix__detail">
@@ -362,6 +362,15 @@ export default {
     },
   },
   watch: {
+    // An answer that is a refusal shows at the top of the page: the person who clicked lower down
+    // must see it, or the click seems to have done nothing (B2).
+    actionError(e) {
+      if (!e) return
+      this.$nextTick(() => {
+        const el = this.$refs.actionAlert?.$el
+        if (el?.scrollIntoView) el.scrollIntoView({ block: 'center' })
+      })
+    },
     route: {
       handler() {
         this.select()

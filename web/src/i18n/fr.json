@@ -1406,6 +1406,7 @@
   "git.update.button": "Mettre à jour mon dossier",
   "git.update.lead": "Michel fait arriver sur ton ordinateur ce qui a été accepté sur le site, sans rien mélanger. Si ce n'est pas possible, il ne touche pas à tes fichiers et te dit pourquoi.",
   "git.update.running": "Mise à jour en cours…",
+  "git.update.wait": "Michel va chercher les nouveautés sur le site. Ça peut prendre un moment : attends ici, le bouton revient dès que c'est fini.",
   "git.update.done": "Ton dossier est à jour. Michel lance le contrôle.",
   "git.update.done_no_check": "Ton dossier est à jour, mais Michel n'a pas pu lancer le contrôle.",
   "git.update.none": "Rien de nouveau sur le site. Si la correction attend encore, accepte-la, puis réessaie.",

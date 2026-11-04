@@ -4,14 +4,14 @@
     <v-btn
       class="m-gitup__btn"
       color="primary"
-      :variant="running ? 'tonal' : 'flat'"
+      variant="flat"
       :aria-disabled="running ? 'true' : undefined"
       @click="run"
     >
       <v-progress-circular v-if="running" class="m-gitup__spin" indeterminate size="14" width="2" />
       {{ $t(running ? 'git.update.running' : 'git.update.button') }}
     </v-btn>
-    <p v-if="running" class="m-gitup__hidden" role="status">{{ $t('git.update.running') }}</p>
+    <p v-if="running" class="m-gitup__wait m-small" role="status">{{ $t('git.update.wait') }}</p>
     <!-- Read before the click, and it can be old: the button stays, a click tells the truth of now. -->
     <p v-if="why" class="m-gitup__why m-small">{{ why }}</p>
     <p v-if="result" class="m-gitup__result" role="status">{{ $t(`git.update.${result}`) }}</p>
@@ -95,5 +95,5 @@ export default {
 .m-gitup__spin { margin-right: 0.5rem; }
 .m-gitup__why, .m-gitup__refusal { padding: 0.4rem 0.7rem; border-radius: 8px; background: rgb(var(--v-theme-tag-look)); }
 .m-gitup__refusal { display: grid; gap: 0.25rem; }
-.m-gitup__hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.m-gitup__wait { padding: 0.4rem 0.7rem; border-radius: 8px; background: rgb(var(--v-theme-tag-look)); }
 </style>

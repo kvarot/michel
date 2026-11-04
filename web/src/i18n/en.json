@@ -1406,6 +1406,7 @@
   "git.update.button": "Update my folder",
   "git.update.lead": "Michel brings to your computer what was accepted on the site, without mixing anything. If that is not possible, it leaves your files alone and tells you why.",
   "git.update.running": "Updating…",
+  "git.update.wait": "Michel is fetching what is new from the site. It can take a moment: wait here, the button comes back as soon as it is done.",
   "git.update.done": "Your folder is up to date. Michel starts the check.",
   "git.update.done_no_check": "Your folder is up to date, but Michel could not start the check.",
   "git.update.none": "Nothing new on the site. If the fix is still waiting, accept it, then try again.",
