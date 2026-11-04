@@ -54,6 +54,8 @@
         <p>{{ refusal.offline ? $t('offline.hint') : refusal.error || $t('error.generic') }}</p>
         <p v-if="refusal.hint" class="m-muted">{{ refusal.hint }}</p>
       </div>
+      <GitUpdateButton v-if="git && git.attached" class="m-card__git" :name="project.name" :update="git.update" @scan-started="$emit('scan-changed')" @finished="loadGit" />
+      <GitQuestion v-if="showsQuestion" class="m-card__git" :name="project.name" :view="git" @answered="onAnswered" @reload="loadGit" />
     </header>
 
     <section v-for="s in sections" :key="s.kind" class="m-section" :aria-label="$t(s.title)">
@@ -71,22 +73,25 @@
 
     <p v-if="seen && !sections.length" class="m-card__quiet m-muted">{{ $t('project.nothing_new') }}</p>
 
-    <FixSettings :name="project.name" />
+    <FixSettings :name="project.name" :git="git" :git-failure="gitFailure" @need-git="loadGit" @git-answered="onAnswered" />
   </article>
 </template>
 
 <script>
 import FixSettings from './FixSettings.vue'
+import GitQuestion from './GitQuestion.vue'
+import GitUpdateButton from './GitUpdateButton.vue'
 import PackageRow from './PackageRow.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
+import { readGit } from '../lib/gitView.js'
 import { checkedWell, runsHere, scanHintKey, scanPath, scanSentence, showsFailure } from '../lib/projectsView.js'
 
 const checkPath = 'M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z'
 
 export default {
   name: 'ProjectCard',
-  components: { FixSettings, PackageRow },
+  components: { FixSettings, GitQuestion, GitUpdateButton, PackageRow },
   props: {
     project: { type: Object, required: true },
     items: { type: Array, default: () => [] },
@@ -95,7 +100,9 @@ export default {
   },
   emits: ['decided', 'scan-changed'],
   data() {
-    return { checkPath, starting: false, refusal: null }
+    // git is the GitView (read only when the card needs it); answeredHere keeps the
+    // sentence of an answer just given on the card, where the keyboard is.
+    return { checkPath, starting: false, refusal: null, git: null, gitFailure: null, answeredHere: false }
   },
   computed: {
     titleId() {
@@ -130,6 +137,14 @@ export default {
     sentence() {
       return scanSentence(this.project, this.$ui.lang)
     },
+    // The card reads the Git view of a project with a question to ask or a button to show.
+    needsGit() {
+      return this.project.git_answer === '' || this.project.git_attached === true
+    },
+    showsQuestion() {
+      if (!this.git) return false
+      return this.answeredHere || !this.git.answer || this.git.changed || (!!this.git.refusal && this.git.answer === 'yes')
+    },
     gone() {
       return (this.project.gone || []).map((pkg) => ({
         kind: 'gone', package: pkg.name, severity: severityOf(pkg.worst_severity), text: '',
@@ -151,6 +166,15 @@ export default {
       // "Already running" is over once the check ends.
       if (!now) this.refusal = null
     },
+    needsGit: {
+      immediate: true,
+      handler(now) {
+        if (now && !this.git) this.loadGit()
+      },
+    },
+    '$ui.lang'() {
+      if (this.git) this.loadGit()
+    },
   },
   methods: {
     async check() {
@@ -165,6 +189,19 @@ export default {
         this.starting = false
       }
       this.$emit('scan-changed')
+    },
+    async loadGit() {
+      this.gitFailure = null
+      try {
+        const view = await readGit(api.get, this.project.name, this.$ui.lang)
+        this.git = view
+      } catch (err) {
+        if (err?.status !== 401) this.gitFailure = err
+      }
+    },
+    onAnswered(view) {
+      this.git = view
+      this.answeredHere = true
     },
     rowKey(item) {
       return `${item.kind}:${item.package}:${item.findingIds.join(',')}`
@@ -224,6 +261,7 @@ export default {
 }
 .m-card__refusal { margin-top: 0.5rem; }
 .m-card__refusal p { margin: 0; }
+.m-card__git { margin-top: 0.9rem; padding-top: 0.75rem; border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); }
 .m-card__quiet { margin: 0 0 0.75rem; }
 .m-section { border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); padding: 0.9rem 0 0.4rem; }
 .m-section__title { font-size: 1rem; font-weight: 650; margin: 0 0 0.25rem; }

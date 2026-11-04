@@ -4,6 +4,7 @@
 // internal/workcopy/install.go): when a case is not true for a flaw, the line
 // is left out or says less.
 import { translate } from '../i18n/index.js'
+import { providerName, safeMergeUrl } from './gitView.js'
 import { plainSentence } from './modeView.js'
 
 const stepKeys = ['found', 'solution', 'accord', 'fixed', 'verified']
@@ -453,12 +454,33 @@ function serverRisk(f, lang, advanced) {
 
 /**
  * mergeStep is the last step left to the person once the branch exists.
- * Michel never merges (R6). A server's fix has nothing to merge. Task 14g adds
- * the attached project (R19).
- * @param {{attempt: object|null, project: object|null}} args
- * @returns {{mode: 'manual'|'none', branch: string, command: string}}
+ * Michel never merges (R6, R19). A server's fix has nothing to merge. Attached,
+ * there is no command: one click sends, the person accepts on the site, one click
+ * updates. Otherwise the command stays; attach says the project could be attached
+ * now, so the page only offers what a yes would allow. A git view that says the
+ * project is not attached wins over an attempt read before it, and the reverse: an
+ * answer just given counts before the attempt is read again.
+ * @param {{attempt: object|null, project?: object|null, git?: object|null}} args git: GitView
+ * @returns {{mode: 'manual'|'attached'|'none', branch: string, command: string, push: {label: string, params: object, pushed: boolean}|null, link: {href: string, params: object}|null, update: {ready: boolean, why: string}|null, attach: boolean}}
  */
-export function mergeStep({ attempt }) {
-  if (!attempt || attempt.server || attempt.state !== 'applied' || !attempt.branch) return { mode: 'none', branch: '', command: '' }
-  return { mode: 'manual', branch: attempt.branch, command: `git merge ${attempt.branch}` }
+export function mergeStep({ attempt, git = null }) {
+  const base = { branch: '', command: '', push: null, link: null, update: null, attach: false }
+  if (!attempt || attempt.server || attempt.state !== 'applied' || !attempt.branch) return { mode: 'none', ...base }
+  const branch = attempt.branch
+  const sent = attempt.push
+  const attached = git ? git.attached === true : !!sent
+  if (!attached) {
+    return { mode: 'manual', ...base, branch, command: `git merge ${branch}`, attach: !!git?.can_attach && !git.changed }
+  }
+  const provider = providerName(sent?.provider ?? git?.provider)
+  const pushed = !!sent?.pushed
+  const href = pushed && provider ? safeMergeUrl(sent.merge_url) : ''
+  return {
+    mode: 'attached',
+    ...base,
+    branch,
+    push: provider ? { label: 'git.push.known', params: { provider }, pushed } : { label: 'git.push.other', params: {}, pushed },
+    link: href ? { href, params: { provider } } : null,
+    update: git?.update ? { ready: !!git.update.ready, why: git.update.why || '' } : null,
+  }
 }

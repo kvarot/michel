@@ -84,6 +84,7 @@
           @to-proposal="toProposal"
           @hold-continue="holdContinue"
           @hold-withdraw="holdWithdraw"
+          @refresh="refreshAttempt"
         />
         <!-- Here in the template as on the screen: it is read and tabbed to before what follows. -->
         <v-alert v-if="actionError" type="error" variant="tonal" density="comfortable" class="m-fix__error" role="alert" closable @click:close="actionError = null">
@@ -642,6 +643,28 @@ export default {
       } finally {
         this.acting = ''
         this.guardFocus()
+      }
+    },
+    /**
+     * refreshAttempt reads the attempt on screen again after a click on the Git buttons
+     * or during the check. final: the check ended, the flaw may have left: its sheet and
+     * the lists are read again too.
+     */
+    async refreshAttempt({ final = false } = {}) {
+      const id = this.current?.id
+      if (!id) return
+      try {
+        if (final) {
+          this.sheetFor = ''
+          await this.loadList(true)
+        }
+        const v = await api.get(this.q(`/fix/${encodeURIComponent(id)}`))
+        if (!this.alive || this.current?.id !== id) return
+        const was = this.current.state
+        this.show(v)
+        if (was !== v.state) this.$emit('changed')
+      } catch {
+        // Tried again at the next look; the page keeps what it holds.
       }
     },
     /** guardFocus: when the button in focus went away with what it did, the keyboard goes to the flaw's heading. */

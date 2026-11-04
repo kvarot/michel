@@ -18,17 +18,21 @@
       <template v-else>{{ $t(`path.note.${path.note.key}`, path.note.params || {}) }}</template>
     </p>
 
-    <section v-if="merge.mode === 'manual'" class="m-guide__merge m-panel" aria-labelledby="fix-merge-lead">
-      <p id="fix-merge-lead">{{ $t('git.manual.lead') }}</p>
-      <div class="m-guide__cmd">
-        <code class="m-code m-guide__code">{{ merge.command }}</code>
-        <v-btn size="small" variant="tonal" color="primary" @click="copy">{{ copied ? $t('git.manual.copied') : $t('git.manual.copy') }}</v-btn>
-      </div>
-      <p v-if="copyFailed" class="m-small" role="alert">{{ $t('git.manual.copy_failed') }}</p>
-      <p v-if="copied" class="m-guide__hidden" role="status">{{ $t('git.manual.copied') }}</p>
-      <p>{{ $t('git.manual.next') }}</p>
-      <a href="#/projects" class="m-guide__link">{{ $t('git.manual.projects') }}</a>
-    </section>
+    <template v-if="merge.mode !== 'none'">
+      <p v-if="gitLoading" class="m-small m-muted" role="status">{{ $t('fix.loading') }}</p>
+      <MergeStep
+        v-else
+        :key="attempt.id"
+        :attempt="attempt"
+        :project="project"
+        :project-view="projectView"
+        :git="git"
+        :heading="subHeading"
+        @git="git = $event"
+        @reload-git="loadGit"
+        @refresh="$emit('refresh', $event)"
+      />
+    </template>
 
     <section v-if="hold" class="m-guide__hold m-panel" aria-labelledby="fix-hold-title">
       <component :is="subHeading" id="fix-hold-title" class="m-guide__sub" tabindex="-1">{{ $t('path.hold.title', { n: hold.count }) }}</component>
@@ -89,8 +93,11 @@
 <script>
 import FailurePath from './FailurePath.vue'
 import MaskedText from './MaskedText.vue'
+import MergeStep from './MergeStep.vue'
+import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
 import { causeSentence } from '../lib/fixView.js'
+import { readGit } from '../lib/gitView.js'
 import { canPrepareServer, canRestart, exposurePath, failurePath, holdView, isGone, mergeStep, pathSteps, plainRisk, projectPlan, serverPlan, showsPlan } from '../lib/pathView.js'
 import { guideServerTitle } from '../lib/serversView.js'
 import { guideTitle } from '../lib/todoView.js'
@@ -102,7 +109,7 @@ import { guideTitle } from '../lib/todoView.js'
 // holds the title and what the flaw means.
 export default {
   name: 'FailureGuide',
-  components: { FailurePath, MaskedText },
+  components: { FailurePath, MaskedText, MergeStep },
   props: {
     // attempt is the AttemptView shown, null for a flaw without a fix.
     attempt: { type: Object, default: null },
@@ -128,9 +135,10 @@ export default {
     // holdBusy: the answer to a held attempt running: withdraw, continue, or ''.
     holdBusy: { type: String, default: '' },
   },
-  emits: ['start', 'to-proposal', 'hold-continue', 'hold-withdraw'],
+  emits: ['start', 'to-proposal', 'hold-continue', 'hold-withdraw', 'refresh'],
   data() {
-    return { copied: false, copyFailed: false }
+    // git is how the project stands with its Git service, read only for a fix on its branch.
+    return { git: null, gitLoading: false }
   },
   computed: {
     // A flaw gone has nothing left to start, whether an attempt went nowhere or none ran.
@@ -207,28 +215,47 @@ export default {
       return this.server && !this.plan && this.attempt?.state === 'proposed' && this.target?.fix_level === 3 ? 'servers.level.3.warn' : ''
     },
     merge() {
-      return mergeStep({ attempt: this.attempt, project: this.projectView })
+      return mergeStep({ attempt: this.attempt, project: this.projectView, git: this.git })
+    },
+    // gitFor is the project to read: a server's fix and a fix without a branch have nothing to send.
+    gitFor() {
+      return this.server || this.attempt?.state !== 'applied' || !this.attempt.branch ? '' : this.project
     },
     proposed() {
       return this.attempt?.state === 'proposed'
     },
   },
   watch: {
-    'attempt.id'() {
-      this.copied = false
-      this.copyFailed = false
+    gitFor: {
+      immediate: true,
+      handler(name) {
+        this.git = null
+        this.gitLoading = !!name
+        if (name) this.loadGit()
+      },
+    },
+    '$ui.lang'() {
+      if (this.gitFor) this.loadGit()
     },
   },
+  beforeUnmount() {
+    this.gitAsked = ''
+  },
   methods: {
-    async copy() {
-      this.copyFailed = false
+    /** loadGit reads the view; a late answer, for another project or a page gone, is dropped. */
+    async loadGit() {
+      const name = this.gitFor
+      if (!name) return
+      this.gitAsked = name
+      let view = null
       try {
-        await navigator.clipboard.writeText(this.merge.command)
-        this.copied = true
+        view = await readGit(api.get, name, this.$ui.lang)
       } catch {
-        this.copied = false
-        this.copyFailed = true
+        // The attempt still says whether it is attached: the step does not wait for this.
       }
+      if (this.gitAsked !== name || this.gitFor !== name) return
+      this.git = view
+      this.gitLoading = false
     },
   },
 }
@@ -249,25 +276,12 @@ export default {
 .m-guide__start { justify-self: start; margin-top: 0.25rem; max-width: 100%; }
 .m-guide__busy { line-height: 1.45; }
 .m-guide__warn { line-height: 1.45; padding: 0.4rem 0.7rem; border-radius: 8px; background: rgb(var(--v-theme-tag-look)); }
-.m-guide__merge { padding: 0.75rem 0.9rem; display: grid; gap: 0.6rem; line-height: 1.5; }
-.m-guide__cmd { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-.m-guide__code {
-  flex: 1 1 12rem;
-  min-width: 0;
-  padding: 0.4rem 0.6rem;
-  border-radius: 6px;
-  background: rgb(var(--v-theme-surface-variant));
-  overflow-wrap: anywhere;
-  user-select: all;
-}
 .m-guide__hold { padding: 0.75rem 0.9rem; display: grid; gap: 0.6rem; line-height: 1.5; min-width: 0; }
 .m-guide__keys { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
 .m-guide__keys li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.6rem; min-width: 0; }
 .m-guide__file { min-width: 0; overflow-wrap: anywhere; }
 .m-guide__answers { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .m-guide__answers :deep(.v-btn) { max-width: 100%; }
-.m-guide__link { justify-self: start; color: rgb(var(--v-theme-primary)); font-weight: 600; }
-.m-guide__hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .m-guide__go { display: none; }
 @media (max-width: 900px) {
   .m-guide__go { display: inline-flex; }

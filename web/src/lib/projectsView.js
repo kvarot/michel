@@ -123,6 +123,8 @@ export function withScanState(project, view) {
     last_failure: view.last_failure || null,
     last_scan_at: view.last_scan_at || '',
     last_scan_status: view.last_scan_status || project.last_scan_status,
+    git_answer: view.git_answer ?? '',
+    git_attached: !!view.git_attached,
   }
 }
 

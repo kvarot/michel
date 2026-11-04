@@ -9,8 +9,9 @@ const families = ['nav.', 'todo.', 'resolved.', 'path.', 'plan.', 'expo.', 'guid
 // Keys allowed to use port, paquet or SSH because their own sentence explains it.
 // A task that adds one lists it here, in the same commit.
 // help.server.port explains the word port in its own sentence, plan.server.approval_michel the word SSH.
+// git.suggest.unsupported explains SSH in its own sentence.
 // expo.udp.note says what TCP is ("le type le plus courant") and that the others are not read; expo.udp.name is its title, shown with it.
-const jargonExceptions = ['help.server.port', 'plan.server.approval_michel', 'expo.udp.name', 'expo.udp.note']
+const jargonExceptions = ['help.server.port', 'plan.server.approval_michel', 'expo.udp.name', 'expo.udp.note', 'git.suggest.unsupported']
 
 const simpleEntries = Object.entries(fr).filter(([k]) => families.some((f) => k.startsWith(f)))
 

@@ -13,6 +13,10 @@ const attempt = (state, extra = {}) => ({
   id: 'a1', state, project: 'demo', cause: '', branch: '', approved_by: '', proposal: null, messages: null, finding: finding(), ...extra,
 })
 const project = (extra = {}) => ({ name: 'demo', classification: 'sensitive', fix_level: 1, auto_fix_minor: false, has_test_cmd: true, git_repo: true, ...extra })
+const openPush = (extra = {}) => ({ provider: 'github', display: 'github.com/demo/app', branch: 'michel/fix-01abc', merge_url: '', pushed_at: '', pushed: false, can_push: true, ...extra })
+const sentPush = (extra = {}) => openPush({ merge_url: 'https://github.com/demo/app/pull/new/michel/fix-01abc', pushed_at: '2026-11-04T10:00:00Z', pushed: true, ...extra })
+const gitOf = (extra = {}) => ({ repo: 'ok', answer: 'yes', attached: true, changed: false, suggested: 'yes', reason: 'known', provider: 'github', display: 'github.com/demo/app',
+  host: 'github.com', remote_id: 'r1', had_credential: false, can_attach: true, update: null, ...extra })
 const keysOf = (plan) => plan.lines.map((l) => l.key.replace('plan.project.', ''))
 const planOf = (f, p) => projectPlan({ finding: f, project: p, level: p.fix_level })
 
@@ -476,16 +480,77 @@ describe('merge', () => {
     expect(p.note).toEqual({ key: 'merge', params: { branch: 'michel/fix-01abc' } })
     const srv = attempt('applied', { branch: '', server: { target: { id: 't' } } })
     expect(failurePath({ attempt: srv }).note.key).toBe('checking')
-    expect(mergeStep({ attempt: srv, project: null })).toEqual({ mode: 'none', branch: '', command: '' })
+    expect(mergeStep({ attempt: srv, project: null })).toEqual({ mode: 'none', branch: '', command: '', push: null, link: null, update: null, attach: false })
+    // The same note in both modes: the path does not depend on the attachment.
+    const sent = attempt('applied', { branch: 'michel/fix-01abc', push: sentPush() })
+    expect(failurePath({ attempt: sent }).note).toEqual({ key: 'merge', params: { branch: 'michel/fix-01abc' } })
+    expect(mergeStep({ attempt: sent, project: project(), git: gitOf() }).branch).toBe('michel/fix-01abc')
+    expect(failurePath({ attempt: sent }).steps[3]).toEqual({ key: 'fixed', state: 'now', label: 'fixed_ready' })
   })
   test('manual merge step gives the command', () => {
     expect(mergeStep({ attempt: attempt('applied', { branch: 'michel/fix-01abc' }), project: project() }))
-      .toEqual({ mode: 'manual', branch: 'michel/fix-01abc', command: 'git merge michel/fix-01abc' })
+      .toEqual({ mode: 'manual', branch: 'michel/fix-01abc', command: 'git merge michel/fix-01abc', push: null, link: null, update: null, attach: false })
   })
   test('no branch, no command', () => {
     expect(mergeStep({ attempt: attempt('applied'), project: project() }).mode).toBe('none')
     expect(mergeStep({ attempt: null, project: project() }).mode).toBe('none')
     expect(mergeStep({ attempt: attempt('proposed', { branch: 'x' }), project: project() }).mode).toBe('none')
+  })
+  test('merge step manual, attached, none', () => {
+    const a = attempt('applied', { branch: 'michel/fix-01' })
+    // Not attached: the command, and the offer only with an address to attach.
+    const no = mergeStep({ attempt: a, project: project(), git: gitOf({ attached: false, answer: 'no' }) })
+    expect(no.mode).toBe('manual')
+    expect(no.command).toBe('git merge michel/fix-01')
+    expect(no.attach).toBe(true)
+    expect(no.push).toBe(null)
+    expect(mergeStep({ attempt: a, project: project(), git: gitOf({ attached: false, answer: '', can_attach: false, reason: 'none' }) }).attach).toBe(false)
+    // Attached: no command.
+    const yes = mergeStep({ attempt: { ...a, push: openPush() }, project: project(), git: gitOf() })
+    expect(yes.mode).toBe('attached')
+    expect(yes.command).toBe('')
+    expect(yes.push).toEqual({ label: 'git.push.known', params: { provider: 'GitHub' }, pushed: false })
+    expect(yes.attach).toBe(false)
+    // An address changed: nothing goes, even if the attempt was read before.
+    const moved = mergeStep({ attempt: { ...a, push: openPush() }, project: project(), git: gitOf({ attached: false, changed: true }) })
+    expect(moved.mode).toBe('manual')
+    expect(moved.push).toBe(null)
+    expect(moved.attach).toBe(false)
+    // A server's fix has nothing to merge.
+    expect(mergeStep({ attempt: { ...a, server: { target: { id: 't' } } }, project: null, git: gitOf() }).mode).toBe('none')
+  })
+  test('an answer just given counts before the attempt is read again', () => {
+    const s = mergeStep({ attempt: attempt('applied', { branch: 'michel/fix-01', push: null }), project: project(), git: gitOf() })
+    expect(s.mode).toBe('attached')
+    expect(s.push.pushed).toBe(false)
+  })
+  test('pushed shows the link only if safe, else the branch name', () => {
+    const a = (merge_url) => attempt('applied', { branch: 'michel/fix-01', push: sentPush({ merge_url }) })
+    expect(mergeStep({ attempt: a('https://github.com/demo/app/pull/new/michel/fix-01'), git: gitOf() }).link)
+      .toEqual({ href: 'https://github.com/demo/app/pull/new/michel/fix-01', params: { provider: 'GitHub' } })
+    for (const bad of ['', 'javascript:alert(1)', 'http://github.com/a', 'https://github.com.example.test/a']) {
+      const s = mergeStep({ attempt: a(bad), git: gitOf() })
+      expect(s.link, bad).toBe(null)
+      expect(s.branch).toBe('michel/fix-01')
+      expect(s.push.pushed).toBe(true)
+    }
+    // Not sent: the link leads nowhere yet.
+    expect(mergeStep({ attempt: attempt('applied', { branch: 'b', push: openPush({ merge_url: 'https://github.com/a/b' }) }), git: gitOf() }).link).toBe(null)
+  })
+  test('unknown service gives the branch name, no link', () => {
+    for (const provider of ['other', 'local']) {
+      const s = mergeStep({ attempt: attempt('applied', { branch: 'michel/fix-01', push: sentPush({ provider, merge_url: 'https://github.com/a/b' }) }), git: gitOf({ provider, reason: 'other' }) })
+      expect(s.push, provider).toEqual({ label: 'git.push.other', params: {}, pushed: true })
+      expect(s.link, provider).toBe(null)
+      expect(s.branch).toBe('michel/fix-01')
+    }
+  })
+  test('update explains why when not ready', () => {
+    const a = attempt('applied', { branch: 'b', push: sentPush() })
+    expect(mergeStep({ attempt: a, git: gitOf({ update: { ready: false, current: 'dev', default: 'main', code: 'api.git.dirty', why: 'Ton dossier a des modifications.' } }) }).update)
+      .toEqual({ ready: false, why: 'Ton dossier a des modifications.' })
+    expect(mergeStep({ attempt: a, git: gitOf({ update: { ready: true, current: 'main', default: 'main', code: '', why: '' } }) }).update).toEqual({ ready: true, why: '' })
+    expect(mergeStep({ attempt: a, git: gitOf({ update: null }) }).update).toBe(null)
   })
 })
 
