@@ -1601,3 +1601,76 @@ func TestReasonOfTellsTheNetworkApart(t *testing.T) {
 		}
 	}
 }
+
+// byPath makes a simulated server that answers each source by its own lines.
+func byPath(lines map[string][]string) sshtest.ShellFunc {
+	return func(_ *sshtest.Server, script string, out, _ io.Writer) int {
+		for path, ls := range lines {
+			if strings.Contains(script, path) {
+				io.WriteString(out, strings.Join(ls, "\n")+"\n")
+				return 0
+			}
+		}
+		return 1
+	}
+}
+
+// A source whose file is gone (or a link, a folder) was not read: it is no
+// "read" source for the alert, and its errors are not closed.
+func TestAbsentSourceIsNotReadAndResolvesNothing(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	ctx := context.Background()
+	var deny atomic.Bool
+	src2, _ := twoSources(t, pe, &deny)
+	if _, _, _, err := pe.repo.Apply(ctx, src2, []Record{rec(1, readNow)}, readNow); err != nil {
+		t.Fatal(err)
+	}
+	pe.activate()
+	pe.clock.Advance(8 * 24 * time.Hour)
+	pe.setShell(byPath(map[string][]string{
+		pe.src.Path: {unseenLine(pe.src.Path, CauseDenied)},
+		src2.Path:   {unseenLine(src2.Path, CauseAbsent)},
+	}))
+	res, err := Pass(ctx, pe.deps, pe.tgt.ID)
+	if err == nil || res.Read != 0 || len(res.Failed) != 1 {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	for _, g := range pe.signatures() {
+		if g.SourceID == src2.ID && g.Status == StatusResolved {
+			t.Error("the error of a source that was not read was closed")
+		}
+	}
+}
+
+// A source read in part (a file refused, the list cut, the cap reached) closes
+// nothing: an error held only by what was not read is not gone.
+func TestPartialReadResolvesNothing(t *testing.T) {
+	for name, tc := range map[string]struct {
+		lines    func(a, b string) []string
+		resolved bool
+	}{
+		"whole":        {func(a, b string) []string { return []string{readLineOf(a)} }, true},
+		"file refused": {func(a, b string) []string { return []string{readLineOf(a), unseenLine(b, CauseDenied)} }, false},
+		"file absent":  {func(a, b string) []string { return []string{readLineOf(a), unseenLine(b, CauseAbsent)} }, true},
+		"list cut":     {func(a, b string) []string { return []string{readLineOf(a), "M"} }, false},
+		"cap reached":  {func(a, b string) []string { return []string{"F\t" + a + "\t123\t0\t5\t0\t0"} }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+			dir := pe.src.Path[:strings.LastIndex(pe.src.Path, "/")]
+			pe.src.Path = dir + "/*.log"
+			if err := pe.repo.UpdateSource(context.Background(), pe.src); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, err := pe.repo.Apply(context.Background(), pe.src, []Record{rec(1, readNow)}, readNow); err != nil {
+				t.Fatal(err)
+			}
+			pe.clock.Advance(8 * 24 * time.Hour)
+			pe.setShell(answer(tc.lines(dir+"/a.log", dir+"/b.log")...))
+			pe.run()
+			if got := pe.signatures()[0].Status == StatusResolved; got != tc.resolved {
+				t.Errorf("resolved = %v, want %v", got, tc.resolved)
+			}
+		})
+	}
+}

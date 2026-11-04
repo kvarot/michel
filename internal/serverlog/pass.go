@@ -292,7 +292,8 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
-		if err := p.readSource(ctx, client, src, o, &res); err != nil {
+		read, err := p.readSource(ctx, client, src, o, &res)
+		if err != nil {
 			reason := reasonOf(err)
 			if res.Reason == "" {
 				res.Reason = reason
@@ -303,8 +304,12 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 			}
 			continue
 		}
-		res.Read++
-		readIDs = append(readIDs, src.ID)
+		if read.opened {
+			res.Read++
+		}
+		if read.whole {
+			readIDs = append(readIDs, src.ID)
+		}
 	}
 	// The read happened whatever comes next: what fails from here on is said in
 	// the log, and does not count as "not reading".
@@ -312,8 +317,8 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 		slog.Warn("serverlog: the alerts of a log read could not be completed", "target", t.ID, "err", err)
 	}
 	// A missing occurrence is no proof after a gap, but the delay is the user's
-	// and the record is "resolved", never "fixed". Only the sources read well can
-	// say it: one that failed, or was not read, keeps its errors as they are.
+	// and the record is "resolved", never "fixed". Only the sources seen entire can
+	// say it: one that failed, was read in part or not at all keeps its errors.
 	if _, err := d.Repo.Resolve(ctx, t.ID, now, readIDs); err != nil && ctx.Err() == nil {
 		slog.Warn("serverlog: cannot mark the log errors as resolved", "target", t.ID, "err", err)
 	}
@@ -341,10 +346,10 @@ type candidate struct {
 	item AlertItem
 }
 
-func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o FilterOptions, res *PassResult) error {
+func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o FilterOptions, res *PassResult) (readOutcome, error) {
 	cursors, err := p.d.Repo.Cursors(ctx, src.ID)
 	if err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	lastRead := latestRead(cursors)
 	out, next, err := Read(ctx, c, src, cursors, o, p.st.ReadTimeout, p.now)
@@ -352,11 +357,11 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 		if ctx.Err() == nil {
 			p.audit(ctx, "failed", map[string]any{"source": src.ID, "reason": reasonOf(err)})
 		}
-		return err
+		return readOutcome{}, err
 	}
 	fresh, reopened, spiked, err := p.d.Repo.Apply(ctx, src, out.Records, p.d.now())
 	if err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	for _, r := range out.Records {
 		id := SignatureID(src.ID, r.Level, r.Type, r.Location, r.Channel)
@@ -369,7 +374,7 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 	// queued before anything else can fail.
 	p.queue(ctx, src, fresh, reopened, spiked, lastRead)
 	if err := p.d.Repo.SaveCursors(ctx, next); err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	// Files that are gone, and the placeholder of an activation, leave their
 	// positions only when the answer is whole: a cut list (too many files) or a
@@ -382,21 +387,21 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 		}
 		keep = append(keep, out.Unseen...)
 		if err := p.d.Repo.PruneCursors(ctx, src.ID, keep); err != nil {
-			return err
+			return readOutcome{}, err
 		}
 	}
 	// A pass that opened no file (all unseen, or nothing matched) moves no date: the
 	// page must not show a fresh read where nothing was read.
 	if len(out.Files) > 0 {
 		if err := p.d.Repo.TouchCursors(ctx, src.ID, p.now, out.Unseen); err != nil {
-			return err
+			return readOutcome{}, err
 		}
 	}
 	if err := p.notes(ctx, src, out, cursors, lastRead); err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	if err := p.d.Repo.SetUnseen(ctx, src.ID, out.UnseenCause, p.now); err != nil {
-		return err
+		return readOutcome{}, err
 	}
 	res.Records += len(out.Records)
 	res.Rejected += out.Rejected
@@ -405,14 +410,46 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 	// and the list of what is unseen. What remains is to say that it failed.
 	if err := sourceUnread(out); err != nil {
 		p.audit(ctx, "failed", map[string]any{"source": src.ID, "reason": reasonOf(err)})
-		return err
+		return readOutcome{}, err
 	}
 	p.audit(ctx, "ok", map[string]any{
 		"source": src.ID, "from": ts(lastRead), "to": ts(p.now),
 		"volume": bytesRead(out, cursors), "skipped": skippedBytes(out), "records": len(out.Records),
 		"occurrences": occurrences(out), "rejected": out.Rejected, "fingerprint": fingerprint(out.Records),
 	})
-	return nil
+	return readOutcome{opened: opened(out), whole: wholeRead(out)}, nil
+}
+
+// readOutcome says how well a source that did not fail was read. opened: a file
+// of it was really opened. whole: it was seen entire, so that what is missing
+// from it is gone (see wholeRead).
+type readOutcome struct{ opened, whole bool }
+
+// opened says whether a file of the answer was really opened: an F line with no
+// U line. An absent file, a link or a folder opens nothing.
+func opened(out Output) bool {
+	for _, f := range out.Files {
+		if _, unseen := out.UnseenCause[f.File]; !unseen {
+			return true
+		}
+	}
+	return false
+}
+
+// wholeRead says whether a source was seen entire: a file opened, none refused
+// (rights, a tool, another failure), the list of files not cut and no part of a
+// log skipped by the cap. Only then does the absence of an error mean anything.
+func wholeRead(out Output) bool {
+	if !opened(out) || out.TooManyFiles || skippedBytes(out) > 0 {
+		return false
+	}
+	for _, cause := range out.UnseenCause {
+		switch cause {
+		case CauseDenied, CauseTools, CauseOther:
+			return false
+		}
+	}
+	return true
 }
 
 // sourceUnread says why a source failed although the filter ran well: no file of
