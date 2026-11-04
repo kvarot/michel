@@ -1500,3 +1500,66 @@ func TestPassFailedConnectionNamesNoSource(t *testing.T) {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
 }
+
+// A source that fails keeps its errors as they are, but the others of the server
+// are resolved all the same, so that an error of theirs that returns is told as
+// back. A source not read in the pass resolves nothing.
+func TestResolveGoesPerSource(t *testing.T) {
+	pe := newPassEnv(t, target.EnvProd, FormatMonolog)
+	ctx := context.Background()
+	var deny atomic.Bool
+	src2, file2 := twoSources(t, pe, &deny)
+	off, err := pe.repo.AddSource(ctx, Source{TargetID: pe.tgt.ID, Path: "/var/log/demo/off.log", Format: FormatMonolog, Active: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := pe.repo.Apply(ctx, off, []Record{rec(1, readNow)}, readNow); err != nil {
+		t.Fatal(err)
+	}
+	pe.activate()
+	pe.write(mono("CRITICAL", "PDOException", "Invoice.php", 42))
+	appendTo(t, file2, mono("CRITICAL", "PDOException", "Invoice.php", 42)+"\n")
+	pe.run()
+	status := func() map[string]Status {
+		out := map[string]Status{}
+		for _, g := range pe.signatures() {
+			out[g.SourceID] = g.Status
+		}
+		return out
+	}
+	if got := status(); len(got) != 3 {
+		t.Fatalf("signatures = %v", got)
+	}
+	// Eight days on, the second source cannot be read.
+	pe.clock.Advance(8 * 24 * time.Hour)
+	deny.Store(true)
+	if _, err := Pass(ctx, pe.deps, pe.tgt.ID); err == nil {
+		t.Fatal("the pass did not fail")
+	}
+	got := status()
+	if got[pe.src.ID] != StatusResolved {
+		t.Errorf("the source read: status = %s", got[pe.src.ID])
+	}
+	if got[src2.ID] == StatusResolved {
+		t.Error("the source that failed was resolved: it was not seen")
+	}
+	if got[off.ID] == StatusResolved {
+		t.Error("a source not read was resolved")
+	}
+	// The error of the source read comes back while the other still fails: told.
+	pe.write(mono("CRITICAL", "PDOException", "Invoice.php", 42))
+	pe.clock.Advance(time.Minute)
+	if _, err := Pass(ctx, pe.deps, pe.tgt.ID); err == nil {
+		t.Fatal("the pass did not fail")
+	}
+	if told := pe.alerts.ofKind(AlertReopened); len(told) != 1 {
+		t.Errorf("alerts = %v", pe.alerts.kinds())
+	}
+	// The other one is read again: nothing was lost, its errors resolve now.
+	deny.Store(false)
+	pe.clock.Advance(8 * 24 * time.Hour)
+	pe.run()
+	if got := status(); got[src2.ID] != StatusResolved {
+		t.Errorf("after the read: status = %s", got[src2.ID])
+	}
+}

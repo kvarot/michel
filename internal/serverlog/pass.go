@@ -235,7 +235,9 @@ const gapFloor = 30 * time.Minute
 //
 // A failing read (connection, filter, cap on the answer) makes the pass fail
 // after the other sources were read: the failed source keeps its positions and
-// is read again next time. PassResult.Reason then names the cause.
+// is read again next time. PassResult.Reason then names the cause, and Failed
+// the sources. The sources that were read well resolve their old errors all the
+// same; the one that failed keeps its errors as they are.
 func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 	t, err := d.Targets.Get(ctx, targetID)
 	if err != nil {
@@ -284,6 +286,7 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 	p := &onePass{d: d, t: t, st: st, now: now, texts: map[string]string{}, counts: map[string]int64{}}
 	var res PassResult
 	var firstErr error
+	var readIDs []string
 	for _, src := range sources {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
@@ -300,21 +303,20 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 			continue
 		}
 		res.Read++
+		readIDs = append(readIDs, src.ID)
 	}
 	// The read happened whatever comes next: what fails from here on is said in
 	// the log, and does not count as "not reading".
 	if err := p.alert(ctx, &res); err != nil && ctx.Err() == nil {
 		slog.Warn("serverlog: the alerts of a log read could not be completed", "target", t.ID, "err", err)
 	}
-	if firstErr != nil {
-		return res, firstErr
-	}
 	// A missing occurrence is no proof after a gap, but the delay is the user's
-	// and the record is "resolved", never "fixed".
-	if _, err := d.Repo.Resolve(ctx, t.ID, now); err != nil && ctx.Err() == nil {
+	// and the record is "resolved", never "fixed". Only the sources read well can
+	// say it: one that failed, or was not read, keeps its errors as they are.
+	if _, err := d.Repo.Resolve(ctx, t.ID, now, readIDs); err != nil && ctx.Err() == nil {
 		slog.Warn("serverlog: cannot mark the log errors as resolved", "target", t.ID, "err", err)
 	}
-	return res, nil
+	return res, firstErr
 }
 
 // onePass is the state of one pass over the sources of a server.
