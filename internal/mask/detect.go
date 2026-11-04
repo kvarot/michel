@@ -161,6 +161,8 @@ type match struct {
 	kind       Kind
 	// strong is the judgement of isStrong, true if any match merged here is.
 	strong bool
+	// tail says this is a later literal of a chain: hidden, but not a secret of its own.
+	tail bool
 }
 
 func rank(k Kind) int {
@@ -178,6 +180,7 @@ func rank(k Kind) int {
 func find(s, tokenPrefix string) []match {
 	var all []match
 	for _, d := range detectors {
+		covered := 0 // where the last chain of this detector ended: never read twice
 		for _, loc := range d.re.FindAllStringSubmatchIndex(s, -1) {
 			a, b := loc[0], loc[1]
 			unquoted := false
@@ -191,7 +194,9 @@ func find(s, tokenPrefix string) []match {
 						// The last group of valueExpr is the value without quotes.
 						unquoted = 2*g+3 >= len(loc)
 						if d.concat && g-d.skip <= 3 {
-							tails = chainTails(s, b+1)
+							if b+1 >= covered {
+								tails, covered = chainTails(s, b+1)
+							}
 						}
 						break
 					}
@@ -215,9 +220,9 @@ func find(s, tokenPrefix string) []match {
 			for _, t := range tails {
 				value += s[t[0]:t[1]]
 			}
-			all = append(all, match{a, b, d.kind, isStrong(d.kind, value, unquoted)})
+			all = append(all, match{a, b, d.kind, isStrong(d.kind, s[a:b], unquoted) || isStrong(d.kind, value, unquoted), false})
 			for _, t := range tails {
-				all = append(all, match{t[0], t[1], d.kind, false})
+				all = append(all, match{t[0], t[1], d.kind, false, true})
 			}
 		}
 	}
@@ -228,6 +233,7 @@ func find(s, tokenPrefix string) []match {
 			last := &merged[n-1]
 			last.end = max(last.end, m.end)
 			last.strong = last.strong || m.strong
+			last.tail = last.tail && m.tail
 			if rank(m.kind) < rank(last.kind) {
 				last.kind = m.kind
 			}
@@ -281,7 +287,7 @@ func ScanFiles(root string, rel []string) []Hit {
 		}
 		text := string(data)
 		for _, m := range find(text, "") {
-			if m.kind == KindAbsPath {
+			if m.kind == KindAbsPath || m.tail {
 				continue
 			}
 			hits = append(hits, Hit{File: r, Line: 1 + strings.Count(text[:m.start], "\n"), Kind: m.kind, Strong: m.strong})
@@ -299,56 +305,141 @@ func mustRel(base, target string) string {
 	return r
 }
 
-// maxChain bounds how far a chain of literals is followed.
+// maxChain bounds how far a chain of literals is read before the rest of its
+// line is hidden whole.
 const maxChain = 4096
 
 // chainTails finds the literals joined, after a quoted value that ends just
-// before pos, by a dot: 'abc' . $x . "def". When the next sign is a dot (not
-// ".=") it reads on to the end of the statement or of the argument (a ";" or a
-// "," outside any bracket, or the bracket that closes the call), skipping the
-// strings, and returns the inside of every non-empty literal met. A literal
-// is hidden inside its own quotes, so the line stays balanced whatever the
-// quotes are. A line comment or a heredoc in the chain is not understood.
-func chainTails(s string, pos int) [][2]int {
+// before pos, by dots: 'abc' . $x . "def". It returns the inside of every
+// non-empty literal of the chain, and where it stopped, so no position is read
+// twice. A chain ends at ";" or "," outside a bracket, at the bracket that
+// closes the call, at "?>", at a dot that is not a PHP concatenation, and at a
+// line end unless the line ends with a dot or the next one starts with one.
+// Comments are skipped. A string over several lines or a heredoc ends the
+// chain unread. When the limit cuts a chain, the rest of that line is returned
+// as one span, quotes included: a leak is worse than a masked line.
+func chainTails(s string, pos int) (tails [][2]int, end int) {
+	started, depth, last := false, 0, byte(0)
+	limit := min(len(s), pos+maxChain)
 	i := pos
-	for i < len(s) && strings.ContainsRune(" \t\r\n", rune(s[i])) {
-		i++
-	}
-	if i >= len(s) || s[i] != '.' || (i+1 < len(s) && s[i+1] == '=') {
-		return nil
-	}
-	var tails [][2]int
-	depth := 0
-	limit := min(len(s), i+maxChain)
 	for ; i < limit; i++ {
-		switch c := s[i]; c {
-		case '\'', '"':
-			j := i + 1
-			for j < len(s) && s[j] != c && s[j] != '\n' {
-				if s[j] == '\\' {
-					j++
-				}
-				j++
+		c := s[i]
+		if j := commentEnd(s, i); j > i {
+			i = j - 1
+			continue
+		}
+		switch {
+		case c == '\'' || c == '"':
+			if !started {
+				return nil, pos
 			}
-			if j >= len(s) || s[j] != c {
-				return tails
+			j := stringEnd(s, i)
+			if j < 0 {
+				return tails, i
 			}
 			if j > i+1 {
 				tails = append(tails, [2]int{i + 1, j})
 			}
-			i = j
-		case '(', '[', '{':
+			i, last = j, c
+		case c == '\n' && depth == 0:
+			if started && last != '.' && nextSign(s, i) != '.' {
+				return tails, i
+			}
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
+		case c == '.' && depth == 0:
+			if !dotContinues(s, i) {
+				return tails, i
+			}
+			started, last = true, c
+		case !started:
+			return nil, pos
+		case c == '?' && i+1 < len(s) && s[i+1] == '>':
+			return tails, i
+		case c == '(' || c == '[' || c == '{':
 			depth++
-		case ')', ']', '}':
-			depth--
-			if depth < 0 {
-				return tails
+			last = c
+		case c == ')' || c == ']' || c == '}':
+			if depth--; depth < 0 {
+				return tails, i
 			}
-		case ';', ',':
-			if depth == 0 {
-				return tails
-			}
+			last = c
+		case (c == ';' || c == ',') && depth == 0:
+			return tails, i
+		default:
+			last = c
 		}
 	}
-	return tails
+	if started && i >= limit && limit < len(s) {
+		eol := strings.IndexByte(s[limit:], '\n')
+		if eol < 0 {
+			eol = len(s) - limit
+		}
+		if i < limit+eol {
+			tails = append(tails, [2]int{i, limit + eol})
+			i = limit + eol
+		}
+	}
+	return tails, i
+}
+
+// commentEnd returns the index after the comment that starts at i, or i when
+// none starts there. An unclosed block comment runs to the end of the text.
+func commentEnd(s string, i int) int {
+	switch {
+	case strings.HasPrefix(s[i:], "/*"):
+		if k := strings.Index(s[i+2:], "*/"); k >= 0 {
+			return i + 2 + k + 2
+		}
+		return len(s)
+	case strings.HasPrefix(s[i:], "//"), s[i] == '#':
+		if k := strings.IndexByte(s[i:], '\n'); k >= 0 {
+			return i + k
+		}
+		return len(s)
+	}
+	return i
+}
+
+// stringEnd returns the index of the quote that closes the string opened at i,
+// on the same line, or -1.
+func stringEnd(s string, i int) int {
+	for j := i + 1; j < len(s) && s[j] != '\n'; j++ {
+		switch s[j] {
+		case '\\':
+			j++
+		case s[i]:
+			return j
+		}
+	}
+	return -1
+}
+
+// nextSign is the next byte after i that is not blank, with comments skipped.
+func nextSign(s string, i int) byte {
+	for i++; i < len(s); i++ {
+		if j := commentEnd(s, i); j > i {
+			i = j - 1
+		} else if !strings.ContainsRune(" \t\r\n", rune(s[i])) {
+			return s[i]
+		}
+	}
+	return 0
+}
+
+// dotContinues says the dot at i joins a chain in PHP: ".=" does not, and a
+// method call written 'abc'.encode() (a name and a parenthesis, no blank around
+// the dot) does not. A variable, a quote or a parenthesis does; a name does if
+// a blank stands beside the dot.
+func dotContinues(s string, i int) bool {
+	if i+1 >= len(s) || s[i+1] == '=' {
+		return false
+	}
+	blank := strings.ContainsRune(" \t", rune(s[i+1])) || (i > 0 && strings.ContainsRune(" \t", rune(s[i-1])))
+	switch c := nextSign(s, i); {
+	case c == '$' || c == '\'' || c == '"' || c == '(' || c == '\\':
+		return true
+	case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+		return blank
+	}
+	return false
 }

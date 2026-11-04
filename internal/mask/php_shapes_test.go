@@ -3,6 +3,7 @@ package mask
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // secretValue is a fictional password with the shape of a real one.
@@ -90,6 +91,17 @@ var phpShapeCases = []struct {
 	{"mysqli comment with an apostrophe", "$db = new mysqli(\n    'h', // it's the host\n    'u', # the user's name\n    'S3cr3t!Demo-2024'\n);\n", true, true, true},
 	{"mysqli three levels of parentheses", "$db = new mysqli(f(g(h($a))), 'u', 'S3cr3t!Demo-2024', 'd');\n", true, true, true},
 	{"mysqli four levels of parentheses", "$db = new mysqli(f(g(h(i($a)))), 'u', 'S3cr3t!Demo-2024', 'd');\n", false, false, false},
+	// Fix round 3: comments in a chain, where a chain ends, hold, long chains.
+	{"chain comment block with apostrophe", "$c['password'] = '" + secretValue + "' . /* it's */ 'Zz9#knLm2Qw';\n", true, true, true},
+	{"chain comment line with apostrophe", "$c['password'] = '" + secretValue + "' . // it's here\n    'Zz9#knLm2Qw';\n", true, true, true},
+	{"chain comment hash before the dot", "$c['password'] = '" + secretValue + "' # it's\n    . 'Zz9#knLm2Qw';\n", true, true, true},
+	{"mysqli chain comment", "$db = new mysqli($h, $u, '" + secretValue + "' . /* it's */ 'Zz9#knLm2Qw', 'd');\n", true, true, true},
+	{"keeps python method", "d['password'] = 'abc'.encode()\nprint(\"keep me\")\nx = 'keep me too'\n", true, false, false},
+	{"keeps js method on next line", "cfg['token'] = 'abc'\n.trim()\nz = \"keep me\"\n", true, false, false},
+	{"keeps after a php close tag", "<?php $c['password'] = '" + secretValue + "' . 'x' ?>\n<p class=\"keep me\">\n", true, true, true},
+	{"keeps after a statement without semicolon", "$c['password'] = '" + secretValue + "' . $a\n$d['keep me password'] = 'p2' . $b\n$e = \"keep me\";\n", true, true, true},
+	{"chain with a harmless literal keeps the hold", "$c['password'] = '" + secretValue + "' . 'http://x//y' . 'Zz9#knLm2Qw';\n", true, true, true},
+	{"chain longer than the limit", "$c['password'] = '" + secretValue + "'" + strings.Repeat(" . $x", 900) + " . 'Zz9#knLm2Qw';\n", true, true, true},
 }
 
 func TestPHPArraySecretsAndConnectionPasswords(t *testing.T) {
@@ -109,6 +121,9 @@ func TestPHPArraySecretsAndConnectionPasswords(t *testing.T) {
 			out := New().Mask(c.text)
 			if c.hit && !quotesBalanced(out) {
 				t.Errorf("quotes no longer balanced: %q", out)
+			}
+			if strings.HasPrefix(c.name, "keeps") && !strings.Contains(out, "keep me") {
+				t.Errorf("code after the chain was masked: %q", out)
 			}
 			if strings.HasPrefix(c.name, "chain stops") && !strings.Contains(out, "Zz9#knLm2Qw") {
 				t.Errorf("code after the statement was masked: %q", out)
@@ -131,6 +146,17 @@ func TestPHPArraySecretsAndConnectionPasswords(t *testing.T) {
 // quotesBalanced says every quote of the line that is not escaped, or inside a
 // comment, has its pair: the masked line must still close its strings.
 func quotesBalanced(s string) bool {
+	for {
+		i := strings.Index(s, "/*")
+		if i < 0 {
+			break
+		}
+		k := strings.Index(s[i:], "*/")
+		if k < 0 {
+			break
+		}
+		s = s[:i] + s[i+k+2:]
+	}
 	for _, line := range strings.Split(s, "\n") {
 		if i := strings.Index(line, "//"); i >= 0 {
 			line = line[:i]
@@ -146,4 +172,29 @@ func quotesBalanced(s string) bool {
 		}
 	}
 	return true
+}
+
+// A chain of three literals is one secret: one hit, one count.
+func TestAChainIsOneHit(t *testing.T) {
+	text := "$c['password'] = '" + secretValue + "' . $x . 'Zz9#knLm2Qw' . 'Aa1nBb2n';\n"
+	if hits := scanOne(t, "a.php", text); len(hits) != 1 {
+		t.Errorf("hits = %+v, want one", hits)
+	}
+	m := New()
+	m.Mask(text)
+	if n := m.Counts()[string(KindAssignment)]; n != 1 {
+		t.Errorf("count = %d, want 1", n)
+	}
+}
+
+// A dense file near the size cap costs a linear time: no position is read twice.
+func TestDenseChainsAreLinear(t *testing.T) {
+	for _, unit := range []string{"$a['password']='x'.", "$a['password']='x1'.\"", "'x'. "} {
+		text := strings.Repeat(unit, 1_000_000/len(unit))
+		start := time.Now()
+		New().Mask(text)
+		if d := time.Since(start); d > 3*time.Second {
+			t.Errorf("%q: %v for %d bytes", unit, d, len(text))
+		}
+	}
 }
