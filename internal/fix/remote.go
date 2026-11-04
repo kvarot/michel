@@ -44,10 +44,14 @@ const (
 // schemeHTTPS is the scheme of a gitremote.Remote that goes through the proxy.
 const schemeHTTPS = "https"
 
+// GitRepoUnreadable is GitState.Repo when Michel could not read the folder, for
+// instance a partial clone: an answer can be saved even so.
+const GitRepoUnreadable = "unreadable"
+
 // GitState is what the page shows of a project's remote: read without network and
 // without writing, each time.
 type GitState struct {
-	Repo          string // workcopy.RepoNone, RepoEmpty or RepoOK
+	Repo          string // workcopy.RepoNone, RepoEmpty, RepoOK, or GitRepoUnreadable
 	Answer        string // "", or the stored answer
 	Attached      bool   // yes, for the address the project holds now
 	Changed       bool   // yes, for an address the project no longer holds
@@ -93,6 +97,15 @@ func (s *Sessions) gitLock(projectID string) *sync.Mutex {
 		s.gitLocks[projectID] = l
 	}
 	return l
+}
+
+// lockGitRules takes the lock of the network rules of Git services, which several
+// projects can share: from who uses a rule to the row that says so, one project at
+// a time. It stops only the answers of michel serve and the same process: a command
+// line in another process is not held by it.
+func (s *Sessions) lockGitRules() (unlock func()) {
+	s.gitRuleMu.Lock()
+	return s.gitRuleMu.Unlock
 }
 
 // GitBusy says whether a click or a check holds the project now.
@@ -167,26 +180,29 @@ func suggestion(reason string) string {
 }
 
 // ProjectGit reads how a project stands with its remote. It starts no click: no
-// network and no write, and it runs on each look at the page.
+// network and no write, and it runs on each look at the page. When the folder
+// cannot be read, the state beside the error still holds the stored answer.
 func ProjectGit(ctx context.Context, d Deps, p project.Project) (GitState, error) {
-	repoState, err := workcopy.RepoState(ctx, d.work(), p)
-	if err != nil {
-		return GitState{}, err
-	}
-	st := GitState{Repo: repoState, Reason: gitReasonNone, Suggested: GitNo}
+	st := GitState{Repo: GitRepoUnreadable, Reason: gitReasonNone, Suggested: GitNo}
 	row, answered, err := d.repo().GitAnswer(ctx, p.ID)
 	if err != nil {
-		return GitState{}, err
+		return st, err
 	}
 	if answered {
 		st.Answer = row.Answer
 	}
+	repoState, err := workcopy.RepoState(ctx, d.work(), p)
+	if err != nil {
+		return st, err
+	}
+	st.Repo = repoState
 	if repoState == workcopy.RepoNone {
 		return st, nil
 	}
 	read, err := d.readRemote(ctx, p)
 	if err != nil {
-		return GitState{}, err
+		st.Repo = GitRepoUnreadable
+		return st, err
 	}
 	st.Reason, st.Suggested = read.reason, suggestion(read.reason)
 	if read.usable() {
@@ -234,8 +250,8 @@ func (d Deps) updateState(ctx context.Context, p project.Project, read remoteRea
 // AnswerGit records the person's answer, on their click. A yes is for the address
 // the page showed (remoteID) and writes the network rule of its host; any other
 // answer takes back what a yes gave, and needs nothing of the folder: it must stay
-// possible whatever became of it. Same order as GiveConsentWith: the rule, the
-// reload, the row, the audit.
+// possible whatever became of it, and once saved it is answered as saved, even if
+// the folder cannot be read (Repo says GitRepoUnreadable).
 func AnswerGit(ctx context.Context, d Deps, p project.Project, answer, remoteID string) (GitState, error) {
 	if answer != GitYes && answer != GitNo && answer != GitUnknown {
 		return GitState{}, fmt.Errorf("the answer %q is not one Michel knows", answer)
@@ -250,46 +266,74 @@ func AnswerGit(ctx context.Context, d Deps, p project.Project, answer, remoteID 
 	if err != nil {
 		return GitState{}, err
 	}
-	return ProjectGit(ctx, d, p)
+	st, err := ProjectGit(ctx, d, p)
+	if err != nil && answer != GitYes {
+		return GitState{Repo: GitRepoUnreadable, Answer: answer, Reason: gitReasonNone, Suggested: answer}, nil
+	}
+	return st, err
 }
 
-// storeGitAnswer does the writing of AnswerGit, under the project's lock. A reload
-// reaches the policy in live, the copy the caller goes on with.
+// storeGitAnswer does the writing of AnswerGit, under the project's lock and the
+// lock of the rules. A reload reaches the policy in live, the copy the caller goes
+// on with.
+//
+// A yes goes as GiveConsentWith: the rule, the reload, the row, the audit, and a
+// failure takes back a rule it wrote, which nobody would own. Any other answer
+// stops the clicks first, since they read only the row: the row, then the rule,
+// then the final row. If the rule cannot go, the row still holds it, so that saying
+// it again finishes the work.
 func (d Deps) storeGitAnswer(ctx context.Context, live *Deps, p project.Project, answer, remoteID string) error {
+	unlockRules := d.sessions().lockGitRules()
+	defer unlockRules()
+	ev := map[string]any{"project_id": p.ID, "host": "", "provider": ""}
+	failed := func(err error) error {
+		d.auditGitRefusal(ctx, auditGitAnswer, p.Name, ev, err)
+		return err
+	}
 	row := GitAnswerRow{ProjectID: p.ID, Answer: answer}
 	prev, _, err := d.repo().GitAnswer(ctx, p.ID)
 	if err != nil {
-		return err
+		return failed(err)
 	}
-	ev := map[string]any{"project_id": p.ID, "host": prev.Host, "provider": prev.Provider}
-	if answer == GitYes {
+	ev["host"], ev["provider"] = prev.Host, prev.Provider
+	wrote := false
+	switch {
+	case answer == GitYes:
 		read, err := d.readYes(ctx, p, remoteID)
 		if read.usable() {
 			ev["host"], ev["provider"] = read.host(), string(read.remote.Provider)
 		}
 		if err != nil {
-			d.auditGitRefusal(ctx, auditGitAnswer, p.Name, ev, err)
-			return err
+			return failed(err)
 		}
 		row.RemoteName, row.URL, row.Host, row.Provider = read.name, read.remote.Address(), read.remote.Host, string(read.remote.Provider)
 		if read.remote.Provider != gitremote.Local {
-			added, err := live.addGitRule(read.remote.Host)
+			wrote, err = live.addGitRule(read.remote.Host)
 			if err != nil {
-				return err
+				return failed(err)
 			}
-			row.RuleWritten = added || (prev.RuleWritten && prev.Host == read.remote.Host)
+			row.RuleWritten = wrote || (prev.RuleWritten && prev.Host == read.remote.Host)
+		}
+	case prev.RuleWritten:
+		stop := GitAnswerRow{ProjectID: p.ID, Answer: answer, Host: prev.Host, Provider: prev.Provider, RuleWritten: true}
+		if err := d.repo().SetGitAnswer(ctx, stop); err != nil {
+			return failed(err)
 		}
 	}
 	if prev.RuleWritten && prev.Host != row.Host {
-		if err := live.releaseGitRule(ctx, p.ID, prev.Host); err != nil {
-			return err
-		}
+		err = live.releaseGitRule(ctx, p.ID, prev.Host)
 	}
-	if err := d.repo().SetGitAnswer(ctx, row); err != nil {
-		return err
+	if err == nil {
+		err = d.repo().SetGitAnswer(ctx, row)
+	}
+	if err != nil {
+		if wrote {
+			err = errors.Join(err, live.dropGitRule(row.Host))
+		}
+		return failed(err)
 	}
 	ev["outcome"], ev["rule_written"], ev["author"] = answer, row.RuleWritten, d.actor()
-	if err := d.record(ctx, auditGitAnswer, p.Name, "ok", ev); err != nil {
+	if err := d.recordDone(ctx, auditGitAnswer, p.Name, "ok", ev); err != nil {
 		return fmt.Errorf("the answer is recorded, but the audit log could not record it: %w", err)
 	}
 	return nil
@@ -358,10 +402,38 @@ func (d *Deps) releaseGitRule(ctx context.Context, projectID, host string) error
 	return nil
 }
 
+// dropGitRule takes back the rule a yes that failed has just written.
+func (d *Deps) dropGitRule(host string) error {
+	if _, err := policy.RemoveAllowRules(d.PolicyPath, policy.AllowRule{Host: host, Purpose: policy.PurposeProjectGit}); err != nil {
+		return err
+	}
+	return d.reload()
+}
+
+// ReleaseProjectRule gives back the rule Michel wrote for a project about to be
+// purged, before anything else of it goes. Once it has succeeded the row owns no
+// rule, so calling it again touches nothing. An error leaves the row owning it.
+func ReleaseProjectRule(ctx context.Context, d Deps, projectID string) error {
+	unlock := d.sessions().lockGitRules()
+	defer unlock()
+	row, ok, err := d.repo().GitAnswer(ctx, projectID)
+	if err != nil || !ok || !row.RuleWritten {
+		return err
+	}
+	if err := d.releaseGitRule(ctx, projectID, row.Host); err != nil {
+		return err
+	}
+	row.RuleWritten = false
+	return d.repo().SetGitAnswer(ctx, row)
+}
+
 // attached reads the agreement and the address again, at each click: an address
 // that is not the one agreed to stops everything. Nothing of git runs before the
-// agreement is read.
+// agreement is read, and a project that was removed sends nothing.
 func (d Deps) attached(ctx context.Context, p project.Project) (remoteRead, error) {
+	if !p.Active {
+		return remoteRead{}, ErrGitNotAttached
+	}
 	if !workcopy.IsGitRepo(p.Path) {
 		return remoteRead{}, ErrGitNoRepo
 	}
@@ -476,16 +548,19 @@ func PushFix(ctx context.Context, d Deps, attemptID string) (PushOutcome, error)
 	ev["outcome"], ev["author"] = res.Outcome, d.actor()
 	out := PushOutcome{Outcome: res.Outcome, Provider: string(read.remote.Provider), Branch: branch,
 		MergeURL: gitremote.MergeURL(read.remote, branch), At: d.repo().now()}
-	if err := d.repo().RecordPush(ctx, FixPush{AttemptID: a.ID, CommitSHA: prop.CommitSHA, Host: read.host(), PushedAt: out.At}); err != nil {
-		return out, err
+	// The branch left: the audit comes first and neither depends on the click's
+	// context, so that a failure of one does not hide the send from the other.
+	auditErr := d.recordDone(ctx, auditGitPush, a.ID, "ok", ev)
+	if auditErr != nil {
+		auditErr = fmt.Errorf("the branch was sent, but the audit log could not record it: %w", auditErr)
 	}
-	if first, ok, err := d.repo().Push(ctx, a.ID); err == nil && ok {
+	done, cancel := d.afterWrite(ctx)
+	defer cancel()
+	rowErr := d.repo().RecordPush(done, FixPush{AttemptID: a.ID, CommitSHA: prop.CommitSHA, Host: read.host(), PushedAt: out.At})
+	if first, ok, err := d.repo().Push(done, a.ID); err == nil && ok {
 		out.At = first.PushedAt
 	}
-	if err := d.record(ctx, auditGitPush, a.ID, "ok", ev); err != nil {
-		return out, fmt.Errorf("the branch was sent, but the audit log could not record it: %w", err)
-	}
-	return out, nil
+	return out, errors.Join(auditErr, rowErr)
 }
 
 // UpdateProject brings the folder up to date with the remote it agreed to, on the
@@ -516,7 +591,7 @@ func UpdateProject(ctx context.Context, d Deps, p project.Project) (workcopy.Upd
 		return refuse(err)
 	}
 	ev["outcome"], ev["commit"], ev["author"] = res.Outcome, res.To, d.actor()
-	if err := d.record(ctx, auditGitUpdate, p.Name, "ok", ev); err != nil {
+	if err := d.recordDone(ctx, auditGitUpdate, p.Name, "ok", ev); err != nil {
 		return res, fmt.Errorf("the folder was updated, but the audit log could not record it: %w", err)
 	}
 	return res, nil
@@ -537,7 +612,20 @@ func (d Deps) auditGitRefusal(ctx context.Context, action, target string, ev map
 		result, outcome = "error", "internal"
 	}
 	ev["outcome"], ev["author"] = outcome, d.actor()
-	_ = d.record(ctx, action, target, result, ev)
+	_ = d.recordDone(ctx, action, target, result, ev)
+}
+
+// afterWrite is the context of what is recorded after a click: a click that ended
+// while it ran, a server shutting down for instance, still leaves its trace.
+func (d Deps) afterWrite(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), d.recordTimeout())
+}
+
+// recordDone is record under afterWrite.
+func (d Deps) recordDone(ctx context.Context, action, target, result string, ev map[string]any) error {
+	done, cancel := d.afterWrite(ctx)
+	defer cancel()
+	return d.record(done, action, target, result, ev)
 }
 
 // GitServiceFailure tells whether a class of a GitFailure is an answer, or an
@@ -556,7 +644,7 @@ func gitPath(lang i18n.Lang, err error) string {
 	if !errors.As(err, &gf) || gf.Path == "" {
 		return ""
 	}
-	return " " + i18n.T(lang, "api.git.in_the_way", gf.Path)
+	return " " + i18n.T(lang, "api.git.in_the_way", workcopy.FailureName(gf.Path))
 }
 
 // ExplainHint is the advice that goes with a refusal of a click, in lang, naming

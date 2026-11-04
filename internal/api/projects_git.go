@@ -38,6 +38,13 @@ type GitUpdateView struct {
 	Why     string `json:"why"`
 }
 
+// GitViewRefused is the refusal of GET /projects/{name}/git: the folder cannot be
+// read, and the person can still see and change what they answered.
+type GitViewRefused struct {
+	FixErrorBody
+	Answer string `json:"answer"`
+}
+
 // GitAnswerRequest is the body of POST /projects/{name}/git/answer. RemoteID is the
 // address shown when the person said yes.
 type GitAnswerRequest struct {
@@ -73,17 +80,26 @@ func gitView(st fix.GitState) GitView {
 // what the service answered or did not answer, never 401 nor 403, which the page
 // takes for a wrong token. Any other error is a 500 without its cause.
 func (s *server) gitRefused(w http.ResponseWriter, r *http.Request, lang i18n.Lang, err error) {
-	key := fix.ErrorKey(err)
-	if key == "" {
+	status, body, known := gitRefusal(lang, err)
+	if !known {
 		s.internal(w, r)
 		return
 	}
-	status := http.StatusConflict
+	writeJSON(w, status, body)
+}
+
+// gitRefusal is the status and body of a refusal; known is false for any other error.
+func gitRefusal(lang i18n.Lang, err error) (status int, body FixErrorBody, known bool) {
+	key := fix.ErrorKey(err)
+	if key == "" {
+		return 0, FixErrorBody{}, false
+	}
+	status = http.StatusConflict
 	var gf *workcopy.GitFailure
 	if errors.As(err, &gf) && fix.GitServiceFailure(gf.Class) {
 		status = http.StatusBadGateway
 	}
-	writeJSON(w, status, FixErrorBody{Error: fix.Explain(lang, err), Hint: fix.ExplainHint(lang, err), Code: key})
+	return status, FixErrorBody{Error: fix.Explain(lang, err), Hint: fix.ExplainHint(lang, err), Code: key}, true
 }
 
 // gitProject reads the fix service's collaborators and the project of the route.
@@ -116,7 +132,11 @@ func (s *server) projectGit(w http.ResponseWriter, r *http.Request) {
 	}
 	st, err := fix.ProjectGit(r.Context(), d, p)
 	if err != nil {
-		s.gitRefused(w, r, lang, err)
+		if status, body, known := gitRefusal(lang, err); known {
+			writeJSON(w, status, GitViewRefused{FixErrorBody: body, Answer: st.Answer})
+			return
+		}
+		s.internal(w, r)
 		return
 	}
 	writeJSON(w, http.StatusOK, gitView(st))
@@ -141,7 +161,12 @@ func (s *server) projectGitAnswer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	st, err := fix.AnswerGit(r.Context(), d, p, req.Answer, req.RemoteID)
+	// The answer changes a rule and a row together: it ends even if the page goes
+	// away, like fixApprove.
+	extend(w)
+	ctx, cancel := s.detached(r)
+	defer cancel()
+	st, err := fix.AnswerGit(ctx, d, p, req.Answer, req.RemoteID)
 	if err != nil {
 		s.gitRefused(w, r, lang, err)
 		return

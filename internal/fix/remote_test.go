@@ -1202,7 +1202,7 @@ func TestPartialCloneIsNamed(t *testing.T) {
 		t.Errorf("git went on: %q", spy.calls)
 	}
 	// Taking the agreement back stays possible.
-	if _, err := AnswerGit(ctx, f.d, f.proj, GitNo, ""); ErrorKey(err) != "api.git.partial_clone" {
+	if _, err := AnswerGit(ctx, f.d, f.proj, GitNo, ""); err != nil {
 		t.Errorf("no: %v", err)
 	}
 	if hasRule(t, f, "example.test") {

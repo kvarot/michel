@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/oklog/ulid/v2"
 
@@ -73,10 +74,20 @@ func failure(class string) *GitFailure { return &GitFailure{Class: class} }
 
 // notDefaultFailure carries two branch names read from a repository.
 func notDefaultFailure(current, def string) *GitFailure {
-	return &GitFailure{Class: classNotDefault, Current: failureName(current), Default: failureName(def)}
+	return &GitFailure{Class: classNotDefault, Current: FailureName(current), Default: FailureName(def)}
 }
 
-func failureName(s string) string {
+// FailureName makes a name read from a repository fit to show inside a sentence: on
+// one line, no invisible character that reorders the text, no quote that would close
+// the quotation (each replaced by "?", so that the name still looks altered), and cut.
+func FailureName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp), strings.ContainsRune("\"«»“”", r):
+			return '?'
+		}
+		return r
+	}, s)
 	s = scan.SanitizeText(s)
 	if r := []rune(s); len(r) > maxFailureName {
 		return string(r[:maxFailureName])

@@ -362,7 +362,7 @@ func (h home) checkReplacedSubmodules(ctx context.Context, d Deps, p project.Pro
 		}
 		entries, err := os.ReadDir(filepath.Join(p.Path, filepath.FromSlash(rel)))
 		if err != nil || len(entries) > 0 {
-			return &GitFailure{Class: classSubmodule, Path: failureName(rel)}
+			return &GitFailure{Class: classSubmodule, Path: FailureName(rel)}
 		}
 	}
 	return nil
@@ -374,7 +374,7 @@ func mergeFailure(stderr, stdout []byte) *GitFailure {
 	said := append(append([]byte{}, stderr...), stdout...)
 	switch {
 	case bytes.Contains(said, []byte("untracked working tree files")), bytes.Contains(said, []byte("lose untracked files")):
-		return &GitFailure{Class: classUntracked, Path: failureName(firstListedPath(said))}
+		return &GitFailure{Class: classUntracked, Path: FailureName(firstListedPath(said))}
 	case bytes.Contains(said, []byte("Not possible to fast-forward")):
 		return failure(classDiverged)
 	}

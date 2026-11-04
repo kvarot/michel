@@ -260,6 +260,8 @@ type Sessions struct {
 	proposing map[string]*sync.Mutex
 	// gitLocks are the locks of a click on a remote, per project.
 	gitLocks map[string]*sync.Mutex
+	// gitRuleMu is the lock of the network rules of Git services (lockGitRules).
+	gitRuleMu sync.Mutex
 	// The level 3 runner's memory (ApplyAutoServer) and the agents' package
 	// simulations, per attempt.
 	autoErr     map[string]string
@@ -1976,10 +1978,7 @@ func (d Deps) purge(ctx context.Context) error {
 // project.Repo.Purge.
 func PurgeProject(ctx context.Context, d Deps, projectID string) error {
 	// A rule that cannot be removed does not keep the files: said at the end.
-	row, ok, ruleErr := d.repo().GitAnswer(ctx, projectID)
-	if ruleErr == nil && ok && row.RuleWritten {
-		ruleErr = d.releaseGitRule(ctx, projectID, row.Host)
-	}
+	ruleErr := ReleaseProjectRule(ctx, d, projectID)
 	attempts, err := d.repo().ListAttempts(ctx, projectID, "")
 	if err != nil {
 		return err
