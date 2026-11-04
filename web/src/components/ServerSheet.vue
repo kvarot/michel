@@ -313,6 +313,7 @@
 
     <v-dialog v-model="consentDialog.open" max-width="520" scrollable persistent>
       <AiConsentDialog
+        kind="server"
         :project="consent ? consent.target.name : ''"
         :lines="consentDialog.lines"
         :switch-mode="consentDialog.switchMode"

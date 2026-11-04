@@ -3,17 +3,16 @@
     <v-card-title id="ai-consent-title" class="m-consent__title">{{ $t('fix.consent.title', { project }) }}</v-card-title>
     <v-card-text>
       <p v-for="k in view.plain" :key="k" class="m-voice m-consent__strict">{{ $t(k) }}</p>
-      <details class="m-consent__detail" :open="view.detailOpen || undefined">
+      <!-- Michel's technical wording about the protection setting only: the lines below are the consent. -->
+      <details v-if="switchMode" class="m-consent__detail" :open="view.detailOpen || undefined">
         <summary v-if="view.detailButton">{{ $t('fix.consent.detail') }}</summary>
-        <template v-if="switchMode">
-          <p class="m-voice m-consent__strict">{{ $t('fix.consent.strict_intro') }}</p>
-          <p class="m-consent__strict">{{ $t('fix.consent.strict_change') }}</p>
-        </template>
-        <p class="m-consent__intro">{{ $t('fix.consent.intro') }}</p>
-        <ul class="m-consent__lines">
-          <li v-for="(l, i) in lines" :key="`${l.what}|${l.host || ''}|${i}`" class="m-voice m-consent__line">{{ l.text }}</li>
-        </ul>
+        <p class="m-voice m-consent__strict">{{ $t('fix.consent.strict_intro') }}</p>
+        <p class="m-consent__strict">{{ $t('fix.consent.strict_change') }}</p>
       </details>
+      <p class="m-consent__intro">{{ $t('fix.consent.intro') }}</p>
+      <ul class="m-consent__lines">
+        <li v-for="(l, i) in lines" :key="`${l.what}|${l.host || ''}|${i}`" class="m-voice m-consent__line">{{ l.text }}</li>
+      </ul>
       <p v-if="error" class="m-consent__error" role="alert">{{ error }}</p>
     </v-card-text>
     <v-card-actions class="m-consent__actions m-consent__wrap">
@@ -38,6 +37,8 @@ export default {
   name: 'AiConsentDialog',
   props: {
     project: { type: String, default: '' },
+    // kind says whose consent it is: a project's (files of a copy go out) or a server's.
+    kind: { type: String, default: 'project' },
     // lines are ConsentLineView: {what, text, host?, purpose?}.
     lines: { type: Array, default: () => [] },
     // switchMode: the policy is strict_local; accepting also switches it to
@@ -49,7 +50,7 @@ export default {
   emits: ['accept', 'cancel'],
   computed: {
     view() {
-      return consentView({ switchMode: this.switchMode, advanced: !!this.$ui.advanced })
+      return consentView({ kind: this.kind, switchMode: this.switchMode, advanced: !!this.$ui.advanced, lines: this.lines })
     },
   },
 }
