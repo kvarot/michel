@@ -48,6 +48,11 @@ type ServerAttemptView struct {
 	// Backups are the copies of the server files kept on this computer, and
 	// whether each one still opens (the full view only).
 	Backups []BackupView `json:"backups,omitempty"`
+	// HandOver is set on a fix the user validated to run themselves, still
+	// waiting for them: "ready" when the server's settings now let Michel run
+	// the same scripts (the page offers one button for it), "settings" when
+	// they do not (the page says what to do).
+	HandOver string `json:"hand_over,omitempty"`
 }
 
 // ScriptsView is the apply and the undo script of a server fix. They hold
@@ -77,6 +82,7 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 	if err != nil && !errors.Is(err, target.ErrNotFound) {
 		return err
 	}
+	known := err == nil
 	user := t.User
 	sv := &ServerAttemptView{Target: TargetRef{ID: a.Work.Server.TargetID, Name: srvText("", t.Name)}, Steps: []StepView{}, BackupList: []string{}}
 	v.Project = sv.Target.Name
@@ -115,6 +121,12 @@ func (s *server) serverAttempt(ctx context.Context, v *AttemptView, a fix.Attemp
 		}
 		if prop.Scripts != nil {
 			sv.RunAsRoot = prop.Scripts.RunAsRoot
+		}
+		if a.State == fix.StateApproved && sv.Executor == string(target.ExecUser) && prop.Scripts != nil && known {
+			sv.HandOver = "settings"
+			if fix.MichelRuns(t, prop.Scripts.RunAsRoot) {
+				sv.HandOver = "ready"
+			}
 		}
 		sv.BackupList = srvTexts(user, fix.BackupList(*prop))
 		if sv.BackupList == nil {
@@ -460,6 +472,41 @@ func (s *server) fixResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := fix.ResolveUnknown(r.Context(), d, a.ID, fixActor); err != nil {
 		s.fixRefused(w, r, lang, err, nil)
+		return
+	}
+	s.answerAttempt(w, r, http.StatusOK, a.ID)
+}
+
+// fixHandOver is the user's click on « Michel lance ce script » for a fix
+// they validated to run themselves (R62): the same scripts, run by Michel
+// under a new approval of who runs them. hash is the fingerprint of the
+// approval being replaced.
+func (s *server) fixHandOver(w http.ResponseWriter, r *http.Request) {
+	lang, ok := s.requestLang(w, r)
+	if !ok {
+		return
+	}
+	var req FixApproveRequest
+	if !s.readJSONHint(w, r, &req, i18n.T(lang, "api.fix.approve_hint")) {
+		return
+	}
+	if strings.TrimSpace(req.Hash) == "" {
+		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.fix.need_hash"), i18n.T(lang, "api.fix.approve_hint"))
+		return
+	}
+	d, ok := s.fixDeps(w, r, lang)
+	if !ok {
+		return
+	}
+	a, ok := s.attempt(w, r, lang)
+	if !ok {
+		return
+	}
+	extend(w)
+	ctx, cancel := s.detached(r)
+	defer cancel()
+	if err := fix.HandOverToMichel(ctx, d, a.ID, strings.TrimSpace(req.Hash)); err != nil {
+		s.applyFailed(w, r, lang, a, err)
 		return
 	}
 	s.answerAttempt(w, r, http.StatusOK, a.ID)

@@ -198,3 +198,45 @@ describe('the exposure advice', () => {
     expect(en['expo.how']).not.toContain('he looks from')
   })
 })
+
+describe('who runs the script is said before the validation (R62)', () => {
+  const link = (f, t, extra) => serverPlan({ finding: f, target: t, ...extra }).lines.find((l) => l.key.includes('choice_user'))
+  test('the user runs a root script: the choice, administrator rights and sudo, and the setting to change', () => {
+    const l = link(cfg(), target())
+    expect(l.key).toBe('plan.server.choice_user_root')
+    expect(l.params).toEqual({ name: 'srv-demo' })
+    expect(l.link).toEqual({ key: 'plan.server.choice_link', href: '#/servers/t1' })
+    expect(fr[l.key]).toContain('administrateur')
+    expect(fr[l.key]).toContain('sudo')
+    expect(fr[l.key]).toContain('Qui lance les scripts')
+    expect(en[l.key]).toContain('administrator')
+    expect(en[l.key]).toContain('Who runs the scripts')
+  })
+  test('Michel set but sudo off is still the user’s script, and says sudo', () => {
+    expect(link(cfg(), target({ executor: 'michel', sudo: 'none' })).key).toBe('plan.server.choice_user_root')
+    expect(link(pkg(), target()).key).toBe('plan.server.choice_user_root')
+  })
+  test('a .user.ini needs no administrator rights: the shorter choice', () => {
+    expect(link(cfg({ location: '/srv/www/.user.ini:3' }), target()).key).toBe('plan.server.choice_user')
+    expect(fr['plan.server.choice_user']).not.toContain('administrateur')
+  })
+  test('nothing to choose when Michel runs it, when a rule does, or when there is no script', () => {
+    expect(link(cfg(), target({ executor: 'michel', sudo: 'nopasswd' }))).toBeUndefined()
+    expect(link(cfg(), target(rule))).toBeUndefined()
+    expect(link(cfg(), target({ fix_level: 0 }))).toBeUndefined()
+    expect(link(pkg({ fixed_versions: [] }), target({ preprod: null, kind: 'hds' }))).toBeUndefined()
+  })
+  test('with a preprod, the setting is the preprod’s', () => {
+    const pre = { id: 'p', name: 'srv-pre', executor: 'user', sudo: 'none', fix_level: 1 }
+    const l = link(cfg(), target({ preprod: { id: 'p', name: 'srv-pre' } }), { preprodTarget: pre })
+    expect(l.params).toEqual({ name: 'srv-pre' })
+    expect(l.link.href).toBe('#/servers/p')
+    expect(link(cfg(), target({ preprod: { id: 'p', name: 'srv-pre' } }))).toBeUndefined()
+  })
+  test('both catalogs carry the three keys', () => {
+    for (const k of ['plan.server.choice_user', 'plan.server.choice_user_root', 'plan.server.choice_link']) {
+      expect(fr[k], k).toBeTruthy()
+      expect(en[k], k).toBeTruthy()
+    }
+  })
+})

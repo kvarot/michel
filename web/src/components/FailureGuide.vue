@@ -1,4 +1,7 @@
-<template>
+<li v-for="l in plan.lines" :key="l.key">
+            {{ $t(l.key, l.params || {}) }}
+            <a v-if="l.link" :href="l.link.href">{{ $t(l.link.key) }}</a>
+          </li><template>
   <section class="m-guide" :aria-label="card ? $t('path.label') : undefined" :aria-labelledby="card ? undefined : 'fix-guide-title'">
     <template v-if="!card">
       <component :is="nested ? 'h2' : 'h1'" id="fix-guide-title" class="m-guide__title" tabindex="-1">
@@ -75,7 +78,10 @@
       <section v-if="plan && plan.lines.length" class="m-guide__block m-panel" :aria-labelledby="planTitleId">
         <component :is="subHeading" :id="planTitleId" class="m-guide__sub">{{ $t(plan.title) }}</component>
         <ul class="m-guide__lines">
-          <li v-for="l in plan.lines" :key="l.key">{{ $t(l.key, l.params || {}) }}</li>
+          <li v-for="l in plan.lines" :key="l.key">
+            {{ $t(l.key, l.params || {}) }}
+            <a v-if="l.link" :href="l.link.href">{{ $t(l.link.key) }}</a>
+          </li>
         </ul>
         <p v-if="plan.warn" class="m-guide__warn">{{ $t(plan.warn) }}</p>
         <template v-if="showStart">

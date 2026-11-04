@@ -194,6 +194,7 @@ func TestTargetRoutesNeedToken(t *testing.T) {
 		{"DELETE", "/api/v1/targets/" + v.ID + "/ai-consent", ""},
 		{"POST", "/api/v1/fix/a1/snapshot-done", ""},
 		{"POST", "/api/v1/fix/a1/applied-by-me", ""},
+		{"POST", "/api/v1/fix/a1/hand-over", "{}"},
 	}
 	for _, r := range routes {
 		for _, tok := range []string{"", "wrong"} {

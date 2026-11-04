@@ -486,3 +486,16 @@ export function serversHash(id, finding = '') {
   const base = `#/servers/${encodeURIComponent(id)}`
   return finding ? `${base}?finding=${encodeURIComponent(finding)}` : base
 }
+
+/**
+ * handOverOf says whether a fix the user validated to run themselves can now be
+ * run by Michel (R62): 'ready' when the server's settings let him, 'settings' when
+ * they do not, '' for any other fix. The server decides (fix.MichelRuns).
+ * @param {object|null} attempt AttemptView with server
+ * @returns {'ready'|'settings'|''}
+ */
+export function handOverOf(attempt) {
+  if (!attempt || attempt.state !== 'approved' || attempt.server?.executor !== 'user') return ''
+  const h = attempt.server.hand_over
+  return h === 'ready' || h === 'settings' ? h : ''
+}

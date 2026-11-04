@@ -71,6 +71,18 @@
             <v-btn color="primary" variant="flat" size="small" :loading="acting === 'applied'" :disabled="!!acting" @click="$emit('applied')">{{ $t('srvfix.applied') }}</v-btn>
           </div>
           <p v-if="acting === 'applied'" class="m-voice m-small" role="status">{{ $t('srvfix.applying') }}</p>
+          <!-- R62: the same script, run by Michel, once the server's settings allow it; else what to do. -->
+          <template v-if="handOver === 'ready'">
+            <p class="m-small">{{ $t('srvfix.handover.ready') }}</p>
+            <div class="m-sprop__actions">
+              <v-btn size="small" variant="tonal" color="primary" :loading="acting === 'handover'" :disabled="!!acting" @click="handOverOpen = true">{{ $t('srvfix.handover.action') }}</v-btn>
+            </div>
+            <p v-if="acting === 'handover'" class="m-voice m-small" role="status">{{ $t('srvfix.handover.busy') }}</p>
+          </template>
+          <p v-else-if="handOver === 'settings'" class="m-small">
+            {{ $t('srvfix.handover.settings') }}
+            <a :href="serverHref">{{ $t('srvfix.handover.settings_link') }}</a>
+          </p>
         </div>
         <p v-else-if="attempt.state === 'approved' && attempt.approved_by === 'auto'" class="m-voice">{{ $t('srvfix.auto') }}</p>
         <p v-else-if="attempt.state === 'approved'" class="m-voice">{{ $t('srvfix.approved') }}</p>
@@ -135,6 +147,19 @@
       <p v-else class="m-muted">{{ attempt.state === 'preparing' ? preparingLine : $t('fix.proposal.none_idle') }}</p>
     </section>
 
+    <v-dialog v-model="handOverOpen" max-width="480">
+      <v-card aria-labelledby="sfix-handover-title">
+        <v-card-title id="sfix-handover-title" class="m-sprop__dialog-title">{{ $t('srvfix.handover.title') }}</v-card-title>
+        <v-card-text>
+          <p class="m-sprop__dialog-body">{{ $t(server.run_as_root ? 'srvfix.handover.body' : 'srvfix.handover.body_plain') }}</p>
+        </v-card-text>
+        <v-card-actions class="m-sprop__dialog-actions">
+          <v-btn variant="text" @click="handOverOpen = false">{{ $t('srvfix.handover.no') }}</v-btn>
+          <v-btn color="primary" variant="flat" @click="doHandOver">{{ $t('srvfix.handover.yes') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-dialog v-model="refuseOpen" max-width="440">
       <v-card aria-labelledby="sfix-refuse-title">
         <v-card-title id="sfix-refuse-title" class="m-sprop__dialog-title">{{ $t('fix.refuse.title') }}</v-card-title>
@@ -155,7 +180,7 @@
 import FieldHelp from './FieldHelp.vue'
 import { formatDate, severityOf } from '../lib/digestView.js'
 import { canPrepareServer, isGone } from '../lib/pathView.js'
-import { backupLine, canApproveServer, doneKey, envLabel, findingTitle, needsSnapshot, restoreNeeded, serverAttemptLine, serversHash } from '../lib/serversView.js'
+import { backupLine, canApproveServer, doneKey, envLabel, findingTitle, handOverOf, needsSnapshot, restoreNeeded, serverAttemptLine, serversHash } from '../lib/serversView.js'
 
 // ServerProposal is the right of the Fix page for a fix of a server: the
 // flaw in plain words, then the proposal: its sentence, « réduit le risque,
@@ -179,10 +204,10 @@ export default {
     acting: { type: String, default: '' },
     updated: { type: Boolean, default: false },
   },
-  emits: ['approve', 'refuse', 'snapshot', 'applied', 'resolve', 'again'],
+  emits: ['approve', 'refuse', 'snapshot', 'applied', 'handover', 'resolve', 'again'],
   data() {
     // showScripts opens the scripts in the simple mode.
-    return { refuseOpen: false, reason: '', copied: '', showScripts: false }
+    return { refuseOpen: false, reason: '', copied: '', showScripts: false, handOverOpen: false }
   },
   computed: {
     lang() {
@@ -203,6 +228,10 @@ export default {
     flawTitle() {
       const f = this.flaw || { rule: this.attempt.finding?.osv_id, title: this.attempt.finding?.summary, package: this.attempt.finding?.package }
       return findingTitle(f, this.lang)
+    },
+    // handOver: 'ready' (Michel can run the validated script now), 'settings' (not yet), or ''.
+    handOver() {
+      return handOverOf(this.attempt)
     },
     serverHref() {
       return serversHash(this.server.target.id)
@@ -257,6 +286,7 @@ export default {
   watch: {
     'attempt.id'() {
       this.refuseOpen = false
+      this.handOverOpen = false
       this.reason = ''
       this.copied = ''
     },
@@ -274,6 +304,11 @@ export default {
       } catch {
         this.copied = this.$t('srvfix.copy_failed')
       }
+    },
+    /** doHandOver is the click that lets Michel run the script the person validated: the hash is the one they approved. */
+    doHandOver() {
+      this.handOverOpen = false
+      this.$emit('handover', this.p?.hash || '')
     },
     refuse() {
       this.refuseOpen = false

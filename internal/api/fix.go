@@ -274,6 +274,7 @@ func (s *server) fixRoutes() {
 	m.HandleFunc("POST /api/v1/fix/{attempt}/withdraw", s.fixWithdraw)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/snapshot-done", s.fixSnapshotDone)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/applied-by-me", s.fixAppliedByMe)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/hand-over", s.fixHandOver)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/resolve", s.fixResolve)
 	m.HandleFunc("GET /api/v1/fixes", s.fixList)
 	m.HandleFunc("GET /api/v1/agent/status", s.agentStatus)

@@ -3,7 +3,7 @@ import fr from '../i18n/fr.json'
 import en from '../i18n/en.json'
 import {
   backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, restoreNeeded,
-  canOfferAgent, cardLine, cardOfFinding, doneKey, guideServerTitle, healthServer, lastAttemptOf, serverAttemptLine, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers, provenOnlyOnPreprod,
+  canOfferAgent, handOverOf, cardLine, cardOfFinding, doneKey, guideServerTitle, healthServer, lastAttemptOf, serverAttemptLine, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers, provenOnlyOnPreprod,
 } from './serversView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -386,5 +386,27 @@ describe('proven on the preprod, nothing prepared here', () => {
     expect(fr['servers.line.proven_preprod_only_do']).toContain('délie-la')
     expect(en['servers.line.proven_preprod_only']).toContain('{name}')
     expect(en['servers.line.proven_preprod_only_do']).toContain('unlink')
+  })
+})
+
+describe('the hand over to Michel (R62)', () => {
+  const approved = (hand, executor = 'user', state = 'approved') => ({ state, server: { executor, hand_over: hand } })
+  test('offered only for an approved fix the user was to run', () => {
+    expect(handOverOf(approved('ready'))).toBe('ready')
+    expect(handOverOf(approved('settings'))).toBe('settings')
+    expect(handOverOf(approved('ready', 'user', 'proposed'))).toBe('')
+    expect(handOverOf(approved('ready', 'michel'))).toBe('')
+    expect(handOverOf(approved(undefined))).toBe('')
+    expect(handOverOf(null)).toBe('')
+  })
+  test('the words exist in both catalogs, and the confirmation says administrator rights', () => {
+    for (const k of ['srvfix.handover.ready', 'srvfix.handover.action', 'srvfix.handover.title', 'srvfix.handover.body', 'srvfix.handover.yes', 'srvfix.handover.no', 'srvfix.handover.settings', 'srvfix.handover.settings_link']) {
+      expect(fr[k], k).toBeTruthy()
+      expect(en[k], k).toBeTruthy()
+    }
+    expect(fr['srvfix.handover.body']).toContain('administrateur')
+    expect(en['srvfix.handover.body']).toContain('administrator')
+    expect(fr['srvfix.handover.settings']).toContain('personne qui s')
+    expect(fr['srvfix.handover.settings']).toContain('Qui lance les scripts')
   })
 })

@@ -163,6 +163,7 @@
         @refuse="refuse"
         @snapshot="serverAction('snapshot-done', 'snapshot')"
         @applied="serverAction('applied-by-me', 'applied')"
+        @handover="(hash) => serverAction('hand-over', 'handover', { hash })"
         @resolve="serverAction('resolve', 'resolve')"
         @again="again"
       />
@@ -256,7 +257,7 @@ export default {
       refusing: false,
       // holdBusy is the answer to a held attempt running: withdraw, continue, or ''.
       holdBusy: '',
-      // acting is the server fix action running: snapshot, applied, resolve, again.
+      // acting is the server fix action running: snapshot, applied, handover, resolve, again.
       acting: '',
       // target is the sheet of the server of the attempt shown (a server fix).
       target: null,
@@ -601,14 +602,14 @@ export default {
       }
     },
     /** serverAction sends the user's word on a server fix: snapshot-done, applied-by-me, resolve. */
-    async serverAction(path, what) {
+    async serverAction(path, what, body) {
       if (!this.current || this.acting) return
       const id = this.current.id
       this.acting = what
       this.actionError = null
       this.focusGuide = true
       try {
-        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/${path}`))
+        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/${path}`), body)
         if (!this.alive || this.current?.id !== id) return
         this.show(v)
         this.pollServer(id)

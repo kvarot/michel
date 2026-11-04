@@ -591,7 +591,7 @@ describe('server plan tells the truth for each case', () => {
     expect(p.action).toBe('prepare')
     expect(p.why).toBe('')
     expect(p.warn).toBe(null)
-    expect(p.lines.map((l) => l.key)).toEqual(['plan.server.who', 'plan.server.no_copy', 'plan.server.checks', 'plan.server.no_tests', 'plan.server.approval_user', 'plan.server.agent'])
+    expect(p.lines.map((l) => l.key)).toEqual(['plan.server.who', 'plan.server.no_copy', 'plan.server.checks', 'plan.server.no_tests', 'plan.server.approval_user', 'plan.server.choice_user_root', 'plan.server.agent'])
   })
   test('without a site address it says so, for a setting and for an update', () => {
     expect(keys(cfg(), target({ site_url: '' }))).toContain('no_site')

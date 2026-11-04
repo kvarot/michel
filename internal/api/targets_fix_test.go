@@ -343,3 +343,40 @@ func TestExposureCannotStartAFix(t *testing.T) {
 		t.Errorf("%d attempts", attempts)
 	}
 }
+
+// B1 (R62): a validated fix the user was to run says whether the server's
+// settings now let Michel run it; the hand over route refuses a wrong hash
+// and, without the settings, refuses to run anything.
+func TestHandOverView(t *testing.T) {
+	tf := newTargetFixture(t)
+	tg := tf.addNamed("srv-hand", "192.0.2.61")
+	tf.seedServerFinding(tg.ID, "fsrv000000000002", scan.KindServerConfig, "expose_php")
+	a, p := tf.seedServerAttempt(tg, "fsrv000000000002", target.ExecUser, false)
+	var v AttemptView
+	if code, body := tf.send("POST", "/api/v1/fix/"+a.ID+"/hand-over", `{"hash":"`+p.Hash+`"}`); code != http.StatusConflict {
+		t.Fatalf("hand-over before approval = %d %s", code, body)
+	}
+	if code, body := tf.send("POST", "/api/v1/fix/"+a.ID+"/approve", `{"hash":"`+p.Hash+`"}`); code != http.StatusOK {
+		t.Fatalf("approve = %d %s", code, body)
+	}
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server == nil || v.Server.HandOver != "settings" {
+		t.Fatalf("hand over with the settings off = %+v", v.Server)
+	}
+	var eb FixErrorBody
+	if code, _ := tf.send("POST", "/api/v1/fix/"+a.ID+"/hand-over", `{}`); code != http.StatusBadRequest {
+		t.Errorf("hand-over without hash = %d", code)
+	}
+	if code, body := tf.send("PATCH", "/api/v1/targets/"+tg.ID, `{"executor":"michel"}`); code != http.StatusOK {
+		t.Fatalf("settings = %d %s", code, body)
+	}
+	tf.get("/api/v1/fix/"+a.ID, &v)
+	if v.Server == nil || v.Server.HandOver != "ready" {
+		t.Errorf("hand over with the settings on = %+v", v.Server)
+	}
+	code, body := tf.send("POST", "/api/v1/fix/"+a.ID+"/hand-over", `{"hash":"nope"}`)
+	_ = json.Unmarshal([]byte(body), &eb)
+	if code != http.StatusConflict || eb.Code != "fix.err.stale_proposal" {
+		t.Errorf("hand-over with a stale hash = %d %s", code, body)
+	}
+}

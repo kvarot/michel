@@ -1024,3 +1024,89 @@ func simulate(ctx context.Context, c *sshx.Client, v serverfix.Plan, t target.Ta
 	}
 	return nil
 }
+
+// MichelRuns says whether, with the server's settings as they are now,
+// Michel would run a script that needs root (rootNeeded) itself. It is the
+// rule of executorFor, for a page that offers the hand over.
+func MichelRuns(t target.Target, rootNeeded bool) bool {
+	return t.Executor == target.ExecMichel && (!rootNeeded || t.Sudo == target.SudoNopasswd)
+}
+
+// HandOverToMichel is the user's click on « Michel lance ce script » for a
+// fix they validated while the server's settings said they would run it
+// themselves (R62). Nothing runs without it. The scripts stay the validated
+// ones, byte for byte (their hash is checked against the stored record and
+// against a new rendering from the current inventory: ErrScriptChanged, the
+// attempt ends, nothing is sent, when they differ). What changes is who
+// runs them, and that is part of what a user approves: the proposal is
+// written again with the same scripts and executor michel, approved by this
+// click with its own hash (approveServer, the path of a normal approval,
+// snapshot included), then applied as any fix Michel runs. hash is the
+// fingerprint the user approved (ErrStaleProposal otherwise). The server's
+// settings must now let Michel run it (ErrNotMichelExecutor otherwise, the
+// attempt stays approved). A rule never does this (ActorAuto). Audited as
+// server_fix.hand_over.
+func HandOverToMichel(ctx context.Context, d Deps, attemptID, hash string) error {
+	lock := d.sessions().attemptLock(attemptID)
+	lock.Lock()
+	defer lock.Unlock()
+	repo := d.repo()
+	a, err := repo.GetAttempt(ctx, attemptID)
+	if err != nil {
+		return err
+	}
+	if a.Work.Server == nil {
+		return ErrNotServerFinding
+	}
+	if a.State != StateApproved {
+		return fmt.Errorf("%w (the attempt is %s)", ErrBadTransition, a.State)
+	}
+	refused := func(reason string, e error) error {
+		_ = d.record(ctx, "server_fix.hand_over", a.ID, "refused", map[string]any{"attempt_id": a.ID, "target_id": a.ProjectID, "reason": reason})
+		return e
+	}
+	if d.actor() == ActorAuto {
+		return refused("a rule does not hand a fix over", fmt.Errorf("%w: only the user hands a fix over", ErrBadTransition))
+	}
+	if hash == "" || hash != a.ApprovedHash {
+		return refused("stale proposal", ErrStaleProposal)
+	}
+	r, err := d.checked(ctx, a, "server_fix.hand_over")
+	if err != nil {
+		return err
+	}
+	if r.sf.Executor != target.ExecUser {
+		return ErrNotUserExecutor
+	}
+	if err := r.rebuild(ctx, "server_fix.hand_over"); err != nil {
+		return err
+	}
+	if executorFor(r.t, r.b) != target.ExecMichel {
+		return refused("the server's settings do not let Michel run it", ErrNotMichelExecutor)
+	}
+	sf := r.sf
+	sf.Executor = target.ExecMichel
+	lang := d.lang()
+	b := r.b
+	np := Proposal{AttemptID: a.ID, Summary: summaryOf(lang, r.t, sf), StepsServer: explainServer(lang, r.t, sf, b),
+		Scripts: &b, Server: &sf, Hash: serverHash(b.Hash, sf)}
+	if err := repo.SetState(ctx, a.ID, []State{StateApproved}, StateProposed, ""); err != nil {
+		return err
+	}
+	np, err = repo.AddProposal(ctx, np)
+	if err != nil {
+		// Back to what the user approved: nothing else changed.
+		_ = repo.SetState(ctx, a.ID, []State{StateProposed}, StateApproved, "")
+		return err
+	}
+	if err := d.approveServer(ctx, a, np, np.Hash); err != nil {
+		return err
+	}
+	_ = d.record(ctx, "server_fix.hand_over", a.ID, "ok", map[string]any{"attempt_id": a.ID, "target_id": a.ProjectID, "finding_id": a.FindingID,
+		"from_hash": a.ApprovedHash, "hash": np.Hash, "scripts_hash": b.Hash, "correction_id": sf.CorrectionID, "executor": "michel", "author": d.actor()})
+	a, err = repo.GetAttempt(ctx, a.ID)
+	if err != nil {
+		return err
+	}
+	return d.applyServer(ctx, a)
+}
