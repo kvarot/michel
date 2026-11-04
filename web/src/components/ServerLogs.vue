@@ -217,6 +217,7 @@
           >
             <v-radio v-for="c in g.choices" :key="String(c.value)" :value="c.value" :label="c.label" :disabled="c.disabled" color="primary" />
           </v-radio-group>
+          <p v-if="strongNote(g)" class="m-logs__warn m-small" role="status">{{ strongNote(g) }}</p>
         </div>
         <div v-if="settings.deviations.length" class="m-logs__away" role="status">
           <p class="m-small">{{ $t('logs.privacy.away') }}</p>
@@ -283,7 +284,7 @@ import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
 import {
   channelNotes, deviationWarning, domId, errorGroups, formatLabel, formats, intervalChoices, intervalNote, levelLabel, levelOrder, levelSeverity, settingsSaveOutcome,
-  privacyChoices, readState, routeChoices, statusLabel,
+  privacyChoices, privacyStrongNote, readState, routeChoices, statusLabel,
 } from '../lib/serverLogsView.js'
 
 let counter = 0
@@ -422,6 +423,9 @@ export default {
     },
     current(g) {
       return g.choices.find((c) => c.current)?.value
+    },
+    strongNote(g) {
+      return privacyStrongNote(g, this.lang)
     },
     /** fail keeps the API's sentence (a busy read says so in plain words); a 401 is the page's business. */
     fail(err) {

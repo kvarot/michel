@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  channelNotes, deviationWarning, domId, errorGroups, intervalChoices, intervalNote, logBadges, privacyChoices, readState, routeChoices, settingsSaveOutcome,
+  channelNotes, deviationWarning, domId, errorGroups, intervalChoices, intervalNote, logBadges, privacyChoices, privacyStrongNote, readState, routeChoices, settingsSaveOutcome,
 } from './serverLogsView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -211,5 +211,23 @@ describe('routeChoices', () => {
     expect(routeChoices('error', 'prod', 'fr')[0].value).toBe('digest')
     expect(routeChoices('warning', 'prod', 'fr').map((c) => c.value)).toEqual(['ignored', 'immediate', 'digest'])
     expect(routeChoices('info', 'prod', 'fr').filter((c) => c.recommended)).toHaveLength(1)
+  })
+})
+
+describe('privacyStrongNote', () => {
+  const group = (kind, extra, key) => privacyChoices(settings(extra), kind, 'en').find((g) => g.key === key)
+
+  test('a health server on a choice away from the recommendation gets a marked warning, per setting', () => {
+    expect(privacyStrongNote(group('hds', { store_text: true }, 'store_text'), 'en')).toMatch(/health data/)
+    expect(privacyStrongNote(group('hds', { store_text: true }, 'store_text'), 'fr')).toMatch(/données de santé/)
+    // The setting still on the recommended choice says nothing, even on this server.
+    expect(privacyStrongNote(group('hds', { store_text: true }, 'alert_text'), 'en')).toBe('')
+    expect(privacyStrongNote(group('hds', { retention_days: 30 }, 'retention'), 'en')).not.toBe('')
+  })
+
+  test('other servers, and the recommended choices, say nothing', () => {
+    for (const kind of ['vps', 'shared']) expect(privacyStrongNote(group(kind, { store_text: true }, 'store_text'), 'en')).toBe('')
+    expect(privacyStrongNote(group('hds', {}, 'store_text'), 'en')).toBe('')
+    expect(privacyStrongNote(undefined, 'en')).toBe('')
   })
 })

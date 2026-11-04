@@ -1118,6 +1118,7 @@
   "logs.privacy.retention": "Combien de temps Michel garde-t-il les erreurs ?",
   "logs.privacy.retention_hint": "Passé ce délai, Michel efface les erreurs qu'il avait gardées.",
   "logs.privacy.away": "Un réglage s'éloigne de ce que Michel recommande.",
+  "logs.privacy.strong": "Ce serveur contient des données de santé, et ce choix n'est pas celui que Michel recommande. Vérifie que c'est bien ce que tu veux.",
   "logs.privacy.back": "Revenir aux choix recommandés",
   "logs.privacy.back_hint": "Michel efface alors tout de suite le texte qu'il avait gardé.",
   "logs.choice.store_text.no": "Non, ne garder aucun texte",

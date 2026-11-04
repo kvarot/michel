@@ -92,6 +92,18 @@ export function privacyChoices(settings, kind, lang) {
 }
 
 /**
+ * privacyStrongNote is the marked warning under a privacy setting of a health
+ * (hds) server whose choice in force is away from the recommendation. "" for
+ * any other server, and for a setting on the recommended choice.
+ * @param {{choices: {current: boolean, strong: boolean}[]}|undefined} group one of privacyChoices
+ * @param {string} lang
+ * @returns {string}
+ */
+export function privacyStrongNote(group, lang) {
+  return group?.choices?.some((c) => c.current && c.strong) ? t(lang, 'privacy.strong') : ''
+}
+
+/**
  * deviationWarning is the question put before a setting moves away from the
  * recommended choice. The risk itself comes from the API (it answers 409 with
  * it); this is the title, and on a health (hds) server the stronger sentence:
