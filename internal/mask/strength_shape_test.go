@@ -116,8 +116,8 @@ var shapeCases = []struct {
 	{"docs: joined words", "a.yml", "password: cheval-correct-batterie\n", true, false},
 	{"docs: a mock part", "a.txt", "API_KEY=mock-kP9mW2xQ7vT\n", true, false},
 	{"docs: a word path", "a.txt", "KEY_FILE=/etc/ssl/private/server.key\n", true, false},
-	{"docs: an array name", "a.php", "$config['password'] = 'S3cr3t!Prod-2024';\n", false, false},
-	{"docs: mysqli", "a.php", "new mysqli('hote', 'root', 'S3cr3t!Prod-2024');\n", false, false},
+	{"docs: an array name", "a.php", "$config['password'] = 'S3cr3t!Prod-2024';\n", true, true},
+	{"docs: mysqli", "a.php", "new mysqli('hote', 'root', 'S3cr3t!Prod-2024');\n", true, true},
 	{"docs: a plain key", "a.yml", "key: kP9mW2xQ7vT3\n", false, false},
 	{"docs: an example in a format", "a.md", "Use xoxb-your-bot-token here\n", true, true},
 }

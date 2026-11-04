@@ -57,12 +57,13 @@ var detectors = []detector{
 	// The name holds a keyword, followed only by "_..." (SECRET_KEY_BASE) or
 	// nothing; the keyword may stick to what precedes it (DBPASSWORD).
 	{KindEnvValue, regexp.MustCompile(`(?im)^[ 	]*(?:export[ 	]+)?([A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)(?:_[A-Z0-9_]*)?)[ 	]*=[ 	]*` + valueExpr), 1, false},
-	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?[ 	]*(?:=>|:|=)[ 	]*` + valueExpr), 0, false},
+	{KindAssignment, regexp.MustCompile(`(?i)` + keywordExpr + `["']?\]?[ 	]*(?:=>|:|=)[ 	]*` + valueExpr), 0, false},
 	// PHP: define('DB_PASSWORD', '...'), Laravel's 'key' => 'base64:...', and
-	// the password, third argument of new PDO.
+	// the password, third argument of new PDO, new mysqli and mysqli_connect.
 	{KindAssignment, regexp.MustCompile(`\bdefine\([ 	]*['"]([^'"\n]*(?:PASSWORD|KEY|SECRET|SALT|TOKEN)[^'"\n]*)['"][ 	]*,[ 	]*` + valueExpr), 1, true},
 	{KindAssignment, regexp.MustCompile(`['"]key['"][ 	]*=>[ 	]*['"](base64:[A-Za-z0-9+/=]{16,})['"]`), 0, false},
 	{KindAssignment, regexp.MustCompile(`\bnew[ 	]+\\?PDO\([^,\n]+,[^,\n]+,[ 	]*` + valueExpr), 0, true},
+	{KindAssignment, regexp.MustCompile(`\b(?:new[ 	]+\\?mysqli|mysqli_connect)\([^,\n]+,[^,\n]+,[ 	]*` + valueExpr), 0, true},
 	// scheme://user:password@host: only the password.
 	{KindURLPassword, regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@"'<>]*:([^\s/@"'<>]+)@`), 0, false},
 	{KindAbsPath, regexp.MustCompile(
