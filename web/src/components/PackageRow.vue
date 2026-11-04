@@ -48,7 +48,7 @@
       </v-btn>
     </div>
     <div v-if="open" :id="sheetId" class="m-row__sheets">
-      <FindingSheet v-for="id in sheets.shown" :key="id" :finding-id="id" @decided="$emit('decided')" />
+      <FindingSheet v-for="id in sheets.shown" :key="id" :finding-id="id" :can-fix="canFix" @decided="$emit('decided')" />
       <!-- One button, so the keyboard stays on it when it changes its words. -->
       <v-btn v-if="foldable" variant="text" size="small" class="m-row__more" @click="all = !all">{{ all ? $t('item.less') : $t('item.more', { n: sheets.hidden }) }}</v-btn>
     </div>
@@ -59,7 +59,7 @@
 import FindingSheet from './FindingSheet.vue'
 import { formatDate, formatPercent } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
-import { visibleSheets } from '../lib/sheetsView.js'
+import { rowFixable, visibleSheets } from '../lib/sheetsView.js'
 
 let seq = 0
 
@@ -68,6 +68,8 @@ export default {
   components: { FindingSheet },
   props: {
     item: { type: Object, required: true },
+    // canFix: Michel can prepare a fix in this project (false for a folder that is no Git repository).
+    canFix: { type: Boolean, default: true },
   },
   emits: ['decided'],
   data() {
@@ -84,7 +86,7 @@ export default {
     },
     // fixable: an open finding (not gone, not ignored) can go to the Fix page.
     fixable() {
-      return this.item.findingIds.length > 0 && this.item.kind !== 'gone' && this.item.decided !== 'ignore'
+      return rowFixable(this.item, this.canFix)
     },
     fixHref() {
       return fixHash({ finding: this.item.findingIds[0] })

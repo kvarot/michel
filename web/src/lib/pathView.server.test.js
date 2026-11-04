@@ -205,7 +205,7 @@ describe('who runs the script is said before the validation (R62)', () => {
     const l = link(cfg(), target())
     expect(l.key).toBe('plan.server.choice_user_root')
     expect(l.params).toEqual({ name: 'srv-demo' })
-    expect(l.link).toEqual({ key: 'plan.server.choice_link', href: '#/servers/t1' })
+    expect(l.link).toEqual({ key: 'plan.server.choice_link', href: '#/servers/t1?settings=1' })
     expect(fr[l.key]).toContain('administrateur')
     expect(fr[l.key]).toContain('sudo')
     expect(fr[l.key]).toContain('Qui lance les scripts')
@@ -230,7 +230,7 @@ describe('who runs the script is said before the validation (R62)', () => {
     const pre = { id: 'p', name: 'srv-pre', executor: 'user', sudo: 'none', fix_level: 1 }
     const l = link(cfg(), target({ preprod: { id: 'p', name: 'srv-pre' } }), { preprodTarget: pre })
     expect(l.params).toEqual({ name: 'srv-pre' })
-    expect(l.link.href).toBe('#/servers/p')
+    expect(l.link.href).toBe('#/servers/p?settings=1')
     expect(link(cfg(), target({ preprod: { id: 'p', name: 'srv-pre' } }))).toBeUndefined()
   })
   test('both catalogs carry the three keys', () => {

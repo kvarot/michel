@@ -66,6 +66,7 @@
           v-for="item in s.items"
           :key="rowKey(item)"
           :item="item"
+          :can-fix="project.git_repo !== false"
           @decided="$emit('decided')"
         />
       </ul>
@@ -83,9 +84,8 @@ import GitQuestion from './GitQuestion.vue'
 import GitUpdateButton from './GitUpdateButton.vue'
 import PackageRow from './PackageRow.vue'
 import { api } from '../api.js'
-import { severityOf } from '../lib/digestView.js'
 import { cardNeedsGit, cardShowsQuestion, readGit } from '../lib/gitView.js'
-import { checkedWell, runsHere, scanHintKey, scanPath, scanSentence, showsFailure } from '../lib/projectsView.js'
+import { checkedWell, goneRows, runsHere, scanHintKey, scanPath, scanSentence, showsFailure } from '../lib/projectsView.js'
 
 const checkPath = 'M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z'
 
@@ -145,10 +145,7 @@ export default {
       return cardShowsQuestion(this.git, this.answeredHere)
     },
     gone() {
-      return (this.project.gone || []).map((pkg) => ({
-        kind: 'gone', package: pkg.name, severity: severityOf(pkg.worst_severity), text: '',
-        findingIds: pkg.finding_ids || [], osvIds: pkg.osv_ids || [], installed: pkg.installed || '', target: pkg.target || '',
-      }))
+      return goneRows(this.project)
     },
     sections() {
       const of = (kind) => this.items.filter((i) => i.kind === kind)

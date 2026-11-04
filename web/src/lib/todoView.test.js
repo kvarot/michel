@@ -597,7 +597,7 @@ describe('texts', () => {
     ] } }
     const simple = build({ digest: d, servers, details })
     expect(allText(simple)).not.toMatch(/CVE-|GHSA-/)
-    expect(simple.lines.find((l) => l.id === 'server:a:s').title).toBe('Un logiciel installé sur srv-a a une faille connue')
+    expect(simple.lines.find((l) => l.id === 'server:a:s').title).toBe('Le logiciel openssl, installé sur srv-a, a une faille connue')
     const advanced = build({ digest: d, servers, details, advanced: true })
     expect(advanced.lines.find((l) => l.id === 'server:a:s').title).toBe('openssl CVE-2024-3333')
     expect(allText(advanced)).toContain('CVE-2024-12345')
@@ -791,7 +791,7 @@ describe('resolvedLines', () => {
     ])
     for (const l of lines) {
       expect(l).toMatchObject({ verified: false, back: false, kind: 'exposure', word: 'no_longer_open', tone: 'info', deploy: false, href: '#/servers/srv1', at: '01/11/2026' })
-      expect(fr[l.dateKey].replace('{date}', l.at)).toBe('dernière fois où Michel a vu ce service ouvert : le 01/11/2026')
+      expect(fr[l.dateKey].replace('{date}', l.at)).toBe('Dernière fois où Michel a vu ce service ouvert : le 01/11/2026')
       expect(JSON.stringify(l)).not.toMatch(/fermé|corrig|vérifi/i)
     }
     for (const k of ['title', 'hint']) {

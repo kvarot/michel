@@ -85,6 +85,7 @@
           <v-btn color="primary" variant="flat" size="large" class="m-guide__start" :loading="starting" :disabled="starting || !canStart" @click="$emit('start')">
             {{ $t(server ? 'plan.server.prepare' : 'plan.project.start') }}
           </v-btn>
+          <p v-if="!canStart && whyNot" class="m-small m-guide__warn">{{ whyNot }}</p>
           <p v-if="starting" class="m-voice m-guide__busy" role="status">{{ $t(server ? 'servers.line.preparing' : 'fix.chat.starting') }}</p>
         </template>
       </section>
@@ -125,6 +126,8 @@ export default {
     // projectView is the element of GET /projects, null while it comes.
     projectView: { type: Object, default: null },
     canStart: { type: Boolean, default: true },
+    // whyNot says, beside the disabled button, why it cannot start.
+    whyNot: { type: String, default: '' },
     starting: { type: Boolean, default: false },
     // server: a server's flaw. sheet is then the TargetFindingView, target the
     // TargetView (null while it comes): the plan and the path read their settings.

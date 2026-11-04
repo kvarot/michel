@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import fr from '../i18n/fr.json'
 import en from '../i18n/en.json'
-import { visibleSheets } from './sheetsView.js'
+import { rowFixable, visibleSheets } from './sheetsView.js'
 
 describe('visibleSheets (B9)', () => {
   const ids = Array.from({ length: 14 }, (_, i) => `f${i}`)
@@ -27,5 +27,20 @@ describe('visibleSheets (B9)', () => {
     for (const cat of [fr, en]) for (const k of ['item.more.one', 'item.more.other', 'item.less']) expect(cat[k], k).toBeTruthy()
     expect(fr['item.more.one']).toContain('Et {n} autre faille')
     expect(fr['item.more.other']).toContain('Et {n} autres failles')
+  })
+})
+
+describe('rowFixable (D-4)', () => {
+  const item = (extra = {}) => ({ kind: 'new', findingIds: ['a'], decided: '', ...extra })
+  test('an open flaw of a project Michel can fix', () => {
+    expect(rowFixable(item(), true)).toBe(true)
+  })
+  test('never a folder Michel can prepare no fix for', () => {
+    expect(rowFixable(item(), false)).toBe(false)
+  })
+  test('never what left, nor what the person ignored', () => {
+    expect(rowFixable(item({ kind: 'gone' }), true)).toBe(false)
+    expect(rowFixable(item({ decided: 'ignore' }), true)).toBe(false)
+    expect(rowFixable(item({ findingIds: [] }), true)).toBe(false)
   })
 })

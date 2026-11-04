@@ -3,7 +3,7 @@ import fr from '../i18n/fr.json'
 import en from '../i18n/en.json'
 import {
   backupLine, canApproveServer, envLabel, findingTitle, intervalLabel, isServerAttempt, kindLabel, levelLabel, mergeFindings, restoreNeeded,
-  canOfferAgent, handOverOf, cardLine, cardOfFinding, doneKey, guideServerTitle, healthServer, lastAttemptOf, serverAttemptLine, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers, provenOnlyOnPreprod,
+  canOfferAgent, handOverOf, serverSettingsHash, cardLine, cardOfFinding, doneKey, guideServerTitle, healthServer, lastAttemptOf, serverAttemptLine, serverLevels, serverPollDelay, serversHash, serversRoute, needsSnapshot, serverStateLine, sortFindings, stateSentence, stepLine, touchedServers, provenOnlyOnPreprod,
 } from './serversView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -410,5 +410,15 @@ describe('the hand over to Michel (R62)', () => {
     expect(en['srvfix.handover.body']).toContain('administrator')
     expect(fr['srvfix.handover.settings']).toContain('personne qui s')
     expect(fr['srvfix.handover.settings']).toContain('Qui lance les scripts')
+  })
+})
+
+describe('the link to a server\'s settings (D-2)', () => {
+  test('its address says so, and reads back', () => {
+    expect(serverSettingsHash('a b')).toBe('#/servers/a%20b?settings=1')
+    expect(serversRoute('#/servers/a%20b?settings=1')).toEqual({ id: 'a b', finding: '', settings: true })
+    expect(serversRoute('#/servers/a')).toEqual({ id: 'a', finding: '' })
+    expect(serversRoute('#/servers/a?finding=f1')).toEqual({ id: 'a', finding: 'f1' })
+    expect(serverSettingsHash('')).toBe('#/servers')
   })
 })

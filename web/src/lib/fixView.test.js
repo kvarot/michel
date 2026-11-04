@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  acceptResult, consentProjectOf, activityLine, canApprove, canDecide, decidingAttempt, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
+  acceptResult, consentProjectOf, offersDecision, activityLine, canApprove, canDecide, decidingAttempt, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
   proposalFacts, proposalSentence, splitMasked, stateLine,
 } from './fixView.js'
 
@@ -293,5 +293,17 @@ describe('consentProjectOf (B2)', () => {
   test('the attempt shown comes first, then the flaw itself', () => {
     expect(consentProjectOf({ current: { project: 'a' }, sheet: { id: 'f1', project: 'b' }, finding })).toBe('a')
     expect(consentProjectOf({ finding: { id: 'f1', project: 'c' } })).toBe('c')
+  })
+})
+
+describe('offersDecision (D-5)', () => {
+  test('a flaw gone has no decision to take, whatever the list still says of its attempt', () => {
+    expect(offersDecision({ state: 'applied' }, true)).toBe(false)
+    expect(offersDecision({ state: 'proven_fixed', finding: { status: 'gone' } }, true)).toBe(false)
+    expect(offersDecision(null, true)).toBe(false)
+  })
+  test('an open flaw: as canDecide', () => {
+    expect(offersDecision(null, false)).toBe(true)
+    expect(offersDecision({ state: 'proposed' }, false)).toBe(false)
   })
 })

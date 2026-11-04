@@ -143,11 +143,11 @@ export default {
       const flaw = guideFlaw({ lines: this.todo.lines, projects: this.projectViews, servers: this.servers })
       return guideSteps({ projects: this.projectViews, servers: this.servers, read: this.$ui.guide.read, anyFinding: flaw.any, flawHref: flaw.href })
     },
-    // Where a person stands is only said once both lists were read.
     // lostShown: asked for the guide, and a list could not be read (N-B).
     lostShown() {
       return helpLostNow({ asked: this.helpLost, loaded: this.loaded, guideShown: this.guideShown, projectViews: this.projectViews, servers: this.servers })
     },
+    // Where a person stands is only said once both lists were read.
     guideShown() {
       return !!this.projectViews && !!this.servers && guideVisible(this.guideSteps, this.$ui.guide)
     },

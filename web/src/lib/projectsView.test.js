@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
-import { anyScanning, checkedWell, cleanProjectPath, needsDigest, projectNameFromPath, runsHere, scanHintKey, scanPath, scanSentence, showsFailure, withScanState } from './projectsView.js'
+import { anyScanning, checkedWell, cleanProjectPath, needsDigest, projectNameFromPath, runsHere, scanHintKey, scanPath, scanSentence, showsFailure, withScanState, goneRows } from './projectsView.js'
 
 const card = import.meta.glob('../components/ProjectCard.vue', { query: '?raw', import: 'default', eager: true })
 
@@ -177,5 +177,22 @@ describe('the button is the one the texts name', () => {
     }
     expect(fr['help.project.path']).toContain("n'y écrit rien")
     expect(en['help.project.path']).toContain('writes nothing')
+  })
+})
+
+describe('goneRows (D-3)', () => {
+  const pkg = (ids, proven = []) => ({ name: 'acme/lib', worst_severity: 'high', finding_ids: ids, proven_ids: proven, osv_ids: ids, installed: '1', target: '2' })
+  test('a flaw Michel proved fixed is not « he cannot prove it »', () => {
+    expect(goneRows({ gone: [pkg(['a'], ['a'])] })).toEqual([])
+  })
+  test('a package keeps the flaws that only vanished', () => {
+    const rows = goneRows({ gone: [pkg(['a', 'b'], ['a'])] })
+    expect(rows.length).toBe(1)
+    expect(rows[0].findingIds).toEqual(['b'])
+    expect(rows[0].kind).toBe('gone')
+  })
+  test('nothing proved: as it was; no list: nothing', () => {
+    expect(goneRows({ gone: [pkg(['a'])] })[0].findingIds).toEqual(['a'])
+    expect(goneRows({})).toEqual([])
   })
 })

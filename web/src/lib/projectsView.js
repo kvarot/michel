@@ -1,6 +1,7 @@
 // Pure functions behind the My projects page: no DOM, no fetch, no storage.
 // Vitest covers them (projectsView.test.js).
 import { translate } from '../i18n/index.js'
+import { severityOf } from './digestView.js'
 import { agoText } from './sourcesView.js'
 
 /**
@@ -136,4 +137,24 @@ export function anyScanning(views) {
 /** @param {string} name @param {string} lang @returns {string} the API path that starts the check of a project. */
 export function scanPath(name, lang) {
   return `/projects/${encodeURIComponent(name)}/scan?lang=${encodeURIComponent(lang)}`
+}
+
+/**
+ * goneRows are the rows of « Failles disparues » of a project's card: what the check no
+ * longer sees and Michel cannot prove fixed. A flaw a fix was proven to fix (« Vérifiée »,
+ * in Résolus) is left out: the section's words would be false of it (D-3).
+ * @param {object} project
+ */
+export function goneRows(project) {
+  const rows = []
+  for (const pkg of project?.gone || []) {
+    const proven = new Set(pkg.proven_ids || [])
+    const findingIds = (pkg.finding_ids || []).filter((id) => !proven.has(id))
+    if (!findingIds.length) continue
+    rows.push({
+      kind: 'gone', package: pkg.name, severity: severityOf(pkg.worst_severity), text: '',
+      findingIds, osvIds: pkg.osv_ids || [], installed: pkg.installed || '', target: pkg.target || '',
+    })
+  }
+  return rows
 }

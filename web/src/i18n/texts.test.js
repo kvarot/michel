@@ -106,3 +106,33 @@ describe('the hand over says what the code does (I5, I11)', () => {
     expect(en['srvfix.handover.settings']).toContain('Report')
   })
 })
+
+describe('the driver\'s words (D-6 to D-12)', () => {
+  test('D-6: each software of a server is named in its row', () => {
+    expect(fr['todo.server_package_named']).toContain('{package}')
+    expect(en['todo.server_package_named']).toContain('{package}')
+  })
+  test('D-7: the sentence on publishing is for what was fixed in the code, and dates start with a capital', () => {
+    expect(fr['resolved.deploy']).toContain('Pour ce qui a été corrigé dans ton code')
+    expect(en['resolved.deploy']).toContain('For what was fixed in your code')
+    expect(fr['resolved.exposure_date'].charAt(0)).toBe('D')
+    expect(en['resolved.exposure_date'].charAt(0)).toBe('L')
+  })
+  test('D-9: the button of the guide says it only opens the page', () => {
+    expect(fr['guide.check.action']).toContain('Ouvrir mes projets')
+    expect(en['guide.check.action']).toContain('Open my projects')
+  })
+  test('D-10: the empty submit of the manual form does not ask for a tick only', () => {
+    expect(fr['servers.discover.pick_one']).toContain('adresse')
+    expect(en['servers.discover.pick_one']).toContain('address')
+  })
+  test('D-11: the plan says where a test command goes', () => {
+    expect(fr['plan.project.no_tests']).toContain('réglages de correction')
+    expect(en['plan.project.no_tests']).toContain('fix settings')
+  })
+  test('D-8, D-12: Michel does list what is installed; a refused update says how to see the files', () => {
+    const go = JSON.parse(readFileSync(new URL('../../../internal/i18n/catalog/fr.json', import.meta.url), 'utf8'))
+    for (const os of ['debian', 'ubuntu', 'alpine', 'almalinux', 'rocky_linux']) expect(go['source.note.osv.' + os], os).not.toContain('saura')
+    expect(go['api.git.dirty_hint']).toContain('git status')
+  })
+})

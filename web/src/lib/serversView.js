@@ -468,7 +468,7 @@ export function backupLine(b, lang) {
  * @returns {{id: string, finding: string}|null}
  */
 export function serversRoute(hash) {
-  const m = String(hash || '').match(/^#\/servers(?:\/([^/?#]+))?\/?(?:\?finding=([^&#]+))?$/)
+  const m = String(hash || '').match(/^#\/servers(?:\/([^/?#]+))?\/?(?:\?finding=([^&#]+)|\?(settings)=1)?$/)
   if (!m) return null
   const dec = (s) => {
     try {
@@ -477,7 +477,13 @@ export function serversRoute(hash) {
       return ''
     }
   }
-  return { id: dec(m[1]), finding: dec(m[2]) }
+  const route = { id: dec(m[1]), finding: dec(m[2]) }
+  return m[3] ? { ...route, settings: true } : route
+}
+
+/** serverSettingsHash is the address of a server's sheet, opened at its settings. */
+export function serverSettingsHash(id) {
+  return id ? `#/servers/${encodeURIComponent(id)}?settings=1` : '#/servers'
 }
 
 /** serversHash is the address of a server's sheet ("" for the list), with a flaw chosen when finding is given. */

@@ -266,7 +266,7 @@ function attemptPath(attempt, gone, vanished, target) {
  * @returns {{key: string, state: string}[]}
  */
 export function pathSteps(path, plan, attempt) {
-  if ((attempt && attempt.state !== 'superseded') || !plan?.why) return path.steps
+  if (attempt && (attempt.state !== 'superseded' || !plan?.why)) return path.steps
   return path.steps.map((s) => (s.state === 'now' ? { ...s, state: 'todo' } : s))
 }
 
@@ -406,7 +406,7 @@ export function serverPlan({ finding, target, attempt = null, tried = false, pre
   if (michel && !auto && root) lines.push({ key: 'plan.server.root' })
   // R62: the person is told, before validating, that who runs the script is a choice, and where.
   if (set && !michel && !auto && ready) {
-    lines.push({ key: root ? 'plan.server.choice_user_root' : 'plan.server.choice_user', params: { name: set.name || '' }, link: { key: 'plan.server.choice_link', href: set.id ? `#/servers/${encodeURIComponent(set.id)}` : '#/servers' } })
+    lines.push({ key: root ? 'plan.server.choice_user_root' : 'plan.server.choice_user', params: { name: set.name || '' }, link: { key: 'plan.server.choice_link', href: set.id ? `#/servers/${encodeURIComponent(set.id)}?settings=1` : '#/servers' } })
   }
 
   // EligibleServer and serverTried (server_auto.go): once, on an active server;

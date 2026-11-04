@@ -60,6 +60,8 @@ type Package struct {
 	// MustShow counts the findings urgent or critical: they come first in
 	// FindingIDs, and a page does not fold them away.
 	MustShow int `json:"must_show,omitempty"`
+	// ProvenIDs, on a gone package, are the findings a fix was proven to fix.
+	ProvenIDs []string `json:"proven_ids,omitempty"`
 	// What is the "what" sentence of the most severe finding, in the
 	// digest's language (new findings only).
 	What string `json:"what,omitempty"`
@@ -622,6 +624,9 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 	if pd.Gone, err = c.packages(ctx, p, gone, nil); err != nil {
 		return ProjectDigest{}, 0, 0, nil, err
 	}
+	if err := c.markProven(ctx, p.ID, pd.Gone); err != nil {
+		return ProjectDigest{}, 0, 0, nil, err
+	}
 	sort.SliceStable(pd.Due, func(i, j int) bool {
 		if pd.Due[i].DueAt != pd.Due[j].DueAt {
 			return pd.Due[i].DueAt < pd.Due[j].DueAt
@@ -906,4 +911,36 @@ func (c computer) packages(ctx context.Context, p project.Project, findings []sc
 func effective(f scan.Finding) string {
 	l, _ := scan.EffectiveSeverity(f)
 	return l
+}
+
+// markProven names, in each gone package, the findings a fix was proven to
+// have fixed: the page does not say of them that nobody can prove it.
+func (c computer) markProven(ctx context.Context, projectID string, list []Package) error {
+	if len(list) == 0 {
+		return nil
+	}
+	rows, err := c.s.DB().QueryContext(ctx, `SELECT DISTINCT finding_id FROM fix_attempt WHERE project_id = ? AND state = 'proven_fixed'`, projectID)
+	if err != nil {
+		return fmt.Errorf("cannot read the fixes: %w", err)
+	}
+	defer rows.Close()
+	proven := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		proven[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range list {
+		for _, id := range list[i].FindingIDs {
+			if proven[id] {
+				list[i].ProvenIDs = append(list[i].ProvenIDs, id)
+			}
+		}
+	}
+	return nil
 }

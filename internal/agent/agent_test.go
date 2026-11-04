@@ -831,3 +831,22 @@ func TestDetectEnvFailure(t *testing.T) {
 		t.Errorf("Detect = %+v, want the env hint", st)
 	}
 }
+
+// M6: a Claude Code that answers too slowly is not said to be too old.
+func TestDetectSlowIsNotTooOld(t *testing.T) {
+	f := newFixture(t, fakeConfig{Version: "1.0.3", LoggedIn: true})
+	real := f.d.exec()
+	f.d.Exec = func(ctx context.Context, bin string, args []string, env []string, dir string) ([]byte, []byte, error) {
+		if len(args) > 0 && args[0] == "--help" {
+			return nil, nil, context.DeadlineExceeded
+		}
+		return real(ctx, bin, args, env, dir)
+	}
+	st := Detect(context.Background(), f.d)
+	if st.Hint != HintSlow {
+		t.Errorf("hint %q", st.Hint)
+	}
+	if !strings.Contains(st.Message(i18n.FR), "à temps") {
+		t.Errorf("message %q", st.Message(i18n.FR))
+	}
+}

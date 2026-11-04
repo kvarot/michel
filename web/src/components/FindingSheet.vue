@@ -167,6 +167,8 @@ export default {
   components: { DecisionPanel },
   props: {
     findingId: { type: String, required: true },
+    // canFix: false for a folder Michel can prepare no fix in.
+    canFix: { type: Boolean, default: true },
   },
   emits: ['decided'],
   data() {
@@ -175,7 +177,7 @@ export default {
   computed: {
     // fixable: an open finding can go to the Fix page ("Corriger").
     fixable() {
-      if (!this.f || this.f.status === 'gone') return false
+      if (!this.canFix || !this.f || this.f.status === 'gone') return false
       return this.f.decision?.action !== 'ignore'
     },
     fixHref() {

@@ -81,7 +81,7 @@
           </template>
           <p v-else-if="handOver === 'settings'" class="m-small">
             {{ $t('srvfix.handover.settings') }}
-            <a :href="serverHref">{{ $t('srvfix.handover.settings_link') }}</a>
+            <a :href="settingsHref">{{ $t('srvfix.handover.settings_link') }}</a>
           </p>
         </div>
         <p v-else-if="attempt.state === 'approved' && attempt.approved_by === 'auto'" class="m-voice">{{ $t('srvfix.auto') }}</p>
@@ -190,7 +190,7 @@
 import FieldHelp from './FieldHelp.vue'
 import { formatDate, severityOf } from '../lib/digestView.js'
 import { canPrepareServer, isGone } from '../lib/pathView.js'
-import { backupLine, canApproveServer, doneKey, envLabel, findingTitle, handOverOf, needsSnapshot, restoreNeeded, serverAttemptLine, serversHash } from '../lib/serversView.js'
+import { backupLine, canApproveServer, doneKey, envLabel, findingTitle, handOverOf, needsSnapshot, restoreNeeded, serverAttemptLine, serverSettingsHash, serversHash } from '../lib/serversView.js'
 
 // ServerProposal is the right of the Fix page for a fix of a server: the
 // flaw in plain words, then the proposal: its sentence, « réduit le risque,
@@ -245,6 +245,9 @@ export default {
     },
     serverHref() {
       return serversHash(this.server.target.id)
+    },
+    settingsHref() {
+      return serverSettingsHash(this.server.target.id)
     },
     envText() {
       return envLabel(this.target?.env, this.lang)

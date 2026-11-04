@@ -359,6 +359,8 @@ export default {
     id: { type: String, required: true },
     // finding is the flaw the address names: its card comes into view with the focus.
     finding: { type: String, default: '' },
+    // settings: the address asks for the settings, far below on a long sheet.
+    settings: { type: Boolean, default: false },
   },
   emits: ['changed', 'removed'],
   data() {
@@ -533,6 +535,9 @@ export default {
     finding() {
       this.focusFinding()
     },
+    settings() {
+      this.focusSettings()
+    },
   },
   created() {
     this.load()
@@ -587,6 +592,19 @@ export default {
     /** planOnCard: the card shows the plan, so the level 3 warning is next to it. */
     planOnCard(c) {
       return showsPlan(this.lastAttempt(c), false)
+    },
+    /** focusSettings takes the keyboard and the view to who runs the scripts, once per address. */
+    focusSettings() {
+      const want = `${this.id}|settings`
+      if (!this.settings || this.focusedFor === want || !this.view) return
+      this.focusedFor = want
+      this.$nextTick(() => {
+        const el = document.getElementById(`srv-${this.id}-exec`)
+        if (!el) return
+        el.setAttribute('tabindex', '-1')
+        el.focus({ preventScroll: true })
+        el.scrollIntoView({ block: 'start' })
+      })
     },
     /** focusFinding takes the keyboard and the view to the flaw the address names, once. */
     focusFinding() {
@@ -646,6 +664,7 @@ export default {
       } finally {
         this.loading = false
         this.$nextTick(this.focusFinding)
+        this.$nextTick(this.focusSettings)
       }
     },
     /** refreshView reads the server again: the log badges follow what the Journaux block changed. A failure is shown, not swallowed. */

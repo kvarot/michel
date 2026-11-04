@@ -13,7 +13,7 @@
 
     <template v-if="route.id">
       <a href="#/servers" class="m-srv__back m-small">← {{ $t('servers.back') }}</a>
-      <ServerSheet :id="route.id" :finding="route.finding" @changed="onChanged" @removed="onRemoved" />
+      <ServerSheet :id="route.id" :finding="route.finding" :settings="route.settings" @changed="onChanged" @removed="onRemoved" />
     </template>
 
     <template v-else>

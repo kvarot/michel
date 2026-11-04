@@ -89,7 +89,8 @@ const (
 	HintNotInstalled = "agent.hint.not_installed"
 	HintNotLoggedIn  = "agent.hint.not_logged_in"
 	HintTooOld       = "agent.hint.too_old"
-	HintEnv          = "agent.hint.env" // Michel could not build Claude Code's environment
+	HintEnv          = "agent.hint.env"  // Michel could not build Claude Code's environment
+	HintSlow         = "agent.hint.slow" // Claude Code did not answer in time: nothing is known of it
 )
 
 // Status is what Michel knows of the installed Claude Code.
@@ -113,6 +114,8 @@ func (s Status) Message(lang i18n.Lang) string {
 		return i18n.T(lang, "agent.hint.too_old")
 	case HintEnv:
 		return i18n.T(lang, "agent.hint.env")
+	case HintSlow:
+		return i18n.T(lang, "agent.hint.slow")
 	}
 	return ""
 }
@@ -121,6 +124,7 @@ func (s Status) Message(lang i18n.Lang) string {
 var (
 	ErrNotInstalled = errors.New("Claude Code is not installed")
 	ErrTooOld       = errors.New("this version of Claude Code cannot be run isolated from the user's settings")
+	errSlow         = errors.New("Claude Code did not answer in time")
 )
 
 // isolationFlags are the options of `claude --help` Michel's launch needs.
@@ -160,6 +164,9 @@ func Detect(ctx context.Context, d Deps) Status {
 	st.Installed, st.Version = true, version
 	if err := isolated(ctx, d); err != nil {
 		st.Hint = HintTooOld
+		if errors.Is(err, errSlow) {
+			st.Hint = HintSlow
+		}
 		return st
 	}
 	env, err := environment(d)
@@ -211,6 +218,9 @@ func isolated(ctx context.Context, d Deps) error {
 	defer cancel()
 	out, _, err := d.exec()(cctx, d.binary(), []string{"--help"}, env, d.DataDir)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || cctx.Err() != nil {
+			return errSlow
+		}
 		return ErrTooOld
 	}
 	help := string(out)

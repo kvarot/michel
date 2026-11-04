@@ -36,6 +36,16 @@ export function canDecide(attempt) {
 }
 
 /**
+ * offersDecision says the page offers « Ta décision »: never on a flaw that is gone (the API
+ * refuses it, and the list of attempts it reads can be a little behind).
+ * @param {object|null} attempt
+ * @param {boolean} gone
+ */
+export function offersDecision(attempt, gone) {
+  return !gone && canDecide(attempt)
+}
+
+/**
  * consentProjectOf is the project a flaw's AI consent is for: the attempt shown, the sheet
  * of this very flaw (never a sheet left from another one), the flaw itself. '' while nothing
  * loaded says it yet: the page loads the sheet before it answers (B2).

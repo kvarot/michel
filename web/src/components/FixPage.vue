@@ -81,6 +81,7 @@
           :server="isServer"
           :target="isServer ? target : null"
           :can-start="isServer || canStart"
+          :why-not="agentProblem ? agentProblem.text : ''"
           :starting="isServer ? acting === 'again' : starting"
           :hold-busy="holdBusy"
           @start="isServer ? again() : start()"
@@ -205,7 +206,7 @@ import FixProposal from './FixProposal.vue'
 import ServerProposal from './ServerProposal.vue'
 import { api } from '../api.js'
 import { severityOf } from '../lib/digestView.js'
-import { acceptResult, activityLine, canDecide, consentProjectOf, decidingAttempt, fixHash, groupAttempts, isFinal, isOpen, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
+import { acceptResult, activityLine, consentProjectOf, offersDecision, decidingAttempt, fixHash, groupAttempts, isFinal, isOpen, mergeMessages, selectAction, stateLine } from '../lib/fixView.js'
 import { chatNoStart, isGone } from '../lib/pathView.js'
 import { isServerFinal, serverAttemptLine, serverPollDelay, stepLine } from '../lib/serversView.js'
 
@@ -331,7 +332,7 @@ export default {
     // toDecide is the flaw's sheet when the page offers its decision.
     toDecide() {
       const id = this.selectedFinding?.id
-      return id && this.sheet?.id === id && !this.startingFor && canDecide(decidingAttempt(this.attempts, id, this.current)) ? this.sheet : null
+      return id && this.sheet?.id === id && !this.startingFor && offersDecision(decidingAttempt(this.attempts, id, this.current), isGone(this.selectedFinding, this.sheet)) ? this.sheet : null
     },
     agentProblem() {
       if (this.agentError) {

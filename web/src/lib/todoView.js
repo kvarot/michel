@@ -270,7 +270,7 @@ export function buildTodo({ digest, attempts, servers, details, findings, lang, 
             continue
           }
           const how = hot ? exploitedRank : bySeverity[severityOf(f.severity)]
-          const title = f.kind === 'server_package' && !advanced ? t('todo.server_package', { server: s.name }) : findingTitle(f, lang)
+          const title = f.kind === 'server_package' && !advanced ? (f.package ? t('todo.server_package_named', { package: f.package, server: s.name }) : t('todo.server_package', { server: s.name })) : findingTitle(f, lang)
           add(id, how, title, kev ? attacked(where) : where, how.action, href, scope, card.ids)
         }
       }

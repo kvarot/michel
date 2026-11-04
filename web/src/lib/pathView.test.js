@@ -577,11 +577,12 @@ describe('pathSteps', () => {
   })
   test('anything else stays as the path says', () => {
     const running = projectPlan({ finding: finding(), project: project() })
-    expect(pathSteps(failurePath({ attempt: null }), running, null).map((s) => s.state)).toEqual(['done', 'now', 'todo', 'todo', 'todo'])
+    // D-11: nothing started: nothing is « en cours ».
+    expect(pathSteps(failurePath({ attempt: null }), running, null).map((s) => s.state)).toEqual(['done', 'todo', 'todo', 'todo', 'todo'])
     const a = attempt('proposed')
     const terminal = projectPlan({ finding: finding(), project: project({ fix_level: 0 }) })
     expect(pathSteps(failurePath({ attempt: a }), terminal, a).map((s) => s.state)).toEqual(['done', 'done', 'now', 'todo', 'todo'])
-    expect(pathSteps(failurePath({ attempt: null }), null, null).map((s) => s.state)).toEqual(['done', 'now', 'todo', 'todo', 'todo'])
+    expect(pathSteps(failurePath({ attempt: null }), null, null).map((s) => s.state)).toEqual(['done', 'todo', 'todo', 'todo', 'todo'])
   })
 })
 

@@ -17,3 +17,13 @@ export function visibleSheets(ids, all, mustShow = 0) {
   if (all || list.length <= limit) return { shown: list, hidden: 0 }
   return { shown: list.slice(0, limit), hidden: list.length - limit }
 }
+
+/**
+ * rowFixable says a row offers « Corriger »: an open flaw (not gone, not ignored) of a
+ * project Michel can prepare a fix for. A folder that is no Git repository gets none (D-4).
+ * @param {{kind: string, findingIds: string[], decided?: string}} item
+ * @param {boolean} canFix
+ */
+export function rowFixable(item, canFix) {
+  return !!canFix && item.findingIds.length > 0 && item.kind !== 'gone' && item.decided !== 'ignore'
+}
