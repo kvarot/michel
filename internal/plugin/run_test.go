@@ -399,3 +399,52 @@ func TestSkippedKnownIsNotNotSeen(t *testing.T) {
 		t.Errorf("CVE-2026-0002 = %s", got)
 	}
 }
+
+// The id of a finding holds its location. A lockfile that moves gives the same
+// CVE another id: the old finding of that rule is not seen at its old place, but
+// the rule was skipped, not unseen, so it stays.
+func TestSkippedKnownRuleKeepsTheOldLocation(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	entry := pluginEntry("plugin.trivy", "trivy", FormatTrivyJSON, false)
+	if res, err := RunPlugin(ctx, e.deps, entry, e.proj, filepath.Join("testdata", "trivy-misconfig.json")); err != nil || res.New != 3 {
+		t.Fatalf("first = %+v %v", res, err)
+	}
+	if _, err := e.st.DB().Exec(`INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id, severity_label,
+		installed_version, fixed_versions, status, first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, status_changed_at, summary)
+		VALUES ('osv-1', ?, 'composer.lock', 'Packagist', 'acme-lib', 'CVE-2026-0001', 'high', '1.0.0', '["1.0.1"]', 'new', 's1', 's1', 't', 't', 't', 'x')`, e.proj.ID); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join("testdata", "trivy-misconfig.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "moved.json")
+	if err := os.WriteFile(moved, []byte(strings.Replace(string(b), `"Target": "package-lock.json"`, `"Target": "web/package-lock.json"`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := RunPlugin(ctx, e.deps, entry, e.proj, moved)
+	if err != nil || res.SkippedKnown != 1 {
+		t.Fatalf("moved = %+v %v", res, err)
+	}
+	var gone int
+	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM finding WHERE project_id = ? AND source_key = 'plugin.trivy' AND rule_id = 'CVE-2026-0001' AND status = 'gone'`, e.proj.ID).Scan(&gone); err != nil || gone != 0 {
+		t.Errorf("the old finding of the skipped rule closed: %d %v", gone, err)
+	}
+	// A report that does not hold the CVE at all: its findings close.
+	var open map[string]any
+	_ = json.Unmarshal(b, &open)
+	results := open["Results"].([]any)
+	results[2].(map[string]any)["Vulnerabilities"] = results[2].(map[string]any)["Vulnerabilities"].([]any)[1:]
+	nb, _ := json.Marshal(open)
+	without := filepath.Join(t.TempDir(), "without.json")
+	if err := os.WriteFile(without, nb, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res, err = RunPlugin(ctx, e.deps, entry, e.proj, without); err != nil || res.SkippedKnown != 0 || res.Gone < 1 {
+		t.Errorf("without = %+v %v, want the CVE closed", res, err)
+	}
+	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM finding WHERE project_id = ? AND source_key = 'plugin.trivy' AND rule_id = 'CVE-2026-0001' AND status = 'gone'`, e.proj.ID).Scan(&gone); err != nil || gone == 0 {
+		t.Errorf("a CVE absent from the report stays open: %d %v", gone, err)
+	}
+}

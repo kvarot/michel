@@ -183,13 +183,14 @@ func RunPlugin(ctx context.Context, deps RunDeps, e source.Entry, p project.Proj
 	findings := make([]scan.Finding, 0, len(external))
 	seen := map[string]bool{}
 	// Skipped is not « not seen »: a plugin finding that OSV now reports stays as it was.
-	keep := map[string]bool{}
+	keep, keepRules := map[string]bool{}, map[string]bool{}
 	for _, x := range external {
 		if x.Kind == KindVulnerability && slices.ContainsFunc(append([]string{x.RuleID}, x.Aliases...), func(id string) bool {
 			return known[strings.ToUpper(id)]
 		}) {
 			res.SkippedKnown++
 			keep[toFinding(p.ID, e.Key, x).ID] = true
+			keepRules[x.RuleID] = true
 			continue
 		}
 		f := toFinding(p.ID, e.Key, x)
@@ -208,7 +209,7 @@ func RunPlugin(ctx context.Context, deps RunDeps, e source.Entry, p project.Proj
 			return err
 		}
 		defer tx.Rollback()
-		res.New, res.Still, res.Gone, superseded, err = scan.ApplyExternalKeeping(ctx, tx, p.ID, e.Key, res.RunID, now(), findings, keep, nil)
+		res.New, res.Still, res.Gone, superseded, err = scan.ApplyExternalKeeping(ctx, tx, p.ID, e.Key, res.RunID, now(), findings, keep, keepRules, nil)
 		if err != nil {
 			return err
 		}
