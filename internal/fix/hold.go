@@ -284,7 +284,12 @@ func WithdrawHeld(ctx context.Context, d Deps, attemptID string) error {
 	if err != nil {
 		return err
 	}
-	if err := repo.SetState(ctx, a.ID, []State{StateHeld}, StateWithdrawn, i18n.T(d.lang(), "fix.cause.hold_withdrawn")); err != nil {
+	// A flaw that has gone leaves only this way out: the cause says it was withdrawn, not that keys were removed.
+	cause := "fix.cause.hold_withdrawn"
+	if fi, _, err := d.find(ctx, a.FindingID); err == nil && fi.Status == scan.StatusGone {
+		cause = "fix.cause.hold_withdrawn_gone"
+	}
+	if err := repo.SetState(ctx, a.ID, []State{StateHeld}, StateWithdrawn, i18n.T(d.lang(), cause)); err != nil {
 		return err
 	}
 	d.cleanup(ctx, a, true)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -620,6 +621,8 @@ func PushFix(ctx context.Context, d Deps, attemptID string) (PushOutcome, error)
 	}
 	if err := errors.Join(auditErr, rowErr); err != nil {
 		// The send happened: the answer says so (a keyed refusal), not a 500 that reads as nothing sent.
+		// The causes are errors of the audit log and of the store, never git's words.
+		slog.Warn("fix: the branch was sent but could not be noted", "attempt", a.ID, "err", err)
 		return out, fmt.Errorf("%w: %w", ErrGitSentNotNoted, err)
 	}
 	return out, nil
