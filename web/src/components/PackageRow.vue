@@ -48,7 +48,9 @@
       </v-btn>
     </div>
     <div v-if="open" :id="sheetId" class="m-row__sheets">
-      <FindingSheet v-for="id in item.findingIds" :key="id" :finding-id="id" @decided="$emit('decided')" />
+      <FindingSheet v-for="id in sheets.shown" :key="id" :finding-id="id" @decided="$emit('decided')" />
+      <v-btn v-if="sheets.hidden" variant="text" size="small" class="m-row__more" @click="all = true">{{ $t('item.more', { n: sheets.hidden }) }}</v-btn>
+      <v-btn v-else-if="all && item.findingIds.length > 3" variant="text" size="small" class="m-row__more" @click="all = false">{{ $t('item.less') }}</v-btn>
     </div>
   </li>
 </template>
@@ -57,6 +59,7 @@
 import FindingSheet from './FindingSheet.vue'
 import { formatDate, formatPercent } from '../lib/digestView.js'
 import { fixHash } from '../lib/fixView.js'
+import { visibleSheets } from '../lib/sheetsView.js'
 
 let seq = 0
 
@@ -69,9 +72,13 @@ export default {
   emits: ['decided'],
   data() {
     seq += 1
-    return { open: false, sheetId: `sheet-${seq}` }
+    return { open: false, all: false, sheetId: `sheet-${seq}` }
   },
   computed: {
+    // sheets: the first few flaw sheets, the rest on a click (B9).
+    sheets() {
+      return visibleSheets(this.item.findingIds, this.all)
+    },
     // fixable: an open finding (not gone, not ignored) can go to the Fix page.
     fixable() {
       return this.item.findingIds.length > 0 && this.item.kind !== 'gone' && this.item.decided !== 'ignore'

@@ -69,6 +69,9 @@
   "item.epss": "Risque d'attaque dans les 30 jours : {p}",
   "item.open": "Voir le détail",
   "item.hide": "Masquer le détail",
+  "item.more.one": "Et {n} autre faille : la montrer",
+  "item.more.other": "Et {n} autres failles : les montrer",
+  "item.less": "Montrer moins de failles",
 
   "reason.severity_changed": "la gravité a changé",
   "reason.fixed_version_changed": "la version qui corrige la faille a changé",
