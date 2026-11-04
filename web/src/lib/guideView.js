@@ -188,3 +188,14 @@ export function emptyInstall(projects, servers) {
 export function guideUnseen(unseen, nothingWatched) {
   return nothingWatched ? unseen.filter((u) => u.key !== 'nothing') : unseen
 }
+
+/**
+ * helpLostNow says « Michel n'a pas pu lire tes projets ou tes serveurs » is true now: the
+ * guide was asked for, it is not shown, the first reading ended (before that the lists are
+ * only loading), and a list could not be read. Once both read, the line has no case.
+ * @param {{asked: boolean, loaded: boolean, guideShown: boolean, projectViews: object|null, servers: object|null}} args
+ * @returns {boolean}
+ */
+export function helpLostNow({ asked, loaded, guideShown, projectViews, servers }) {
+  return !!asked && !!loaded && !guideShown && (!projectViews || !servers)
+}

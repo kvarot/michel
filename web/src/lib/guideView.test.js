@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideUnseen, guideVisible, guideWaiting, markGuideRead, readGuide, showGuideAgain } from './guideView.js'
+import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideUnseen, guideVisible, guideWaiting, helpLostNow, markGuideRead, readGuide, showGuideAgain } from './guideView.js'
 import { keys } from './storage.js'
 import en from '../i18n/en.json'
 import fr from '../i18n/fr.json'
@@ -225,5 +225,21 @@ describe('the words of the guide and of the empty screens', () => {
       expect(fr[`plan.server.approval_${k}_preprod`]).toContain('ta préprod {name}')
       expect(en[`plan.server.approval_${k}_preprod`]).toContain('your preprod {name}')
     }
+  })
+})
+
+describe('helpLostNow (N-B)', () => {
+  const ok = { asked: true, loaded: true, guideShown: false, projectViews: [], servers: [] }
+  test('only when a list could not be read, once the first reading ended', () => {
+    expect(helpLostNow({ ...ok, projectViews: null })).toBe(true)
+    expect(helpLostNow({ ...ok, servers: null })).toBe(true)
+    expect(helpLostNow({ ...ok, projectViews: null, loaded: false })).toBe(false)
+  })
+  test('not when both lists read, even if the guide was asked for then dismissed', () => {
+    expect(helpLostNow(ok)).toBe(false)
+  })
+  test('not when the guide is shown, nor when it was not asked for', () => {
+    expect(helpLostNow({ ...ok, projectViews: null, guideShown: true })).toBe(false)
+    expect(helpLostNow({ ...ok, projectViews: null, asked: false })).toBe(false)
   })
 })

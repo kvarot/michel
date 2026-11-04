@@ -245,7 +245,7 @@
   "api.target.busy_unknown": "A fix on this server ended without Michel knowing what it changed.",
   "api.target.busy_unknown_hint": "Check the server yourself, then mark the fix as checked.",
   "api.target.check_failed": "The check did not complete.",
-  "api.target.check_failed_hint": "Try again. If it fails again, type michel target check in a terminal (the window where commands are typed): the answer says what is in the way.",
+  "api.target.check_failed_hint": "Try again. If it fails again, type michel target check in a terminal (the window where commands are typed): it runs the check again and shows what it can.",
   "api.target.check_running": "A check of this server is already running.",
   "api.target.denied": "The network policy does not allow this server.",
   "api.target.denied_hint": "Michel adds this permission when you add a server. If it was removed, put the server's address back in his rules file: in network.allow, with the purpose target.ssh. Ask whoever manages your computer if this means nothing to you.",

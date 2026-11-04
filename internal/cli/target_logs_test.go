@@ -232,7 +232,7 @@ func TestTargetLogsReadFailureSaysWhyWithoutThePathOfTheAgent(t *testing.T) {
 		}
 	}
 	_, _, _, err := run(t, e.dir, "target", "logs", "read", "srv-demo")
-	if err == nil || !strings.Contains(err.Error(), "SSH agent") || strings.Contains(err.Error(), sock) {
+	if err == nil || !strings.Contains(err.Error(), "SSH agent") || !strings.Contains(err.Error(), "ssh-add") || strings.Contains(err.Error(), sock) {
 		t.Errorf("read without agent: %v", err)
 	}
 }

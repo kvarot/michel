@@ -245,7 +245,7 @@
   "api.target.busy_unknown": "Une correction sur ce serveur s'est arrêtée sans que Michel sache ce qu'elle a changé.",
   "api.target.busy_unknown_hint": "Vérifie le serveur toi-même, puis marque la correction comme vérifiée.",
   "api.target.check_failed": "La vérification n'est pas allée jusqu'au bout.",
-  "api.target.check_failed_hint": "Réessaie. Si elle échoue encore, tape michel target check dans un terminal (la fenêtre où l'on tape des commandes) : la réponse dit ce qui bloque.",
+  "api.target.check_failed_hint": "Réessaie. Si elle échoue encore, tape michel target check dans un terminal (la fenêtre où l'on tape des commandes) : il refait la vérification et montre ce qu'il peut.",
   "api.target.check_running": "Une vérification de ce serveur est déjà en cours.",
   "api.target.denied": "La politique réseau n'autorise pas ce serveur.",
   "api.target.denied_hint": "Michel ajoute cette autorisation quand tu ajoutes un serveur. Si elle a été retirée, remets l'adresse du serveur dans son fichier de règles : dans network.allow, avec le but target.ssh. Demande à qui gère ton ordinateur si ça ne te parle pas.",

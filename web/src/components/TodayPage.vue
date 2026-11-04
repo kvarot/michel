@@ -18,7 +18,7 @@
 
       <FirstSteps v-if="guideShown" ref="guide" :steps="guideSteps" :git="guideGit" @dismiss="dismissGuide" />
       <p v-else-if="guideNotice" ref="notice" class="m-small m-todo__notice" role="status" tabindex="-1">{{ $t('guide.dismissed') }}</p>
-      <p v-if="helpLost && !guideShown" ref="lost" class="m-small m-todo__notice" role="status" tabindex="-1">{{ $t('guide.unreadable') }}</p>
+      <p v-if="lostShown" ref="lost" class="m-small m-todo__notice" role="status" tabindex="-1">{{ $t('guide.unreadable') }}</p>
       <v-btn v-if="nothingWatched && !guideShown" class="m-todo__empty-action" color="primary" variant="flat" href="#/projects">{{ $t('empty.todo_action') }}</v-btn>
 
       <OsvBanner :fetched-at="osvFetchedAt" :stale="digest.osv_stale" />
@@ -80,7 +80,7 @@ import FirstSteps from './FirstSteps.vue'
 import OsvBanner from './OsvBanner.vue'
 import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
-import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideUnseen, guideVisible, guideWaiting } from '../lib/guideView.js'
+import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideUnseen, guideVisible, guideWaiting, helpLostNow } from '../lib/guideView.js'
 import { save } from '../lib/storage.js'
 import { buildTodo, projectsToRead, serversToRead, unseenBelow } from '../lib/todoView.js'
 
@@ -109,7 +109,7 @@ export default {
       // projectViews is GET /projects, null when it could not be read: the guide reads it.
       projectViews: null,
       guideNotice: false,
-      // helpLost: "Revoir le guide" was asked while a list could not be read.
+      // helpLost: "Revoir le guide" was asked on this page; the line it may bring is lostShown.
       helpLost: false,
       // timer reads the page again while a check runs, so the guide follows it.
       timer: null,
@@ -144,6 +144,10 @@ export default {
       return guideSteps({ projects: this.projectViews, servers: this.servers, read: this.$ui.guide.read, anyFinding: flaw.any, flawHref: flaw.href })
     },
     // Where a person stands is only said once both lists were read.
+    // lostShown: asked for the guide, and a list could not be read (N-B).
+    lostShown() {
+      return helpLostNow({ asked: this.helpLost, loaded: this.loaded, guideShown: this.guideShown, projectViews: this.projectViews, servers: this.servers })
+    },
     guideShown() {
       return !!this.projectViews && !!this.servers && guideVisible(this.guideSteps, this.$ui.guide)
     },
@@ -166,8 +170,8 @@ export default {
     // "Revoir le guide" from the menu, on this very page.
     '$ui.guide.asks'() {
       this.guideNotice = false
-      this.helpLost = !this.guideShown
-      this.$nextTick(() => (this.helpLost ? this.$refs.lost : this.$refs.guide)?.focus())
+      this.helpLost = true
+      this.$nextTick(() => (this.lostShown ? this.$refs.lost : this.$refs.guide)?.focus())
     },
   },
   created() {
@@ -219,6 +223,7 @@ export default {
     /** dismissGuide hides the guide, says where it went, and keeps the keyboard there. */
     dismissGuide() {
       dismissGuide(this.$ui.guide, save)
+      this.helpLost = false
       this.guideNotice = true
       this.$nextTick(() => this.$refs.notice?.focus())
     },
