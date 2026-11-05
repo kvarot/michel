@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  ageCounts, ageOf, allListed, barHeight, openBySeverity, parkSummary, proposedCount, provenFixedCount,
+  ageCounts, ageOf, allListed, barHeight, listsStatus, openBySeverity, parkSummary, proposedCount, provenFixedCount,
   longDay, severityShares, shortDay, signalCounts, weekKey, weekStart, weeklyChanges, weeklyMax,
 } from './overviewView.js'
 
@@ -61,15 +61,18 @@ describe('the fixes', () => {
 })
 
 describe('parkSummary', () => {
-  test('counts the projects, the active servers and the failed checks', () => {
+  test('counts the projects, the active servers, and the failed checks of each, apart', () => {
     const projects = [{ name: 'shop', last_scan_status: 'failed' }, { name: 'blog', last_scan_status: 'done' }, { name: 'demo', last_scan_status: 'interrupted' }]
     const servers = [{ id: '1', active: true, state: { code: 'check_failed' } }, { id: '2', active: true, state: { code: 'clean' } }, { id: '3', active: false, state: { code: 'check_failed' } }]
-    expect(parkSummary(projects, servers)).toEqual({ projects: 3, servers: 2, failed: 3 })
-    expect(parkSummary([], [])).toEqual({ projects: 0, servers: 0, failed: 0 })
+    expect(parkSummary(projects, servers, { failed_scans: 2 })).toEqual({ projects: 3, servers: 2, failedProjects: 2, failedServers: 1 })
+    expect(parkSummary([], [], { failed_scans: 0 })).toEqual({ projects: 0, servers: 0, failedProjects: 0, failedServers: 0 })
   })
-  test('what cannot be read is null, and so is the failed count it would hide', () => {
-    expect(parkSummary(null, [])).toEqual({ projects: null, servers: 0, failed: null })
-    expect(parkSummary([], null)).toEqual({ projects: 0, servers: null, failed: null })
+  test('the failed projects are the number of the digest, the one of the banner', () => {
+    expect(parkSummary([{ name: 'shop', last_scan_status: 'failed' }], [], { failed_scans: 0 }).failedProjects).toBe(0)
+  })
+  test('what cannot be read is null', () => {
+    expect(parkSummary(null, [], null)).toEqual({ projects: null, servers: 0, failedProjects: null, failedServers: 0 })
+    expect(parkSummary([], null, { failed_scans: 'x' })).toEqual({ projects: 0, servers: null, failedProjects: null, failedServers: null })
   })
 })
 
@@ -132,6 +135,20 @@ describe('weeks', () => {
       ['2027-01-04', 0, 2],
     ])
   })
+  test('a full answer may miss older digests: the weeks up to the oldest one given are not read', () => {
+    const now = new Date('2026-11-05T12:00:00Z')
+    const runs = Array.from({ length: 100 }, (_, i) => ({ until: new Date(Date.parse('2026-11-04T06:00:00Z') - i * 3600000 * 5).toISOString(), projects: [{ name: 'shop', new: 1, gone: 0 }] }))
+    // 100 digests five hours apart reach back to 2026-10-14 (week of 10-12).
+    const weeks = weeklyChanges(runs, now)
+    expect(weeks.map((w) => [w.key, w.unread])).toEqual([
+      ['2026-09-14', true], ['2026-09-21', true], ['2026-09-28', true], ['2026-10-05', true],
+      ['2026-10-12', true], ['2026-10-19', false], ['2026-10-26', false], ['2026-11-02', false],
+    ])
+    expect(weeks[4].fresh).toBe(null)
+    expect(weeks[5].fresh).toBeGreaterThan(0)
+    // Fewer than 100: nothing is missing.
+    expect(weeklyChanges(runs.slice(0, 99), now)[4].unread).toBe(false)
+  })
   test('the digests cannot be read: null', () => {
     expect(weeklyChanges(null, new Date())).toBe(null)
   })
@@ -155,6 +172,13 @@ describe('ages', () => {
     expect(ageOf('2026-12-01T00:00:00Z', now)).toBe(0)
     expect(ageOf('', now)).toBe(null)
     expect(ageOf('yesterday', now)).toBe(null)
+  })
+  test('ageOf counts calendar days on the clock of the person, across a change of hour', () => {
+    // 25 October 2026, Paris goes back one hour: 24 to 26 October is two days, though 37 hours.
+    expect(ageOf('2026-10-24T10:30:00Z', new Date('2026-10-25T23:30:00Z'))).toBe(2)
+    expect(ageOf('2026-10-24T21:59:00Z', new Date('2026-10-24T22:01:00Z'))).toBe(1)
+    // 29 March 2026, Paris goes forward one hour.
+    expect(ageOf('2026-03-28T23:30:00Z', new Date('2026-03-29T22:30:00Z'))).toBe(1)
   })
   test('the buckets hold their edges', () => {
     const f = (days, status = 'new', decision = null) => ({ id: String(days), status, decision, first_seen_at: ago(days) })
@@ -205,5 +229,16 @@ describe('days of the axis', () => {
     expect(shortDay(d, 'en')).toBe('11-02')
     expect(longDay(d, 'fr')).toBe('02/11/2026')
     expect(longDay(d, 'en')).toBe('2026-11-02')
+  })
+})
+
+describe('listsStatus', () => {
+  test('reading, unread, read', () => {
+    expect(listsStatus('reading', {})).toBe('reading')
+    expect(listsStatus('unread', {})).toBe('unread')
+    expect(listsStatus('read', {})).toBe('read')
+    expect(listsStatus('read', { shop: [], blog: null })).toBe('read')
+    expect(listsStatus('read', { shop: null, blog: null })).toBe('unread')
+    expect(listsStatus('odd', {})).toBe('reading')
   })
 })

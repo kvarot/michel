@@ -54,8 +54,8 @@
           <v-btn color="primary" variant="tonal" @click="load">{{ $t('app.retry') }}</v-btn>
         </section>
 
-        <SourcesPage v-else-if="page === 'sources'" @changed="stale = true" />
-        <ProjectsPage v-else-if="page === 'projects'" :digest="digest" @decided="loadToday(false)" @changed="stale = true" />
+        <SourcesPage v-else-if="page === 'sources'" @changed="markStale" />
+        <ProjectsPage v-else-if="page === 'projects'" :digest="digest" @decided="decided" @changed="markStale" />
         <ResolvedPage v-else-if="page === 'resolved'" />
         <SettingsPanel
           v-else-if="page === 'settings'"
@@ -66,10 +66,10 @@
           @token-forgotten="onUnauthorized"
           @token-saved="load"
         />
-        <FixPage v-else-if="page === 'fix'" :route="fixRoute" @changed="stale = true" />
-        <ServersPage v-else-if="page === 'servers'" :route="serversRoute" @changed="stale = true" />
+        <FixPage v-else-if="page === 'fix'" :route="fixRoute" @changed="markStale" />
+        <ServersPage v-else-if="page === 'servers'" :route="serversRoute" @changed="markStale" />
         <FindingsPage v-else-if="page === 'findings'" :route="findingsRoute" />
-        <TodayPage v-else :digest="digest" :meta="meta" :refreshing="refreshing" @decided="loadToday(false)" @refresh="loadToday(true)" />
+        <TodayPage v-else :digest="digest" :meta="meta" :refreshing="refreshing" @decided="decided" @poll="loadToday(false)" @refresh="loadToday(true)" />
       </div>
     </v-main>
 
@@ -89,18 +89,14 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import { api } from './api.js'
 import { keys, save } from './lib/storage.js'
 import { fixRoute } from './lib/fixView.js'
-import { findingsRoute, emptyFilters } from './lib/findingsView.js'
+import { findingsCache } from './lib/findingsCache.js'
+import { filtersFromHash } from './lib/findingsView.js'
 import { openBadge, pageOf, navMode } from './lib/navView.js'
 import { serversRoute } from './lib/serversView.js'
 
 /** serversOf is the Servers page's {id} in the address ('' for the list). */
 function serversOf(hash) {
   return serversRoute(hash) || { id: '' }
-}
-
-/** filtersOf is the Findings page's filters in the address (none elsewhere). */
-function filtersOf(hash) {
-  return findingsRoute(hash) || emptyFilters()
 }
 
 /** routeOf is the Fix page's {attempt, finding} in the address (empty elsewhere). */
@@ -129,7 +125,7 @@ export default {
       // serversRoute is the server whose sheet the Servers page shows.
       serversRoute: serversOf(window.location.hash),
       // findingsRoute is the filters the Findings page shows.
-      findingsRoute: filtersOf(window.location.hash),
+      findingsRoute: filtersFromHash(window.location.hash),
       // stale is set when another page changed something the digest shows.
       stale: false,
     }
@@ -187,13 +183,24 @@ export default {
       this.page = pageOf(window.location.hash)
       this.fixRoute = routeOf(window.location.hash)
       this.serversRoute = serversOf(window.location.hash)
-      const filters = filtersOf(window.location.hash)
-      if (JSON.stringify(filters) !== JSON.stringify(this.findingsRoute)) this.findingsRoute = filters
+      // A new object each time: the page wrote its search without telling (replaceState),
+      // so a click on « Failles » must reach it even when the filters look unchanged.
+      if (this.page === 'findings') this.findingsRoute = filtersFromHash(window.location.hash)
       if (this.page !== previous) this.$nextTick(this.focusMain)
       if ((this.page === 'todo' || this.page === 'projects') && this.stale && this.state === 'ready') {
         this.stale = false
         this.loadToday(false)
       }
+    },
+    /** markStale: another page changed something; what was read is read again. */
+    markStale() {
+      this.stale = true
+      findingsCache.clear()
+    },
+    /** decided: a decision changes the lists; read them again with the digest. */
+    decided() {
+      findingsCache.clear()
+      this.loadToday(false)
     },
     onUnauthorized() {
       this.rejected = !!api.token
@@ -228,7 +235,11 @@ export default {
     },
     /** loadToday computes the digest again; shown says whether the button spins. */
     async loadToday(shown) {
-      if (shown) this.refreshing = true
+      // « Actualiser » reads everything again.
+      if (shown) {
+        this.refreshing = true
+        findingsCache.clear()
+      }
       try {
         this.digest = await api.get(`/today?lang=${encodeURIComponent(this.$ui.lang)}`)
         this.state = 'ready'

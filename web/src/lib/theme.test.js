@@ -17,6 +17,8 @@ const pairs = [
   ['on-surface', 'surface-variant'],
   ['secondary', 'surface-variant'],
   ['primary', 'surface-variant'],
+  // A hot chip of the overview and .m-flag: the surface color on critical.
+  ['surface', 'critical'],
   ['error', 'tag-urgent'],
   ['warning', 'tag-look'],
   ['success', 'tag-done'],

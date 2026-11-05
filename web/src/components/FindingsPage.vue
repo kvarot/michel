@@ -53,7 +53,8 @@
 
     <template v-else>
       <p v-if="unread.length" class="m-small m-findings__partial" role="status">{{ $t('findings.partial', { n: unread.length, names: unread.join(', ') }) }}</p>
-      <p class="m-small m-muted m-findings__count" role="status">{{ $t('findings.count', { n: shown.length }) }}</p>
+      <p class="m-small m-muted m-findings__count" aria-hidden="true">{{ $t('findings.count', { n: shown.length }) }}</p>
+      <p class="m-sr" role="status">{{ announced }}</p>
 
       <div v-if="!shown.length" class="m-card m-findings__empty">
         <p>{{ anyFilter ? $t('findings.empty_filtered') : $t('findings.empty') }}</p>
@@ -109,9 +110,13 @@
 <script>
 import { api } from '../api.js'
 import { severities } from '../lib/digestView.js'
+import { findingsCache } from '../lib/findingsCache.js'
 import {
-  emptyFilters, filterRows, findingRows, findingStates, findingsHash, projectChoices, readAllFindings, signals, unreadProjects,
+  emptyFilters, filterRows, findingRows, findingStates, findingsHash, knownFilters, projectChoices, readAllFindings, signals, unreadProjects,
 } from '../lib/findingsView.js'
+
+// announceAfter is how long the count waits before a screen reader hears it: not at every key.
+const announceAfter = 600
 
 export default {
   name: 'FindingsPage',
@@ -129,6 +134,9 @@ export default {
       states: findingStates,
       signals,
       seq: 0,
+      // announced is the count a screen reader hears, once the typing pauses.
+      announced: '',
+      announceTimer: null,
     }
   },
   computed: {
@@ -165,20 +173,40 @@ export default {
     '$ui.lang'() {
       this.load()
     },
+    'shown.length'() {
+      this.announce()
+    },
   },
   created() {
     this.load()
+  },
+  beforeUnmount() {
+    clearTimeout(this.announceTimer)
   },
   methods: {
     async load() {
       const seq = ++this.seq
       this.loaded = false
       const read = (path) => api.get(path).then((r) => r || []).catch(() => null)
-      const got = await readAllFindings(read, this.$ui.lang)
+      const ui = this.$ui.lang
+      const projects = await read(`/projects?lang=${encodeURIComponent(ui)}`)
       if (seq !== this.seq) return
+      // The lists the overview just read are not read again (findingsCache).
+      const got = await readAllFindings(read, ui, { projects, known: findingsCache.lists(ui, projects) })
+      if (seq !== this.seq) return
+      findingsCache.keep(ui, got.projects, got.lists)
       this.projects = got.projects
       this.lists = got.lists
       this.loaded = true
+      this.filters = knownFilters(this.filters, got.projects ? projectChoices(got.projects) : null)
+      this.announce()
+    },
+    /** announce says the count to a screen reader, after a pause. */
+    announce() {
+      clearTimeout(this.announceTimer)
+      this.announceTimer = setTimeout(() => {
+        this.announced = this.loaded && this.projects ? this.$t('findings.count', { n: this.shown.length }) : ''
+      }, announceAfter)
     },
     clear() {
       this.filters = emptyFilters()
@@ -202,11 +230,12 @@ export default {
 .m-findings__sub { margin: 0.4rem 0 0; }
 .m-findings__filters {
   display: grid;
-  grid-template-columns: minmax(12rem, 2fr) repeat(4, minmax(9rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   gap: 0.75rem;
   align-items: end;
   margin-bottom: 1rem;
 }
+.m-field--search { grid-column: 1 / -1; }
 .m-findings__clear { justify-self: start; }
 .m-field { display: grid; gap: 0.25rem; min-width: 0; }
 .m-field label { font-size: 0.8125rem; font-weight: 700; }
@@ -251,10 +280,6 @@ export default {
 .m-table__num { text-align: right; white-space: nowrap; }
 .m-findings__signals { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 
-@media (max-width: 959px) {
-  .m-findings__filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .m-field--search { grid-column: 1 / -1; }
-}
 @media (max-width: 599px) {
   .m-findings__filters { grid-template-columns: minmax(0, 1fr); }
 }

@@ -95,6 +95,7 @@ import OverviewPanel from './OverviewPanel.vue'
 import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
 import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideUnseen, guideVisible, guideWaiting, helpLostNow } from '../lib/guideView.js'
+import { findingsCache } from '../lib/findingsCache.js'
 import { readAllFindings } from '../lib/findingsView.js'
 import { save } from '../lib/storage.js'
 import { buildTodo, projectsToRead, serversToRead, unseenBelow } from '../lib/todoView.js'
@@ -110,7 +111,7 @@ export default {
     meta: { type: Object, default: null },
     refreshing: { type: Boolean, default: false },
   },
-  emits: ['decided', 'refresh'],
+  emits: ['decided', 'poll', 'refresh'],
   data() {
     return {
       // loaded stays false until the first reading ended: an empty list is
@@ -211,16 +212,25 @@ export default {
     async load() {
       const seq = ++this.seq
       clearTimeout(this.timer)
-      const lang = `lang=${encodeURIComponent(this.$ui.lang)}`
+      // The cards built on the lists never mix an old list with a new digest.
+      this.listsState = 'reading'
+      const ui = this.$ui.lang
+      const lang = `lang=${encodeURIComponent(ui)}`
       const read = (path) => api.get(path).then((r) => r || []).catch(() => null)
       const digest = this.digest
-      const [attempts, servers, projectViews, runs] = await Promise.all([read(`/fixes?${lang}`), read(`/targets?${lang}`), read(`/projects?${lang}`), read('/digests?last=100')])
+      // The digests sent are read once, then again after « Actualiser », a
+      // decision or a change of language (findingsCache).
+      const keptRuns = findingsCache.runs(ui)
+      const [attempts, servers, projectViews, runs] = await Promise.all([read(`/fixes?${lang}`), read(`/targets?${lang}`), read(`/projects?${lang}`), keptRuns || read('/digests?last=100')])
       if (seq !== this.seq) return
+      findingsCache.keepRuns(ui, runs)
       const wanted = serversToRead(servers)
       const toRead = projectsToRead(digest, attempts)
+      // A project's list is read again only when it was checked since, or after a decision.
+      const kept = findingsCache.lists(ui, projectViews)
       const [answers, lists] = await Promise.all([
         Promise.all(wanted.map((s) => read(`/targets/${encodeURIComponent(s.id)}?${lang}`))),
-        Promise.all(toRead.map((p) => read(`/projects/${encodeURIComponent(p.name)}/findings?${lang}`))),
+        Promise.all(toRead.map((p) => kept[p.name] || read(`/projects/${encodeURIComponent(p.name)}/findings?${lang}`))),
       ])
       if (seq !== this.seq) return
       const details = {}
@@ -241,13 +251,15 @@ export default {
       this.now = new Date()
       this.loaded = true
       // The overview counts every open flaw: the lists not read yet come after the to-do list.
-      readAllFindings(read, this.$ui.lang, { projects: projectViews, known: findings }).then((all) => {
+      findingsCache.keep(ui, projectViews, findings)
+      readAllFindings(read, ui, { projects: projectViews, known: { ...kept, ...findings } }).then((all) => {
         if (seq !== this.seq) return
+        findingsCache.keep(ui, all.projects, all.lists)
         this.allLists = all.lists
         this.listsState = all.projects ? 'read' : 'unread'
       })
       // A check that runs ends without a click: ask the digest again, which reads the rest.
-      if (this.guideShown && guideWaiting(projectViews, servers)) this.timer = setTimeout(() => this.$emit('decided'), waitEvery)
+      if (this.guideShown && guideWaiting(projectViews, servers)) this.timer = setTimeout(() => this.$emit('poll'), waitEvery)
     },
     /** dismissGuide hides the guide, says where it went, and keeps the keyboard there. */
     dismissGuide() {

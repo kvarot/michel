@@ -56,9 +56,10 @@
             <span v-else class="m-unread"><span aria-hidden="true">— </span>{{ $t('overview.park.unread_servers') }}</span>
           </li>
         </ul>
-        <p v-if="park.failed === null" class="m-small m-unread m-ov__line"><span aria-hidden="true">— </span>{{ $t('overview.park.unread_failed') }}</p>
-        <p v-else-if="park.failed > 0" class="m-small m-ov__line m-ov__failed">{{ $t('overview.park.failed', { n: park.failed }) }}</p>
-        <p v-else class="m-small m-muted m-ov__line">{{ $t('overview.park.failed_none') }}</p>
+        <p v-if="park.failedProjects > 0" class="m-small m-ov__line m-ov__failed">{{ $t('overview.park.failed_projects', { n: park.failedProjects }) }}</p>
+        <p v-if="park.failedServers > 0" class="m-small m-ov__line m-ov__failed">{{ $t('overview.park.failed_servers', { n: park.failedServers }) }}</p>
+        <p v-if="park.failedProjects === null || park.failedServers === null" class="m-small m-unread m-ov__line"><span aria-hidden="true">— </span>{{ $t('overview.park.unread_failed') }}</p>
+        <p v-else-if="park.failedProjects === 0 && park.failedServers === 0" class="m-small m-muted m-ov__line">{{ $t('overview.park.failed_none') }}</p>
       </article>
     </div>
 
@@ -73,7 +74,7 @@
             <li><span class="m-ov__key m-ov__key--new" />{{ $t('overview.weeks.new') }}</li>
             <li><span class="m-ov__key m-ov__key--gone" />{{ $t('overview.weeks.gone') }}</li>
           </ul>
-          <svg class="m-ov__chart" :viewBox="`0 0 ${chart.width} ${chart.height + 18}`" aria-hidden="true" focusable="false">
+          <svg class="m-ov__chart" :viewBox="`0 0 ${chart.width} ${chart.height + 22}`" aria-hidden="true" focusable="false">
             <line :x1="0" :x2="chart.width" :y1="chart.height" :y2="chart.height" class="m-ov__axis" />
             <g v-for="(w, i) in weeks" :key="w.key">
               <template v-if="w.fresh !== null">
@@ -81,7 +82,7 @@
                 <rect :x="i * chart.step + 20" :y="chart.height - bar(w.gone)" width="12" :height="bar(w.gone)" class="m-ov__bar--gone" />
               </template>
               <text v-else :x="i * chart.step + chart.step / 2" :y="chart.height - 4" text-anchor="middle" class="m-ov__none">–</text>
-              <text :x="i * chart.step + chart.step / 2" :y="chart.height + 14" text-anchor="middle" class="m-ov__tick">{{ short(w.start) }}</text>
+              <text :x="i * chart.step + chart.step / 2" :y="chart.height + 16" text-anchor="middle" class="m-ov__tick">{{ short(w.start) }}</text>
             </g>
           </svg>
           <p class="m-small m-muted m-ov__line">{{ $t('overview.weeks.gaps') }}</p>
@@ -109,8 +110,8 @@
 
       <article class="m-card" aria-labelledby="ov-ages">
         <h3 id="ov-ages" class="m-card__title">{{ $t('overview.ages.title') }}</h3>
-        <p v-if="listsState === 'reading'" class="m-small m-muted m-ov__line" role="status">{{ $t('overview.reading') }}</p>
-        <p v-else-if="listsState === 'unread'" class="m-small m-unread m-ov__line"><span aria-hidden="true">— </span>{{ $t('overview.lists_unread') }}</p>
+        <p v-if="listsShown === 'reading'" class="m-small m-muted m-ov__line" role="status">{{ $t('overview.reading') }}</p>
+        <p v-else-if="listsShown === 'unread'" class="m-small m-unread m-ov__line"><span aria-hidden="true">— </span>{{ $t('overview.lists_unread') }}</p>
         <template v-else>
           <p v-if="unreadCount" class="m-small m-ov__line m-ov__partial">{{ $t('overview.partial', { n: unreadCount }) }}</p>
           <p v-if="!ages.total" class="m-small m-muted m-ov__line">{{ $t('overview.ages.none') }}</p>
@@ -128,8 +129,8 @@
 
     <article class="m-card m-ov__signals" aria-labelledby="ov-signals">
       <h3 id="ov-signals" class="m-card__title">{{ $t('overview.signals.title') }}</h3>
-      <p v-if="listsState === 'reading'" class="m-small m-muted m-ov__line">{{ $t('overview.reading') }}</p>
-      <p v-else-if="listsState === 'unread'" class="m-small m-unread m-ov__line"><span aria-hidden="true">— </span>{{ $t('overview.lists_unread') }}</p>
+      <p v-if="listsShown === 'reading'" class="m-small m-muted m-ov__line">{{ $t('overview.reading') }}</p>
+      <p v-else-if="listsShown === 'unread'" class="m-small m-unread m-ov__line"><span aria-hidden="true">— </span>{{ $t('overview.lists_unread') }}</p>
       <template v-else>
         <p class="m-small m-muted m-ov__line">{{ $t('overview.signals.hint') }}</p>
         <p v-if="unreadCount" class="m-small m-ov__line m-ov__partial">{{ $t('overview.partial', { n: unreadCount }) }}</p>
@@ -149,7 +150,7 @@
 import Unread from './UnreadValue.vue'
 import { findingsHash } from '../lib/findingsView.js'
 import {
-  ageCounts, allListed, barHeight, longDay, openBySeverity, parkSummary, proposedCount, provenFixedCount, severityShares, shortDay,
+  ageCounts, allListed, barHeight, listsStatus, longDay, openBySeverity, parkSummary, proposedCount, provenFixedCount, severityShares, shortDay,
   signalCounts, weeklyChanges, weeklyMax,
 } from '../lib/overviewView.js'
 
@@ -186,13 +187,17 @@ export default {
       return provenFixedCount(this.attempts, this.now)
     },
     park() {
-      return parkSummary(this.projects, this.servers)
+      return parkSummary(this.projects, this.servers, this.digest)
     },
     weeks() {
       return weeklyChanges(this.runs, this.now)
     },
     max() {
       return weeklyMax(this.weeks)
+    },
+    // lists: reading, unread (no list could be read), or read.
+    listsShown() {
+      return listsStatus(this.listsState, this.lists)
     },
     listed() {
       return allListed(this.lists)
@@ -267,22 +272,22 @@ export default {
 .m-ov__axis { stroke: rgb(var(--v-theme-line)); stroke-width: 1; }
 .m-ov__bar--new { fill: rgb(var(--v-theme-primary)); }
 .m-ov__bar--gone { fill: rgb(var(--v-theme-tag-done)); stroke: rgb(var(--v-theme-success)); stroke-width: 2; }
-.m-ov__none { fill: rgb(var(--v-theme-secondary)); font-size: 14px; }
-.m-ov__tick { fill: rgb(var(--v-theme-secondary)); font-size: 10px; }
+.m-ov__none { fill: rgb(var(--v-theme-secondary)); font-size: 16px; }
+.m-ov__tick { fill: rgb(var(--v-theme-secondary)); font-size: 12px; }
 .m-ov__ages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.45rem; }
 .m-ov__ages li { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr) 2.5rem; align-items: center; gap: 0.6rem; }
 .m-ov__age-track { height: 10px; border-radius: 999px; background: rgb(var(--v-theme-surface-variant)); overflow: hidden; }
 .m-ov__age-bar { display: block; height: 100%; border-radius: 999px; background: rgb(var(--v-theme-primary)); }
 .m-ov__age-n { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
 .m-ov__signals { margin-top: 0.75rem; display: grid; gap: 0.5rem; }
-.m-ov__chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.m-ov__chips { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 0.4rem; }
 .m-ov__chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  min-height: 36px;
-  padding: 0.25rem 0.8rem;
+  min-height: 40px;
+  padding: 0.35rem 0.8rem;
   border: 1px solid var(--m-line);
-  border-radius: 999px;
+  border-radius: 8px;
   color: rgb(var(--v-theme-primary));
   background: rgb(var(--v-theme-surface-variant));
   font-size: 0.875rem;

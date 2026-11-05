@@ -79,22 +79,25 @@ export function provenFixedCount(attempts, now, days = 30) {
 }
 
 /**
- * parkSummary is what Michel watches: the projects, the active servers, and
- * the checks that failed (a project whose last scan failed or stopped, a
- * server whose last check failed). Each is null when its list could not be
- * read; failed is null when either could not.
+ * parkSummary is what Michel watches: the projects and the active servers,
+ * and, said apart so each matches where it comes from, the projects whose
+ * last check did not finish (the digest's failed_scans, the number of the
+ * banner above) and the active servers whose last check failed. Each is
+ * null when its source could not be read.
  * @param {object[]|null} projects GET /projects
  * @param {object[]|null} servers GET /targets
- * @returns {{projects: number|null, servers: number|null, failed: number|null}}
+ * @param {object|null} digest GET /today
+ * @returns {{projects: number|null, servers: number|null, failedProjects: number|null, failedServers: number|null}}
  */
-export function parkSummary(projects, servers) {
+export function parkSummary(projects, servers, digest) {
   const p = Array.isArray(projects) ? projects.filter(Boolean) : null
   const s = Array.isArray(servers) ? servers.filter((x) => x && x.active !== false) : null
-  const failed = p && s
-    ? p.filter((x) => x.last_scan_status === 'failed' || x.last_scan_status === 'interrupted').length
-      + s.filter((x) => x.state?.code === 'check_failed').length
-    : null
-  return { projects: p ? p.length : null, servers: s ? s.length : null, failed }
+  return {
+    projects: p ? p.length : null,
+    servers: s ? s.length : null,
+    failedProjects: isCount(digest?.failed_scans) ? digest.failed_scans : null,
+    failedServers: s ? s.filter((x) => x.state?.code === 'check_failed').length : null,
+  }
 }
 
 /**
@@ -142,14 +145,17 @@ function runCounts(run) {
  * their until, on the person's clock). A week no digest was sent has null
  * counts and sent 0: nothing was counted that week, it is not « 0 ». A
  * digest whose counts cannot be read makes its week null too (unread true).
- * A digest whose time cannot be read is left out. null when the digests
- * could not be read.
+ * A digest whose time cannot be read is left out. When the answer holds
+ * limit digests (the most the API gives), older ones may be missing: the
+ * weeks up to the one of the oldest digest given are not read either. null
+ * when the digests could not be read.
  * @param {object[]|null} runs GET /digests?last=100
  * @param {Date} now
  * @param {number} [weeks]
+ * @param {number} [limit] the last= asked
  * @returns {{key: string, start: Date, fresh: number|null, gone: number|null, sent: number, unread: boolean}[]|null}
  */
-export function weeklyChanges(runs, now, weeks = 8) {
+export function weeklyChanges(runs, now, weeks = 8, limit = 100) {
   if (!Array.isArray(runs)) return null
   const current = weekStart(now)
   const out = []
@@ -170,6 +176,13 @@ export function weeklyChanges(runs, now, weeks = 8) {
     w.fresh = (w.fresh || 0) + c.fresh
     w.gone = (w.gone || 0) + c.gone
   }
+  if (runs.length >= limit) {
+    const times = runs.map((r) => Date.parse(r?.until)).filter((t) => !Number.isNaN(t))
+    if (times.length) {
+      const cut = weekStart(new Date(Math.min(...times))).getTime()
+      for (const w of out) if (w.start.getTime() <= cut) w.unread = true
+    }
+  }
   for (const w of out) {
     if (w.unread) {
       w.fresh = null
@@ -187,17 +200,23 @@ export const ageBuckets = [
   { key: 'd181', min: 181, max: Infinity },
 ]
 
+/** localDate is the calendar day of t on the person's clock, at midnight. */
+function localDate(t) {
+  return new Date(t.getFullYear(), t.getMonth(), t.getDate())
+}
+
 /**
- * ageOf is the number of whole days between first seen and now (0 the
- * first day); null when the time cannot be read. A time ahead of now (a
- * clock behind) counts as 0.
+ * ageOf is the number of calendar days, on the person's clock, between the
+ * day first seen and today (0 the first day), like weekStart: a change of
+ * hour does not move it. null when the time cannot be read. A time ahead of
+ * now (a clock behind) counts as 0.
  * @param {string} firstSeen RFC 3339
  * @param {Date} now
  */
 export function ageOf(firstSeen, now) {
-  const t = Date.parse(firstSeen)
-  if (Number.isNaN(t) || !/^\d{4}-\d{2}-\d{2}/.test(String(firstSeen || ''))) return null
-  return Math.max(0, Math.floor((now.getTime() - t) / dayMs))
+  const t = new Date(firstSeen)
+  if (Number.isNaN(t.getTime()) || !/^\d{4}-\d{2}-\d{2}/.test(String(firstSeen || ''))) return null
+  return Math.max(0, Math.round((localDate(now).getTime() - localDate(t).getTime()) / dayMs))
 }
 
 /**
@@ -286,4 +305,20 @@ export function shortDay(d, lang) {
 export function longDay(d, lang) {
   const y = String(d.getFullYear()).padStart(4, '0')
   return lang === 'fr' ? `${shortDay(d, lang)}/${y}` : `${y}-${shortDay(d, lang)}`
+}
+
+/**
+ * listsStatus says what the cards built on the findings lists may show:
+ * reading while Michel reads them, unread when the projects could not be
+ * read or no list of a project with findings could, read otherwise (a
+ * partial reading says how many lists are missing).
+ * @param {'reading'|'read'|'unread'} state
+ * @param {Record<string, object[]|null>} lists
+ * @returns {'reading'|'read'|'unread'}
+ */
+export function listsStatus(state, lists) {
+  if (state !== 'read') return state === 'unread' ? 'unread' : 'reading'
+  const all = Object.values(lists || {})
+  if (all.length && all.every((l) => !Array.isArray(l))) return 'unread'
+  return 'read'
 }

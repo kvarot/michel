@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  emptyFilters, filterRows, findingRows, findingsHash, findingsRoute, isListedOpen, projectChoices,
+  emptyFilters, filterRows, filtersFromHash, findingRows, knownFilters, findingsHash, findingsRoute, isListedOpen, projectChoices,
   readAllFindings, signalsOf, stateOf, unreadProjects,
 } from './findingsView.js'
 
@@ -20,6 +20,21 @@ describe('the address', () => {
     expect(findingsRoute('#/')).toBe(null)
     expect(findingsRoute('#/findingsx')).toBe(null)
     expect(findingsRoute('#/fix?finding=a')).toBe(null)
+  })
+  test('filtersFromHash gives a new object each time, so the page follows the address', () => {
+    const a = filtersFromHash('#/findings')
+    const b = filtersFromHash('#/findings')
+    expect(a).toEqual(emptyFilters())
+    expect(a).not.toBe(b)
+    expect(filtersFromHash('#/')).toEqual(emptyFilters())
+    expect(filtersFromHash('#/findings?q=x').q).toBe('x')
+  })
+  test('knownFilters drops a project the list does not hold', () => {
+    const f = { ...emptyFilters(), project: 'gone', q: 'x' }
+    expect(knownFilters(f, ['shop', 'blog'])).toEqual({ ...emptyFilters(), q: 'x' })
+    expect(knownFilters({ ...f, project: 'shop' }, ['shop'])).toEqual({ ...f, project: 'shop' })
+    expect(knownFilters(f, null)).toBe(f)
+    expect(knownFilters(emptyFilters(), [])).toEqual(emptyFilters())
   })
   test('findingsHash writes only what is chosen, in a fixed order', () => {
     expect(findingsHash()).toBe('#/findings')

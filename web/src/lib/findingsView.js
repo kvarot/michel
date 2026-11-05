@@ -64,6 +64,29 @@ export function findingsRoute(hash) {
 }
 
 /**
+ * filtersFromHash is the filters of an address, a new object each time
+ * (none chosen for another address): the page then follows every change of
+ * the address, even back to filters it already had, because a search the page
+ * wrote itself (replaceState) did not tell the app.
+ * @param {string} hash
+ */
+export function filtersFromHash(hash) {
+  return { ...(findingsRoute(hash) || emptyFilters()) }
+}
+
+/**
+ * knownFilters drops a project the list of projects does not hold (an old
+ * link, a project removed): the table would stay empty with no way to say why.
+ * Without the list (not read) the filters stay as they are.
+ * @param {{project: string}} filters
+ * @param {string[]|null} names projectChoices
+ */
+export function knownFilters(filters, names) {
+  if (!filters.project || !Array.isArray(names) || names.includes(filters.project)) return filters
+  return { ...filters, project: '' }
+}
+
+/**
  * findingsHash writes the filters into the address, in a fixed order, only
  * those chosen: findingsRoute(findingsHash(f)) gives f back.
  * @param {Partial<{project: string, severity: string, status: string, signal: string, q: string}>} [filters]
