@@ -127,7 +127,7 @@ func (r *Repo) query(ctx context.Context, q string, args ...any) ([]Run, error) 
 		run.Projects, run.Channels, run.Summary = []ProjectSummary{}, []ChannelResult{}, map[string]int{}
 		for _, c := range []struct {
 			name, raw string
-			into any
+			into      any
 		}{{"projects", pj, &run.Projects}, {"channels", ch, &run.Channels}, {"summary", sm, &run.Summary}} {
 			if err := json.Unmarshal([]byte(c.raw), c.into); err != nil {
 				return nil, fmt.Errorf("cannot read the %s of digest run %s: %w", c.name, run.ID, err)
