@@ -125,9 +125,14 @@ func (r *Repo) query(ctx context.Context, q string, args ...any) ([]Run, error) 
 		}
 		run.Since, run.Until, run.CreatedAt, run.Lang = parseTime(since), parseTime(until), parseTime(created), i18n.Lang(lang)
 		run.Projects, run.Channels, run.Summary = []ProjectSummary{}, []ChannelResult{}, map[string]int{}
-		_ = json.Unmarshal([]byte(pj), &run.Projects)
-		_ = json.Unmarshal([]byte(ch), &run.Channels)
-		_ = json.Unmarshal([]byte(sm), &run.Summary)
+		for _, c := range []struct {
+			name, raw string
+			into any
+		}{{"projects", pj, &run.Projects}, {"channels", ch, &run.Channels}, {"summary", sm, &run.Summary}} {
+			if err := json.Unmarshal([]byte(c.raw), c.into); err != nil {
+				return nil, fmt.Errorf("cannot read the %s of digest run %s: %w", c.name, run.ID, err)
+			}
+		}
 		out = append(out, run)
 	}
 	return out, rows.Err()
