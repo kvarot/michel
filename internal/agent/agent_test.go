@@ -252,12 +252,33 @@ func TestGeneratedSettingsAndMCPConfig(t *testing.T) {
 		settings.EnableAllProjectMcpServers == nil || *settings.EnableAllProjectMcpServers {
 		t.Errorf("settings = %s", set)
 	}
-	if want := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob", "Grep", "mcp__michel__*"}; !slices.Equal(settings.Permissions.Allow, want) {
+	if want := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob(./**)", "Grep(./**)", "mcp__michel__*"}; !slices.Equal(settings.Permissions.Allow, want) {
 		t.Errorf("allow = %v, want %v", settings.Permissions.Allow, want)
 	}
 	for _, w := range []string{"Bash", "WebFetch", "WebSearch", "Edit(./.git/**)"} {
 		if !slices.Contains(settings.Permissions.Deny, w) {
 			t.Errorf("deny lacks %s: %v", w, settings.Permissions.Deny)
+		}
+	}
+	// Michel's data folder as Claude Code reads an absolute path: //c/... on
+	// Windows, //home/... elsewhere.
+	data := filepath.ToSlash(f.d.DataDir)
+	if v := filepath.VolumeName(f.d.DataDir); len(v) == 2 && v[1] == ':' {
+		data = "/" + strings.ToLower(v[:1]) + data[2:]
+	}
+	data = "/" + data
+	for _, tool := range []string{"Read", "Glob", "Grep"} {
+		for _, p := range []string{"~/.claude/**", "~/.claude.json", "~/.ssh/**", "~/.aws/**", "~/.git-credentials", "~/.npmrc",
+			"~/.config/gh/**", "~/.docker/config.json", "~/.netrc",
+			data + "/secrets/**", data + "/agent/**", data + "/michel.db*", data + "/config.yaml"} {
+			if w := tool + "(" + p + ")"; !slices.Contains(settings.Permissions.Deny, w) {
+				t.Errorf("deny lacks %s", w)
+			}
+		}
+	}
+	for _, d := range settings.Permissions.Deny {
+		if strings.Contains(d, "/worktrees") {
+			t.Errorf("a deny rule covers the copies: %s", d)
 		}
 	}
 	var cfg struct {

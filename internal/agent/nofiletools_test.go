@@ -60,7 +60,7 @@ func TestServerSessionHasNoFileTools(t *testing.T) {
 	}
 	// A code session is unchanged.
 	code := f.spec()
-	if got := strings.Join(allowRules(code), " "); got != "Read(./**) Edit(./**) Write(./**) Glob Grep mcp__michel__*" {
+	if got := strings.Join(allowRules(code), " "); got != "Read(./**) Edit(./**) Write(./**) Glob(./**) Grep(./**) mcp__michel__*" {
 		t.Errorf("code allow = %s", got)
 	}
 	if a, _ := argv(code, "m", "s"); func() string { v, _ := argAfter(a, "--tools"); return v }() != tools {

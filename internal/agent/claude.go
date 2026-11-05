@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -70,7 +71,7 @@ const mcpServer = "michel"
 // allowRules give the file tools the working folder (the copy) only, and
 // the tools of Michel's MCP server when there is one.
 func allowRules(s Spec) []string {
-	rules := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob", "Grep"}
+	rules := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob(./**)", "Grep(./**)"}
 	if s.NoFileTools {
 		rules = nil
 	}
@@ -86,9 +87,38 @@ func allowRules(s Spec) []string {
 // depth.
 var protected = []string{"vendor/**", "node_modules/**", ".git/**", ".claude/**", ".mcp.json"}
 
+// secretFiles are the user's files the agent never reads: Claude Code's
+// login and settings, keys and the usual credential files.
+var secretFiles = []string{"~/.claude/**", "~/.claude.json", "~/.ssh/**", "~/.aws/**", "~/.git-credentials", "~/.npmrc",
+	"~/.config/gh/**", "~/.docker/config.json", "~/.netrc"}
+
+// dataSecrets are the entries of Michel's data folder the agent never reads:
+// the secrets, the generated files of the sessions (MCP tokens), the
+// database and the policy. The copies (worktrees) are not among them.
+var dataSecrets = []string{"secrets/**", "agent/**", "michel.db*", "config.yaml"}
+
+// ruleRoot is dir as Claude Code reads an absolute path in a rule: //c/x on
+// Windows (C:\x), //x elsewhere (/x). Empty when dir has no such form (a
+// relative or UNC path).
+func ruleRoot(dir string) string {
+	if !filepath.IsAbs(dir) {
+		return ""
+	}
+	p := filepath.ToSlash(filepath.Clean(dir))
+	if v := filepath.VolumeName(dir); v != "" {
+		if len(v) != 2 || v[1] != ':' {
+			return ""
+		}
+		p = "/" + strings.ToLower(v[:1]) + p[2:]
+	}
+	return "/" + strings.TrimSuffix(p, "/")
+}
+
 // denyRules are refused whatever else allows them: Bash, the web tools,
-// writes to the protected paths, and reads of the user's Claude Code files
-// (login, settings) and keys.
+// writes to the protected paths, and reads (Read, Glob, Grep) of the user's
+// credential files and of Michel's own data. The data folder is the copy's
+// <DataDir>/worktrees/<project>/<attempt> three levels up (Start checked
+// that shape).
 func denyRules(s Spec) []string {
 	rules := []string{"Bash", "WebFetch", "WebSearch"}
 	if s.NoFileTools {
@@ -101,7 +131,20 @@ func denyRules(s Spec) []string {
 			rules = append(rules, tool+"(./"+p+")", tool+"(./**/"+p+")")
 		}
 	}
-	return append(rules, "Read(~/.claude/**)", "Read(~/.claude.json)", "Read(~/.ssh/**)")
+	paths := slices.Clone(secretFiles)
+	if s.Dir != "" {
+		if root := ruleRoot(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(s.Dir))))); root != "" {
+			for _, p := range dataSecrets {
+				paths = append(paths, root+"/"+p)
+			}
+		}
+	}
+	for _, tool := range []string{"Read", "Glob", "Grep"} {
+		for _, p := range paths {
+			rules = append(rules, tool+"("+p+")")
+		}
+	}
+	return rules
 }
 
 // generated returns the settings file and the MCP configuration of a
