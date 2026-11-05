@@ -1257,12 +1257,18 @@ func (s *server) targetHostKeyConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fp != b.Fingerprint {
-		_ = s.targetAudit(ctx, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "fingerprint mismatch"})
+		if err := s.targetAudit(ctx, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "fingerprint mismatch"}); err != nil {
+			s.failedBody(w, http.StatusInternalServerError, lang, "api.target.refusal_audit_failed", "api.internal_hint")
+			return
+		}
 		s.failedBody(w, http.StatusConflict, lang, "api.target.hostkey_mismatch", "api.target.hostkey_mismatch_hint")
 		return
 	}
 	if t.HostKey != "" && t.HostKey != fp && !b.Replace {
-		_ = s.targetAudit(ctx, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "key changed, replace not asked"})
+		if err := s.targetAudit(ctx, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "key changed, replace not asked"}); err != nil {
+			s.failedBody(w, http.StatusInternalServerError, lang, "api.target.refusal_audit_failed", "api.internal_hint")
+			return
+		}
 		s.failedBody(w, http.StatusConflict, lang, "api.target.hostkey_changed", "api.target.hostkey_changed_hint")
 		return
 	}
