@@ -58,6 +58,97 @@ func TestScannerCallsAreSerialized(t *testing.T) {
 	}
 }
 
+// A scan waiting for another one to end returns as soon as it is cancelled
+// and never runs the scanner.
+func TestScanCancelledWhileWaitingNeverScans(t *testing.T) {
+	first, second := newEnv(t, "project-a"), newEnv(t, "project-a")
+	started, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	fakeScanner(t, func(root string) (models.VulnerabilityResults, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return models.VulnerabilityResults{}, nil
+	})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		_, _ = Run(context.Background(), first.deps, first.proj, Options{OSVRoot: osvRoot})
+	}()
+	<-started
+	defer func() { close(release); <-firstDone }()
+	for _, which := range []string{"Run", "ScanDir"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			var err error
+			if which == "Run" {
+				_, err = Run(ctx, second.deps, second.proj, Options{OSVRoot: osvRoot})
+			} else {
+				_, err = ScanDir(ctx, second.deps, second.proj.Path, nil, Options{OSVRoot: osvRoot})
+			}
+			done <- err
+		}()
+		time.Sleep(50 * time.Millisecond) // it is waiting for the first scan
+		cancel()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("%s = %v, want context.Canceled", which, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not return within 1 s of the cancel", which)
+		}
+	}
+	var status string
+	if err := second.st.DB().QueryRow(`SELECT status FROM scan`).Scan(&status); err != nil || status != ScanInterrupted {
+		t.Errorf("waiting scan status %q (%v), want %s", status, err, ScanInterrupted)
+	}
+	close(release)
+	<-firstDone
+	release = make(chan struct{}) // the deferred close has nothing left to free
+	time.Sleep(50 * time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("the scanner ran %d times, want 1 (the cancelled scans never ran it)", n)
+	}
+}
+
+// A cancel once the scanner has returned does not lose what follows: the
+// findings, the manifests and the audit rows are all stored.
+func TestCancelAfterTheScannerKeepsEveryRow(t *testing.T) {
+	e := newEnv(t, "project-a")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lookup := func([]string) (map[string]Enrichment, error) {
+		cancel() // after the scanner, before the transaction
+		return map[string]Enrichment{}, nil
+	}
+	r, err := Run(ctx, e.deps, e.proj, Options{OSVRoot: osvRoot, Lookup: lookup})
+	if err != nil || r.Status != ScanOK || len(r.Errors) != 0 {
+		t.Fatalf("Run = %s %v %v", r.Status, r.Errors, err)
+	}
+	count := func(q string) int {
+		var n int
+		if err := e.st.DB().QueryRow(q).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(`SELECT COUNT(*) FROM finding`); n != 3 {
+		t.Errorf("findings = %d, want 3", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM scan_manifest`); n != 2 {
+		t.Errorf("manifests = %d, want 2", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM audit_event WHERE action = 'scan.manifest'`); n != 2 {
+		t.Errorf("scan.manifest rows = %d, want 2", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM audit_event WHERE action = 'scan.finish' AND result = 'ok'`); n != 1 {
+		t.Errorf("scan.finish ok rows = %d, want 1", n)
+	}
+}
+
 func TestRunReturnsOnCancel(t *testing.T) {
 	e := newEnv(t, "project-a")
 	started, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
