@@ -1,7 +1,8 @@
 /**
  * The guided interface palette. Every text color reaches AA (4.5:1) on the
  * backgrounds it is drawn on; theme.test.js checks it. A severity is still
- * a color and a word, never a color alone.
+ * a color and a word, never a color alone. The side menu is light: a white
+ * band (a dark one in the dark theme), the page lit in primary on a pale fill.
  */
 
 /** @typedef {{dark: boolean, colors: Record<string, string>}} MichelTheme */
@@ -19,7 +20,7 @@ export const themes = {
       warning: '#9A5B00', medium: '#9A5B00',
       error: '#B3261E', critical: '#B3261E',
       high: '#B4501A',
-      nav: '#14304F', 'on-nav': '#FFFFFF', 'nav-active': '#264A70',
+      nav: '#FFFFFF', 'on-nav': '#14304F', 'nav-active': '#E6EEF6',
       line: '#D3DDE8',
       'tag-urgent': '#FBEAEA', 'tag-look': '#FDF2DE', 'tag-done': '#E3F4EE', 'tag-info': '#E6EEF6',
     },
@@ -35,7 +36,7 @@ export const themes = {
       warning: '#E9B860', medium: '#E9B860',
       error: '#FF9A90', critical: '#FF9A90',
       high: '#FFB074',
-      nav: '#0A1521', 'on-nav': '#E6EEF6', 'nav-active': '#22364A',
+      nav: '#132232', 'on-nav': '#E6EEF6', 'nav-active': '#22364A',
       line: '#2E4459',
       'tag-urgent': '#333542', 'tag-look': '#30383C', 'tag-done': '#223C46', 'tag-info': '#293949',
     },

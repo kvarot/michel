@@ -10,6 +10,13 @@ const pairs = [
   ['on-primary', 'primary'],
   ['on-nav', 'nav'],
   ['on-nav', 'nav-active'],
+  // The side menu: the lit page in primary, the group names in secondary.
+  ['primary', 'nav-active'],
+  ['secondary', 'nav'],
+  // The heads of the findings table and the tiles' pale fills.
+  ['on-surface', 'surface-variant'],
+  ['secondary', 'surface-variant'],
+  ['primary', 'surface-variant'],
   ['error', 'tag-urgent'],
   ['warning', 'tag-look'],
   ['success', 'tag-done'],
