@@ -1,0 +1,70 @@
+package watch
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/kvarot/michel/internal/store"
+)
+
+// keepDays is how long the record of a day's source read is kept.
+const keepDays = 30
+
+// Repo reads what the watch needs from the database.
+type Repo struct{ s *store.Store }
+
+// NewRepo returns the watch's view of s.
+func NewRepo(s *store.Store) *Repo { return &Repo{s: s} }
+
+// LastStarts maps each project id to the start of its newest scan, whatever
+// its status: a failed check is a check of the day too.
+func (r *Repo) LastStarts(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT project_id, MAX(started_at) FROM scan GROUP BY project_id`)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the last checks: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id, at string
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, fmt.Errorf("cannot read the last checks: %w", err)
+		}
+		t, err := time.Parse(time.RFC3339, at)
+		if err != nil {
+			return nil, fmt.Errorf("a check of project %s has an unreadable start %q: %w", id, at, err)
+		}
+		out[id] = t
+	}
+	return out, rows.Err()
+}
+
+// ClaimSources records that the watch of the local day (YYYY-MM-DD) reads
+// the sources, and reports whether this call did: once a day, whichever serve
+// asks first, and not again after a restart. Records older than keepDays go.
+func (r *Repo) ClaimSources(ctx context.Context, day string, at time.Time) (bool, error) {
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("cannot record the source read of the day: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `INSERT INTO watch_day (day, sources_at) VALUES (?, ?) ON CONFLICT (day) DO NOTHING`,
+		day, at.UTC().Format(time.RFC3339))
+	if err != nil {
+		return false, fmt.Errorf("cannot record the source read of the day: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cannot record the source read of the day: %w", err)
+	}
+	if d, perr := time.Parse("2006-01-02", day); perr == nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM watch_day WHERE day < ?`, d.AddDate(0, 0, -keepDays).Format("2006-01-02")); err != nil {
+			return false, fmt.Errorf("cannot record the source read of the day: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("cannot record the source read of the day: %w", err)
+	}
+	return n == 1, nil
+}
