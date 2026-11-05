@@ -30,6 +30,9 @@ type Project struct {
 	TestCmd      string `json:"test_cmd"`
 	InstallCmd   string `json:"install_cmd"`
 	Active       bool   `json:"active"`
+	// AutoScan lets the daily watch of michel serve check the project (true
+	// on creation).
+	AutoScan bool `json:"auto_scan"`
 	// CorePackages are the packages whose upgrade is riskier for this project
 	// (stored as typed; matching is done per ecosystem).
 	CorePackages []string `json:"core_packages"`
