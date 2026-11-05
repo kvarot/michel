@@ -43,10 +43,11 @@
           />
           <p class="m-muted m-small">{{ $t('logs.sources.active_hint') }}</p>
           <p class="m-small">{{ s.state.line }}</p>
+          <p v-if="s.state.failure" class="m-small">{{ s.state.failure }}</p>
           <ul v-if="s.state.unseen.length" class="m-sheet__list m-small">
             <li v-for="u in s.state.unseen" :key="u.what">{{ u.text }}</li>
           </ul>
-          <p v-for="n in s.notes" :key="n.kind" class="m-muted m-small">{{ n.text }}</p>
+          <p v-for="n in s.notes" :key="n.kind" class="m-muted m-small">{{ noteText(n) }}</p>
           <p v-if="s.note" class="m-muted m-small">{{ s.note }}</p>
           <p v-for="w in s.channelNotes" :key="w" class="m-logs__warn m-small">{{ w }}</p>
           <div class="m-logs__actions">
@@ -286,7 +287,7 @@ import { api } from '../api.js'
 import { formatDate } from '../lib/digestView.js'
 import {
   channelNotes, deviationWarning, domId, errorGroups, formatLabel, formatShort, formats, intervalChoices, intervalNote, levelLabel, levelOrder, levelSeverity, numberSources, settingsSaveOutcome,
-  privacyChoices, privacyStrongNote, readState, routeChoices, statusLabel,
+  noteLine, privacyChoices, privacyStrongNote, readState, routeChoices, statusLabel,
 } from '../lib/serverLogsView.js'
 
 let counter = 0
@@ -405,6 +406,9 @@ export default {
     },
     levelSeverity,
     domId,
+    noteText(n) {
+      return noteLine(n, this.lang)
+    },
     shortFormat(f) {
       return formatShort(f, this.lang)
     },

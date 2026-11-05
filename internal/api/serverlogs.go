@@ -54,6 +54,10 @@ type LogSourceView struct {
 	// Unseen lists the files of the source that the last read could not open,
 	// by path and why. LastReadAt leaves them out.
 	Unseen []TargetUnseenView `json:"unseen"`
+	// Failure is why the last read of the source failed, in a sentence ("" when
+	// the last read did not fail, or the source is turned off). The cause of a
+	// connection that failed is the server's, so every active source carries it.
+	Failure string `json:"failure,omitempty"`
 	// Note is a word of advice for the format (PostgreSQL's %e), when it has one.
 	Note      string `json:"note,omitempty"`
 	NoChannel bool   `json:"no_channel"`
@@ -282,13 +286,17 @@ func LogChannelHears(p policy.Policy, st serverlog.Settings) bool {
 // it is what the page sends back.
 func LogPath(p string) string { return localPaths(srvText("", p)) }
 
-func noteTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+// noteTime writes a time on the clock of this computer, which is the person's:
+// day and hour, never "UTC".
+func noteTime(lang i18n.Lang, t time.Time) string {
+	return t.In(time.Local).Format(i18n.T(lang, "api.logs.note.moment_layout"))
+}
 
 // noteText is the sentence of a note.
 func noteText(lang i18n.Lang, n serverlog.Note) string {
 	switch n.Kind {
 	case serverlog.NoteGap:
-		return i18n.T(lang, "api.logs.note.gap", noteTime(n.From), noteTime(n.To))
+		return i18n.T(lang, "api.logs.note.gap", noteTime(lang, n.From), noteTime(lang, n.To))
 	case serverlog.NoteSkipped:
 		return i18n.T(lang, "api.logs.note.skipped", serverlog.ByteSize(n.Amount))
 	case serverlog.NoteRotated:
@@ -379,8 +387,24 @@ func (s *server) logSourceOf(w http.ResponseWriter, r *http.Request, lang i18n.L
 // the filter wrote (serverlog.Cause*): the real cause, in plain words, so that a
 // refused link does not read as a rights problem.
 func LogUnseenReason(lang i18n.Lang, cause string) string {
+	return LogUnseenReasonFor(lang, cause, false)
+}
+
+// UnseenIsFolder says whether an unseen entry of a source is the folder of its
+// pattern rather than a file: a pattern with a wildcard that the filter reported
+// as it is declared, which it does when the folder cannot be listed.
+func UnseenIsFolder(src serverlog.Source, entry string) bool {
+	return strings.ContainsAny(src.Path, "*?") && entry == src.Path
+}
+
+// LogUnseenReasonFor is LogUnseenReason for an entry that is a folder (see
+// UnseenIsFolder) when folder is set: "this folder", where the data says so.
+func LogUnseenReasonFor(lang i18n.Lang, cause string, folder bool) string {
 	switch cause {
 	case serverlog.CauseDenied:
+		if folder {
+			return i18n.T(lang, "api.logs.unseen.denied_folder")
+		}
 		return i18n.T(lang, "api.logs.unseen.denied")
 	case serverlog.CauseLink:
 		return i18n.T(lang, "api.logs.unseen.link")
@@ -392,6 +416,22 @@ func LogUnseenReason(lang i18n.Lang, cause string) string {
 		return i18n.T(lang, "api.logs.unseen.tools")
 	}
 	return i18n.T(lang, "api.logs.unseen.other")
+}
+
+// LogFailureText is the sentence for why a read failed, by the key the pass kept
+// (serverlog.Reason*). own says the cause is the source's own: the server was
+// reached, so the general cause does not send to the check of the connection. A
+// key this page does not know reads as the general cause.
+func LogFailureText(lang i18n.Lang, reason string, own bool) string {
+	switch reason {
+	case serverlog.ReasonNoAgent, serverlog.ReasonNoKeyAccepted, serverlog.ReasonHostKeyUnknown, serverlog.ReasonHostKeyChanged,
+		serverlog.ReasonDenied, serverlog.ReasonTimeout, serverlog.ReasonRefused, serverlog.ReasonPolicy, serverlog.ReasonOutputCut, serverlog.ReasonTools:
+		return i18n.T(lang, "api.logs.failure."+reason)
+	}
+	if own {
+		return i18n.T(lang, "api.logs.failure.error_source")
+	}
+	return i18n.T(lang, "api.logs.failure."+serverlog.ReasonError)
 }
 
 // LogNoteText is the sentence of a note of a source.
@@ -448,6 +488,10 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 	if err != nil {
 		return nil, err
 	}
+	failures, err := repo.Failures(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
 	hears := LogChannelHears(s.currentPolicy(), st)
 	out := make([]LogSourceView, 0, len(srcs))
 	for _, src := range srcs {
@@ -469,7 +513,17 @@ func (s *server) sourceViews(ctx context.Context, lang i18n.Lang, t target.Targe
 			v.Notes = append(v.Notes, LogNoteView{Kind: n.Kind, Text: noteText(lang, n), From: stamp(n.From), To: stamp(n.To), Amount: n.Amount})
 		}
 		for _, u := range unseen[src.ID] {
-			v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u.File), Reason: LogUnseenReason(lang, u.Cause)})
+			v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u.File), Reason: LogUnseenReasonFor(lang, u.Cause, UnseenIsFolder(src, u.File))})
+		}
+		if src.Active && t.Active {
+			reason, own := failures[src.ID]
+			failed := own
+			if !own {
+				reason, failed = failures[""]
+			}
+			if failed {
+				v.Failure = LogFailureText(lang, reason, own)
+			}
 		}
 		if src.Active && !hears {
 			v.NoChannel, v.Warning = true, i18n.T(lang, "api.logs.no_channel")
@@ -874,7 +928,7 @@ func (s *server) logSourceTry(w http.ResponseWriter, r *http.Request) {
 		v.SkippedBytes += f.Skipped
 	}
 	for _, u := range out.Unseen {
-		v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u), Reason: LogUnseenReason(lang, out.UnseenCause[u])})
+		v.Unseen = append(v.Unseen, TargetUnseenView{What: LogPath(u), Reason: LogUnseenReasonFor(lang, out.UnseenCause[u], UnseenIsFolder(src, u))})
 	}
 	switch {
 	case len(v.Records) > 0 || len(v.Unseen) > 0:

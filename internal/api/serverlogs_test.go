@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/secret"
 	"github.com/kvarot/michel/internal/serverlog"
@@ -987,5 +988,127 @@ func TestNoLogDataReachesAnAgent(t *testing.T) {
 				t.Errorf("%s (for %s) reaches %s", deps[0], roots[deps[0]], dep)
 			}
 		}
+	}
+}
+
+func TestSourcesSayWhyTheLastReadFailed(t *testing.T) {
+	lf := newLogFixture(t, "")
+	src := lf.addSource("")
+	list := func() LogSourceView {
+		t.Helper()
+		code, out := lf.send("GET", lf.url("/sources"), "")
+		var body []LogSourceView
+		if code != http.StatusOK || json.Unmarshal([]byte(out), &body) != nil || len(body) != 1 {
+			t.Fatalf("list = %d %s", code, out)
+		}
+		return body[0]
+	}
+	if f := list().Failure; f != "" {
+		t.Fatalf("a source never read says %q", f)
+	}
+	ctx := context.Background()
+	// The connection failed: the cause is the server's, and each source carries it.
+	if err := lf.repo().SetFailures(ctx, lf.id, []serverlog.Failure{{Reason: serverlog.ReasonRefused}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if f := list().Failure; !strings.Contains(f, "refus") && !strings.Contains(f, "refused") {
+		t.Errorf("server failure = %q", f)
+	}
+	// One source failed on its own: its own cause wins.
+	if err := lf.repo().SetFailures(ctx, lf.id, []serverlog.Failure{{SourceID: src.ID, Reason: serverlog.ReasonTools}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if f := list().Failure; !strings.Contains(f, "awk") {
+		t.Errorf("source failure = %q", f)
+	}
+	// A turned off source says nothing.
+	if code, out := lf.send("PATCH", lf.url("/sources/"+src.ID), `{"active":false}`); code != http.StatusOK {
+		t.Fatalf("patch = %d %s", code, out)
+	}
+	if f := list().Failure; f != "" {
+		t.Errorf("a turned off source says %q", f)
+	}
+	// A good read clears the rest.
+	if err := lf.repo().SetFailures(ctx, lf.id, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := lf.send("PATCH", lf.url("/sources/"+src.ID), `{"active":true}`); code != http.StatusOK {
+		t.Fatalf("patch = %d %s", code, out)
+	}
+	if f := list().Failure; f != "" {
+		t.Errorf("a good read left %q", f)
+	}
+	// A reason this page does not know reads as the general one, which says what to try.
+	if got := LogFailureText(i18n.FR, "weird", false); !strings.Contains(got, "Vérifier maintenant") {
+		t.Errorf("unknown reason = %q", got)
+	}
+	if got := LogFailureText(i18n.EN, serverlog.ReasonError, false); !strings.Contains(got, "Check now") {
+		t.Errorf("general reason = %q", got)
+	}
+}
+
+func TestGapNoteIsOnTheLocalClockAndNeverSaysUTC(t *testing.T) {
+	was := time.Local
+	time.Local = time.FixedZone("paris", 3600)
+	defer func() { time.Local = was }()
+	n := serverlog.Note{Kind: serverlog.NoteGap, From: time.Date(2026, 11, 1, 22, 30, 0, 0, time.UTC), To: time.Date(2026, 11, 2, 5, 15, 0, 0, time.UTC)}
+	if got, want := LogNoteText(i18n.EN, n), "Michel could not read this log from 2026-11-01 23:30 to 2026-11-02 06:15."; got != want {
+		t.Errorf("en = %q, want %q", got, want)
+	}
+	if got, want := LogNoteText(i18n.FR, n), "Michel n'a pas pu lire ce journal du 01/11/2026 à 23h30 au 02/11/2026 à 06h15."; got != want {
+		t.Errorf("fr = %q, want %q", got, want)
+	}
+}
+
+// The sentence for a refused file starts with what to ask of whoever looks after
+// the server, in plain words; the technical detail comes after it. A pattern or a
+// folder that cannot be listed is a folder, not "this file".
+func TestUnseenRightsSentenceLeadsWithWhatToAsk(t *testing.T) {
+	for lang, c := range map[i18n.Lang]struct{ lead, file, folder string }{
+		i18n.FR: {"Demande à la personne qui s'occupe de ton serveur de donner à Michel le droit de lire ", "ce fichier.", "ce dossier."},
+		i18n.EN: {"Ask whoever looks after your server to give Michel the right to read ", "this file.", "this folder."},
+	} {
+		file, folder := LogUnseenReasonFor(lang, serverlog.CauseDenied, false), LogUnseenReasonFor(lang, serverlog.CauseDenied, true)
+		if !strings.HasPrefix(file, c.lead+c.file) || !strings.HasPrefix(folder, c.lead+c.folder) {
+			t.Errorf("%s: file %q, folder %q", lang, file, folder)
+		}
+		for _, s := range []string{file, folder} {
+			if !strings.Contains(s, "adm") || strings.Contains(s, "sudo ") {
+				t.Errorf("%s: technical detail lost or sudo advised: %q", lang, s)
+			}
+		}
+		if strings.Contains(folder, "fichier") || strings.Contains(folder, " file") {
+			t.Errorf("%s: a folder called a file: %q", lang, folder)
+		}
+	}
+	if LogUnseenReason(i18n.EN, serverlog.CauseDenied) != LogUnseenReasonFor(i18n.EN, serverlog.CauseDenied, false) {
+		t.Error("LogUnseenReason is the file sentence")
+	}
+}
+
+func TestSheetCallsAnUnreadableFolderAFolder(t *testing.T) {
+	lf := newLogFixture(t, "")
+	ctx := context.Background()
+	wild, err := lf.repo().AddSource(ctx, serverlog.Source{TargetID: lf.id, Path: "/var/log/demo/*.log", Format: serverlog.FormatPHP, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pattern itself is unseen when its folder cannot be listed; a file of it, when only that file is refused.
+	if err := lf.repo().SetUnseen(ctx, wild.ID, map[string]string{"/var/log/demo/*.log": serverlog.CauseDenied, "/var/log/demo/a.log": serverlog.CauseDenied}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	code, out := lf.send("GET", lf.url("/sources"), "")
+	var views []LogSourceView
+	if code != http.StatusOK || json.Unmarshal([]byte(out), &views) != nil || len(views) != 1 {
+		t.Fatalf("list = %d %s", code, out)
+	}
+	for _, u := range views[0].Unseen {
+		isFolder := strings.HasSuffix(u.What, "*.log")
+		if isFolder != strings.Contains(u.Reason, "this folder") || (!isFolder && !strings.Contains(u.Reason, "this file")) {
+			t.Errorf("%s: %q", u.What, u.Reason)
+		}
+	}
+	if len(views[0].Unseen) != 2 {
+		t.Errorf("unseen = %+v", views[0].Unseen)
 	}
 }

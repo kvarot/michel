@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  channelNotes, deviationWarning, domId, errorGroups, formatShort, intervalChoices, intervalNote, logBadges, numberSources, privacyChoices, privacyStrongNote, readState, routeChoices, settingsSaveOutcome,
+  channelNotes, deviationWarning, domId, errorGroups, formatShort, intervalChoices, intervalNote, logBadges, noteLine, numberSources, privacyChoices, privacyStrongNote, readState, routeChoices, settingsSaveOutcome,
 } from './serverLogsView.js'
 
 const now = new Date('2026-11-01T12:00:00Z')
@@ -270,5 +270,54 @@ describe('formatShort', () => {
     expect(formatShort('monolog', 'fr')).toBe("erreurs de l'application")
     expect(formatShort('text', 'fr')).toBe('texte')
     expect(formatShort('nothing', 'en')).toBe('other')
+  })
+})
+
+describe('readState failure', () => {
+  test('the cause of the last failed read comes as a sentence of its own, with the API words untouched', () => {
+    const why = 'Le serveur a refusé la connexion.'
+    const r = readState({ active: true, last_read_at: '', failure: why }, now, 'fr')
+    expect(r.line).toBe("Michel n'a pas encore réussi à lire ce journal.")
+    expect(r.failure).toBe(`Cause : ${why}`)
+    expect(readState({ active: true, last_read_at: '2026-11-01T11:30:00Z', failure: 'The server refused the connection.' }, now, 'en').failure).toBe('Cause: The server refused the connection.')
+  })
+
+  test('nothing to say when the last read did not fail, or the log is turned off', () => {
+    expect(readState({ active: true, last_read_at: '' }, now, 'fr').failure).toBe('')
+    expect(readState({ active: true, failure: '' }, now, 'fr').failure).toBe('')
+    expect(readState({ active: false, failure: 'x' }, now, 'fr').failure).toBe('')
+    expect(readState(null, now, 'fr').failure).toBe('')
+  })
+})
+
+describe('noteLine', () => {
+  const pad = (n) => String(n).padStart(2, '0')
+  const from = '2026-11-01T22:30:00Z'
+  const to = '2026-11-02T05:15:00Z'
+  const local = (iso) => {
+    const d = new Date(iso)
+    return { day: `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`, iso: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, h: pad(d.getHours()), m: pad(d.getMinutes()) }
+  }
+
+  test('a gap is told with the dates and hours of the person, never UTC', () => {
+    const a = local(from)
+    const b = local(to)
+    expect(noteLine({ kind: 'gap', text: 'Michel n’a pas pu lire ce journal de 2026-11-01 22:30 UTC à …', from, to }, 'fr'))
+      .toBe(`Michel n'a pas pu lire ce journal du ${a.day} à ${a.h}h${a.m} au ${b.day} à ${b.h}h${b.m}.`)
+    expect(noteLine({ kind: 'gap', text: 'x', from, to }, 'en')).toBe(`Michel could not read this log from ${a.iso} ${a.h}:${a.m} to ${b.iso} ${b.h}:${b.m}.`)
+    expect(noteLine({ kind: 'gap', text: 'x', from, to }, 'fr')).not.toMatch(/UTC/)
+  })
+
+  test('the other notes keep the API sentence, and a gap without dates too', () => {
+    expect(noteLine({ kind: 'rotated', text: 'Le journal a été remplacé.' }, 'fr')).toBe('Le journal a été remplacé.')
+    expect(noteLine({ kind: 'gap', text: 'La phrase de l’API.', from: '', to }, 'fr')).toBe('La phrase de l’API.')
+    expect(noteLine(null, 'fr')).toBe('')
+  })
+})
+
+describe('noteLine with a bad date', () => {
+  test('a date that is not one leaves the API sentence', () => {
+    expect(noteLine({ kind: 'gap', text: 'x', from: 'nope', to: '2026-11-02T05:15:00Z' }, 'fr')).toBe('x')
+    expect(noteLine({ kind: 'gap', text: 'x', from: '2026-11-02T05:15:00Z', to: 'nope' }, 'en')).toBe('x')
   })
 })

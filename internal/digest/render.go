@@ -64,7 +64,7 @@ func funcs(d Digest) map[string]any {
 		"serverLogsTitle":       func() string { return i18n.T(lang, "digest.serverlogs.title") },
 		"serverLogHead":         func(s ServerLogDigest) string { return serverLogHead(lang, s) },
 		"serverLogItem":         func(it serverlog.AlertItem) string { return serverLogItem(lang, it) },
-		"serverLogGap":          func(g serverlog.Note) string { return serverLogGap(lang, g) },
+		"serverLogGap":          func(g LogGap) string { return serverLogGap(lang, g) },
 		"serverLogSkipped":      func(n int64) string { return serverLogSkipped(lang, n) },
 		"serverLogUnopened":     func(u UnopenedSource) string { return serverLogUnopened(lang, u) },
 		"serverLogUnopenedMore": func(n int) string { return serverLogUnopenedMore(lang, n) },

@@ -142,8 +142,8 @@ type PassResult struct {
 // number on the sheet of the server (Rank, from 1, in the order of
 // Repo.Sources, the sheet's order) and its format.
 type SourceRef struct {
-	Rank   int
-	Format Format
+	Rank   int    `json:"rank"`
+	Format Format `json:"format"`
 }
 
 // FailedSource is a source whose read failed in a pass. ID is the source's id
@@ -275,6 +275,8 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 		}
 	}
 	if len(sources) == 0 {
+		p := &onePass{d: d, t: t}
+		p.keepFailures(ctx, d.now(), nil)
 		return PassResult{}, nil
 	}
 	st, err := d.Repo.Settings(ctx, t.ID)
@@ -291,12 +293,17 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 	}
 	now := d.now()
 	client, err := sshx.Dial(ctx, d.SSH, t)
+	p := &onePass{d: d, t: t, st: st, now: now, texts: map[string]string{}, counts: map[string]int64{}}
 	if err != nil {
-		return PassResult{Reason: reasonOf(err)}, fmt.Errorf("cannot connect to %s: %w", t.Name, err)
+		reason := reasonOf(err)
+		// A connection that fails names the server, not a source.
+		if ctx.Err() == nil {
+			p.keepFailures(ctx, now, []Failure{{Reason: reason}})
+		}
+		return PassResult{Reason: reason}, fmt.Errorf("cannot connect to %s: %w", t.Name, err)
 	}
 	defer client.Close()
 
-	p := &onePass{d: d, t: t, st: st, now: now, texts: map[string]string{}, counts: map[string]int64{}}
 	var res PassResult
 	var firstErr error
 	var readIDs []string
@@ -323,6 +330,12 @@ func Pass(ctx context.Context, d Deps, targetID string) (PassResult, error) {
 			readIDs = append(readIDs, src.ID)
 		}
 	}
+	// The page tells why the last read failed, until a read does not.
+	kept := make([]Failure, 0, len(res.Failed))
+	for _, f := range res.Failed {
+		kept = append(kept, Failure{SourceID: f.ID, Reason: f.Reason})
+	}
+	p.keepFailures(ctx, now, kept)
 	// The read happened whatever comes next: what fails from here on is said in
 	// the log, and does not count as "not reading".
 	if err := p.alert(ctx, &res); err != nil && ctx.Err() == nil {
@@ -430,6 +443,15 @@ func (p *onePass) readSource(ctx context.Context, c *sshx.Client, src Source, o 
 		"occurrences": occurrences(out), "rejected": out.Rejected, "fingerprint": fingerprint(out.Records),
 	})
 	return readOutcome{opened: opened(out), whole: wholeRead(out)}, nil
+}
+
+// keepFailures stores why the read failed, for the page: the reasons of this
+// pass replace those of the one before, and none clears them. What cannot be
+// stored is said in the log; it does not change what the pass did.
+func (p *onePass) keepFailures(ctx context.Context, at time.Time, fs []Failure) {
+	if err := p.d.Repo.SetFailures(ctx, p.t.ID, fs, at); err != nil && ctx.Err() == nil {
+		slog.Warn("serverlog: cannot keep the reason of a failed log read", "target", p.t.ID, "err", err)
+	}
 }
 
 // readOutcome says how well a source that did not fail was read. opened: a file

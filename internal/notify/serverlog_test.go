@@ -347,3 +347,24 @@ func TestNotReadingSaysARefusedConnection(t *testing.T) {
 		t.Errorf("unknown cause: %q", body)
 	}
 }
+
+// A log whose format has no error type or place (plain text, JSON) gives an item
+// with neither: the message still names the server, in every channel the same
+// way, and shows nothing the default content keeps out.
+func TestLogAlertForAFormatWithoutTypeNamesTheServer(t *testing.T) {
+	in := serverlog.AlertInput{Target: logServer(), Kind: serverlog.AlertNew, Items: []serverlog.AlertItem{
+		{Kind: serverlog.AlertNew, Level: serverlog.LevelError, Count: 1},
+		{Kind: serverlog.AlertReopened, Level: serverlog.LevelError, Count: 1},
+	}}
+	_, en := logMessage(i18n.EN, in, logPage)
+	want := "Server srv-demo: 2 errors in the logs\n- an error, 1 time (new)\n- an error, 1 time (back)\n" + logPage
+	if en != want {
+		t.Errorf("en = %q, want %q", en, want)
+	}
+	_, fr := logMessage(i18n.FR, in, logPage)
+	for _, w := range []string{"Serveur srv-demo : 2 erreurs dans les journaux", "- une erreur, 1 fois (nouvelle)", "- une erreur, 1 fois (de retour)"} {
+		if !strings.Contains(fr, w) {
+			t.Errorf("fr %q lacks %q", fr, w)
+		}
+	}
+}

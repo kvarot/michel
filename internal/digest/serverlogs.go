@@ -33,18 +33,33 @@ type UnopenedSource struct {
 }
 
 // SourceLabel names a source in a message without its path: its number on the
-// sheet of the server and its format ("log no. 2 on the sheet (PHP)").
+// sheet of the server and, for the formats a beginner knows by name, its format
+// ("log no. 2 on the sheet (PHP)"). A plain text log or another format has no
+// name worth a bracket: "log no. 3 on the sheet".
 func SourceLabel(lang i18n.Lang, ref serverlog.SourceRef) string {
-	return i18n.T(lang, "digest.serverlogs.source", ref.Rank, sourceFormat(lang, ref.Format))
+	if f := sourceFormat(lang, ref.Format); f != "" {
+		return i18n.T(lang, "digest.serverlogs.source", ref.Rank, f)
+	}
+	return i18n.T(lang, "digest.serverlogs.source_plain", ref.Rank)
 }
 
-// sourceFormat is the format of a source in a word or two.
+// sourceOf is SourceLabel in the form "of log no. 2 on the sheet (PHP)", for a
+// sentence about the files of a source.
+func sourceOf(lang i18n.Lang, rank int, format serverlog.Format) string {
+	if f := sourceFormat(lang, format); f != "" {
+		return i18n.T(lang, "digest.serverlogs.source_of", rank, f)
+	}
+	return i18n.T(lang, "digest.serverlogs.source_of_plain", rank)
+}
+
+// sourceFormat is the format of a source in a word or two, "" for the formats
+// that are not worth naming (plain text, other).
 func sourceFormat(lang i18n.Lang, f serverlog.Format) string {
 	switch f {
-	case serverlog.FormatPHP, serverlog.FormatPostgres, serverlog.FormatMonolog, serverlog.FormatJSON, serverlog.FormatText:
+	case serverlog.FormatPHP, serverlog.FormatPostgres, serverlog.FormatMonolog, serverlog.FormatJSON:
 		return i18n.T(lang, "digest.serverlogs.format."+string(f))
 	}
-	return i18n.T(lang, "digest.serverlogs.format.other")
+	return ""
 }
 
 // deviationKey is the key of Run.Summary that marks a digest which carried the
@@ -62,9 +77,9 @@ type ServerLogDigest struct {
 	New      int                   `json:"new"`
 	Reopened int                   `json:"reopened"`
 	Top      []serverlog.AlertItem `json:"top,omitempty"`
-	// Gaps are the periods the logs were not read; the notes of the sources
-	// of the server that overlap are joined into one.
-	Gaps []serverlog.Note `json:"gaps,omitempty"`
+	// Gaps are the periods the logs were not read; the notes of the sources of the
+	// server that overlap are joined into one, which says which logs were behind.
+	Gaps []LogGap `json:"gaps,omitempty"`
 	// Skipped is the volume in bytes left unread in the period because a log grew
 	// past the read cap, all sources of the server together. It is left out when
 	// errors of level error go nowhere on this server.
@@ -211,7 +226,15 @@ func (c computer) serverLogs(ctx context.Context, remind bool) ([]ServerLogDiges
 		if err != nil {
 			return nil, err
 		}
-		sl.Gaps = gapsSince(notes, c.since)
+		srcs, err := repo.Sources(ctx, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		kept, err := repo.KeptFailures(ctx, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		sl.Gaps = gapsSince(notes, c.since, srcs, kept)
 		// A log that swells counts as a signal, with the rule of the level error.
 		if st.Routes[serverlog.LevelError] != serverlog.RouteIgnored {
 			sl.Skipped = skippedIn(notes, since, until)
@@ -296,25 +319,93 @@ func unopenedSources(ctx context.Context, repo *serverlog.Repo, targetID string,
 	return out, more, nil
 }
 
+// LogGap is a period the logs of a server were not read. All says that every log
+// of the server was behind; otherwise Sources names the ones that were, by their
+// number on the sheet and their format (never a path or an id). Both empty: one
+// of the logs, which the data cannot name. Reason is the cause the pass kept for
+// the failure that made the gap, a key of serverlog.Reason*, empty when it kept
+// none or only the general one.
+type LogGap struct {
+	From    time.Time             `json:"from"`
+	To      time.Time             `json:"to"`
+	All     bool                  `json:"all,omitempty"`
+	Sources []serverlog.SourceRef `json:"sources,omitempty"`
+	Reason  string                `json:"reason,omitempty"`
+}
+
 // gapsSince joins the gap notes that reach into the window: periods of
-// several sources that overlap are one period of the server.
-func gapsSince(notes []serverlog.Note, since time.Time) []serverlog.Note {
-	var gaps []serverlog.Note
+// several sources that overlap are one period of the server, which names the
+// sources that were behind (or says all of them were). The cause comes from the
+// failures the pass kept, when one of them is of that period and of one of these
+// sources or of the whole server, and only when they all agree.
+func gapsSince(notes []serverlog.Note, since time.Time, srcs []serverlog.Source, kept []serverlog.KeptFailure) []LogGap {
+	type part struct {
+		from, to time.Time
+		ids      map[string]bool
+	}
+	var parts []part
 	for _, n := range notes {
 		if n.Kind == serverlog.NoteGap && n.To.After(since) {
-			gaps = append(gaps, serverlog.Note{Kind: serverlog.NoteGap, From: n.From, To: n.To})
+			parts = append(parts, part{from: n.From, to: n.To, ids: map[string]bool{n.SourceID: true}})
 		}
 	}
-	sort.SliceStable(gaps, func(i, j int) bool { return gaps[i].From.Before(gaps[j].From) })
-	var out []serverlog.Note
-	for _, g := range gaps {
-		if last := len(out) - 1; last >= 0 && !g.From.After(out[last].To) {
-			if g.To.After(out[last].To) {
-				out[last].To = g.To
+	sort.SliceStable(parts, func(i, j int) bool { return parts[i].from.Before(parts[j].from) })
+	var merged []part
+	for _, g := range parts {
+		if last := len(merged) - 1; last >= 0 && !g.from.After(merged[last].to) {
+			if g.to.After(merged[last].to) {
+				merged[last].to = g.to
+			}
+			for id := range g.ids {
+				merged[last].ids[id] = true
 			}
 			continue
 		}
-		out = append(out, g)
+		merged = append(merged, g)
+	}
+	var out []LogGap
+	for _, g := range merged {
+		gap := LogGap{From: g.from, To: g.to}
+		all := true
+		for i, src := range srcs {
+			switch {
+			case g.ids[src.ID]:
+				gap.Sources = append(gap.Sources, serverlog.SourceRef{Rank: i + 1, Format: src.Format})
+			case src.Active:
+				all = false
+			}
+		}
+		// All the active logs were behind (and the one log of a server is the logs).
+		if gap.All = all && len(gap.Sources) > 0; gap.All {
+			gap.Sources = nil
+		}
+		// The cause kept is the one of the last try. It counts for the gap only when it
+		// falls inside it, and for every log of it: a cause of the whole server covers
+		// them all, a cause of one log covers that log, and the gap has one cause only
+		// if all its logs have the same.
+		reasons, covered := map[string]bool{}, map[string]bool{}
+		for _, f := range kept {
+			if f.At.Before(g.from) || f.At.After(g.to) {
+				continue
+			}
+			if f.SourceID == "" {
+				reasons[f.Reason] = true
+				for id := range g.ids {
+					covered[id] = true
+				}
+			} else if g.ids[f.SourceID] {
+				reasons[f.Reason] = true
+				covered[f.SourceID] = true
+			}
+		}
+		if len(reasons) == 1 && len(covered) == len(g.ids) {
+			for r := range reasons {
+				if r != serverlog.ReasonError {
+					gap.Reason = r
+				}
+			}
+		}
+		out = append(out, gap)
 	}
 	return out
 }
@@ -374,10 +465,33 @@ func serverLogItem(lang i18n.Lang, it serverlog.AlertItem) string {
 	return line + " (" + i18n.T(lang, "notify.log.why."+string(it.Kind)) + ")"
 }
 
-// serverLogGap says from when to when the logs were not read.
-func serverLogGap(lang i18n.Lang, g serverlog.Note) string {
+// serverLogGap says from when to when the logs were not read, which of them, and
+// why when the pass kept the cause. The hours are the computer's own, like the
+// rest of what the person reads; none says "UTC".
+func serverLogGap(lang i18n.Lang, g LogGap) string {
 	layout := i18n.T(lang, "digest.serverlogs.moment_layout")
-	return i18n.T(lang, "digest.serverlogs.gap", g.From.UTC().Format(layout), g.To.UTC().Format(layout))
+	var what string
+	switch {
+	case g.All:
+		what = i18n.T(lang, "digest.serverlogs.gap_what.all")
+	case len(g.Sources) > 0:
+		labels := make([]string, len(g.Sources))
+		for i, s := range g.Sources {
+			labels[i] = SourceLabel(lang, s)
+		}
+		what = strings.Join(labels[:len(labels)-1], ", ")
+		if what != "" {
+			what += " " + i18n.T(lang, "digest.serverlogs.and") + " "
+		}
+		what += labels[len(labels)-1]
+	default:
+		what = i18n.T(lang, "digest.serverlogs.gap_what.one")
+	}
+	why := i18n.T(lang, "digest.serverlogs.gap_unknown")
+	if g.Reason != "" && g.Reason != serverlog.ReasonError {
+		why = i18n.T(lang, "digest.serverlogs.gap_last", i18n.T(lang, "notify.log.reason."+g.Reason))
+	}
+	return i18n.T(lang, "digest.serverlogs.gap", g.From.In(time.Local).Format(layout), g.To.In(time.Local).Format(layout), what, why)
 }
 
 // serverLogSkipped says how much of the logs of a server was left unread.
@@ -391,7 +505,7 @@ func serverLogSkipped(lang i18n.Lang, n int64) string {
 
 // serverLogUnopened says that some files of a source cannot be opened.
 func serverLogUnopened(lang i18n.Lang, u UnopenedSource) string {
-	of := i18n.T(lang, "digest.serverlogs.source_of", u.Rank, sourceFormat(lang, u.Format))
+	of := sourceOf(lang, u.Rank, u.Format)
 	return i18n.N(lang, "digest.serverlogs.unopened", u.Count, of)
 }
 

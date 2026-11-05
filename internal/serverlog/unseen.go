@@ -152,6 +152,7 @@ func (r *Repo) ForgetTarget(ctx context.Context, targetID string) error {
 		`DELETE FROM log_signature WHERE target_id = ?`,
 		`DELETE FROM log_cursor WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`,
 		`DELETE FROM log_unseen WHERE source_id IN (SELECT id FROM log_source WHERE target_id = ?)`,
+		`DELETE FROM log_failure WHERE target_id = ?`,
 		`DELETE FROM log_note WHERE target_id = ?`,
 		`DELETE FROM log_source WHERE target_id = ?`,
 		`DELETE FROM log_settings WHERE target_id = ?`,
@@ -199,4 +200,94 @@ func ReadVolume(out Output) int64 {
 		}
 	}
 	return n
+}
+
+// Failure is the cause of a failed read, kept for the page. SourceID is the log
+// that failed, "" when the connection to the server failed. Reason is a key of
+// the Reason* constants, never what the server printed.
+type Failure struct {
+	SourceID string
+	Reason   string
+}
+
+// knownReason says whether r is one of the keys a failure may carry.
+func knownReason(r string) bool {
+	switch r {
+	case ReasonNoAgent, ReasonNoKeyAccepted, ReasonHostKeyUnknown, ReasonHostKeyChanged, ReasonDenied, ReasonTimeout,
+		ReasonRefused, ReasonPolicy, ReasonOutputCut, ReasonTools, ReasonError:
+		return true
+	}
+	return false
+}
+
+// SetFailures replaces the failures kept for a server by those of the pass that
+// ran at at: none after a good read. A reason that is no key is refused.
+func (r *Repo) SetFailures(ctx context.Context, targetID string, fs []Failure, at time.Time) error {
+	for _, f := range fs {
+		if !knownReason(f.Reason) {
+			return fmt.Errorf("%w: failure reason %q", ErrInvalidRecord, f.Reason)
+		}
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot save the log failure: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM log_failure WHERE target_id = ?`, targetID); err != nil {
+		return fmt.Errorf("cannot save the log failure: %w", err)
+	}
+	for _, f := range fs {
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO log_failure (target_id, source_id, reason, at) VALUES (?,?,?,?)`, targetID, f.SourceID, f.Reason, ts(at)); err != nil {
+			return fmt.Errorf("cannot save the log failure: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// Failures lists the reasons kept for a server, by source id ("" for the
+// connection to the server).
+func (r *Repo) Failures(ctx context.Context, targetID string) (map[string]string, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT source_id, reason FROM log_failure WHERE target_id = ?`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log failure: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, reason string
+		if err := rows.Scan(&id, &reason); err != nil {
+			return nil, fmt.Errorf("cannot read the log failure: %w", err)
+		}
+		out[id] = reason
+	}
+	return out, rows.Err()
+}
+
+// KeptFailure is a failure as the pass kept it, with when it happened.
+type KeptFailure struct {
+	Failure
+	At time.Time
+}
+
+// KeptFailures lists the failures kept for a server with their dates, for the
+// digest: it tells a gap in the reading the cause of the failure that made it.
+func (r *Repo) KeptFailures(ctx context.Context, targetID string) ([]KeptFailure, error) {
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT source_id, reason, at FROM log_failure WHERE target_id = ? ORDER BY source_id`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the log failure: %w", err)
+	}
+	defer rows.Close()
+	var out []KeptFailure
+	for rows.Next() {
+		var k KeptFailure
+		var at string
+		if err := rows.Scan(&k.SourceID, &k.Reason, &at); err != nil {
+			return nil, fmt.Errorf("cannot read the log failure: %w", err)
+		}
+		if k.At, err = parseTime(at); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
 }

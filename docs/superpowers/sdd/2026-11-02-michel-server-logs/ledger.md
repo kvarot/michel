@@ -222,3 +222,12 @@ Scope agreed with Kévin 2026-11-02: tasks 1 and 2 before plan 6 real run; stop 
 - Fix round 1 dispatched.
 - Fix round 1: dfa20ee, ebdd40f. Re-review: all addressed bar told on recovery; new 1 important (the sheet shows no number) 4 minor. Fix round 2 dispatched.
 - Fix round 2: 25b51eb. Re-review: all addressed, 2 cosmetic left (comments say "sheet"; advanced row shows short and long format). Not seen in a browser: number on the sheet, marked health warning. No real server.
+
+## Real run of the logs fixes (2026-11-04/05)
+- Real run: sheet, hds warning, alert with number, per-source back, digest line, refused, timeout and policy sentences pass. Defect: the page never shows the cause of a failed read.
+- Ruling R71: the page shows the last cause, stored per server — the alert sends people to the page and it had nothing to say — costs one stored field, no log data in it.
+- Fixes: f218b27, 4683650, 259c14f, a6eb2fa. Review running. Not seen in a browser.
+- Review: no leak; digest can state a false cause (merged gap, later pass, last attempt as whole period); mail lines collapse; server off keeps cause; 7 mutations survived. Fix round 1 dispatched. Accepted: one interval's stale cause after re-enabling, one DST night, webhook gaps[] losing kind.
+- Fix round 1: 11440f8, mutations caught. Re-review: 8 of 8, no new breakage. Not seen in a browser after these fixes.
+- Gate at 11440f8: vitest 667, build, vet, gofmt, hygiene pass. 4 Go tests fail and two of them checked fail the same at 3ccfb16: `TestAPIResponsesHaveNoAbsolutePathsNorCommands`, `TestItemsReadAndDiscoverActions` (bare LF), `TestAllowProxyTunnelsAllowedHost`, `TestEmailImplicitTLSAndNoStartTLSRefused` (x509 unknown authority on 127.0.0.1). Likely Avast's traffic scanning on this PC, not confirmed; earlier full runs passed.
+- Ruling R72: merged with those 4 red — the two checked TLS tests fail on main without this change, and this diff touches none of their code paths — costs a real regression hidden behind them, CI not readable here.
