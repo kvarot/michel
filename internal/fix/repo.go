@@ -133,29 +133,71 @@ func (r *Repo) SetWork(ctx context.Context, id string, w Work) error {
 }
 
 // Approve moves the attempt from proposed to approved and records who did
-// it and for which proposal (id and hash), in one conditional update that
-// also checks that proposal is still the current one with that hash:
+// it and for which proposal (id and hash), in one transaction that also
+// checks that proposal is still the current one with that hash:
 // ErrStaleProposal when it is not (the attempt stays proposed),
 // ErrBadTransition in any other state.
 func (r *Repo) Approve(ctx context.Context, id, by, proposalID, hash string) error {
-	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, approved_by = ?, approved_proposal = ?, approved_hash = ?, updated_at = ?
-		WHERE id = ? AND state = ?
-		AND EXISTS (SELECT 1 FROM fix_proposal WHERE id = ? AND attempt_id = ? AND superseded = 0 AND hash = ?)`,
-		string(StateApproved), by, proposalID, hash, ts(r.now()), id, string(StateProposed), proposalID, id, hash)
+	now := r.now()
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	defer tx.Rollback()
+	if err := lockProposed(ctx, tx, id, now, StateApproved); err != nil {
+		return err
+	}
+	if err := checkCurrent(ctx, tx, id, proposalID, hash); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET state = ?, approved_by = ?, approved_proposal = ?, approved_hash = ?, updated_at = ? WHERE id = ?`,
+		string(StateApproved), by, proposalID, hash, ts(now), id); err != nil {
+		return fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	return nil
+}
+
+// lockProposed takes the row of the attempt in tx (an update, which every
+// database serializes, PostgreSQL in READ COMMITTED included) when it is
+// proposed. ErrNotFound for an unknown attempt, ErrBadTransition (moving to
+// to) in any other state.
+func lockProposed(ctx context.Context, tx *sql.Tx, id string, now time.Time, to State) error {
+	res, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET updated_at = ? WHERE id = ? AND state = ?`, ts(now), id, string(StateProposed))
 	if err != nil {
 		return fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		return nil
 	}
-	a, err := r.GetAttempt(ctx, id)
-	if err != nil {
-		return err
+	var state string
+	if err := tx.QueryRowContext(ctx, `SELECT state FROM fix_attempt WHERE id = ?`, id).Scan(&state); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	} else if err != nil {
+		return fmt.Errorf("cannot read the fix attempt: %w", err)
 	}
-	if a.State == StateProposed {
+	return fmt.Errorf("%w (the attempt is %s, moving to %s)", ErrBadTransition, state, to)
+}
+
+// checkCurrent reads, after lockProposed, the current proposal of the
+// attempt and compares it in Go: ErrStaleProposal unless its hash is hash
+// (and its id proposalID, when given).
+func checkCurrent(ctx context.Context, tx *sql.Tx, id, proposalID, hash string) error {
+	var curID, curHash string
+	err := tx.QueryRowContext(ctx, `SELECT id, hash FROM fix_proposal WHERE attempt_id = ? AND superseded = 0
+		ORDER BY created_at DESC, id DESC LIMIT 1`, id).Scan(&curID, &curHash)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrStaleProposal
 	}
-	return fmt.Errorf("%w (moving to %s)", ErrBadTransition, StateApproved)
+	if err != nil {
+		return fmt.Errorf("cannot read the proposal: %w", err)
+	}
+	if hash == "" || curHash != hash || (proposalID != "" && curID != proposalID) {
+		return ErrStaleProposal
+	}
+	return nil
 }
 
 type scanner interface{ Scan(...any) error }
@@ -358,23 +400,11 @@ func (r *Repo) AddProposalIfCurrent(ctx context.Context, p Proposal, hash string
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET updated_at = ? WHERE id = ? AND state = ?
-		AND EXISTS (SELECT 1 FROM fix_proposal WHERE attempt_id = ? AND superseded = 0 AND hash = ?)`,
-		ts(now), p.AttemptID, string(StateProposed), p.AttemptID, hash)
-	if err != nil {
-		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	if err := lockProposed(ctx, tx, p.AttemptID, now, StateProposed); err != nil {
+		return Proposal{}, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		var state string
-		if err := tx.QueryRowContext(ctx, `SELECT state FROM fix_attempt WHERE id = ?`, p.AttemptID).Scan(&state); errors.Is(err, sql.ErrNoRows) {
-			return Proposal{}, fmt.Errorf("%w: %s", ErrNotFound, p.AttemptID)
-		} else if err != nil {
-			return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
-		}
-		if State(state) != StateProposed {
-			return Proposal{}, fmt.Errorf("%w (the attempt is %s)", ErrBadTransition, state)
-		}
-		return Proposal{}, ErrStaleProposal
+	if err := checkCurrent(ctx, tx, p.AttemptID, "", hash); err != nil {
+		return Proposal{}, err
 	}
 	if err := insert(ctx, tx); err != nil {
 		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
