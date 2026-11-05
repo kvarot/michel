@@ -185,9 +185,27 @@ michel serve --listen 127.0.0.1:8080
 - **Install it.** In Chrome or Edge, the install icon in the address bar (or menu > Install page as app) adds Michel as an app (PWA). The app window then opens even when `michel serve` is stopped, and says that Michel does not answer.
 - **Rebuilding the page.** The page is embedded in the binary. To rebuild it from the sources: `make web` (needs Node and npm), then `go build`. Without npm, the binary still builds and `serve` shows a short text page.
 
+## The daily watch of `michel serve`
+
+While `michel serve` runs, it watches by itself: you need no scheduled task. Every day, from `watch.scan_at` (an hour before `notify.digest_at`, so 07:00 with the default settings), it first reads the enabled sources, as `michel source update` does (a source still waiting for your consent reads nothing and says so in the window of `serve`), then checks every active project one after the other, as `michel scan` does. The digest of 08:00 then tells a fresh state.
+
+```yaml
+watch:
+  enabled: true      # false: serve checks nothing by itself
+  scan_at: "06:30"   # local time; empty: an hour before the digest
+```
+
+- A project is checked once a day: a check you start by hand after the hour counts, and a restart of `serve` does not check it again.
+- A check that fails (a folder gone or unreadable) is tried again at most twice, 30 minutes apart, then the next day. The digest and the page say the failed checks.
+- `michel project set demo --auto-scan=false` takes a project out of the watch; you can still check it by hand.
+- Two Michel never check the same project at the same time: the second one says that a check is already running.
+- `michel watch status` shows the hour, the next pass, and the last and next check of each project. The page shows the next check on each project's card.
+
+Without `serve`, the scheduled task below still works.
+
 ## Scheduled task (until `michel schedule`)
 
-`michel schedule` does not exist yet. Meanwhile, create the scheduled task yourself. The line to run every morning is:
+`michel schedule` does not exist yet. If `michel serve` does not run all day, create the scheduled task yourself. The line to run every morning is:
 
 ```
 michel scan --all --update --digest

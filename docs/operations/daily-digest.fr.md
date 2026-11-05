@@ -189,9 +189,27 @@ michel serve --listen 127.0.0.1:8080
 - **Installer la page.** Dans Chrome ou Edge, l'icône d'installation dans la barre d'adresse (ou menu > Installer la page en tant qu'application) ajoute Michel comme une application. La fenêtre s'ouvre alors même quand `michel serve` est arrêté, mais elle affiche que Michel ne répond pas.
 - **Reconstruire la page.** La page est intégrée au programme. Pour la reconstruire depuis les sources : `make web` (nécessite Node et npm, deux outils de développement), puis `go build`. Sans npm, le programme se compile quand même et `serve` affiche une courte page de texte.
 
+## La veille du jour de `michel serve`
+
+Tant que `michel serve` tourne, il surveille tout seul : tu n'as pas besoin de tâche planifiée. Chaque jour, à partir de `watch.scan_at` (une heure avant `notify.digest_at`, donc 07:00 avec les réglages par défaut), il lit d'abord les sources activées, comme `michel source update` (une source qui attend encore ton accord ne lit rien et le dit dans la fenêtre de `serve`), puis contrôle chaque projet actif, l'un après l'autre, comme `michel scan`. Le résumé de 08:00 décrit alors un état frais.
+
+```yaml
+watch:
+  enabled: true      # false : serve ne contrôle rien tout seul
+  scan_at: "06:30"   # heure locale ; vide : une heure avant le résumé
+```
+
+- Un projet est contrôlé une fois par jour : un contrôle que tu lances à la main après l'heure compte, et un redémarrage de `serve` ne le contrôle pas une deuxième fois.
+- Un contrôle qui échoue (dossier disparu ou illisible) est retenté au plus deux fois, à 30 minutes d'écart, puis le lendemain. Le résumé et la page disent les contrôles en échec.
+- `michel project set demo --auto-scan=false` sort un projet de la veille ; tu peux toujours le contrôler à la main.
+- Deux Michel ne contrôlent jamais le même projet en même temps : le second dit qu'un contrôle est déjà en cours.
+- `michel watch status` montre l'heure, le prochain passage, et le dernier et le prochain contrôle de chaque projet. La page montre le prochain contrôle sur la carte de chaque projet.
+
+Sans `serve`, la tâche planifiée ci-dessous marche toujours.
+
 ## Tâche planifiée (en attendant `michel schedule`)
 
-`michel schedule` n'existe pas encore. En attendant, crée toi-même la tâche planifiée. La ligne à lancer chaque matin est :
+`michel schedule` n'existe pas encore. Si `michel serve` ne tourne pas toute la journée, crée toi-même la tâche planifiée. La ligne à lancer chaque matin est :
 
 ```
 michel scan --all --update --digest
