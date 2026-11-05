@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/osv-scanner/v2/pkg/models"
@@ -118,6 +119,9 @@ var afterScanHook func()
 // scanFunc runs the scanner; tests replace it.
 var scanFunc = doScan
 
+// scannerMu serializes osv-scanner's runs (see runScanner).
+var scannerMu sync.Mutex
+
 // scanResult is what the scanner returned.
 type scanResult struct {
 	vr       models.VulnerabilityResults
@@ -130,16 +134,25 @@ type scanResult struct {
 // cancelled scan is left to end on its own and its result is dropped (the
 // goroutine writes nothing but its channel). A panic of the scanner is
 // passed on to the caller, as when it ran on the caller's goroutine.
+// osv-scanner's logger is a global: scannerMu is held around SetLogger and
+// the scan, so one scan at a time runs, with its own logger.
 func runScanner(ctx context.Context, deps Deps, root string, exclude []string, enabled func(string) bool, osvRoot, override string) (models.VulnerabilityResults, error) {
+	handler := deps.LogHandler
+	if handler == nil {
+		handler = slog.NewTextHandler(io.Discard, nil)
+	}
 	out := make(chan scanResult, 1)
 	go func() {
 		var r scanResult
+		scannerMu.Lock()
 		defer func() {
+			scannerMu.Unlock()
 			if p := recover(); p != nil {
 				r = scanResult{panicked: p}
 			}
 			out <- r
 		}()
+		osvscanner.SetLogger(handler)
 		r.vr, r.err = scanFunc(deps, root, exclude, enabled, osvRoot, override)
 	}()
 	select {
@@ -466,11 +479,6 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		record("scan.finish", p.Name, ScanEmpty, map[string]any{"reason": "no_manifests", "ignored_config_files": configs})
 		return res, nil
 	}
-	handler := deps.LogHandler
-	if handler == nil {
-		handler = slog.NewTextHandler(io.Discard, nil)
-	}
-	osvscanner.SetLogger(handler)
 	dataDir := deps.DataDir
 	if dataDir == "" {
 		dataDir = filepath.Dir(deps.Store.Path())
@@ -808,11 +816,6 @@ func ScanDir(ctx context.Context, deps Deps, root string, ecosystems []string, o
 	if err != nil {
 		return nil, fmt.Errorf("Michel cannot prepare the scanner configuration: %w", err)
 	}
-	handler := deps.LogHandler
-	if handler == nil {
-		handler = slog.NewTextHandler(io.Discard, nil)
-	}
-	osvscanner.SetLogger(handler)
 	vr, derr := runScanner(ctx, deps, root, exclude, enabled, opt.OSVRoot, override)
 	if cerr := ctx.Err(); cerr != nil {
 		return nil, cerr

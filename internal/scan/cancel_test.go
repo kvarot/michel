@@ -3,6 +3,8 @@ package scan
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +19,43 @@ func fakeScanner(t *testing.T, f func(root string) (models.VulnerabilityResults,
 		return f(root)
 	}
 	t.Cleanup(func() { scanFunc = saved })
+}
+
+// osv-scanner's logger is a global: Run and ScanDir never run the scanner
+// at the same time. (No -race on this machine; the fake counts overlaps.)
+func TestScannerCallsAreSerialized(t *testing.T) {
+	var inFlight, most atomic.Int32
+	fakeScanner(t, func(string) (models.VulnerabilityResults, error) {
+		n := inFlight.Add(1)
+		for {
+			m := most.Load()
+			if n <= m || most.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		inFlight.Add(-1)
+		return models.VulnerabilityResults{}, nil
+	})
+	envs := []env{newEnv(t, "project-a"), newEnv(t, "project-a")}
+	var wg sync.WaitGroup
+	for _, e := range envs {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if _, err := Run(context.Background(), e.deps, e.proj, Options{OSVRoot: osvRoot}); err != nil {
+				t.Errorf("Run: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = ScanDir(context.Background(), e.deps, e.proj.Path, nil, Options{OSVRoot: osvRoot})
+		}()
+	}
+	wg.Wait()
+	if m := most.Load(); m != 1 {
+		t.Errorf("%d scanner calls ran at once, want 1", m)
+	}
 }
 
 func TestRunReturnsOnCancel(t *testing.T) {
