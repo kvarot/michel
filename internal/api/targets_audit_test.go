@@ -9,6 +9,25 @@ import (
 	"github.com/kvarot/michel/internal/target"
 )
 
+// A change made whose audit row cannot be written says so (the change is
+// made), not a bare internal error.
+func TestTargetChangeAuditFailure(t *testing.T) {
+	tf := newTargetFixture(t)
+	if _, err := tf.st.DB().Exec(`CREATE TRIGGER fail_add BEFORE INSERT ON audit_event WHEN NEW.action = 'target.add'
+		BEGIN SELECT RAISE(ABORT, 'disk on fire'); END`); err != nil {
+		t.Fatal(err)
+	}
+	code, out := tf.send("POST", "/api/v1/targets", tf.addBody(""))
+	var eb FixErrorBody
+	_ = json.Unmarshal([]byte(out), &eb)
+	if code != http.StatusInternalServerError || eb.Code != "api.target.audit_failed" || eb.Hint == "" {
+		t.Errorf("add with the audit refused = %d %s", code, out)
+	}
+	if list, err := target.NewRepo(tf.st).List(context.Background()); err != nil || len(list) != 1 {
+		t.Errorf("the server was not added: %d %v", len(list), err)
+	}
+}
+
 // A host-key refusal whose audit row cannot be written answers 500, not the
 // plain refusal: the refusal left no trace.
 func TestHostKeyRefusalAuditFailure(t *testing.T) {

@@ -238,6 +238,7 @@
   "api.source.upgrade.nothing": "No new version of %s is known. Michel checks the repository at each update.",
   "api.target.allow_failed": "The server was not saved: Michel could not write its network rule in the policy file.",
   "api.target.allow_failed_hint": "Check that the policy file can be written, then try again.",
+  "api.target.audit_failed": "The change is made, but Michel could not write it to the audit log.",
   "api.target.bad_classification": "The classification must be public, internal, confidential, sensitive or health.",
   "api.target.bad_env": "The role of the server must be prod, preprod or dev.",
   "api.target.bad_executor": "Who runs the fixes must be user or michel.",

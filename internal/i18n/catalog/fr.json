@@ -238,6 +238,7 @@
   "api.source.upgrade.nothing": "Aucune nouvelle version de %s n'est connue. Michel vérifie le dépôt à chaque mise à jour.",
   "api.target.allow_failed": "Le serveur n'a pas été enregistré : Michel n'a pas pu écrire sa règle réseau dans le fichier de politique.",
   "api.target.allow_failed_hint": "Vérifie que le fichier de politique est modifiable, puis réessaie.",
+  "api.target.audit_failed": "Le changement est fait, mais Michel n'a pas pu l'écrire dans le journal d'audit.",
   "api.target.bad_classification": "La classification doit être public, internal, confidential, sensitive ou health.",
   "api.target.bad_env": "Le rôle du serveur doit être prod, preprod ou dev.",
   "api.target.bad_executor": "Qui lance les corrections doit être user ou michel.",

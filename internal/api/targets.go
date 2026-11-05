@@ -471,6 +471,12 @@ func (s *server) reachable(w http.ResponseWriter, lang i18n.Lang) bool {
 	return true
 }
 
+// targetAuditFailed answers 500: the change is made, but the audit log
+// refused its row.
+func (s *server) targetAuditFailed(w http.ResponseWriter, lang i18n.Lang) {
+	s.failedBody(w, http.StatusInternalServerError, lang, "api.target.audit_failed", "api.internal_hint")
+}
+
 func (s *server) targetAudit(ctx context.Context, action, id, result string, ev map[string]any) error {
 	_, err := s.deps.Audit.Record(ctx, audit.Event{Actor: targetActor, Action: action, Target: id, Result: result, Evidence: ev})
 	return err
@@ -969,7 +975,7 @@ func (s *server) targetAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.targetAudit(ctx, "target.add", added.ID, "ok", map[string]any{"name": added.Name, "kind": string(added.Kind), "env": string(added.Env),
 		"fix_level": added.FixLevel, "links": len(links), "rules_written": n}); err != nil {
-		s.internal(w, r)
+		s.targetAuditFailed(w, lang)
 		return
 	}
 	v, err := s.targetView(ctx, added, lang, true)
@@ -1097,7 +1103,7 @@ func (s *server) targetPatch(w http.ResponseWriter, r *http.Request) {
 	rules := len(fresh)
 	if err := s.targetAudit(ctx, "target.update", t.ID, "ok", map[string]any{"name": t.Name, "changed": changed, "rules_written": rules,
 		"rules_removed": released, "host_key_reset": moved && old.HostKey != ""}); err != nil {
-		s.internal(w, r)
+		s.targetAuditFailed(w, lang)
 		return
 	}
 	got, err := s.targets().Get(ctx, t.ID)
@@ -1189,9 +1195,9 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		_, gone, err := s.changeRules(nil, released)
 		removed, rulesFailed = len(gone), err != nil
 	}
-	if err := s.targetAudit(ctx, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "rules_error": rulesFailed,
+	if err := s.targetAudit(dctx, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "rules_error": rulesFailed,
 		"preprod_cleared": dependents, "logs_error": forgetErr != nil}); err != nil {
-		s.internal(w, r)
+		s.targetAuditFailed(w, lang)
 		return
 	}
 	if rulesFailed {
@@ -1277,7 +1283,7 @@ func (s *server) targetHostKeyConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.targetAudit(ctx, "target.hostkey", t.ID, "ok", map[string]any{"name": t.Name, "fingerprint": fp, "replaced": t.HostKey != "" && t.HostKey != fp}); err != nil {
-		s.internal(w, r)
+		s.targetAuditFailed(w, lang)
 		return
 	}
 	got, err := s.targets().Get(ctx, t.ID)
