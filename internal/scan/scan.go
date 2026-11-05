@@ -115,6 +115,44 @@ func ensureOverrideConfig(dataDir string) (string, error) {
 // afterScanHook is a test hook run right after the scanner returns.
 var afterScanHook func()
 
+// scanFunc runs the scanner; tests replace it.
+var scanFunc = doScan
+
+// scanResult is what the scanner returned.
+type scanResult struct {
+	vr       models.VulnerabilityResults
+	err      error
+	panicked any
+}
+
+// runScanner runs the scanner in a goroutine and returns its result, or
+// ctx's error as soon as ctx is done: osv-scanner takes no context, so a
+// cancelled scan is left to end on its own and its result is dropped (the
+// goroutine writes nothing but its channel). A panic of the scanner is
+// passed on to the caller, as when it ran on the caller's goroutine.
+func runScanner(ctx context.Context, deps Deps, root string, exclude []string, enabled func(string) bool, osvRoot, override string) (models.VulnerabilityResults, error) {
+	out := make(chan scanResult, 1)
+	go func() {
+		var r scanResult
+		defer func() {
+			if p := recover(); p != nil {
+				r = scanResult{panicked: p}
+			}
+			out <- r
+		}()
+		r.vr, r.err = scanFunc(deps, root, exclude, enabled, osvRoot, override)
+	}()
+	select {
+	case <-ctx.Done():
+		return models.VulnerabilityResults{}, ctx.Err()
+	case r := <-out:
+		if r.panicked != nil {
+			panic(r.panicked)
+		}
+		return r.vr, r.err
+	}
+}
+
 // Options tunes a scan.
 type Options struct {
 	OSVRoot string
@@ -449,7 +487,20 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 	var vr models.VulnerabilityResults
 	var derr error
 	if len(needed) > 0 {
-		vr, derr = doScan(deps, p.Path, exclude, enabled, opt.OSVRoot, override)
+		vr, derr = runScanner(ctx, deps, p.Path, exclude, enabled, opt.OSVRoot, override)
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		// Cancelled: the scan is interrupted, whatever the scanner returns
+		// later is dropped and nothing else is stored.
+		res.Status = ScanInterrupted
+		bg := context.WithoutCancel(ctx)
+		_, _ = db.ExecContext(bg, `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=?`,
+			ScanInterrupted, deps.Now().UTC().Format(time.RFC3339), "the scan was cancelled", res.ScanID)
+		if _, err := deps.Audit.Record(bg, audit.Event{Actor: "scan", Action: "scan.finish", Target: p.Name, Result: ScanInterrupted,
+			Evidence: map[string]any{"reason": "cancelled"}}); err != nil {
+			res.Errors = append(res.Errors, fmt.Errorf("cannot write the audit log: %w", err))
+		}
+		return res, fmt.Errorf("the scan of %s was cancelled: %w", p.Name, cerr)
 	}
 	if afterScanHook != nil {
 		afterScanHook()
@@ -762,7 +813,10 @@ func ScanDir(ctx context.Context, deps Deps, root string, ecosystems []string, o
 		handler = slog.NewTextHandler(io.Discard, nil)
 	}
 	osvscanner.SetLogger(handler)
-	vr, derr := doScan(deps, root, exclude, enabled, opt.OSVRoot, override)
+	vr, derr := runScanner(ctx, deps, root, exclude, enabled, opt.OSVRoot, override)
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	if derr != nil && !errors.Is(derr, osvscanner.ErrVulnerabilitiesFound) && !errors.Is(derr, osvscanner.ErrNoPackagesFound) {
 		return nil, fmt.Errorf("the scanner failed: %w", derr)
 	}

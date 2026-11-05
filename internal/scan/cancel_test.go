@@ -1,0 +1,66 @@
+package scan
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/google/osv-scanner/v2/pkg/models"
+)
+
+// fakeScanner replaces osv-scanner for the test.
+func fakeScanner(t *testing.T, f func(root string) (models.VulnerabilityResults, error)) {
+	t.Helper()
+	saved := scanFunc
+	scanFunc = func(_ Deps, root string, _ []string, _ func(string) bool, _, _ string) (models.VulnerabilityResults, error) {
+		return f(root)
+	}
+	t.Cleanup(func() { scanFunc = saved })
+}
+
+func TestRunReturnsOnCancel(t *testing.T) {
+	e := newEnv(t, "project-a")
+	started, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	fakeScanner(t, func(string) (models.VulnerabilityResults, error) {
+		close(started)
+		<-release
+		defer close(finished)
+		return models.VulnerabilityResults{}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, e.deps, e.proj, Options{OSVRoot: osvRoot})
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("Run did not return within 1 s of the cancel")
+	}
+	var status string
+	if err := e.st.DB().QueryRow(`SELECT status FROM scan`).Scan(&status); err != nil || status != ScanInterrupted {
+		t.Errorf("scan status %q (%v), want %s", status, err, ScanInterrupted)
+	}
+	// The scanner ends later: its result is dropped, nothing is stored.
+	close(release)
+	<-finished
+	time.Sleep(50 * time.Millisecond)
+	var n int
+	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM finding`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("findings after the cancel = %d (%v), want 0", n, err)
+	}
+	if err := e.st.DB().QueryRow(`SELECT COUNT(*) FROM scan_manifest`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("manifests after the cancel = %d (%v), want 0", n, err)
+	}
+	if err := e.st.DB().QueryRow(`SELECT status FROM scan`).Scan(&status); err != nil || status != ScanInterrupted {
+		t.Errorf("scan status after the scanner ended %q (%v)", status, err)
+	}
+}
