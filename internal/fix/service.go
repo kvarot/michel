@@ -117,7 +117,10 @@ type Deps struct {
 	// DefaultMaxTurns). WorkerInterval is the pause between two looks at the
 	// queue (0: 30 s). PollInterval is how often a running session's state
 	// is read (0: 1 s).
-	Timeout        time.Duration
+	Timeout time.Duration
+	// TestsBound bounds a run of the tests a person asked for (RunTests):
+	// 0 is DefaultTestsTimeout.
+	TestsBound     time.Duration
 	MaxTurns       int
 	WorkerInterval time.Duration
 	PollInterval   time.Duration
@@ -268,6 +271,8 @@ type Sessions struct {
 	autoTried   map[string]time.Time
 	autoAlerted map[string]bool
 	sims        map[string]int
+	// testing are the attempts whose tests run now on a click (RunTests).
+	testing map[string]bool
 }
 
 // running is one attempt's session: the agent, its proxy, its masker and
@@ -1196,7 +1201,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 			// for a person's click (RunTests); the agent is never trusted
 			// with this.
 			testsStatus = workcopy.TestsAwaiting
-			lines = append(lines, awaitingText(lang, tell, attemptID, codeFiles(plan, ch.Files)))
+			lines = append(lines, awaitingText(lang, tell, attemptID, ch.Files))
 		default:
 			var terr error
 			commands = append(commands, RanCommand{What: "tests"})
@@ -1314,34 +1319,32 @@ func testsText(lang i18n.Lang, tell func(string) string, status, out string, err
 	return i18n.T(lang, "fix.msg.tests_not_run", reason)
 }
 
-// maxCodeFilesShown is how many code files a message or the page names
-// before "and N more".
-const maxCodeFilesShown = 10
-
-// codeFilesText names up to maxCodeFilesShown files, then "and N more".
-func codeFilesText(lang i18n.Lang, tell func(string) string, files []string) string {
-	shownFiles := files
-	if len(files) > maxCodeFilesShown {
-		shownFiles = files[:maxCodeFilesShown]
-	}
+// reviewText names the changed files as ShownReviewFiles shows them, the
+// manifests and lockfiles said for what they are, then "and N more".
+func reviewText(lang i18n.Lang, tell func(string) string, list []ReviewFile) string {
+	shownFiles, more := ShownReviewFiles(list)
 	names := make([]string, 0, len(shownFiles))
 	for _, f := range shownFiles {
-		names = append(names, tell(scan.SanitizeText(f)))
+		name := tell(scan.SanitizeText(f.Path))
+		switch f.Kind {
+		case FileManifest:
+			name = i18n.T(lang, "fix.msg.file_manifest", name)
+		case FileLockfile:
+			name = i18n.T(lang, "fix.msg.file_lockfile", name)
+		}
+		names = append(names, name)
 	}
 	text := strings.Join(names, ", ")
-	if n := len(files) - len(shownFiles); n > 0 {
-		text += " " + i18n.N(lang, "fix.msg.tests_awaiting_more", n)
+	if more > 0 {
+		text += " " + i18n.N(lang, "fix.msg.tests_awaiting_more", more)
 	}
 	return text
 }
 
 // awaitingText is Michel's line when the tests wait for a click: why, and
-// the code files the agent changed (none: only the dependency files).
-func awaitingText(lang i18n.Lang, tell func(string) string, attemptID string, code []string) string {
-	if len(code) == 0 {
-		return i18n.T(lang, "fix.msg.tests_awaiting_deps", attemptID)
-	}
-	return i18n.T(lang, "fix.msg.tests_awaiting", codeFilesText(lang, tell, code), attemptID)
+// every file the agent changed.
+func awaitingText(lang i18n.Lang, tell func(string) string, attemptID string, files []string) string {
+	return i18n.T(lang, "fix.msg.tests_awaiting", reviewText(lang, tell, reviewFiles(files)), attemptID)
 }
 
 // plainConstraint is the only shape of constraint Michel's own update leaves

@@ -123,11 +123,20 @@ func materialize(ctx context.Context, d Deps, c Copy, tree, name string) (run Co
 	cleanup = func() {
 		_ = os.RemoveAll(dir)
 		_ = os.Remove(archive)
-		_ = os.Remove(tmpPath(d, attemptID))
+		// A tests folder leaves the attempt's folder, which another run (of
+		// another process) may be creating its own in; Remove and the sweep
+		// take it later.
+		if name == "run" {
+			_ = os.Remove(tmpPath(d, attemptID))
+		}
 	}
 	cleanup()
 	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o700); err != nil {
-		return Copy{}, nil, fmt.Errorf("Michel cannot create the scratch folder: %w", noPath(err))
+		// The attempt's folder may have gone between two steps of MkdirAll
+		// (the cleanup of the run folder): once more.
+		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o700); err != nil {
+			return Copy{}, nil, fmt.Errorf("Michel cannot create the scratch folder: %w", noPath(err))
+		}
 	}
 	fail := func(err error) (Copy, func(), error) {
 		cleanup()

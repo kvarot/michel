@@ -193,18 +193,33 @@ export function testsState(s) {
   return testsStates.includes(s) ? s : 'not_run'
 }
 
-/** How many code files the proposal names before "and N more". */
+/** How many other files (kind code) the proposal names before "and N more". */
 export const maxCodeFilesShown = 10
 
 /**
- * codeFilesShown bounds the list of the code files the agent changed:
- * the first maxCodeFilesShown, and how many more.
- * @param {string[]|undefined} files
- * @returns {{shown: string[], more: number}}
+ * reviewFilesShown bounds the list of the files the agent changed, as the
+ * API orders it (the list of software, its fixed versions, tests and
+ * settings, then the rest): every file of the first three kinds is named,
+ * then the first maxCodeFilesShown others, and how many more.
+ * @param {{path: string, kind: string}[]|undefined} files
+ * @returns {{shown: {path: string, kind: string}[], more: number}}
  */
-export function codeFilesShown(files) {
+export function reviewFilesShown(files) {
   const list = Array.isArray(files) ? files : []
-  return { shown: list.slice(0, maxCodeFilesShown), more: Math.max(0, list.length - maxCodeFilesShown) }
+  const shown = []
+  let code = 0
+  let more = 0
+  for (const f of list) {
+    if (f?.kind !== 'manifest' && f?.kind !== 'lockfile' && f?.kind !== 'tests') {
+      code++
+      if (code > maxCodeFilesShown) {
+        more++
+        continue
+      }
+    }
+    shown.push(f)
+  }
+  return { shown, more }
 }
 
 /** @param {object|null} attempt @returns {boolean} whether « Lancer les tests » may be offered: a proposed attempt whose tests wait and can run. */

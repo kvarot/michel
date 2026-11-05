@@ -38,11 +38,14 @@
           <template v-if="codeFiles.shown.length">
             <p>{{ $t('fix.proposal.code_files') }}</p>
             <ul class="m-prop__files">
-              <li v-for="f in codeFiles.shown" :key="f" class="m-code">{{ f }}</li>
+              <li v-for="f in codeFiles.shown" :key="f.path">
+                <span class="m-code">{{ f.path }}</span>
+                <span v-if="f.kind === 'manifest' || f.kind === 'lockfile'" class="m-muted"> ({{ $t(`fix.proposal.file_kind.${f.kind}`) }})</span>
+              </li>
             </ul>
             <p v-if="codeFiles.more">{{ $t('fix.proposal.code_files_more', { n: codeFiles.more }) }}</p>
           </template>
-          <p v-else>{{ $t('fix.proposal.code_files_deps') }}</p>
+          <p>{{ $t('fix.proposal.code_files_note') }}</p>
           <v-btn variant="text" size="small" class="m-prop__see" @click="openChange">{{ $t('fix.proposal.read_change') }}</v-btn>
         </div>
         <p v-if="p.risk > 0" class="m-muted m-small">{{ $t('fix.proposal.risk', { risk: p.risk }) }}</p>
@@ -149,7 +152,7 @@
 import FieldHelp from './FieldHelp.vue'
 import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
-import { canApprove, canRunTests, codeFilesShown, proposalFacts, proposalSentence, testsState } from '../lib/fixView.js'
+import { canApprove, canRunTests, proposalFacts, proposalSentence, reviewFilesShown, testsState } from '../lib/fixView.js'
 import { plainSentence } from '../lib/modeView.js'
 import { cameBack, rescanKey } from '../lib/pathView.js'
 
@@ -212,9 +215,9 @@ export default {
     testsRunnable() {
       return canRunTests(this.attempt)
     },
-    // codeFiles: the code files the agent changed, 10 at most, and how many more.
+    // codeFiles: every file the AI changed, the list of software first; 10 other files at most, and how many more.
     codeFiles() {
-      return codeFilesShown(this.p?.code_files)
+      return reviewFilesShown(this.p?.code_files)
     },
     busy() {
       return this.approving || this.refusing || this.runningTests

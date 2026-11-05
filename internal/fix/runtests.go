@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/kvarot/michel/internal/egress/allowproxy"
 	"github.com/kvarot/michel/internal/i18n"
@@ -24,13 +26,42 @@ var (
 	// ErrTestsInterrupted: the run of the tests a person asked for was cut
 	// (time limit, Ctrl+C): nothing was recorded, the tests still wait.
 	ErrTestsInterrupted = errors.New("the run of the tests was interrupted")
+	// ErrTestsRunning: this process already runs the tests of the attempt
+	// on a click; a second click runs nothing.
+	ErrTestsRunning = errors.New("the tests of this attempt are already running")
 )
 
-// CodeFiles are the files of the proposal p of attempt a that are neither
-// its plan's manifest nor its lockfile: what running the tests would run
-// of the agent's own writing.
-func CodeFiles(a Attempt, p Proposal) []string {
-	return codeFiles(a.Work.Plan, p.Files)
+// DefaultTestsTimeout bounds a run of the tests a person asked for (install
+// and tests) when Deps.TestsTimeout is 0.
+const DefaultTestsTimeout = 30 * time.Minute
+
+// TestsTimeout is the bound of a run of the tests a person asked for.
+func (d Deps) TestsTimeout() time.Duration {
+	if d.TestsBound > 0 {
+		return d.TestsBound
+	}
+	return DefaultTestsTimeout
+}
+
+// beginTests marks a run of the tests of the attempt in this process; false
+// when one already runs.
+func (s *Sessions) beginTests(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.testing == nil {
+		s.testing = map[string]bool{}
+	}
+	if s.testing[id] {
+		return false
+	}
+	s.testing[id] = true
+	return true
+}
+
+func (s *Sessions) endTests(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.testing, id)
 }
 
 // CanRunTests reports whether a click may run the tests of p: they wait
@@ -42,13 +73,17 @@ func CanRunTests(p Proposal) bool {
 // RunTests runs the project's tests on a person's click, for the current
 // proposal of the attempt (state proposed) whose hash is hash and whose
 // tests wait (ErrStaleProposal, ErrNotAwaiting, ErrNoTree, ErrBadTransition
-// otherwise: nothing runs). Michel materialises the proposal's tree in a
-// scratch folder of its own, installs, runs the tests, and records a new
-// proposal with the same change, commit, tree and re-scan and the tests'
-// result, which supersedes the clicked one only if that one is still
-// current (ErrStaleProposal otherwise: the result is dropped). The agent's
-// session goes on; no waiting notification is sent.
+// otherwise: nothing runs; ErrTestsRunning while this process runs them
+// already). Michel materialises the proposal's tree in a scratch folder of
+// its own, installs, runs the tests (all bounded by TestsTimeout), and
+// records a new proposal with the same change, commit, tree and re-scan and
+// the tests' result, which supersedes the clicked one only if that one is
+// still current (ErrStaleProposal otherwise: the result is dropped). The
+// agent's session goes on; no waiting notification is sent. Every click is
+// in the audit log (fix.tests_run).
 func RunTests(ctx context.Context, d Deps, attemptID, hash string) (Proposal, error) {
+	ctx, cancel := context.WithTimeout(ctx, d.TestsTimeout())
+	defer cancel()
 	repo := d.repo()
 	lang := d.lang()
 	a, err := repo.GetAttempt(ctx, attemptID)
@@ -65,10 +100,22 @@ func RunTests(ctx context.Context, d Deps, attemptID, hash string) (Proposal, er
 	if !ok {
 		return Proposal{}, ErrNoProposal
 	}
+	// What Michel says and records holds even when ctx was cut.
+	keep := context.WithoutCancel(ctx)
+	files := reviewFiles(prop.Files)
+	evidence := map[string]any{"attempt_id": attemptID, "proposal_id": prop.ID, "hash": hash, "author": d.actor(), "files_code": len(files)}
+	record := func(result string, extra map[string]any) error {
+		ev := map[string]any{}
+		for k, v := range evidence {
+			ev[k] = v
+		}
+		for k, v := range extra {
+			ev[k] = v
+		}
+		return d.record(keep, "fix.tests_run", attemptID, result, ev)
+	}
 	refuse := func(reason string, err error) (Proposal, error) {
-		_ = d.record(ctx, "fix.tests_run", attemptID, "refused", map[string]any{
-			"attempt_id": attemptID, "proposal_id": prop.ID, "hash": hash, "author": d.actor(), "reason": reason,
-		})
+		_ = record("refused", map[string]any{"reason": reason})
 		return Proposal{}, err
 	}
 	switch {
@@ -79,46 +126,60 @@ func RunTests(ctx context.Context, d Deps, attemptID, hash string) (Proposal, er
 	case prop.Tree == "":
 		return refuse("no tree", ErrNoTree)
 	}
-	_, p, err := d.find(ctx, a.FindingID)
-	if err != nil {
-		return Proposal{}, err
+	if !d.sessions().beginTests(attemptID) {
+		return refuse("already running", ErrTestsRunning)
 	}
+	defer d.sessions().endTests(attemptID)
+
 	c := a.Work.Copy
-	if c.Dir == "" {
-		return Proposal{}, errors.New("the attempt has no work copy")
-	}
-	if d.Gateway == nil {
-		return Proposal{}, errors.New("the fix service needs the egress gateway")
-	}
 	m := mask.New()
 	dirs := []string{c.Dir, c.Mirror, d.DataDir}
 	tell := func(text string) string { return shown(m, dirs, text) }
-	// What Michel says and records holds even when ctx was cut.
-	keep := context.WithoutCancel(ctx)
 	say := func(text string) {
 		_, _ = repo.AddMessage(keep, Message{AttemptID: attemptID, Role: RoleMichel, Text: tell(text)})
 	}
-	code := codeFiles(a.Work.Plan, prop.Files)
-	evidence := map[string]any{"attempt_id": attemptID, "proposal_id": prop.ID, "hash": hash, "author": d.actor(), "files_code": len(code)}
-
+	// fail is any failure past the checks: said, recorded, nothing stored.
+	fail := func(err error) (Proposal, error) {
+		say(i18n.T(lang, "fix.msg.tests_error", tell(noPath(err).Error())))
+		_ = record("error", map[string]any{"detail": auditDetail(d, err)})
+		return Proposal{}, err
+	}
+	_, p, err := d.find(ctx, a.FindingID)
+	if err != nil {
+		return fail(err)
+	}
+	if c.Dir == "" {
+		return fail(errors.New("the attempt has no work copy"))
+	}
+	if d.Gateway == nil {
+		return fail(errors.New("the fix service needs the egress gateway"))
+	}
 	wd := d.work()
 	run, cleanup, err := workcopy.MaterializeTests(ctx, wd, c, prop.Tree)
 	if err != nil {
-		return Proposal{}, err
+		return fail(err)
 	}
 	defer cleanup()
 	proxyURL, closeProxy, err := allowproxy.Listen(d.Gateway, policy.PurposeFixInstall)
 	if err != nil {
-		return Proposal{}, err
+		return fail(err)
 	}
 	defer closeProxy()
 	wd.ProxyAddr = proxyURL
 	dirs = append(dirs, run.Dir)
+	// The proposal may have changed while the files were written: nothing
+	// runs for a proposal no longer shown.
+	if cur, ok, err := repo.CurrentProposal(ctx, attemptID); err != nil {
+		return fail(err)
+	} else if !ok || cur.Hash != hash {
+		return refuse("stale proposal", ErrStaleProposal)
+	}
 	plan := a.Work.Plan
 	status, out := workcopy.TestsNotRun, ""
 	var lines []string
 	commands := append([]RanCommand{}, prop.Commands...)
 	installed := false
+	_ = record("started", nil)
 	var cmdErr *workcopy.CmdError
 	switch err := workcopy.Install(ctx, wd, run, plan.Ecosystem, plan.ManifestRel); {
 	case err == nil:
@@ -148,8 +209,7 @@ func RunTests(ctx context.Context, d Deps, attemptID, hash string) (Proposal, er
 	if ctx.Err() != nil {
 		// Cut before its end: no result to record; the tests still wait.
 		say(i18n.T(lang, "fix.msg.tests_interrupted"))
-		evidence["tests"] = status
-		_ = d.record(keep, "fix.tests_run", attemptID, "interrupted", evidence)
+		_ = record("interrupted", map[string]any{"tests": status})
 		return Proposal{}, fmt.Errorf("%w: %v", ErrTestsInterrupted, ctx.Err())
 	}
 	cleanup()
@@ -159,17 +219,18 @@ func RunTests(ctx context.Context, d Deps, attemptID, hash string) (Proposal, er
 	next.Hash = proposalHash(prop.DiffRaw, prop.CommitSHA, status, prop.Summary)
 	evidence["tests"] = status
 	got, err := repo.AddProposalIfCurrent(ctx, next, hash)
-	if err != nil {
-		if errors.Is(err, ErrStaleProposal) || errors.Is(err, ErrBadTransition) {
-			say(i18n.T(lang, "fix.msg.tests_dropped"))
-			_ = d.record(ctx, "fix.tests_run", attemptID, "dropped", evidence)
-		}
+	switch {
+	case errors.Is(err, ErrStaleProposal) || errors.Is(err, ErrBadTransition):
+		say(i18n.T(lang, "fix.msg.tests_dropped"))
+		_ = record("dropped", nil)
 		return Proposal{}, err
+	case err != nil:
+		return fail(err)
 	}
 	say(strings.Join(append([]string{i18n.T(lang, "fix.msg.tests_clicked")}, lines...), "\n"))
-	evidence["proposal_id"], evidence["new_hash"], evidence["clicked_proposal_id"] = got.ID, got.Hash, prop.ID
-	if err := d.record(ctx, "fix.tests_run", attemptID, "ok", evidence); err != nil {
-		return got, err
+	if err := record("ok", map[string]any{"proposal_id": got.ID, "new_hash": got.Hash, "clicked_proposal_id": prop.ID}); err != nil {
+		// The new proposal is stored and shown: the click succeeded.
+		log.Printf("michel: the audit log did not take fix.tests_run for attempt %s: %v", attemptID, noPath(err))
 	}
 	return got, nil
 }

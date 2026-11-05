@@ -768,10 +768,6 @@ func newFixResolveCmd(deps *Deps) *cobra.Command {
 	}
 }
 
-// maxCodeFilesShown is how many changed code files michel fix test names
-// before "and N more", like the page.
-const maxCodeFilesShown = 10
-
 func newFixTestCmd(deps *Deps) *cobra.Command {
 	var yes bool
 	var hash string
@@ -780,7 +776,8 @@ func newFixTestCmd(deps *Deps) *cobra.Command {
 		Short: "Run the project's tests on the agent's change, once you have read it",
 		Long: "Test runs the project's tests on a proposal whose tests wait for your go-ahead: the agent changed more than " +
 			"Michel's own update, so running the tests runs code it wrote, on this computer and with your rights. Michel never " +
-			"runs them alone in that case. Without --yes, test lists the code files the agent changed and runs nothing; read " +
+			"runs them alone in that case. Without --yes, test lists the files the agent changed (the list of software first: its " +
+			"scripts are commands the tests can run) and runs nothing; read " +
 			"the change with michel fix status <id> --diff first. With --yes, Michel runs the tests on the proposal michel fix " +
 			"status last showed (or --hash) and records a new proposal with the result: approve that one. Michel refuses when " +
 			"the agent replaced the proposal since.",
@@ -808,19 +805,23 @@ func newFixTestCmd(deps *Deps) *cobra.Command {
 			}
 			w := deps.Stdout
 			fmt.Fprintln(w, deps.T("cli.fix.test.warning", a.ID))
-			code := fix.CodeFiles(a, prop)
-			if len(code) == 0 {
-				fmt.Fprintln(w, deps.T("cli.fix.test.deps_only"))
-			} else {
-				m := mask.New()
-				fmt.Fprintln(w, deps.T("cli.fix.test.files"))
-				for i, f := range code {
-					if i == maxCodeFilesShown {
-						fmt.Fprintln(w, deps.N("cli.fix.test.more", len(code)-maxCodeFilesShown))
-						break
-					}
-					fmt.Fprintln(w, deps.T("cli.fix.test.file", m.Mask(scan.SanitizeText(f))))
+			// Every changed file, the list of software first: its scripts are
+			// commands the tests can run. Paths are shown as they are.
+			shownFiles, more := fix.ShownReviewFiles(fix.ReviewFiles(prop))
+			fmt.Fprintln(w, deps.T("cli.fix.test.files"))
+			for _, f := range shownFiles {
+				name := scan.SanitizeText(f.Path)
+				switch f.Kind {
+				case fix.FileManifest:
+					fmt.Fprintln(w, deps.T("cli.fix.test.file_manifest", name))
+				case fix.FileLockfile:
+					fmt.Fprintln(w, deps.T("cli.fix.test.file_lockfile", name))
+				default:
+					fmt.Fprintln(w, deps.T("cli.fix.test.file", name))
 				}
+			}
+			if more > 0 {
+				fmt.Fprintln(w, deps.N("cli.fix.test.more", more))
 			}
 			if !yes {
 				fmt.Fprintln(w, deps.T("cli.fix.test.confirm"))

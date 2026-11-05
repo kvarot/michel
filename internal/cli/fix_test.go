@@ -283,10 +283,11 @@ func TestFixTestNeedsYes(t *testing.T) {
 	dir, list := scannedDemo(t, false)
 	ctx := context.Background()
 	var id string
-	files := []string{"composer.lock", "composer.json"}
+	files := []string{"composer.lock"}
 	for i := range 12 {
-		files = append(files, "tests/T"+string(rune('a'+i))+"Test.php")
+		files = append(files, "src/F"+string(rune('a'+i))+".php")
 	}
+	files = append(files, "tests/AppTest.php", "composer.json")
 	withStore(t, dir, func(st *store.Store) {
 		p, err := project.NewRepo(st).Get(ctx, "demo")
 		if err != nil {
@@ -312,9 +313,14 @@ func TestFixTestNeedsYes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fix test: %v", err)
 	}
-	if !strings.Contains(out, i18n.T(i18n.FR, "cli.fix.test.warning", id)) || !strings.Contains(out, "tests/TaTest.php") ||
-		strings.Contains(out, "tests/TkTest.php") || !strings.Contains(out, i18n.N(i18n.FR, "cli.fix.test.more", 2)) ||
-		strings.Contains(out, "  composer.lock") || !strings.Contains(out, i18n.T(i18n.FR, "cli.fix.test.confirm")) {
+	// Every file the person must read: the list of software first, the
+	// tests next, then at most 10 other files.
+	manifest := i18n.T(i18n.FR, "cli.fix.test.file_manifest", "composer.json")
+	lock := i18n.T(i18n.FR, "cli.fix.test.file_lockfile", "composer.lock")
+	iM, iL, iT, iA := strings.Index(out, manifest), strings.Index(out, lock), strings.Index(out, "tests/AppTest.php"), strings.Index(out, "src/Fa.php")
+	if !strings.Contains(out, i18n.T(i18n.FR, "cli.fix.test.warning", id)) || iM < 0 || iL < iM || iT < iL || iA < iT ||
+		!strings.Contains(out, "src/Fj.php") || strings.Contains(out, "src/Fk.php") || !strings.Contains(out, i18n.N(i18n.FR, "cli.fix.test.more", 2)) ||
+		!strings.Contains(out, i18n.T(i18n.FR, "cli.fix.test.confirm")) {
 		t.Errorf("fix test without --yes:\n%s", out)
 	}
 	withStore(t, dir, func(st *store.Store) {

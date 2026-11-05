@@ -58,7 +58,8 @@ func (ff *fixFixture) awaitingAttempt() (string, ProposalView) {
 func TestRunTestsRoute(t *testing.T) {
 	ff := newFixFixture(t)
 	id, prop := ff.awaitingAttempt()
-	if prop.TestsStatus != workcopy.TestsAwaiting || !prop.CanRunTests || len(prop.CodeFiles) != 1 || prop.CodeFiles[0] != "tests/EvilTest.php" {
+	if prop.TestsStatus != workcopy.TestsAwaiting || !prop.CanRunTests || len(prop.CodeFiles) != 2 ||
+		prop.CodeFiles[0] != (ReviewFileView{Path: "composer.lock", Kind: "lockfile"}) || prop.CodeFiles[1] != (ReviewFileView{Path: "tests/EvilTest.php", Kind: "tests"}) {
 		t.Fatalf("awaiting proposal = %+v", prop)
 	}
 	// A stale hash: 409, nothing ran.

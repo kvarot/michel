@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   acceptResult, consentProjectOf, offersDecision, activityLine, canApprove, canDecide, decidingAttempt, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
-  proposalFacts, proposalSentence, splitMasked, stateLine, testsState, codeFilesShown, canRunTests,
+  proposalFacts, proposalSentence, splitMasked, stateLine, testsState, reviewFilesShown, canRunTests,
 } from './fixView.js'
 
 /** attempt builds an AttemptView as GET /fixes answers it. */
@@ -326,12 +326,27 @@ describe('testsState', () => {
   })
 })
 
-describe('codeFilesShown', () => {
-  test('names 10 files, then says how many more', () => {
-    const files = Array.from({ length: 13 }, (_, i) => `tests/T${i}Test.php`)
-    expect(codeFilesShown(files)).toEqual({ shown: files.slice(0, 10), more: 3 })
-    expect(codeFilesShown(files.slice(0, 10))).toEqual({ shown: files.slice(0, 10), more: 0 })
-    expect(codeFilesShown(undefined)).toEqual({ shown: [], more: 0 })
+describe('reviewFilesShown', () => {
+  test('names 10 other files, then says how many more', () => {
+    const files = Array.from({ length: 13 }, (_, i) => ({ path: `src/F${i}.php`, kind: 'code' }))
+    expect(reviewFilesShown(files)).toEqual({ shown: files.slice(0, 10), more: 3 })
+    expect(reviewFilesShown(files.slice(0, 10))).toEqual({ shown: files.slice(0, 10), more: 0 })
+    expect(reviewFilesShown(undefined)).toEqual({ shown: [], more: 0 })
+  })
+  test('never hides the list of software, its versions or a tests file', () => {
+    const risky = [
+      { path: 'composer.json', kind: 'manifest' },
+      { path: 'composer.lock', kind: 'lockfile' },
+      { path: 'tests/AppTest.php', kind: 'tests' },
+    ]
+    const code = Array.from({ length: 12 }, (_, i) => ({ path: `src/F${i}.php`, kind: 'code' }))
+    const { shown, more } = reviewFilesShown([...risky, ...code, { path: 'phpunit.xml', kind: 'tests' }])
+    expect(more).toBe(2)
+    for (const f of [...risky, { path: 'phpunit.xml', kind: 'tests' }]) expect(shown).toContainEqual(f)
+    expect(shown.filter((f) => f.kind === 'code')).toHaveLength(10)
+  })
+  test('a manifest-only change is listed', () => {
+    expect(reviewFilesShown([{ path: 'package.json', kind: 'manifest' }]).shown).toEqual([{ path: 'package.json', kind: 'manifest' }])
   })
 })
 

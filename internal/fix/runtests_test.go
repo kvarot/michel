@@ -132,7 +132,7 @@ func TestRunTestsDroppedWhenAgentProposedMeanwhile(t *testing.T) {
 	if text := michelText(t, f, a.ID); !strings.Contains(text, i18n.T(i18n.EN, "fix.msg.tests_dropped")) {
 		t.Errorf("Michel's messages = %q", text)
 	}
-	if ev := f.audits("fix.tests_run"); len(ev) != 1 || ev[0].Result != "dropped" {
+	if ev := f.audits("fix.tests_run"); len(ev) != 2 || ev[0].Result != "started" || ev[1].Result != "dropped" {
 		t.Errorf("fix.tests_run audit = %+v", ev)
 	}
 }
@@ -169,9 +169,12 @@ func TestRunTestsTwoRunsOwnFolders(t *testing.T) {
 		return inner(ctx, name, args, env, dir)
 	}
 	errs := make(chan error, 2)
+	// Two processes (serve and michel fix test): each has its own Sessions.
 	for range 2 {
+		d := f.d
+		d.Sessions = NewSessions()
 		go func() {
-			_, err := RunTests(context.Background(), f.d, a.ID, old.Hash)
+			_, err := RunTests(context.Background(), d, a.ID, old.Hash)
 			errs <- err
 		}()
 	}
@@ -232,7 +235,7 @@ func TestRunTestsTimeoutKeepsProposed(t *testing.T) {
 	if got := f.attempt(a.ID); got.State != StateProposed || cur.ID != old.ID || cur.TestsStatus != workcopy.TestsAwaiting {
 		t.Errorf("state = %s, current = %+v", got.State, cur)
 	}
-	if ev := f.audits("fix.tests_run"); len(ev) != 1 || ev[0].Result != "interrupted" {
+	if ev := f.audits("fix.tests_run"); len(ev) != 2 || ev[0].Result != "started" || ev[1].Result != "interrupted" {
 		t.Errorf("fix.tests_run audit = %+v", ev)
 	}
 }
@@ -271,12 +274,16 @@ func TestRunTestsAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := f.audits("fix.tests_run")
-	if len(ev) != 1 || ev[0].Result != "ok" {
+	if len(ev) != 2 || ev[0].Result != "started" || ev[1].Result != "ok" {
 		t.Fatalf("fix.tests_run audit = %+v", ev)
 	}
+	if e := ev[0].Evidence; e["attempt_id"] != a.ID || e["hash"] != old.Hash || e["author"] != "test" {
+		t.Errorf("started evidence = %+v", e)
+	}
+	ev = ev[1:]
 	e := ev[0].Evidence
 	if e["attempt_id"] != a.ID || e["proposal_id"] != got.ID || e["hash"] != old.Hash || e["author"] != "test" ||
-		e["tests"] != workcopy.TestsPassed || e["files_code"] != float64(1) {
+		e["tests"] != workcopy.TestsPassed || e["files_code"] != float64(2) {
 		t.Errorf("evidence = %+v", e)
 	}
 }

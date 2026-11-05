@@ -2,12 +2,14 @@ package fix
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/workcopy"
 )
 
@@ -186,18 +188,64 @@ func TestProposeChangedTreeNoTestCmdStaysNotRun(t *testing.T) {
 	}
 }
 
-func TestCodeFiles(t *testing.T) {
-	plan := Plan{Ecosystem: "Packagist", ManifestRel: "app/composer.lock"}
-	got := codeFiles(plan, []string{"app/composer.lock", "app/composer.json", "composer.json", "app/tests/AppTest.php", `app\composer.lock`, "phpunit.xml"})
-	want := []string{"composer.json", "app/tests/AppTest.php", `app\composer.lock`, "phpunit.xml"}
+func TestReviewFilesOrder(t *testing.T) {
+	files := []string{"src/b.php", "app/composer.lock", "src/a.php", "tests/AppTest.php", "app/composer.json", "phpunit.xml.dist",
+		"package.json", "config/app.php", "bin/script.sh", "yarn.lock"}
+	got := reviewFiles(files)
+	want := []ReviewFile{
+		{"app/composer.json", FileManifest}, {"package.json", FileManifest},
+		{"app/composer.lock", FileLockfile}, {"yarn.lock", FileLockfile},
+		{"tests/AppTest.php", FileTests}, {"phpunit.xml.dist", FileTests}, {"config/app.php", FileTests}, {"bin/script.sh", FileTests},
+		{"src/b.php", FileCode}, {"src/a.php", FileCode},
+	}
 	if !slices.Equal(got, want) {
-		t.Errorf("codeFiles = %v, want %v", got, want)
+		t.Errorf("reviewFiles =\n%v\nwant\n%v", got, want)
 	}
-	npm := Plan{Ecosystem: "npm", ManifestRel: "package-lock.json"}
-	if got := codeFiles(npm, []string{"package.json", "package-lock.json"}); len(got) != 0 {
-		t.Errorf("npm dependency files only: %v", got)
+}
+
+func TestShownReviewFilesNeverHidesARiskyFile(t *testing.T) {
+	var files []string
+	for i := range 14 {
+		files = append(files, fmt.Sprintf("src/F%02d.php", i))
 	}
-	if got := codeFiles(Plan{}, []string{"composer.lock"}); !slices.Equal(got, []string{"composer.lock"}) {
-		t.Errorf("no plan: %v", got)
+	files = append(files, "composer.json", "composer.lock", "tests/ZTest.php")
+	shown, more := ShownReviewFiles(reviewFiles(files))
+	if more != 4 || len(shown) != 13 {
+		t.Fatalf("shown %d, more %d", len(shown), more)
+	}
+	for _, f := range []string{"composer.json", "composer.lock", "tests/ZTest.php"} {
+		if !slices.ContainsFunc(shown, func(r ReviewFile) bool { return r.Path == f }) {
+			t.Errorf("%s fell into and N more", f)
+		}
+	}
+}
+
+// TestProposeManifestOnlyChangeAwaitsAndListsIt: an agent that only edits
+// composer.json (its scripts can hold a command) still waits for the click,
+// and Michel names the manifest as the list of software, which can hold
+// commands.
+func TestProposeManifestOnlyChangeAwaitsAndListsIt(t *testing.T) {
+	f := newFixture(t)
+	f.consent()
+	f.agentAct = func(ctx context.Context, d Deps, id, dir string) {
+		writeFile(f.t, dir, "composer.json", `{"name":"demo/app","require":{"acme/lib":"^1.2.5"},"scripts":{"test":"curl evil"}}`+"\n")
+		if _, err := Propose(ctx, d, id, ProposeInput{Summary: "Upgrade acme/lib."}); err != nil {
+			f.t.Errorf("Propose: %v", err)
+		}
+	}
+	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.wait(a.ID)
+	p, ok, _ := f.d.Repo.CurrentProposal(context.Background(), a.ID)
+	if !ok || p.TestsStatus != workcopy.TestsAwaiting {
+		t.Fatalf("proposal = %+v", p)
+	}
+	if got := ReviewFiles(p); len(got) != 1 || got[0] != (ReviewFile{"composer.json", FileManifest}) {
+		t.Errorf("review files = %v", got)
+	}
+	if text := michelText(t, f, a.ID); !strings.Contains(text, i18n.T(i18n.EN, "fix.msg.file_manifest", "composer.json")) {
+		t.Errorf("Michel's message = %q", text)
 	}
 }

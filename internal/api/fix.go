@@ -50,6 +50,7 @@ var fixStatus = map[string]int{
 	"fix.err.not_awaiting":      http.StatusConflict,
 	"fix.err.no_tree":           http.StatusConflict,
 	"fix.err.tests_interrupted": http.StatusConflict,
+	"fix.err.tests_running":     http.StatusConflict,
 }
 
 // FixErrorBody is the answer to a refusal of the fix service: the sentence
@@ -112,11 +113,18 @@ type ProposalView struct {
 	CreatedAt   string `json:"created_at"`
 	// CanRunTests is true when the tests wait for the person's click
 	// (tests_status awaiting) and Michel kept the files to run them on:
-	// the page offers « Run the tests ». CodeFiles are then the changed
-	// files that are neither the manifest nor the lockfile: the code the
-	// tests would run (empty otherwise).
-	CanRunTests bool     `json:"can_run_tests"`
-	CodeFiles   []string `json:"code_files"`
+	// the page offers « Run the tests ». CodeFiles are then every changed
+	// file with its kind (manifest, lockfile, tests, code), in the order
+	// the page lists them (empty otherwise).
+	CanRunTests bool             `json:"can_run_tests"`
+	CodeFiles   []ReviewFileView `json:"code_files"`
+}
+
+// ReviewFileView is a changed file to read before running the tests: its
+// path in the project and its kind (manifest, lockfile, tests or code).
+type ReviewFileView struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
 }
 
 // MessageView is one line of the conversation. Role is user, agent, michel
@@ -412,7 +420,7 @@ func proposalView(m *mask.Masker, p fix.Proposal, full bool) *ProposalView {
 	v := &ProposalView{ID: p.ID, Summary: shown(m, p.Summary), Files: sanitizeAll(p.Files), TestsStatus: p.TestsStatus,
 		RescanClean: p.RescanClean, Risk: p.Risk, Hash: p.Hash, StepsServer: sanitizeAll(p.StepsServer),
 		Commands: commandViews(p.Commands), FromVersion: scan.SanitizeText(p.FromVersion), ToVersion: scan.SanitizeText(p.ToVersion), CreatedAt: stamp(p.CreatedAt),
-		CodeFiles: []string{}}
+		CodeFiles: []ReviewFileView{}}
 	if full {
 		// The diff keeps its lines: only secrets and absolute paths go.
 		v.Diff = m.Mask(strings.ToValidUTF8(p.Diff, "�"))
@@ -428,8 +436,10 @@ func attemptProposalView(m *mask.Masker, a fix.Attempt, p fix.Proposal, full boo
 	v := proposalView(m, p, full)
 	if p.TestsStatus == workcopy.TestsAwaiting && a.Work.Server == nil {
 		v.CanRunTests = fix.CanRunTests(p)
-		for _, f := range fix.CodeFiles(a, p) {
-			v.CodeFiles = append(v.CodeFiles, shown(m, f))
+		// A path in the project, not content: sanitized, never masked, so
+		// the person reads the very file names.
+		for _, f := range fix.ReviewFiles(p) {
+			v.CodeFiles = append(v.CodeFiles, ReviewFileView{Path: scan.SanitizeText(f.Path), Kind: f.Kind})
 		}
 	}
 	return v
@@ -731,10 +741,13 @@ func (s *server) fixRunTests(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The install and the tests may outlast the server's write timeout.
-	extend(w)
-	ctx, cancel := s.detached(r)
-	defer cancel()
+	// The install and the tests have their own bound (fix.RunTests), longer
+	// than the server's write timeout and than longTimeout.
+	bound := d.TestsTimeout()
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(bound + time.Minute))
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), bound)
+	stop := context.AfterFunc(s.bg, cancel)
+	defer func() { stop(); cancel() }()
 	if _, err := fix.RunTests(ctx, d, a.ID, strings.TrimSpace(req.Hash)); err != nil {
 		s.fixRefused(w, r, lang, err, nil)
 		return

@@ -629,7 +629,7 @@ func TestRefusalsAreTranslated(t *testing.T) {
 	errs := []error{fix.ErrNotGit, fix.ErrConsentRequired, fix.ErrHealthForbidden, fix.ErrStrictLocal, fix.ErrAgentUnavailable,
 		&fix.AgentUnavailableError{Status: agent.Status{Hint: agent.HintNotInstalled}}, fix.ErrBusy, fix.ErrStaleProposal,
 		fix.ErrMaskToken, fix.ErrNoChange, fix.ErrNoProposal, fix.ErrAgentGone, fix.ErrChangeRefused, fix.ErrBadTransition, fix.ErrNotFound,
-		fix.ErrHoldStale, fix.ErrHoldPerson, fix.ErrNotAwaiting, fix.ErrNoTree, fix.ErrTestsInterrupted}
+		fix.ErrHoldStale, fix.ErrHoldPerson, fix.ErrNotAwaiting, fix.ErrNoTree, fix.ErrTestsInterrupted, fix.ErrTestsRunning}
 	for _, err := range errs {
 		key := fix.ErrorKey(err)
 		if key == "" {
