@@ -1,11 +1,11 @@
 <template>
   <v-app>
     <a class="m-skip" href="#main" @click.prevent="focusMain">{{ $t('app.skip') }}</a>
-    <AppNav v-if="state === 'ready'" :page="page" :assistant="assistant" />
+    <AppNav v-if="state === 'ready'" :page="page" :assistant="assistant" :open="openCount" />
 
     <v-main>
       <header v-if="showHeader" class="m-top">
-        <div class="m-top__row" :class="page === 'fix' ? 'm-wide' : 'm-column'">
+        <div class="m-top__row" :class="width">
           <span v-if="showBrand" class="m-brand">
             <img src="/icons/icon-192.png" alt="" width="28" height="28">
             <span>{{ assistant }}</span>
@@ -17,7 +17,7 @@
         </div>
       </header>
 
-      <div id="main" class="m-main" :class="page === 'fix' && state === 'ready' ? 'm-wide' : 'm-column'" tabindex="-1">
+      <div id="main" class="m-main" :class="state === 'ready' ? width : 'm-column'" tabindex="-1">
         <div v-if="state === 'loading'" class="m-state" role="status">
           <v-progress-circular indeterminate color="primary" size="28" width="3" />
           <p class="m-muted">{{ $t('app.loading') }}</p>
@@ -54,8 +54,8 @@
           <v-btn color="primary" variant="tonal" @click="load">{{ $t('app.retry') }}</v-btn>
         </section>
 
-        <SourcesPage v-else-if="page === 'sources'" @changed="stale = true" />
-        <ProjectsPage v-else-if="page === 'projects'" :digest="digest" @decided="loadToday(false)" @changed="stale = true" />
+        <SourcesPage v-else-if="page === 'sources'" @changed="markStale" />
+        <ProjectsPage v-else-if="page === 'projects'" :digest="digest" @decided="decided" @changed="markStale" />
         <ResolvedPage v-else-if="page === 'resolved'" />
         <SettingsPanel
           v-else-if="page === 'settings'"
@@ -66,9 +66,10 @@
           @token-forgotten="onUnauthorized"
           @token-saved="load"
         />
-        <FixPage v-else-if="page === 'fix'" :route="fixRoute" @changed="stale = true" />
-        <ServersPage v-else-if="page === 'servers'" :route="serversRoute" @changed="stale = true" />
-        <TodayPage v-else :digest="digest" :meta="meta" :refreshing="refreshing" @decided="loadToday(false)" @refresh="loadToday(true)" />
+        <FixPage v-else-if="page === 'fix'" :route="fixRoute" @changed="markStale" />
+        <ServersPage v-else-if="page === 'servers'" :route="serversRoute" @changed="markStale" />
+        <FindingsPage v-else-if="page === 'findings'" :route="findingsRoute" />
+        <TodayPage v-else :digest="digest" :meta="meta" :refreshing="refreshing" @decided="decided" @poll="loadToday(false)" @refresh="loadToday(true)" />
       </div>
     </v-main>
 
@@ -82,12 +83,15 @@ import ProjectsPage from './components/ProjectsPage.vue'
 import ResolvedPage from './components/ResolvedPage.vue'
 import SourcesPage from './components/SourcesPage.vue'
 import FixPage from './components/FixPage.vue'
+import FindingsPage from './components/FindingsPage.vue'
 import ServersPage from './components/ServersPage.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import { api } from './api.js'
 import { keys, save } from './lib/storage.js'
 import { fixRoute } from './lib/fixView.js'
-import { pageOf, navMode } from './lib/navView.js'
+import { findingsCache } from './lib/findingsCache.js'
+import { filtersFromHash } from './lib/findingsView.js'
+import { openBadge, pageOf, navMode } from './lib/navView.js'
 import { serversRoute } from './lib/serversView.js'
 
 /** serversOf is the Servers page's {id} in the address ('' for the list). */
@@ -102,7 +106,7 @@ function routeOf(hash) {
 
 export default {
   name: 'App',
-  components: { AppNav, TodayPage, ProjectsPage, ResolvedPage, SourcesPage, FixPage, ServersPage, SettingsPanel },
+  components: { AppNav, TodayPage, ProjectsPage, ResolvedPage, SourcesPage, FixPage, FindingsPage, ServersPage, SettingsPanel },
   data() {
     return {
       state: 'loading', // loading | unauthorized | offline | error | ready
@@ -120,6 +124,8 @@ export default {
       fixRoute: routeOf(window.location.hash),
       // serversRoute is the server whose sheet the Servers page shows.
       serversRoute: serversOf(window.location.hash),
+      // findingsRoute is the filters the Findings page shows.
+      findingsRoute: filtersFromHash(window.location.hash),
       // stale is set when another page changed something the digest shows.
       stale: false,
     }
@@ -131,6 +137,16 @@ export default {
     // The menu stands at the bottom below 960 px; the brand then sits in the header.
     showBrand() {
       return this.state !== 'ready' || navMode(this.$vuetify.display.width) === 'bottom'
+    },
+    // openCount is the badge of the Failles entry: null when the digest cannot say.
+    openCount() {
+      return openBadge(this.digest)
+    },
+    // width: the Fix page has three columns, the overview and the findings a screen, the rest one column.
+    width() {
+      if (this.page === 'fix') return 'm-wide'
+      if (this.page === 'todo' || this.page === 'findings') return 'm-dash'
+      return 'm-column'
     },
     refreshable() {
       return this.page === 'projects'
@@ -167,11 +183,24 @@ export default {
       this.page = pageOf(window.location.hash)
       this.fixRoute = routeOf(window.location.hash)
       this.serversRoute = serversOf(window.location.hash)
+      // A new object each time: the page wrote its search without telling (replaceState),
+      // so a click on « Failles » must reach it even when the filters look unchanged.
+      if (this.page === 'findings') this.findingsRoute = filtersFromHash(window.location.hash)
       if (this.page !== previous) this.$nextTick(this.focusMain)
       if ((this.page === 'todo' || this.page === 'projects') && this.stale && this.state === 'ready') {
         this.stale = false
         this.loadToday(false)
       }
+    },
+    /** markStale: another page changed something; what was read is read again. */
+    markStale() {
+      this.stale = true
+      findingsCache.clear()
+    },
+    /** decided: a decision changes the lists; read them again with the digest. */
+    decided() {
+      findingsCache.clear()
+      this.loadToday(false)
     },
     onUnauthorized() {
       this.rejected = !!api.token
@@ -206,7 +235,11 @@ export default {
     },
     /** loadToday computes the digest again; shown says whether the button spins. */
     async loadToday(shown) {
-      if (shown) this.refreshing = true
+      // « Actualiser » reads everything again.
+      if (shown) {
+        this.refreshing = true
+        findingsCache.clear()
+      }
       try {
         this.digest = await api.get(`/today?lang=${encodeURIComponent(this.$ui.lang)}`)
         this.state = 'ready'
@@ -252,20 +285,18 @@ export default {
   display: inline-flex;
   align-items: center;
   gap: 0.6rem;
-  font-family: var(--m-voice);
-  font-weight: 600;
-  font-size: 1.2rem;
+  font-weight: 700;
+  font-size: 1.1rem;
 }
 .m-brand img { border-radius: 7px; }
 .m-top__actions { display: flex; gap: 0.25rem; margin-right: -0.5rem; }
-.m-main { padding-top: 2.5rem; padding-bottom: 4rem; outline: none; }
+.m-main { padding-top: 1.75rem; padding-bottom: 4rem; outline: none; }
 .m-state { max-width: 34rem; display: grid; gap: 0.9rem; justify-items: start; padding-top: 1rem; }
 .m-state p { margin: 0; line-height: 1.55; }
 .m-state__title {
-  font-family: var(--m-voice);
-  font-size: 1.75rem;
+  font-size: 1.6rem;
   line-height: 1.2;
-  font-weight: 600;
+  font-weight: 700;
   margin: 0;
 }
 .m-auth__rejected { color: rgb(var(--v-theme-error)); font-weight: 600; }

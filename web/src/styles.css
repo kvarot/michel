@@ -1,11 +1,13 @@
 /*
- * Michel's page: a calm morning read. One voice (Michel's sentences, set in
- * a book serif), a quiet interface around it (the system sans), one column.
- * No web font is downloaded: the CSP keeps the page to its own origin.
+ * Michel's page: a working tool, calm and dense. White cards with a thin
+ * border on a pale page, bold sans-serif headings, one family of type (the
+ * system sans): Michel's voice (--m-voice) is the same sans now. No web font
+ * is downloaded: the CSP keeps the page to its own origin.
  */
 :root {
-  --m-voice: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", Georgia, serif;
   --m-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --m-voice: var(--m-ui);
+  --m-radius: 12px;
   --m-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --m-column: 46rem;
   --m-gutter: 16px;
@@ -21,6 +23,13 @@ body, .v-application { font-family: var(--m-ui); }
   padding: 0 var(--m-gutter);
 }
 
+/* The overview and the findings table use the width of a screen. */
+.m-dash {
+  max-width: calc(76rem + 2 * var(--m-gutter));
+  margin: 0 auto;
+  padding: 0 var(--m-gutter);
+}
+
 /* The Fix page needs its three columns. */
 .m-wide {
   max-width: calc(84rem + 2 * var(--m-gutter));
@@ -32,17 +41,17 @@ body, .v-application { font-family: var(--m-ui); }
 .m-voice { font-family: var(--m-voice); }
 .m-headline {
   font-family: var(--m-voice);
-  font-weight: 600;
-  font-size: clamp(1.75rem, 1.2rem + 2.6vw, 2.6rem);
-  line-height: 1.18;
-  letter-spacing: -0.01em;
+  font-weight: 700;
+  font-size: clamp(1.6rem, 1.2rem + 1.8vw, 2.2rem);
+  line-height: 1.2;
+  letter-spacing: -0.015em;
   margin: 0;
   max-width: 22ch;
   text-wrap: balance;
 }
 .m-word {
   font-family: var(--m-voice);
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   line-height: 1.5;
   margin: 0.75rem 0 0;
 }
@@ -146,12 +155,45 @@ body, .v-application { font-family: var(--m-ui); }
 .m-panel {
   background: rgb(var(--v-theme-surface));
   border: 1px solid var(--m-line);
-  border-radius: 8px;
+  border-radius: var(--m-radius);
+}
+
+/* A card: a panel with room inside, its title in bold sans. */
+.m-card {
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  padding: 1rem 1.1rem;
+  min-width: 0;
+}
+.m-card__title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 0;
 }
 
 .m-verdict {
   font-family: var(--m-voice);
-  font-weight: 600;
-  font-size: clamp(1.5rem, 1.2rem + 1.4vw, 1.9rem);
-  max-width: 30ch;
+  font-weight: 700;
+  font-size: clamp(1.4rem, 1.15rem + 1.1vw, 1.75rem);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  max-width: 34ch;
 }
+
+/* Said to a screen reader, not shown: the numbers behind a chart. */
+.m-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A number Michel could not read: a dash, never a 0, and a short sentence. */
+.m-unread { color: rgb(var(--v-theme-secondary)); }

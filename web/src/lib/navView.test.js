@@ -1,21 +1,36 @@
 import { describe, expect, test } from 'vitest'
-import { activeEntry, navEntries, navMode, pageOf } from './navView.js'
+import { activeEntry, entriesFor, navEntries, navMode, openBadge, pageOf } from './navView.js'
 import { serversHash, serversRoute } from './serversView.js'
 
 describe('navEntries', () => {
-  test('has the five pages, in order, with their addresses', () => {
-    expect(navEntries.map((e) => [e.page, e.hash])).toEqual([
-      ['todo', '#/'],
-      ['projects', '#/projects'],
-      ['servers', '#/servers'],
-      ['resolved', '#/resolved'],
-      ['settings', '#/settings'],
+  test('has the six pages, in order, with their addresses and groups', () => {
+    expect(navEntries.map((e) => [e.page, e.hash, e.group])).toEqual([
+      ['todo', '#/', 'follow'],
+      ['findings', '#/findings', 'follow'],
+      ['resolved', '#/resolved', 'follow'],
+      ['projects', '#/projects', 'park'],
+      ['servers', '#/servers', 'park'],
+      ['settings', '#/settings', 'other'],
     ])
     for (const e of navEntries) {
       expect(e.key).toBe(`nav.${e.page}`)
       expect(e.shortKey).toBe(`nav.short.${e.page}`)
       expect(e.icon.length).toBeGreaterThan(10)
     }
+  })
+  test('the side menu has every entry in three groups', () => {
+    const side = entriesFor('side')
+    expect(side.map((g) => [g.group, g.entries.map((e) => e.page)])).toEqual([
+      ['follow', ['todo', 'findings', 'resolved']],
+      ['park', ['projects', 'servers']],
+      ['other', ['settings']],
+    ])
+  })
+  test('the bottom bar has five entries at most, the resolved problems left to the overview', () => {
+    const bottom = entriesFor('bottom')
+    expect(bottom).toHaveLength(1)
+    expect(bottom[0].entries.map((e) => e.page)).toEqual(['todo', 'findings', 'projects', 'servers', 'settings'])
+    expect(bottom[0].entries.length).toBeLessThanOrEqual(5)
   })
 })
 
@@ -29,6 +44,9 @@ describe('pageOf', () => {
     expect(pageOf('#/servers/a?finding=b')).toBe('servers')
     expect(pageOf('#/resolved')).toBe('resolved')
     expect(pageOf('#/settings')).toBe('settings')
+    expect(pageOf('#/findings')).toBe('findings')
+    expect(pageOf('#/findings?project=shop&q=a%20b')).toBe('findings')
+    expect(pageOf('#/findingsx')).toBe('todo')
     expect(pageOf('#/sources')).toBe('sources')
     expect(pageOf('#/fix')).toBe('fix')
     expect(pageOf('#/fix/abc')).toBe('fix')
@@ -40,9 +58,30 @@ describe('pageOf', () => {
 
 describe('activeEntry', () => {
   test('activeEntry highlights the parent', () => {
-    expect(activeEntry('fix')).toBe('todo')
+    expect(activeEntry('fix')).toBe('findings')
     expect(activeEntry('sources')).toBe('settings')
-    for (const p of ['todo', 'projects', 'servers', 'resolved', 'settings']) expect(activeEntry(p)).toBe(p)
+    for (const p of ['todo', 'findings', 'projects', 'servers', 'resolved', 'settings']) expect(activeEntry(p)).toBe(p)
+  })
+  test('at the bottom the resolved problems light the overview, which leads to them', () => {
+    expect(activeEntry('resolved', 'bottom')).toBe('todo')
+    expect(activeEntry('resolved', 'side')).toBe('resolved')
+    expect(activeEntry('fix', 'bottom')).toBe('findings')
+  })
+})
+
+describe('openBadge', () => {
+  test('sums the open counts of every project, zeros included', () => {
+    const digest = { projects: [{ name: 'shop', open: { critical: 1, high: 0, medium: 2, low: 0, unknown: 0 } }, { name: 'blog', open: { critical: 0, high: 0, medium: 0, low: 0, unknown: 3 } }] }
+    expect(openBadge(digest)).toBe(6)
+    expect(openBadge({ projects: [{ name: 'demo', open: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 } }] })).toBe(0)
+    expect(openBadge({ projects: [] })).toBe(0)
+  })
+  test('is null, never 0, when a count cannot be read', () => {
+    expect(openBadge(null)).toBe(null)
+    expect(openBadge({})).toBe(null)
+    expect(openBadge({ projects: [{ name: 'shop' }] })).toBe(null)
+    expect(openBadge({ projects: [{ name: 'shop', open: { high: 'x' } }] })).toBe(null)
+    expect(openBadge({ projects: [{ name: 'shop', open: { high: -1 } }] })).toBe(null)
   })
 })
 

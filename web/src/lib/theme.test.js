@@ -10,6 +10,15 @@ const pairs = [
   ['on-primary', 'primary'],
   ['on-nav', 'nav'],
   ['on-nav', 'nav-active'],
+  // The side menu: the lit page in primary, the group names in secondary.
+  ['primary', 'nav-active'],
+  ['secondary', 'nav'],
+  // The heads of the findings table and the tiles' pale fills.
+  ['on-surface', 'surface-variant'],
+  ['secondary', 'surface-variant'],
+  ['primary', 'surface-variant'],
+  // A hot chip of the overview and .m-flag: the surface color on critical.
+  ['surface', 'critical'],
   ['error', 'tag-urgent'],
   ['warning', 'tag-look'],
   ['success', 'tag-done'],
