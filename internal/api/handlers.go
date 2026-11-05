@@ -23,6 +23,7 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/watch"
 	"github.com/kvarot/michel/internal/workcopy"
 )
 
@@ -189,6 +190,11 @@ func (s *server) projectView(ctx context.Context, lang i18n.Lang, p project.Proj
 		v.LastScanAt, v.LastScanStatus = at, status
 	case !errors.Is(err, sql.ErrNoRows):
 		return ProjectView{}, err
+	}
+	v.AutoScan = p.AutoScan
+	if h, m, on := s.currentPolicy().WatchHour(); on && p.AutoScan {
+		last, perr := time.Parse(time.RFC3339, at)
+		v.NextScanAt = watch.Next(last, perr == nil, s.deps.Now(), h, m).UTC().Format(time.RFC3339)
 	}
 	s.scanState(lang, p, &v)
 	return v, nil
