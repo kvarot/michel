@@ -139,7 +139,7 @@ func (st *stream) step(ctx context.Context, s *server, id string) error {
 		return err
 	}
 	if ok && prop.ID+" "+prop.Hash != st.prop {
-		if err := st.event("proposal", "", proposalView(st.m, prop, true)); err != nil {
+		if err := st.event("proposal", "", attemptProposalView(st.m, a, prop, true)); err != nil {
 			return err
 		}
 		st.prop, wrote = prop.ID+" "+prop.Hash, true

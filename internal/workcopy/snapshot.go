@@ -2,10 +2,13 @@ package workcopy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -63,9 +66,14 @@ func scratchDir(d Deps, attemptID string) string {
 	return filepath.Join(tmpPath(d, attemptID), "run")
 }
 
-// isScratch reports whether dir is the scratch worktree of an attempt.
+// testsRunShape is the name of the folder of a run of the tests a person
+// asked for (MaterializeTests).
+var testsRunShape = regexp.MustCompile(`^tests-[0-9a-f]{16}$`)
+
+// isScratch reports whether dir is a scratch worktree of an attempt: its
+// run folder or one of its tests folders.
 func isScratch(d Deps, dir string) bool {
-	if filepath.Base(dir) != "run" {
+	if base := filepath.Base(dir); base != "run" && !testsRunShape.MatchString(base) {
 		return false
 	}
 	attempt := filepath.Dir(dir)
@@ -79,6 +87,23 @@ func isScratch(d Deps, dir string) bool {
 // returns it as a Copy for Install and RunTests. cleanup removes it; it may
 // be called more than once.
 func Materialize(ctx context.Context, d Deps, c Copy, tree string) (run Copy, cleanup func(), err error) {
+	return materialize(ctx, d, c, tree, "run")
+}
+
+// MaterializeTests is Materialize into a folder of its own,
+// <data>/fix-tmp/<attempt id>/tests-<random>, for a run of the tests a
+// person asked for: two such runs, or one and a proposal, never share a
+// folder nor wipe each other's.
+func MaterializeTests(ctx context.Context, d Deps, c Copy, tree string) (run Copy, cleanup func(), err error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return Copy{}, nil, err
+	}
+	return materialize(ctx, d, c, tree, "tests-"+hex.EncodeToString(b))
+}
+
+// materialize writes tree into <data>/fix-tmp/<attempt id>/<name>.
+func materialize(ctx context.Context, d Deps, c Copy, tree, name string) (run Copy, cleanup func(), err error) {
 	if err := checkCopy(d, c); err != nil {
 		return Copy{}, nil, err
 	}
@@ -90,8 +115,11 @@ func Materialize(ctx context.Context, d Deps, c Copy, tree string) (run Copy, cl
 		return Copy{}, nil, err
 	}
 	attemptID := filepath.Base(c.Dir)
-	dir := scratchDir(d, attemptID)
+	dir := filepath.Join(tmpPath(d, attemptID), name)
 	archive := filepath.Join(tmpPath(d, attemptID), "snapshot.tar")
+	if name != "run" {
+		archive = filepath.Join(tmpPath(d, attemptID), name+".tar")
+	}
 	cleanup = func() {
 		_ = os.RemoveAll(dir)
 		_ = os.Remove(archive)

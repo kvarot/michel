@@ -313,3 +313,58 @@ func TestRemoveRefusesScratch(t *testing.T) {
 		t.Error("the scratch worktree was removed")
 	}
 }
+
+// TestMaterializeTestsOwnFolders: each run of the tests a person asked for
+// gets a folder of its own, apart from Propose's run folder; none wipes
+// another, and each is accepted for installs and tests.
+func TestMaterializeTestsOwnFolders(t *testing.T) {
+	parallel(t)
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
+	snap, err := Freeze(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, cleanRun, err := Materialize(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanRun()
+	one, cleanOne, err := MaterializeTests(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, cleanTwo, err := MaterializeTests(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Join(f.deps.DataDir, "fix-tmp", filepath.Base(c.Dir))
+	for _, r := range []Copy{one, two} {
+		if filepath.Dir(r.Dir) != parent || !strings.HasPrefix(filepath.Base(r.Dir), "tests-") {
+			t.Errorf("tests folder = %s", r.Dir)
+		}
+		if err := runDir(f.deps, r); err != nil {
+			t.Errorf("%s is not accepted for installs: %v", r.Dir, err)
+		}
+		if b, err := os.ReadFile(filepath.Join(r.Dir, "composer.lock")); err != nil || !strings.Contains(string(b), "1.2.5") {
+			t.Errorf("lockfile = %q %v", b, err)
+		}
+	}
+	if one.Dir == two.Dir || one.Dir == run.Dir {
+		t.Fatalf("shared folders: %s %s %s", one.Dir, two.Dir, run.Dir)
+	}
+	cleanOne()
+	if _, err := os.Lstat(one.Dir); err == nil {
+		t.Error("cleanup left the tests folder")
+	}
+	for _, d := range []string{two.Dir, run.Dir} {
+		if _, err := os.Lstat(filepath.Join(d, "composer.lock")); err != nil {
+			t.Errorf("a cleanup wiped %s", d)
+		}
+	}
+	cleanTwo()
+	if err := runDir(f.deps, Copy{Dir: filepath.Join(parent, "tests-x")}); err == nil {
+		t.Error("a folder that is not a tests folder is accepted")
+	}
+}

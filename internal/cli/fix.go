@@ -155,12 +155,12 @@ func newFixCmd(deps *Deps) *cobra.Command {
 		Use:   "fix",
 		Short: "Prepare, follow, approve or refuse the fixes Claude Code prepares for a finding",
 		Long: "Fix drives the fix agent from the command line, like the Fix page of michel serve: prepare starts Claude Code on " +
-			"a copy of the project and follows it, status shows an attempt and its proposal, approve creates the branch " +
+			"a copy of the project and follows it, status shows an attempt and its proposal, test runs its tests when they wait for your go-ahead, approve creates the branch " +
 			"michel/fix-<id> in your repository from the proposal status showed, refuse ends an attempt, clean removes the " +
 			"copies Michel no longer needs, and consent gives a project's AI consent. None of them is needed to use the page.",
 	}
 	c.AddCommand(newFixPrepareCmd(deps), newFixStatusCmd(deps), newFixApproveCmd(deps), newFixRefuseCmd(deps), newFixResolveCmd(deps),
-		newFixCleanCmd(deps), newFixConsentCmd(deps), newFixContinueCmd(deps), newFixWithdrawCmd(deps))
+		newFixCleanCmd(deps), newFixConsentCmd(deps), newFixContinueCmd(deps), newFixWithdrawCmd(deps), newFixTestCmd(deps))
 	return c
 }
 
@@ -244,6 +244,8 @@ func testsLabel(deps *Deps, status string) string {
 		return deps.T("cli.fix.tests.passed")
 	case workcopy.TestsFailed:
 		return deps.T("cli.fix.tests.failed")
+	case workcopy.TestsAwaiting:
+		return deps.T("cli.fix.tests.awaiting")
 	}
 	return deps.T("cli.fix.tests.not_run")
 }
@@ -315,6 +317,9 @@ func printAttempt(cmd *cobra.Command, deps *Deps, a fix.Attempt, withDiff bool) 
 			rescan = deps.T("cli.fix.status.rescan_clean")
 		}
 		fmt.Fprintln(w, deps.T("cli.fix.status.tests", testsLabel(deps, prop.TestsStatus), rescan))
+		if a.State == fix.StateProposed && fix.CanRunTests(prop) {
+			fmt.Fprintln(w, deps.T("cli.fix.status.tests_awaiting", a.ID))
+		}
 		if a.State == fix.StateProposed {
 			fmt.Fprintln(w, deps.T("cli.fix.status.hash", prop.Hash, a.ID))
 		}
@@ -761,4 +766,95 @@ func newFixResolveCmd(deps *Deps) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// maxCodeFilesShown is how many changed code files michel fix test names
+// before "and N more", like the page.
+const maxCodeFilesShown = 10
+
+func newFixTestCmd(deps *Deps) *cobra.Command {
+	var yes bool
+	var hash string
+	c := &cobra.Command{
+		Use:   "test <attempt-id-or-prefix>",
+		Short: "Run the project's tests on the agent's change, once you have read it",
+		Long: "Test runs the project's tests on a proposal whose tests wait for your go-ahead: the agent changed more than " +
+			"Michel's own update, so running the tests runs code it wrote, on this computer and with your rights. Michel never " +
+			"runs them alone in that case. Without --yes, test lists the code files the agent changed and runs nothing; read " +
+			"the change with michel fix status <id> --diff first. With --yes, Michel runs the tests on the proposal michel fix " +
+			"status last showed (or --hash) and records a new proposal with the result: approve that one. Michel refuses when " +
+			"the agent replaced the proposal since.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			defer stop()
+			a, err := resolveAttempt(ctx, deps, args[0])
+			if err != nil {
+				return err
+			}
+			prop, ok, err := fix.NewRepo(deps.Store).CurrentProposal(ctx, a.ID)
+			if err != nil {
+				return err
+			}
+			switch {
+			case !ok:
+				return fixError(deps, fix.ErrNoProposal, "")
+			case a.State != fix.StateProposed:
+				return fixError(deps, fix.ErrBadTransition, "")
+			case prop.TestsStatus == workcopy.TestsAwaiting && prop.Tree == "":
+				return fixError(deps, fix.ErrNoTree, "")
+			case !fix.CanRunTests(prop):
+				return fixError(deps, fix.ErrNotAwaiting, "")
+			}
+			w := deps.Stdout
+			fmt.Fprintln(w, deps.T("cli.fix.test.warning", a.ID))
+			code := fix.CodeFiles(a, prop)
+			if len(code) == 0 {
+				fmt.Fprintln(w, deps.T("cli.fix.test.deps_only"))
+			} else {
+				m := mask.New()
+				fmt.Fprintln(w, deps.T("cli.fix.test.files"))
+				for i, f := range code {
+					if i == maxCodeFilesShown {
+						fmt.Fprintln(w, deps.N("cli.fix.test.more", len(code)-maxCodeFilesShown))
+						break
+					}
+					fmt.Fprintln(w, deps.T("cli.fix.test.file", m.Mask(scan.SanitizeText(f))))
+				}
+			}
+			if !yes {
+				fmt.Fprintln(w, deps.T("cli.fix.test.confirm"))
+				return nil
+			}
+			hash := strings.TrimSpace(hash)
+			if hash == "" {
+				b, err := os.ReadFile(shownFile(cmd, a.ID))
+				if err != nil {
+					return deps.Errorf("cli.fix.test.status_first", a.ID)
+				}
+				hash = strings.TrimSpace(string(b))
+			}
+			d, err := fixService(cmd, deps)
+			if err != nil {
+				return err
+			}
+			got, err := fix.RunTests(ctx, d, a.ID, hash)
+			if err != nil {
+				hint := ""
+				if errors.Is(err, fix.ErrStaleProposal) {
+					hint = deps.T("cli.fix.approve.stale_hint", a.ID)
+				}
+				return fixError(deps, err, hint)
+			}
+			fmt.Fprintln(w, deps.T("cli.fix.test.done", testsLabel(deps, got.TestsStatus)))
+			after, err := fix.NewRepo(deps.Store).GetAttempt(context.WithoutCancel(ctx), a.ID)
+			if err != nil {
+				return err
+			}
+			return printAttempt(cmd, deps, after, false)
+		},
+	}
+	c.Flags().BoolVar(&yes, "yes", false, "run the tests (without it, Michel only lists what would run)")
+	c.Flags().StringVar(&hash, "hash", "", "the hash of the proposal to test (default: the one michel fix status showed)")
+	return c
 }

@@ -278,3 +278,67 @@ func TestFixConsentYes(t *testing.T) {
 		t.Errorf("strict_local consent: %v", err)
 	}
 }
+
+func TestFixTestNeedsYes(t *testing.T) {
+	dir, list := scannedDemo(t, false)
+	ctx := context.Background()
+	var id string
+	files := []string{"composer.lock", "composer.json"}
+	for i := range 12 {
+		files = append(files, "tests/T"+string(rune('a'+i))+"Test.php")
+	}
+	withStore(t, dir, func(st *store.Store) {
+		p, err := project.NewRepo(st).Get(ctx, "demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := fix.NewRepo(st)
+		a, err := repo.CreateAttempt(ctx, fix.Attempt{FindingID: list[0].ID, ProjectID: p.ID, Origin: fix.OriginAgent,
+			Work: fix.Work{Plan: fix.Plan{Ecosystem: "Packagist", ManifestRel: "composer.lock"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id = a.ID
+		if _, err := repo.AddProposal(ctx, fix.Proposal{AttemptID: id, Summary: "A proposal.", Files: files,
+			TestsStatus: workcopy.TestsAwaiting, Hash: "hash-one", Tree: strings.Repeat("a", 40)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SetState(ctx, id, []fix.State{fix.StatePreparing}, fix.StateProposed, ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Without --yes: the code files, the warning, and nothing runs.
+	_, out, _, err := run(t, dir, "fix", "test", id, "--lang", "fr")
+	if err != nil {
+		t.Fatalf("fix test: %v", err)
+	}
+	if !strings.Contains(out, i18n.T(i18n.FR, "cli.fix.test.warning", id)) || !strings.Contains(out, "tests/TaTest.php") ||
+		strings.Contains(out, "tests/TkTest.php") || !strings.Contains(out, i18n.N(i18n.FR, "cli.fix.test.more", 2)) ||
+		strings.Contains(out, "  composer.lock") || !strings.Contains(out, i18n.T(i18n.FR, "cli.fix.test.confirm")) {
+		t.Errorf("fix test without --yes:\n%s", out)
+	}
+	withStore(t, dir, func(st *store.Store) {
+		if cur, _, _ := fix.NewRepo(st).CurrentProposal(ctx, id); cur.Hash != "hash-one" {
+			t.Errorf("the proposal changed: %+v", cur)
+		}
+	})
+	// With --yes but nothing shown: status first.
+	if _, _, _, err := run(t, dir, "fix", "test", id, "--yes"); err == nil || !strings.Contains(err.Error(), "michel fix status") {
+		t.Errorf("fix test --yes before status: %v", err)
+	}
+	// Status says how to run them.
+	if _, out, _, err := run(t, dir, "fix", "status", id); err != nil || !strings.Contains(out, "michel fix test "+id) ||
+		!strings.Contains(out, i18n.T(i18n.EN, "cli.fix.tests.awaiting")) {
+		t.Errorf("status: %v\n%s", err, out)
+	}
+	// The agent replaces its proposal after status: --yes is refused.
+	withStore(t, dir, func(st *store.Store) {
+		if _, err := fix.NewRepo(st).AddProposal(ctx, fix.Proposal{AttemptID: id, Summary: "Second.", Files: files,
+			TestsStatus: workcopy.TestsAwaiting, Hash: "hash-two", Tree: strings.Repeat("b", 40)}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, _, _, err := run(t, dir, "fix", "test", id, "--yes", "--lang", "fr"); err == nil || !strings.Contains(err.Error(), i18n.T(i18n.FR, "fix.err.stale_proposal")) {
+		t.Errorf("fix test --yes on a changed proposal: %v", err)
+	}
+}
