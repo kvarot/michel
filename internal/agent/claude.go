@@ -69,9 +69,14 @@ func toolsOf(s Spec) string {
 const mcpServer = "michel"
 
 // allowRules give the file tools the working folder (the copy) only, and
-// the tools of Michel's MCP server when there is one.
+// the tools of Michel's MCP server when there is one. Claude Code checks
+// path rules of Read and Edit only: an Edit rule covers every tool that
+// writes a file (Write too), a Read rule the tools that read (Glob and Grep,
+// best effort). Write, Glob and Grep path rules never match, so none is
+// given; in dontAsk mode the read-only tools are approved inside the working
+// folder and everything not allowed is refused.
 func allowRules(s Spec) []string {
-	rules := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob(./**)", "Grep(./**)"}
+	rules := []string{"Read(./**)", "Edit(./**)"}
 	if s.NoFileTools {
 		rules = nil
 	}
@@ -97,54 +102,60 @@ var secretFiles = []string{"~/.claude/**", "~/.claude.json", "~/.ssh/**", "~/.aw
 // database and the policy. The copies (worktrees) are not among them.
 var dataSecrets = []string{"secrets/**", "agent/**", "michel.db*", "config.yaml"}
 
+// errDataRoot means Michel's data folder has no form a permission rule can
+// name (a relative or network path): its files could not be refused to the
+// agent, so the session does not start.
+var errDataRoot = errors.New("Michel cannot keep the agent out of its data folder: use a data folder on a local drive, given as an absolute path")
+
 // ruleRoot is dir as Claude Code reads an absolute path in a rule: //c/x on
-// Windows (C:\x), //x elsewhere (/x). Empty when dir has no such form (a
-// relative or UNC path).
-func ruleRoot(dir string) string {
+// Windows (C:\x or \\?\C:\x), //x elsewhere (/x). A relative or UNC path
+// has no such form: errDataRoot.
+func ruleRoot(dir string) (string, error) {
+	if rest, ok := strings.CutPrefix(dir, `\\?\`); ok && filepath.Separator == '\\' {
+		dir = rest
+	}
 	if !filepath.IsAbs(dir) {
-		return ""
+		return "", errDataRoot
 	}
 	p := filepath.ToSlash(filepath.Clean(dir))
 	if v := filepath.VolumeName(dir); v != "" {
 		if len(v) != 2 || v[1] != ':' {
-			return ""
+			return "", errDataRoot
 		}
 		p = "/" + strings.ToLower(v[:1]) + p[2:]
 	}
-	return "/" + strings.TrimSuffix(p, "/")
+	return "/" + strings.TrimSuffix(p, "/"), nil
 }
 
 // denyRules are refused whatever else allows them: Bash, the web tools,
-// writes to the protected paths, and reads (Read, Glob, Grep) of the user's
-// credential files and of Michel's own data. The data folder is the copy's
-// <DataDir>/worktrees/<project>/<attempt> three levels up (Start checked
-// that shape).
-func denyRules(s Spec) []string {
+// writes (Edit) to the protected paths, and reads (Read, which Glob and Grep
+// follow) of the user's credential files and of Michel's own data. The data
+// folder is the copy's <DataDir>/worktrees/<project>/<attempt> three levels
+// up (Start checked that shape); a Spec with no Dir names none.
+func denyRules(s Spec) ([]string, error) {
 	rules := []string{"Bash", "WebFetch", "WebSearch"}
 	if s.NoFileTools {
 		// No built-in tool is loaded (--tools ""); the file tools are
 		// refused as well, whatever a setting says.
 		rules = append(rules, "Read", "Edit", "Write", "Glob", "Grep")
 	}
-	for _, tool := range []string{"Edit", "Write"} {
-		for _, p := range protected {
-			rules = append(rules, tool+"(./"+p+")", tool+"(./**/"+p+")")
-		}
+	for _, p := range protected {
+		rules = append(rules, "Edit(./"+p+")", "Edit(./**/"+p+")")
 	}
 	paths := slices.Clone(secretFiles)
 	if s.Dir != "" {
-		if root := ruleRoot(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(s.Dir))))); root != "" {
-			for _, p := range dataSecrets {
-				paths = append(paths, root+"/"+p)
-			}
+		root, err := ruleRoot(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(s.Dir)))))
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range dataSecrets {
+			paths = append(paths, root+"/"+p)
 		}
 	}
-	for _, tool := range []string{"Read", "Glob", "Grep"} {
-		for _, p := range paths {
-			rules = append(rules, tool+"("+p+")")
-		}
+	for _, p := range paths {
+		rules = append(rules, "Read("+p+")")
 	}
-	return rules
+	return rules, nil
 }
 
 // generated returns the settings file and the MCP configuration of a
@@ -153,11 +164,15 @@ func denyRules(s Spec) []string {
 // carries the same permissions for that reason): permissions, no hook at
 // all, project MCP servers off.
 func generated(s Spec) (settings, mcp []byte, err error) {
+	deny, err := denyRules(s)
+	if err != nil {
+		return nil, nil, err
+	}
 	settings, err = json.MarshalIndent(map[string]any{
 		"permissions": map[string]any{
 			"defaultMode":                  "dontAsk",
 			"allow":                        allowRules(s),
-			"deny":                         denyRules(s),
+			"deny":                         deny,
 			"disableBypassPermissionsMode": "disable",
 		},
 		"disableAllHooks":            true,
@@ -253,8 +268,12 @@ func argv(s Spec, mcpPath, settingsPath string) ([]string, error) {
 	a = append(a, allowRules(s)...)
 	// The deny rules too: --print silently ignores a settings file that
 	// fails validation, so argv carries every permission.
+	deny, err := denyRules(s)
+	if err != nil {
+		return nil, err
+	}
 	a = append(a, "--disallowedTools")
-	a = append(a, denyRules(s)...)
+	a = append(a, deny...)
 	if s.ResumeID != "" {
 		if !sessionID.MatchString(s.ResumeID) {
 			return nil, errors.New("the session to resume is not a Claude Code session id")

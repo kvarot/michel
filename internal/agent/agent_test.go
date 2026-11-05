@@ -252,12 +252,31 @@ func TestGeneratedSettingsAndMCPConfig(t *testing.T) {
 		settings.EnableAllProjectMcpServers == nil || *settings.EnableAllProjectMcpServers {
 		t.Errorf("settings = %s", set)
 	}
-	if want := []string{"Read(./**)", "Edit(./**)", "Write(./**)", "Glob(./**)", "Grep(./**)", "mcp__michel__*"}; !slices.Equal(settings.Permissions.Allow, want) {
+	// Only Read and Edit path rules are checked by Claude Code (Edit covers
+	// every tool that writes files, Read the ones that read): no path rule
+	// for Write, Glob or Grep, and no bare Glob or Grep allow.
+	if want := []string{"Read(./**)", "Edit(./**)", "mcp__michel__*"}; !slices.Equal(settings.Permissions.Allow, want) {
 		t.Errorf("allow = %v, want %v", settings.Permissions.Allow, want)
 	}
-	for _, w := range []string{"Bash", "WebFetch", "WebSearch", "Edit(./.git/**)"} {
+	for _, r := range append(slices.Clone(settings.Permissions.Allow), settings.Permissions.Deny...) {
+		for _, tool := range []string{"Write(", "Glob(", "Grep("} {
+			if strings.HasPrefix(r, tool) {
+				t.Errorf("path rule %s is never matched", r)
+			}
+		}
+	}
+	for _, w := range []string{"Bash", "WebFetch", "WebSearch"} {
 		if !slices.Contains(settings.Permissions.Deny, w) {
 			t.Errorf("deny lacks %s: %v", w, settings.Permissions.Deny)
+		}
+	}
+	// The install folders, git's folder and Claude Code's files of the copy
+	// are never written, at the root and at any depth.
+	for _, p := range []string{"vendor/**", "node_modules/**", ".git/**", ".claude/**", ".mcp.json"} {
+		for _, w := range []string{"Edit(./" + p + ")", "Edit(./**/" + p + ")"} {
+			if !slices.Contains(settings.Permissions.Deny, w) {
+				t.Errorf("deny lacks %s", w)
+			}
 		}
 	}
 	// Michel's data folder as Claude Code reads an absolute path: //c/... on
@@ -267,7 +286,7 @@ func TestGeneratedSettingsAndMCPConfig(t *testing.T) {
 		data = "/" + strings.ToLower(v[:1]) + data[2:]
 	}
 	data = "/" + data
-	for _, tool := range []string{"Read", "Glob", "Grep"} {
+	for _, tool := range []string{"Read"} {
 		for _, p := range []string{"~/.claude/**", "~/.claude.json", "~/.ssh/**", "~/.aws/**", "~/.git-credentials", "~/.npmrc",
 			"~/.config/gh/**", "~/.docker/config.json", "~/.netrc",
 			data + "/secrets/**", data + "/agent/**", data + "/michel.db*", data + "/config.yaml"} {
@@ -369,10 +388,11 @@ func TestLaunchDeniesBash(t *testing.T) {
 }
 
 // Ruling 33: no write to install folders, git's folder, Claude Code's
-// project settings or MCP file, at the root of the copy or deeper.
+// project settings or MCP file, at the root of the copy or deeper. An Edit
+// rule covers every tool that writes a file, Write included.
 func TestLaunchDeniesWritesToInstallFolders(t *testing.T) {
 	_, deny, _ := launchRecord(t)
-	for _, tool := range []string{"Edit", "Write"} {
+	for _, tool := range []string{"Edit"} {
 		for _, p := range []string{"vendor/**", "node_modules/**", ".git/**", ".claude/**", ".mcp.json"} {
 			for _, rule := range []string{tool + "(./" + p + ")", tool + "(./**/" + p + ")"} {
 				if !slices.Contains(deny, rule) {
@@ -416,8 +436,12 @@ func TestLaunchLoadsNoProjectOrUserSettings(t *testing.T) {
 	for _, e := range entries {
 		t.Errorf("a %s hook ran", e.Name())
 	}
+	refused, err := denyRules(Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, a := range r.Args {
-		if slices.Contains(denyRules(Spec{}), a) {
+		if slices.Contains(refused, a) {
 			continue // a rule refusing that file, not a file to load
 		}
 		if strings.Contains(a, ".claude") || strings.Contains(a, ".mcp.json") || strings.Contains(a, "CLAUDE.md") {
