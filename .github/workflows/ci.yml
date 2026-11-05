@@ -18,3 +18,35 @@ jobs:
           go-version: '1.27.x'
       - run: go vet ./...
       - run: go test ./...
+
+  # The race detector needs cgo (gcc is on the ubuntu runner). The tools run
+  # with go run at their latest version: they are not dependencies of Michel.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+      - run: go test -race ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      # Not blocking yet: findings that predate this job (U1000, SA4006, SA4009,
+      # SA4010, SA1019) are listed in the audit and fixed in their own change.
+      - run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+        continue-on-error: true
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

@@ -70,6 +70,15 @@ func targetRecord(cmd *cobra.Command, deps *Deps, action, id, result string, ev 
 	return nil
 }
 
+// refusalRecord audits a host-key refusal and returns refused, joined with
+// the audit failure when the row could not be written.
+func refusalRecord(cmd *cobra.Command, deps *Deps, id string, ev map[string]any, refused error) error {
+	if _, err := deps.Audit.Record(cmd.Context(), audit.Event{Actor: "cli", Action: "target.hostkey", Target: id, Result: "refused", Evidence: ev}); err != nil {
+		return errors.Join(refused, deps.Wrapf("cli.target.refusal_audit_failed", err))
+	}
+	return refused
+}
+
 // targetRef finds the server named by arg (its id or its name).
 func targetRef(cmd *cobra.Command, deps *Deps, arg string) (target.Target, error) {
 	t, err := target.NewRepo(deps.Store).Get(cmd.Context(), arg)
@@ -416,12 +425,12 @@ func newTargetTrustCmd(deps *Deps) *cobra.Command {
 				return nil
 			}
 			if fingerprint != fp {
-				_ = targetRecord(cmd, deps, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "fingerprint mismatch"})
-				return deps.Errorf("cli.target.trust.mismatch", t.Name)
+				return refusalRecord(cmd, deps, t.ID, map[string]any{"name": t.Name, "reason": "fingerprint mismatch"},
+					deps.Errorf("cli.target.trust.mismatch", t.Name))
 			}
 			if t.HostKey != "" && t.HostKey != fp && !replace {
-				_ = targetRecord(cmd, deps, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "key changed, replace not asked"})
-				return deps.Errorf("cli.target.trust.changed", t.Name)
+				return refusalRecord(cmd, deps, t.ID, map[string]any{"name": t.Name, "reason": "key changed, replace not asked"},
+					deps.Errorf("cli.target.trust.changed", t.Name))
 			}
 			if err := repo.SetHostKey(cmd.Context(), t.ID, fp); err != nil {
 				return targetFailure(deps, err, false)

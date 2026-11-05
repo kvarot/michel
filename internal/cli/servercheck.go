@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -120,20 +121,28 @@ func serverAlert(cmd *cobra.Command, deps *Deps) func(context.Context, serverche
 	}
 }
 
+// recordAlert writes the audit row of an alert delivery. The alert is not
+// retried, so a row the audit log refuses is at least a warning in the log.
+func recordAlert(ctx context.Context, deps *Deps, server string, e audit.Event) {
+	if _, err := deps.Audit.Record(ctx, e); err != nil {
+		slog.Warn("serve: cannot write the audit row of an alert", "actor", e.Actor, "server", server, "result", e.Result, "err", err)
+	}
+}
+
 // sendServerAlert builds the channels and sends the alert. When the channels
 // cannot be built the failure is audited (the error holds no secret): the
 // alert is not retried, so it must not vanish without a trace.
 func sendServerAlert(ctx context.Context, deps *Deps, build func() ([]notify.Notifier, error), in servercheck.AlertInput) {
 	ns, err := build()
 	if err != nil {
-		_, _ = deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{Actor: "servercheck", Action: "notify.send", Target: in.Target.ID, Result: "error",
+		recordAlert(context.WithoutCancel(ctx), deps, in.Target.ID, audit.Event{Actor: "servercheck", Action: "notify.send", Target: in.Target.ID, Result: "error",
 			Evidence: map[string]any{"kind": in.Kind, "server": in.Target.ID, "error": scan.SanitizeText(err.Error())}})
 		return
 	}
 	now := deps.Now().UTC()
 	for _, dl := range notify.SendServerAlert(ctx, ns, in, serverPageURL(deps.Policy.Notify.PageURL, in.Target.ID), now) {
 		// Never the body: the channel, where it went, how it ended, its size.
-		_, _ = deps.Audit.Record(ctx, audit.Event{Actor: "servercheck", Action: "notify.send", Target: dl.Name, Result: dl.Result,
+		recordAlert(ctx, deps, in.Target.ID, audit.Event{Actor: "servercheck", Action: "notify.send", Target: dl.Name, Result: dl.Result,
 			Evidence: map[string]any{"channel": dl.Name, "type": dl.Type, "host": dl.Host, "result": dl.Result, "bytes": dl.Bytes,
 				"kind": in.Kind, "server": in.Target.ID}})
 	}
