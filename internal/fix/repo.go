@@ -267,7 +267,7 @@ func (r *Repo) SetRun(ctx context.Context, id, cloneDir, sessionID string) error
 	return nil
 }
 
-const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version, commands, scripts, steps`
+const proposalCols = `id, attempt_id, summary, diff, files, tests_status, tests_output, rescan_clean, risk, hash, steps_server, created_at, superseded, commit_sha, diff_raw, from_version, to_version, commands, scripts, steps, tree`
 
 // serverRecord is what the scripts column holds for a server fix.
 type serverRecord struct {
@@ -339,6 +339,52 @@ func (r *Repo) AddProposal(ctx context.Context, p Proposal) (Proposal, error) {
 	return p, nil
 }
 
+// AddProposalIfCurrent stores p for its attempt, superseding the current
+// proposal, only when the attempt is proposed and its current proposal still
+// has the hash hash: the check and the insert run in one transaction (same
+// form as Approve). ErrStaleProposal when the current proposal is another
+// one (nothing stored), ErrBadTransition when the attempt is not proposed.
+func (r *Repo) AddProposalIfCurrent(ctx context.Context, p Proposal, hash string) (Proposal, error) {
+	if hash == "" {
+		return Proposal{}, ErrStaleProposal
+	}
+	now := r.now()
+	p, insert, err := r.proposalInsert(p, now)
+	if err != nil {
+		return Proposal{}, err
+	}
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET updated_at = ? WHERE id = ? AND state = ?
+		AND EXISTS (SELECT 1 FROM fix_proposal WHERE attempt_id = ? AND superseded = 0 AND hash = ?)`,
+		ts(now), p.AttemptID, string(StateProposed), p.AttemptID, hash)
+	if err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		var state string
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM fix_attempt WHERE id = ?`, p.AttemptID).Scan(&state); errors.Is(err, sql.ErrNoRows) {
+			return Proposal{}, fmt.Errorf("%w: %s", ErrNotFound, p.AttemptID)
+		} else if err != nil {
+			return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+		}
+		if State(state) != StateProposed {
+			return Proposal{}, fmt.Errorf("%w (the attempt is %s)", ErrBadTransition, state)
+		}
+		return Proposal{}, ErrStaleProposal
+	}
+	if err := insert(ctx, tx); err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Proposal{}, fmt.Errorf("cannot save the proposal: %w", err)
+	}
+	return p, nil
+}
+
 // proposalInsert prepares p for storing: its id and date, and the function
 // that, inside a transaction, supersedes the attempt's proposals and inserts it.
 func (r *Repo) proposalInsert(p Proposal, now time.Time) (Proposal, func(context.Context, *sql.Tx) error, error) {
@@ -375,9 +421,9 @@ func (r *Repo) proposalInsert(p Proposal, now time.Time) (Proposal, func(context
 		if _, err := tx.ExecContext(ctx, `UPDATE fix_proposal SET superseded = 1 WHERE attempt_id = ?`, p.AttemptID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)`,
+		_, err := tx.ExecContext(ctx, `INSERT INTO fix_proposal (`+proposalCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)`,
 			p.ID, p.AttemptID, p.Summary, p.Diff, string(files), p.TestsStatus, p.TestsOutput, b2i(p.RescanClean), p.Risk, p.Hash, string(steps), ts(now),
-			p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds), scripts, stepsDone)
+			p.CommitSHA, base64.StdEncoding.EncodeToString(p.DiffRaw), p.FromVersion, p.ToVersion, string(cmds), scripts, stepsDone, p.Tree)
 		return err
 	}, nil
 }
@@ -434,7 +480,7 @@ func scanProposal(s scanner) (Proposal, error) {
 	var err error
 	var files, steps, created, raw, cmds, scripts, ran string
 	var rescan, superseded int
-	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion, &cmds, &scripts, &ran); err != nil {
+	if err := s.Scan(&p.ID, &p.AttemptID, &p.Summary, &p.Diff, &files, &p.TestsStatus, &p.TestsOutput, &rescan, &p.Risk, &p.Hash, &steps, &created, &superseded, &p.CommitSHA, &raw, &p.FromVersion, &p.ToVersion, &cmds, &scripts, &ran, &p.Tree); err != nil {
 		return Proposal{}, err
 	}
 	if scripts != "" {
