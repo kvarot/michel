@@ -37,6 +37,43 @@ type Policy struct {
 	Risk        RiskConfig        `yaml:"risk"`
 	Notify      NotifyConfig      `yaml:"notify"`
 	SSH         SSHConfig         `yaml:"ssh"`
+	Watch       WatchConfig       `yaml:"watch"`
+}
+
+// WatchConfig is the daily watch of michel serve: once a day, from ScanAt
+// on, it reads the enabled sources and checks every active project whose
+// watch is on (michel project set --auto-scan).
+type WatchConfig struct {
+	// Enabled nil means true.
+	Enabled *bool `yaml:"enabled"`
+	// ScanAt is the local time (HH:MM) of the watch; empty means an hour
+	// before notify.digest_at, so that the digest tells a fresh state.
+	ScanAt string `yaml:"scan_at"`
+}
+
+// IsEnabled reports whether the daily watch is on (Enabled nil = true).
+func (w WatchConfig) IsEnabled() bool { return w.Enabled == nil || *w.Enabled }
+
+// watchLead is how long before the digest the watch starts when scan_at is empty.
+const watchLead = 60
+
+// WatchHour is the hour and minute of the daily watch, and false when it is
+// off. An empty scan_at is an hour before the digest (07:00 with the defaults,
+// and when the digest is off), never before 00:00 of the same day. An invalid
+// value reads as the default; Validate refuses it before.
+func (p Policy) WatchHour() (hour, minute int, enabled bool) {
+	if !p.Watch.IsEnabled() {
+		return 0, 0, false
+	}
+	if h, m, ok := parseHourMinute(p.Watch.ScanAt); ok {
+		return h, m, true
+	}
+	h, m, on := p.Notify.DigestHour()
+	if !on {
+		h, m, _ = NotifyConfig{}.DigestHour()
+	}
+	t := max(h*60+m-watchLead, 0)
+	return t / 60, t % 60, true
 }
 
 // SSHConfig holds the settings of Michel's SSH client.
