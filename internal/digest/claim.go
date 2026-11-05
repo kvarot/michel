@@ -85,7 +85,9 @@ func (r *Repo) Finish(ctx context.Context, id string, channels []ChannelResult, 
 		return fmt.Errorf("cannot read the digest run: %w", err)
 	}
 	summary := map[string]int{}
-	_ = json.Unmarshal([]byte(sm), &summary)
+	if err := json.Unmarshal([]byte(sm), &summary); err != nil {
+		return fmt.Errorf("cannot read the summary of digest run %s: %w", id, err)
+	}
 	delete(summary, "pending")
 	if !reminded {
 		delete(summary, deviationKey)

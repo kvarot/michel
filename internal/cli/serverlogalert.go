@@ -43,13 +43,13 @@ func serverLogAlert(cmd *cobra.Command, deps *Deps, repo *serverlog.Repo) func(c
 func sendServerLogAlert(ctx context.Context, deps *Deps, build func() ([]notify.Notifier, error), in serverlog.AlertInput, smsAllowed bool) {
 	ns, err := build()
 	if err != nil {
-		_, _ = deps.Audit.Record(context.WithoutCancel(ctx), audit.Event{Actor: "serverlog", Action: "notify.send", Target: in.Target.ID, Result: "error",
+		recordAlert(context.WithoutCancel(ctx), deps, in.Target.ID, audit.Event{Actor: "serverlog", Action: "notify.send", Target: in.Target.ID, Result: "error",
 			Evidence: map[string]any{"kind": in.Kind, "server": in.Target.ID, "error": "channels not built"}})
 		return
 	}
 	now := deps.Now().UTC()
 	for _, dl := range notify.SendLogAlert(ctx, ns, in, smsAllowed, serverPageURL(deps.Policy.Notify.PageURL, in.Target.ID), now) {
-		_, _ = deps.Audit.Record(ctx, audit.Event{Actor: "serverlog", Action: "notify.send", Target: dl.Name, Result: dl.Result,
+		recordAlert(ctx, deps, in.Target.ID, audit.Event{Actor: "serverlog", Action: "notify.send", Target: dl.Name, Result: dl.Result,
 			Evidence: map[string]any{"channel": dl.Name, "type": dl.Type, "host": dl.Host, "result": dl.Result, "bytes": dl.Bytes,
 				"kind": in.Kind, "server": in.Target.ID}})
 	}

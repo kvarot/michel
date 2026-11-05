@@ -45,7 +45,9 @@ func scanDecision(row scanner) (Decision, error) {
 	d.SeenKEV = kev != 0
 	d.Action, d.SupersededReason = Action(action), Reason(reason)
 	d.DueAt, d.CreatedAt, d.SupersededAt = parseTime(due), parseTime(created), parseTime(supAt)
-	_ = json.Unmarshal([]byte(fixed), &d.SeenFixedVersions)
+	if err := json.Unmarshal([]byte(fixed), &d.SeenFixedVersions); err != nil {
+		return Decision{}, fmt.Errorf("cannot read the fixed versions of decision %s: %w", d.ID, err)
+	}
 	if d.SeenFixedVersions == nil {
 		d.SeenFixedVersions = []string{}
 	}
@@ -105,7 +107,12 @@ func (r *Repo) Set(ctx context.Context, d Decision, now time.Time) (Decision, er
 		return Decision{}, ErrFindingGone
 	}
 	d.SeenFixedVersions = []string{}
-	_ = json.Unmarshal([]byte(fixed), &d.SeenFixedVersions)
+	if err := json.Unmarshal([]byte(fixed), &d.SeenFixedVersions); err != nil {
+		return Decision{}, fmt.Errorf("cannot read the fixed versions of the finding: %w", err)
+	}
+	if d.SeenFixedVersions == nil {
+		d.SeenFixedVersions = []string{}
+	}
 	d.CreatedAt = now.UTC().Truncate(time.Second)
 	d.SupersededAt, d.SupersededReason = time.Time{}, ""
 	ts := timeText(d.CreatedAt)
