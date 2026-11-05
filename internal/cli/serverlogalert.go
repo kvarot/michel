@@ -22,10 +22,10 @@ func serverLogAlert(cmd *cobra.Command, deps *Deps, repo *serverlog.Repo) func(c
 			return nil, err
 		}
 		nd.SMSCounter = notify.StoreCounter{S: deps.Store}
-		return notify.Build(deps.Policy.Notify, nd)
+		return notify.Build(deps.Policy().Notify, nd)
 	}
 	return func(ctx context.Context, in serverlog.AlertInput) {
-		if len(deps.Policy.Notify.Channels) == 0 {
+		if len(deps.Policy().Notify.Channels) == 0 {
 			return
 		}
 		smsAllowed := false
@@ -48,7 +48,7 @@ func sendServerLogAlert(ctx context.Context, deps *Deps, build func() ([]notify.
 		return
 	}
 	now := deps.Now().UTC()
-	for _, dl := range notify.SendLogAlert(ctx, ns, in, smsAllowed, serverPageURL(deps.Policy.Notify.PageURL, in.Target.ID), now) {
+	for _, dl := range notify.SendLogAlert(ctx, ns, in, smsAllowed, serverPageURL(deps.Policy().Notify.PageURL, in.Target.ID), now) {
 		recordAlert(ctx, deps, in.Target.ID, audit.Event{Actor: "serverlog", Action: "notify.send", Target: dl.Name, Result: dl.Result,
 			Evidence: map[string]any{"channel": dl.Name, "type": dl.Type, "host": dl.Host, "result": dl.Result, "bytes": dl.Bytes,
 				"kind": in.Kind, "server": in.Target.ID}})

@@ -94,7 +94,7 @@ func newTargetLogsListCmd(deps *Deps) *cobra.Command {
 				active = active || s.Active
 				v.Sources = append(v.Sources, row)
 			}
-			v.NoChannel = active && !api.LogChannelHears(deps.Policy, st)
+			v.NoChannel = active && !api.LogChannelHears(deps.Policy(), st)
 			for _, g := range sigs {
 				row := logErrRow{ID: g.ID, Level: string(g.Level), Type: api.ServerText(t.User, g.Type, extra...), Location: api.ServerText(t.User, g.Location, extra...),
 					Channel: api.ServerText(t.User, g.Channel, extra...), Status: string(g.Status), Total: g.Total, FirstAt: g.FirstAt, LastAt: g.LastAt}

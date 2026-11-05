@@ -41,7 +41,7 @@ func newMCPCmd(deps *Deps) *cobra.Command {
 			// boundary, the attempt state check in fix.Propose.
 			fd := fixDeps(cmd, deps, secrets, "mcp")
 			return mcp.Serve(cmd.Context(), in, deps.Stdout, mcp.Deps{
-				Store: deps.Store, DataDir: dataDir, Policy: deps.Policy, Lang: deps.Lang, Secrets: secrets,
+				Store: deps.Store, DataDir: dataDir, Policy: deps.Policy(), Lang: deps.Lang, Secrets: secrets,
 				Attempt: attempt, Token: token, Version: buildinfo.Version, Log: deps.Stderr,
 				Propose: func(ctx context.Context, attemptID string, in fix.ProposeInput) (fix.Proposal, error) {
 					return fix.Propose(ctx, fd, attemptID, in)

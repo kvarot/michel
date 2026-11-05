@@ -62,7 +62,7 @@ func newDigestCmd(deps *Deps) *cobra.Command {
 
 // digestOptions reads the digest settings from the flags and the policy.
 func digestOptions(cmd *cobra.Command, deps *Deps, since string) (digest.Options, error) {
-	opt := digest.Options{Assistant: deps.Policy.Assistant.Name, OSVRoot: dbRoot(cmd, deps), PageURL: deps.Policy.Notify.PageURL,
+	opt := digest.Options{Assistant: deps.Policy().Assistant.Name, OSVRoot: dbRoot(cmd, deps), PageURL: deps.Policy().Notify.PageURL,
 		Allowed: deps.allowed}
 	if s := strings.TrimSpace(since); s != "" {
 		t, err := time.Parse("2006-01-02", s)

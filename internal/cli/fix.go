@@ -43,14 +43,14 @@ func fixDeps(cmd *cobra.Command, deps *Deps, secrets secret.Store, actor string)
 	}
 	d := fix.Deps{
 		Store: deps.Store, Audit: deps.Audit, Secrets: secrets, Gateway: deps.Gateway,
-		Policy: deps.Policy, PolicyPath: cfg,
+		Policy: deps.Policy(), PolicyPath: cfg,
 		Reload: func() (policy.Policy, error) {
 			p, src, err := policy.Load(cfg, dataDir)
 			if err == nil {
 				err = policy.Validate(p)
 			}
 			if err == nil {
-				deps.Policy, deps.PolicySource = p, src
+				deps.SetPolicy(p, src)
 			}
 			return p, err
 		},
@@ -74,11 +74,11 @@ func fixDeps(cmd *cobra.Command, deps *Deps, secrets secret.Store, actor string)
 			return
 		}
 		nd.Secrets = secrets
-		ns, err := notify.Build(deps.Policy.Notify, nd)
+		ns, err := notify.Build(deps.Policy().Notify, nd)
 		if err != nil {
 			return
 		}
-		notify.SendFixWaiting(ctx, ns, waiting, deps.Policy.Notify.PageURL)
+		notify.SendFixWaiting(ctx, ns, waiting, deps.Policy().Notify.PageURL)
 	}
 	d.NotifyHeld = func(ctx context.Context, n int) {
 		nd, err := notifyDeps(cmd, deps, false)
@@ -86,11 +86,11 @@ func fixDeps(cmd *cobra.Command, deps *Deps, secrets secret.Store, actor string)
 			return
 		}
 		nd.Secrets = secrets
-		ns, err := notify.Build(deps.Policy.Notify, nd)
+		ns, err := notify.Build(deps.Policy().Notify, nd)
 		if err != nil {
 			return
 		}
-		notify.SendFixHeld(ctx, ns, n, deps.Policy.Notify.PageURL)
+		notify.SendFixHeld(ctx, ns, n, deps.Policy().Notify.PageURL)
 	}
 	return d
 }
@@ -701,14 +701,14 @@ func newFixConsentCmd(deps *Deps) *cobra.Command {
 			if p.Classification == policy.ClassHealth {
 				return fixError(deps, fix.ErrHealthForbidden, "")
 			}
-			if deps.Policy.Sovereignty.Mode == policy.ModeStrictLocal {
+			if deps.Policy().Sovereignty.Mode == policy.ModeStrictLocal {
 				return fixError(deps, fix.ErrStrictLocal, "")
 			}
 			_, _, consented, err := fix.NewRepo(deps.Store).Consent(ctx, p.ID)
 			if err != nil {
 				return err
 			}
-			lines := fix.ConsentNeeded(p, deps.Policy, consented)
+			lines := fix.ConsentNeeded(p, deps.Policy(), consented)
 			if consented && len(lines) == 0 {
 				fmt.Fprintln(deps.Stdout, deps.T("cli.fix.consent.already", p.Name))
 				return nil

@@ -242,7 +242,7 @@ func printFinding(deps *Deps, lang explain.Lang, fi scan.Finding, p project.Proj
 	fmt.Fprintf(w, "  %s %s %d/100, %s %s\n", H("risk"), L("score"), a.Risk.Score, L("recommendation"), explain.Enum(lang, "rec", string(a.Risk.Recommendation)))
 	fmt.Fprintf(w, "    %s\n", explain.RiskTerms(lang, a.Risk.Terms))
 	if a.Risk.Warning {
-		eff, _ := analyze.EffectiveRisk(deps.Policy.Risk, p.RiskOverrides)
+		eff, _ := analyze.EffectiveRisk(deps.Policy().Risk, p.RiskOverrides)
 		fmt.Fprintf(w, "  %s\n", explain.RiskWarning(lang, eff.HandoffUpTo))
 	}
 	printGlossary(w, lang, facts)

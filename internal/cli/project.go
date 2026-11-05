@@ -25,7 +25,7 @@ func newProjectCmd(deps *Deps) *cobra.Command {
 
 func projectRepo(deps *Deps) *project.Repo {
 	r := project.NewRepo(deps.Store)
-	r.DefaultClassification = deps.Policy.Sovereignty.DataClassification
+	r.DefaultClassification = deps.Policy().Sovereignty.DataClassification
 	return r
 }
 
@@ -341,7 +341,7 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			if fl.Changed("install-cmd") {
 				p.InstallCmd = installCmd
 			}
-			if merged := deps.Policy.Risk.WithOverrides(p.RiskOverrides); policy.ValidateRisk(merged) != nil {
+			if merged := deps.Policy().Risk.WithOverrides(p.RiskOverrides); policy.ValidateRisk(merged) != nil {
 				return fail("denied", "cli.project.set.bad_thresholds", ev, name, merged.AutoFixBelow, merged.HandoffUpTo)
 			}
 			if err := repo.Update(ctx, p); err != nil {

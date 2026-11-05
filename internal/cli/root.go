@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kvarot/michel/internal/audit"
@@ -51,10 +52,10 @@ type Deps struct {
 	Stderr    io.Writer
 	Now       func() time.Time
 
-	// Policy and PolicySource are set by the root command before any
-	// subcommand runs.
-	Policy       policy.Policy
-	PolicySource policy.Source
+	// policy holds the policy in force and its source, set by the root
+	// command before any subcommand runs and swapped whole by a reload: read
+	// it with Policy and PolicySource, from any goroutine.
+	policy atomic.Pointer[loadedPolicy]
 	// Lang is the resolved language of generated text: the --lang flag,
 	// else the policy's assistant.lang ("auto" defers), else the system's
 	// language, else English.
@@ -69,6 +70,34 @@ type Deps struct {
 	// LogsReady, when set by michel serve, is closed when the first round of the
 	// log scheduler is over; the digest loop waits for it (see digestLogWait).
 	LogsReady <-chan struct{}
+}
+
+// loadedPolicy is a policy with where it was read from.
+type loadedPolicy struct {
+	p   policy.Policy
+	src policy.Source
+}
+
+// Policy returns the policy in force. A reload replaces it whole: a reader
+// never sees half of the old one and half of the new.
+func (d *Deps) Policy() policy.Policy {
+	if lp := d.policy.Load(); lp != nil {
+		return lp.p
+	}
+	return policy.Policy{}
+}
+
+// PolicySource returns where the policy in force comes from.
+func (d *Deps) PolicySource() policy.Source {
+	if lp := d.policy.Load(); lp != nil {
+		return lp.src
+	}
+	return ""
+}
+
+// SetPolicy puts p in force.
+func (d *Deps) SetPolicy(p policy.Policy, src policy.Source) {
+	d.policy.Store(&loadedPolicy{p: p, src: src})
 }
 
 // Close releases the store. It is safe to call more than once.
@@ -130,7 +159,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 			if err := policy.Validate(p); err != nil {
 				return &ExitError{Code: ExitCodePolicy, Err: deps.Wrapf("cli.root.policy_invalid", err, cfgPath)}
 			}
-			deps.Policy, deps.PolicySource = p, src
+			deps.SetPolicy(p, src)
 			if f := strings.ToLower(strings.TrimSpace(flag)); f != "" && !i18n.Lang(f).Valid() {
 				return &ExitError{Code: ExitCodePolicy, Err: deps.Errorf("cli.root.unknown_lang", f)}
 			}

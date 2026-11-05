@@ -32,7 +32,7 @@ func newSourceCmd(deps *Deps) *cobra.Command {
 }
 
 // sourceDeps wires the consent dependencies: the policy file of --config is
-// the one that receives the allow rules, and a reload updates deps.Policy.
+// the one that receives the allow rules, and a reload puts the new policy in force (Deps.SetPolicy).
 func sourceDeps(cmd *cobra.Command, deps *Deps) source.Deps {
 	cfg, _ := cmd.Flags().GetString("config")
 	dir, _ := cmd.Flags().GetString("data-dir")
@@ -44,7 +44,7 @@ func sourceDeps(cmd *cobra.Command, deps *Deps) source.Deps {
 				err = policy.Validate(p)
 			}
 			if err == nil {
-				deps.Policy, deps.PolicySource = p, src
+				deps.SetPolicy(p, src)
 			}
 			return p, err
 		},

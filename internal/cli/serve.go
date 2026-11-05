@@ -182,7 +182,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 				}
 			}
 			home, _ := userHomeDir()
-			d := api.Deps{Store: deps.Store, Audit: deps.Audit, Policy: deps.Policy, Secrets: secrets, Now: deps.Now,
+			d := api.Deps{Store: deps.Store, Audit: deps.Audit, Policy: deps.Policy(), Secrets: secrets, Now: deps.Now,
 				Version: buildinfo.Version, OSVRoot: dbRoot(cmd, deps), Lang: deps.Lang,
 				AllowedHosts: []string{bound, net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("localhost", port), net.JoinHostPort("::1", port)},
 				PolicyPath:   sd.PolicyPath, Reload: sd.Reload,

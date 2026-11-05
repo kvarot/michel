@@ -199,7 +199,7 @@ func heldMessage(deps *Deps, deliveries []notify.Delivery) string {
 func deliveredTo(deps *Deps, deliveries []notify.Delivery) (delivered, reminded bool) {
 	scoped := map[string]bool{}
 	unlimited := false
-	for _, c := range deps.Policy.Notify.Channels {
+	for _, c := range deps.Policy().Notify.Channels {
 		if !c.IsEnabled() || c.Type == policy.ChannelSMS {
 			continue
 		}

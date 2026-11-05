@@ -33,7 +33,7 @@ const serverCheckInterval = 15 * time.Minute
 // gateway, the audit, and the SSH agent the policy names (ssh.agent_pipe), else
 // the system one.
 func sshDeps(deps *Deps) sshx.Deps {
-	return sshx.Deps{Gateway: deps.Gateway, Audit: deps.Audit, Now: deps.Now, Agent: sshAgent(deps.Policy.SSH.AgentPipe)}
+	return sshx.Deps{Gateway: deps.Gateway, Audit: deps.Audit, Now: deps.Now, Agent: sshAgent(deps.Policy().SSH.AgentPipe)}
 }
 
 // sshAgent opens the SSH agent at path, "" for the system one. Replaced in
@@ -111,10 +111,10 @@ func serverAlert(cmd *cobra.Command, deps *Deps) func(context.Context, serverche
 			return nil, err
 		}
 		nd.SMSCounter = notify.StoreCounter{S: deps.Store}
-		return notify.Build(deps.Policy.Notify, nd)
+		return notify.Build(deps.Policy().Notify, nd)
 	}
 	return func(ctx context.Context, in servercheck.AlertInput) {
-		if len(deps.Policy.Notify.Channels) == 0 {
+		if len(deps.Policy().Notify.Channels) == 0 {
 			return
 		}
 		sendServerAlert(ctx, deps, build, in)
@@ -140,7 +140,7 @@ func sendServerAlert(ctx context.Context, deps *Deps, build func() ([]notify.Not
 		return
 	}
 	now := deps.Now().UTC()
-	for _, dl := range notify.SendServerAlert(ctx, ns, in, serverPageURL(deps.Policy.Notify.PageURL, in.Target.ID), now) {
+	for _, dl := range notify.SendServerAlert(ctx, ns, in, serverPageURL(deps.Policy().Notify.PageURL, in.Target.ID), now) {
 		// Never the body: the channel, where it went, how it ended, its size.
 		recordAlert(ctx, deps, in.Target.ID, audit.Event{Actor: "servercheck", Action: "notify.send", Target: dl.Name, Result: dl.Result,
 			Evidence: map[string]any{"channel": dl.Name, "type": dl.Type, "host": dl.Host, "result": dl.Result, "bytes": dl.Bytes,

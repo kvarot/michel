@@ -31,7 +31,7 @@ func dbRoot(cmd *cobra.Command, deps *Deps) string {
 	if v, _ := cmd.Flags().GetString("osv-db"); v != "" {
 		return v
 	}
-	return deps.Policy.DB.OSVPath
+	return deps.Policy().DB.OSVPath
 }
 
 func newDBUpdateCmd(deps *Deps) *cobra.Command {
