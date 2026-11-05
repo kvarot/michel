@@ -159,6 +159,14 @@ func ErrorKey(err error) string {
 		return "fix.err.hold_stale"
 	case errors.Is(err, ErrHoldPerson):
 		return "fix.err.hold_person"
+	case errors.Is(err, ErrNotAwaiting):
+		return "fix.err.not_awaiting"
+	case errors.Is(err, ErrNoTree):
+		return "fix.err.no_tree"
+	case errors.Is(err, ErrTestsInterrupted):
+		return "fix.err.tests_interrupted"
+	case errors.Is(err, ErrTestsRunning):
+		return "fix.err.tests_running"
 	case errors.Is(err, ErrBadTransition):
 		return "fix.err.bad_state"
 	case errors.Is(err, ErrNotFound):
@@ -215,6 +223,14 @@ func Explain(lang i18n.Lang, err error) string {
 		text = i18n.T(lang, "fix.err.hold_stale")
 	case "fix.err.hold_person":
 		text = i18n.T(lang, "fix.err.hold_person")
+	case "fix.err.not_awaiting":
+		text = i18n.T(lang, "fix.err.not_awaiting")
+	case "fix.err.no_tree":
+		text = i18n.T(lang, "fix.err.no_tree")
+	case "fix.err.tests_interrupted":
+		text = i18n.T(lang, "fix.err.tests_interrupted")
+	case "fix.err.tests_running":
+		text = i18n.T(lang, "fix.err.tests_running")
 	case "fix.err.bad_state":
 		text = i18n.T(lang, "fix.err.bad_state")
 	case "fix.err.not_found":

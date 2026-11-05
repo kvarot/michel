@@ -154,6 +154,11 @@ type Proposal struct {
 	Hash string `json:"hash"`
 	// CommitSHA is the fix commit built in the private mirror.
 	CommitSHA string `json:"commit_sha"`
+	// Tree is the git tree of the snapshot the proposal was built from (the
+	// agent's copy, excluded files left out): a click on "Run the tests"
+	// materialises that very tree. "" for a proposal written before it was
+	// kept, and for a server fix. Not covered by Hash: the patch is.
+	Tree string `json:"-"`
 	// DiffRaw is the exact patch the commit applies (hashed, checked for
 	// mask tokens before apply, never shown).
 	DiffRaw     []byte   `json:"-"`

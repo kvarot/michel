@@ -170,3 +170,75 @@ func TestPurgeMessagesOlderThan30Days(t *testing.T) {
 		t.Fatalf("left = %v, %v", left, err)
 	}
 }
+
+func TestProposalTreeRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+	a := newAttempt(t, r, "f1", "p1", OriginAgent)
+	if _, err := r.AddProposal(ctx, Proposal{AttemptID: a.ID, Summary: "one", Hash: "h1", Tree: "abc"}); err != nil {
+		t.Fatal(err)
+	}
+	cur, ok, err := r.CurrentProposal(ctx, a.ID)
+	if err != nil || !ok || cur.Tree != "abc" {
+		t.Fatalf("current = %+v ok=%v err=%v", cur, ok, err)
+	}
+}
+
+func TestAddProposalIfCurrentStale(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+	a := newAttempt(t, r, "f1", "p1", OriginAgent)
+	if _, err := r.AddProposal(ctx, Proposal{AttemptID: a.ID, Summary: "zero", Hash: "h0"}); err != nil {
+		t.Fatal(err)
+	}
+	p1, err := r.AddProposal(ctx, Proposal{AttemptID: a.ID, Summary: "one", Hash: "h1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetState(ctx, a.ID, []State{StatePreparing}, StateProposed, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.AddProposalIfCurrent(ctx, Proposal{AttemptID: a.ID, Summary: "tested", Hash: "h2"}, "h0")
+	if !errors.Is(err, ErrStaleProposal) {
+		t.Fatalf("AddProposalIfCurrent with an old hash: %v, want ErrStaleProposal", err)
+	}
+	cur, ok, err := r.CurrentProposal(ctx, a.ID)
+	if err != nil || !ok || cur.ID != p1.ID || cur.Hash != "h1" {
+		t.Fatalf("current = %+v ok=%v err=%v", cur, ok, err)
+	}
+	if all, _ := r.Proposals(ctx, a.ID); len(all) != 2 {
+		t.Errorf("proposals = %d, want 2", len(all))
+	}
+}
+
+func TestAddProposalIfCurrentSupersedes(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+	a := newAttempt(t, r, "f1", "p1", OriginAgent)
+	p1, err := r.AddProposal(ctx, Proposal{AttemptID: a.ID, Summary: "one", Hash: "h1", Tree: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetState(ctx, a.ID, []State{StatePreparing}, StateProposed, ""); err != nil {
+		t.Fatal(err)
+	}
+	p2, err := r.AddProposalIfCurrent(ctx, Proposal{AttemptID: a.ID, Summary: "one", Hash: "h2", Tree: "t1"}, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, ok, err := r.CurrentProposal(ctx, a.ID)
+	if err != nil || !ok || cur.ID != p2.ID || cur.Hash != "h2" || cur.Tree != "t1" {
+		t.Fatalf("current = %+v ok=%v err=%v", cur, ok, err)
+	}
+	all, _ := r.Proposals(ctx, a.ID)
+	if len(all) != 2 || all[0].ID != p1.ID || !all[0].Superseded {
+		t.Errorf("proposals = %+v", all)
+	}
+	// The attempt must still be proposed: an approved attempt takes no new proposal.
+	if err := r.Approve(ctx, a.ID, "test", p2.ID, "h2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.AddProposalIfCurrent(ctx, Proposal{AttemptID: a.ID, Summary: "x", Hash: "h3"}, "h2"); !errors.Is(err, ErrBadTransition) {
+		t.Errorf("on an approved attempt: %v, want ErrBadTransition", err)
+	}
+}

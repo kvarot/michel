@@ -604,6 +604,9 @@ func TestProposeComputesDiffAndTestsItself(t *testing.T) {
 			f.t.Errorf("Propose: %v", err)
 		}
 	}
+	// The agent's write is the one Michel's update made: Michel's own tree,
+	// so Michel runs the tests itself.
+	michelsUpdate(t, f)
 	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
 	if err != nil {
 		t.Fatal(err)

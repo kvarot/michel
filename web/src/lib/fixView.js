@@ -175,9 +175,57 @@ export function proposalSentence(facts, lang) {
   if (typeof facts.sites === 'number') {
     parts.push(facts.sites > 0 ? t('fix.proposal.sites', { n: facts.sites }) : t('fix.proposal.no_sites'))
   }
-  const tests = ['passed', 'failed', 'not_run'].includes(facts.tests) ? facts.tests : 'not_run'
-  parts.push(t(`fix.proposal.tests_${tests}`))
+  parts.push(t(`fix.proposal.tests_${testsState(facts.tests)}`))
   return t('fix.proposal.sentence', { head, rest: parts.join(', ') })
+}
+
+/** The tests statuses the page knows; any other reads as not run, never as passed. */
+const testsStates = ['passed', 'failed', 'not_run', 'awaiting']
+
+/**
+ * testsState is the tests status of a proposal as the page shows it: passed,
+ * failed, not_run or awaiting (the agent changed Michel's tree: the tests
+ * wait for the person's click). An unknown value is not_run.
+ * @param {string} s
+ * @returns {'passed'|'failed'|'not_run'|'awaiting'}
+ */
+export function testsState(s) {
+  return testsStates.includes(s) ? s : 'not_run'
+}
+
+/** How many other files (kind code) the proposal names before "and N more". */
+export const maxCodeFilesShown = 10
+
+/**
+ * reviewFilesShown bounds the list of the files the agent changed, as the
+ * API orders it (the list of software, its fixed versions, tests and
+ * settings, then the rest): every file of the first three kinds is named,
+ * then the first maxCodeFilesShown others, and how many more.
+ * @param {{path: string, kind: string}[]|undefined} files
+ * @returns {{shown: {path: string, kind: string}[], more: number}}
+ */
+export function reviewFilesShown(files) {
+  const list = Array.isArray(files) ? files : []
+  const shown = []
+  let code = 0
+  let more = 0
+  for (const f of list) {
+    if (f?.kind !== 'manifest' && f?.kind !== 'lockfile' && f?.kind !== 'tests') {
+      code++
+      if (code > maxCodeFilesShown) {
+        more++
+        continue
+      }
+    }
+    shown.push(f)
+  }
+  return { shown, more }
+}
+
+/** @param {object|null} attempt @returns {boolean} whether « Lancer les tests » may be offered: a proposed attempt whose tests wait and can run. */
+export function canRunTests(attempt) {
+  const p = attempt?.proposal
+  return canApprove(attempt) && p.tests_status === 'awaiting' && p.can_run_tests === true
 }
 
 /** @param {object|null} attempt @returns {boolean} whether Valider may be offered: a proposed attempt with its proposal. */

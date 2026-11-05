@@ -76,6 +76,7 @@ func TestTestsRunOutsideAgentCopy(t *testing.T) {
 			writeFile(t, dir, "vendor/marker.php", "installed\n")
 		}
 	}
+	michelsUpdate(t, f)
 	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +155,7 @@ func TestScratchWorktreeRemoved(t *testing.T) {
 			existed = err == nil
 		}
 	}
+	michelsUpdate(t, f)
 	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
 	if err != nil {
 		t.Fatal(err)

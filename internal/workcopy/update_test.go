@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -311,5 +312,109 @@ func TestRemoveRefusesScratch(t *testing.T) {
 	}
 	if _, err := os.Lstat(run.Dir); err != nil {
 		t.Error("the scratch worktree was removed")
+	}
+}
+
+// TestMaterializeTestsOwnFolders: each run of the tests a person asked for
+// gets a folder of its own, apart from Propose's run folder; none wipes
+// another, and each is accepted for installs and tests.
+func TestMaterializeTestsOwnFolders(t *testing.T) {
+	parallel(t)
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
+	snap, err := Freeze(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, cleanRun, err := Materialize(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanRun()
+	one, cleanOne, err := MaterializeTests(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, cleanTwo, err := MaterializeTests(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Join(f.deps.DataDir, "fix-tmp", filepath.Base(c.Dir))
+	for _, r := range []Copy{one, two} {
+		if filepath.Dir(r.Dir) != parent || !strings.HasPrefix(filepath.Base(r.Dir), "tests-") {
+			t.Errorf("tests folder = %s", r.Dir)
+		}
+		if err := runDir(f.deps, r); err != nil {
+			t.Errorf("%s is not accepted for installs: %v", r.Dir, err)
+		}
+		if b, err := os.ReadFile(filepath.Join(r.Dir, "composer.lock")); err != nil || !strings.Contains(string(b), "1.2.5") {
+			t.Errorf("lockfile = %q %v", b, err)
+		}
+	}
+	if one.Dir == two.Dir || one.Dir == run.Dir {
+		t.Fatalf("shared folders: %s %s %s", one.Dir, two.Dir, run.Dir)
+	}
+	cleanOne()
+	if _, err := os.Lstat(one.Dir); err == nil {
+		t.Error("cleanup left the tests folder")
+	}
+	for _, d := range []string{two.Dir, run.Dir} {
+		if _, err := os.Lstat(filepath.Join(d, "composer.lock")); err != nil {
+			t.Errorf("a cleanup wiped %s", d)
+		}
+	}
+	cleanTwo()
+	if err := runDir(f.deps, Copy{Dir: filepath.Join(parent, "tests-x")}); err == nil {
+		t.Error("a folder that is not a tests folder is accepted")
+	}
+}
+
+// TestMaterializeTestsCleanupKeepsParent: the cleanup of a tests folder
+// leaves the attempt's shared folder fix-tmp/<attempt> in place, so a run
+// starting meanwhile (another process) is never cut from under it.
+func TestMaterializeTestsCleanupKeepsParent(t *testing.T) {
+	parallel(t)
+	f := newFixture(t)
+	c := prepare(t, f)
+	writeFile(t, c.Dir, "composer.lock", `{"packages":[{"name":"acme/lib","version":"1.2.5"}]}`+"\n")
+	snap, err := Freeze(context.Background(), f.deps, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Join(f.deps.DataDir, "fix-tmp", filepath.Base(c.Dir))
+	one, cleanOne, err := MaterializeTests(context.Background(), f.deps, c, snap.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanOne()
+	if _, err := os.Lstat(one.Dir); err == nil {
+		t.Error("the tests folder is left")
+	}
+	if info, err := os.Lstat(parent); err != nil || !info.IsDir() {
+		t.Fatalf("the cleanup removed the shared folder: %v", err)
+	}
+	// One run cleans up while the other starts.
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r, clean, err := MaterializeTests(context.Background(), f.deps, c, snap.Tree)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if _, err := os.Lstat(filepath.Join(r.Dir, "composer.lock")); err != nil {
+				errs <- err
+			}
+			clean()
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("a run failed while another cleaned up: %v", err)
 	}
 }
