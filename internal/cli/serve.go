@@ -124,7 +124,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 		Long: "Serve starts the Today page and its JSON API on a loopback address (127.0.0.1 by default): no other computer " +
 			"can reach it. The first start creates an access token, kept in the data folder like the other secrets; serve " +
 			"prints the page link with the token once, and the page then keeps it. Decisions taken on the page are " +
-			"recorded and audited like 'michel decide' (author web). A project can be added and checked from the page; the check " +
+			"recorded and audited like 'michel decide' (author web). Once a day it watches by itself (see 'michel watch status'). A project can be added and checked from the page; the check " +
 			"is the same pass as 'michel scan'. The project folders are never touched. " +
 			"Ctrl+C stops the server.",
 		Args: cobra.NoArgs,
@@ -185,6 +185,8 @@ func newServeCmd(deps *Deps) *cobra.Command {
 					slog.Warn("serve: cannot queue the findings of a server", "target", targetID)
 				}
 			}
+			// One scanner for the page and the daily watch: one check at a time.
+			scanOne := serveScanProject(cmd, deps)
 			home, _ := userHomeDir()
 			d := api.Deps{Store: deps.Store, Audit: deps.Audit, Policy: deps.Policy(), Secrets: secrets, Now: deps.Now,
 				Version: buildinfo.Version, OSVRoot: dbRoot(cmd, deps), Lang: deps.Lang,
@@ -192,7 +194,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 				PolicyPath:   sd.PolicyPath, Reload: sd.Reload,
 				Sources: api.Sources{Gateway: deps.Gateway, DataDir: dataDir, Rematch: serverRematch(cmd, deps)},
 				Fix:     &fd, FixWorker: true, Servers: api.Servers{Check: cd, Home: home},
-				ScanProject: serveScanProject(cmd, deps)}
+				ScanProject: scanOne}
 			if fsys, ok := web.Dist(); ok {
 				d.Web = fsys
 			}
@@ -239,6 +241,14 @@ func newServeCmd(deps *Deps) *cobra.Command {
 				defer close(digestDone)
 				digestLoop(schedCtx, cmd, deps, digestTick)
 			}()
+			// The daily watch (07:00 by default, an hour before the digest): the
+			// sources are read, then every due project is checked. Stopping serve
+			// stops the check in progress.
+			watchDone := make(chan struct{})
+			go func() {
+				defer close(watchDone)
+				watchLoop(schedCtx, serveWatchDeps(cmd, deps, scanOne), watchTick)
+			}()
 			// Server fixes left running by a process that stopped end
 			// unknown, with an urgent alert, once past their own bound.
 			sweepDone := make(chan struct{})
@@ -266,6 +276,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			<-schedDone
 			<-logDone
 			<-digestDone
+			<-watchDone
 			<-sweepDone
 			// The plugin runs the page started, the fix queue and the agents
 			// are stopped and waited for.

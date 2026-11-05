@@ -237,6 +237,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newMCPCmd(deps))
 	root.AddCommand(newFixCmd(deps))
 	root.AddCommand(newTargetCmd(deps))
+	root.AddCommand(newWatchCmd(deps))
 	return root
 }
 

@@ -49,6 +49,8 @@ var dynamicPrefixes = []string{
 	// api.logs.* are named by the refusals of the log routes (logRefused: the key
 	// and its _hint), by the sentences of a note, of a proposal and of a risk.
 	"api.logs.",
+	// cli.watch.scan_status.* are named by the status of a scan (michel watch status).
+	"cli.watch.scan_status.",
 }
 
 // family says how a call names a catalog key: the prefix added to the

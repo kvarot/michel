@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,7 +56,12 @@ func newSourceUpdateCmd(deps *Deps) *cobra.Command {
 // unknown key is refused before anything is read. The error is
 // sourceupdate.ErrSomeFailed when a source could not be read.
 func sourceUpdate(cmd *cobra.Command, deps *Deps, keys []string, kind source.Kind) (sourceupdate.Report, error) {
-	ctx := cmd.Context()
+	return sourceUpdateIn(cmd.Context(), cmd, deps, keys, kind)
+}
+
+// sourceUpdateIn is sourceUpdate under ctx (the daily watch of serve stops
+// with serve).
+func sourceUpdateIn(ctx context.Context, cmd *cobra.Command, deps *Deps, keys []string, kind source.Kind) (sourceupdate.Report, error) {
 	repo := source.NewRepo(deps.Store)
 	for _, k := range keys {
 		if _, err := repo.Get(ctx, k); err != nil {

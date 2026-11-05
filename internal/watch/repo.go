@@ -2,6 +2,8 @@ package watch
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,6 +40,25 @@ func (r *Repo) LastStarts(ctx context.Context) (map[string]time.Time, error) {
 		out[id] = t
 	}
 	return out, rows.Err()
+}
+
+// LastScan is the newest scan of the project: its start and status, has
+// false when it was never scanned.
+func (r *Repo) LastScan(ctx context.Context, projectID string) (at time.Time, status string, has bool, err error) {
+	var started string
+	err = r.s.DB().QueryRowContext(ctx, `SELECT started_at, status FROM scan WHERE project_id = ?
+		ORDER BY started_at DESC, id DESC LIMIT 1`, projectID).Scan(&started, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, "", false, nil
+	}
+	if err != nil {
+		return time.Time{}, "", false, fmt.Errorf("cannot read the last check: %w", err)
+	}
+	at, err = time.Parse(time.RFC3339, started)
+	if err != nil {
+		return time.Time{}, "", false, fmt.Errorf("a check has an unreadable start %q: %w", started, err)
+	}
+	return at, status, true, nil
 }
 
 // ClaimSources records that the watch of the local day (YYYY-MM-DD) reads
