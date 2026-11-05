@@ -13,6 +13,7 @@ michel brief <faille>             # la fiche de correction (trouver, comprendre,
 michel fix consent <projet> --yes # l'accord IA du projet (aussi demandé sur la page)
 michel fix prepare <faille>       # lance une tentative et la suit
 michel fix status [<tentative>]   # les tentatives, ou une tentative avec sa proposition et la conversation
+michel fix test <tentative> --yes # lance les tests d'une proposition qui attend ton accord
 michel fix approve <tentative>    # valide la proposition affichée par status et crée la branche
 michel fix refuse <tentative>     # refuse ; la faille revient dans tes décisions
 michel fix clean                  # supprime les copies des tentatives terminées
@@ -140,8 +141,19 @@ Le résultat est le premier message de Michel dans la conversation. Ce que cette
 Quand l'agent propose sa correction (`propose_fix`), Michel prend une fois pour toutes un instantané de la copie : ce que l'agent écrit après est ignoré. Michel reconstruit cet instantané dans un dossier séparé (`<data>/fix-tmp/<tentative>/`, jamais dans la copie de l'agent), puis il :
 
 1. installe les dépendances (`composer install --no-scripts --no-plugins` ou `npm ci --ignore-scripts`), en repartant de zéro ;
-2. lance les tests du projet, si tu as indiqué une commande (`michel project set <nom> --test-cmd "vendor/bin/phpunit"`, découpée en mots sans passer par un shell) ;
+2. lance les tests du projet, si tu as indiqué une commande (`michel project set <nom> --test-cmd "vendor/bin/phpunit"`, découpée en mots sans passer par un shell), **seulement si l'instantané est exactement celui que la mise à jour de Michel a laissé** (l'agent n'a rien changé d'autre) ;
 3. scanne à nouveau le résultat.
+
+### Les tests sur la modification de l'agent attendent ton clic
+
+Dès que l'instantané diffère de ce que la mise à jour de Michel a laissé (l'agent a touché un fichier, quel qu'il soit : un test, `phpunit.xml`, `package.json`, et aussi le manifeste et le fichier qui fixe les versions), lancer les tests ferait tourner du code écrit par l'agent, sur ton ordinateur, avec tes droits. Michel installe quand même (aucun script ne tourne) et scanne à nouveau (il ne fait que lire des fichiers), mais il **ne lance pas les tests** : les tests de la proposition sont en `awaiting` (« en attente de ton accord »). Un changement limité au manifeste ou au fichier des versions compte aussi : un logiciel que l'agent y aurait ajouté chargerait son code pendant les tests. Le message de Michel et la page listent les fichiers modifiés qui ne sont ni le manifeste ni le fichier des versions (10 au plus, puis « et N autres ») : ce sont eux qui feraient tourner du code nouveau.
+
+Tu lis la modification, puis :
+
+- tu cliques sur **Lancer les tests** dans la proposition (ou `michel fix test <tentative>` : sans `--yes`, la commande liste les fichiers et ne lance rien ; avec `--yes`, elle lance les tests de la proposition que `michel fix status` a affichée en dernier, ou celle de `--hash`). Le clic porte l'empreinte de la proposition affichée, comme **Valider** : si l'agent a proposé autre chose entre-temps, rien ne tourne (erreur 409). Michel reconstruit les fichiers de la proposition dans un dossier à part, rien que pour ce lancement (`<data>/fix-tmp/<tentative>/tests-<aléatoire>`), installe, lance les tests, puis enregistre une **nouvelle proposition** avec la même modification, le même commit, le même nouveau scan et le résultat des tests. Son empreinte change : un **Valider** envoyé sur l'ancienne est refusé, tu valides en connaissant le résultat. Si l'agent a proposé à nouveau pendant les tests, le résultat est laissé de côté et rien n'est remplacé. Des tests lancés sur clic ne se relancent pas : l'agent peut proposer à nouveau. Chaque clic est noté dans le journal d'audit (`fix.tests_run` : tentative, proposition, empreinte, auteur, résultat, nombre de fichiers de code) ;
+- ou tu **valides** sans les lancer, comme pour une proposition dont les tests n'ont pas tourné : la page dit que les tests n'ont pas tourné.
+
+L'agent ne peut pas lancer les tests : aucun outil de `michel mcp` ne le fait, et il voit seulement l'état `awaiting`. Le niveau 3 ne change pas : il exige déjà l'arbre de Michel. Une proposition faite avant cette règle ne garde pas de copie de ses fichiers : elle n'offre pas le bouton.
 
 Michel n'installe qu'avec **Composer et npm**. Un projet yarn ou pnpm est lu et peut être corrigé, mais Michel ne lance ni yarn ni pnpm : la proposition arrive **sans installation ni tests**, et la page le dit.
 
@@ -149,7 +161,7 @@ Avant d'installer quoi que ce soit, Michel vérifie les réglages de ton projet.
 
 ## La proposition et la validation par empreinte
 
-Une proposition ne change plus une fois faite. Elle contient : un résumé en clair, les modifications (le « diff ») **calculées par Michel** à partir de l'instantané (pas recopiées de l'agent), les fichiers touchés, les commandes lancées par Michel, le résultat des tests (`passed` réussis, `failed` échoués, `not_run` pas lancés), le nouveau scan de la copie (une faille trouvée par un outil externe (Semgrep, Trivy…) ne peut pas être scannée à nouveau sur la copie : la page dit que Michel n'a pas pu la contrôler), le risque, et une empreinte de l'ensemble (SHA-256 : un code qui change dès que le moindre détail du contenu change). Si l'agent continue et propose à nouveau, la nouvelle proposition remplace l'ancienne (`superseded`) et la page l'affiche.
+Une proposition ne change plus une fois faite. Elle contient : un résumé en clair, les modifications (le « diff ») **calculées par Michel** à partir de l'instantané (pas recopiées de l'agent), les fichiers touchés, les commandes lancées par Michel, le résultat des tests (`passed` réussis, `failed` échoués, `not_run` pas lancés, `awaiting` en attente de ton accord), le nouveau scan de la copie (une faille trouvée par un outil externe (Semgrep, Trivy…) ne peut pas être scannée à nouveau sur la copie : la page dit que Michel n'a pas pu la contrôler), le risque, et une empreinte de l'ensemble (SHA-256 : un code qui change dès que le moindre détail du contenu change). Si l'agent continue et propose à nouveau, la nouvelle proposition remplace l'ancienne (`superseded`) et la page l'affiche.
 
 Michel refuse une modification qui touche un fichier hors de la copie (`..`, chemin complet, lien), un fichier protégé ou un fichier exclu : la tentative passe `failed`, la cause est dite en clair, rien n'est appliqué.
 
@@ -222,7 +234,7 @@ Une faille de **serveur** (un réglage de PHP, un paquet) a sa propre correction
 
 ## Risques qui restent
 
-- **L'installation et les tests tournent avec tes droits, sans bac à sable.** `composer`/`npm` et tes tests tournent sur la copie en ton nom, sur ton ordinateur ; quand l'agent a modifié du code, les tests exécutent ce code. Michel verrouille ce qu'il peut (pas de scripts d'installation, pas de plugins, listes de réglages autorisés, dossiers remis à zéro avant chaque installation, dossier séparé, dossier personnel propre à Michel, le proxy), mais ce n'est pas un environnement isolé : un projet ou une modification malveillante pourrait atteindre ce que toi tu peux atteindre. Un environnement isolé (Docker) est prévu dans un plan suivant.
+- **L'installation et les tests tournent avec tes droits, sans bac à sable.** `composer`/`npm` et tes tests tournent sur la copie en ton nom, sur ton ordinateur ; quand l'agent a modifié du code, les tests exécutent ce code, mais seulement après ton clic (**Lancer les tests**, `michel fix test`). Michel verrouille ce qu'il peut (pas de scripts d'installation, pas de plugins, listes de réglages autorisés, dossiers remis à zéro avant chaque installation, dossier séparé, dossier personnel propre à Michel, le proxy), mais ce n'est pas un environnement isolé : un projet ou une modification malveillante pourrait atteindre ce que toi tu peux atteindre. Un environnement isolé (Docker) est prévu dans un plan suivant.
 - **Un programme qui ignore le proxy.** Claude Code, git, composer, npm et les tests reçoivent `HTTPS_PROXY`/`HTTP_PROXY` vers le proxy d'autorisation de Michel. Mais un programme peut ignorer ce proxy et ouvrir ses propres connexions : Michel ne l'arrêterait pas et ne le noterait pas. Le proxy est un garde-fou, pas une garantie.
 - **Claude Code évolue.** Michel s'appuie sur des options de Claude Code pour garder l'agent à l'écart de tes réglages. Il refuse les versions qui n'ont pas ces options, mais ne peut pas garantir qu'une future version les respectera de la même façon. Claude Code lit toujours sa connexion dans ton dossier utilisateur (ton profil).
   - Options utilisées (testées avec la version 2.1.314) : `--setting-sources ""`, `--strict-mcp-config`, `--restricted`, `--tools`, les règles de permission, et les variables qui coupent `CLAUDE.md`, la mémoire et le trafic non essentiel.
@@ -244,6 +256,7 @@ Une faille de **serveur** (un réglage de PHP, un paquet) a sa propre correction
 | « Ce projet n'est pas suivi par git » / « pas encore de commit » | Michel copie avec git : le dossier ajouté doit être le dossier principal d'un dépôt, avec un premier commit. Le contrôle et la fiche restent disponibles. |
 | « Ton projet est trop gros » | Exclus les gros dossiers (`--exclude`), ou corrige à la main depuis la fiche. |
 | « …feraient lancer des programmes du projet lui-même » | Un réglage de ton projet (npm, Composer) demanderait d'exécuter du code pendant l'installation ; Michel ne l'accepte pas, donc rien n'a tourné. Corrige à la main ou retire ce réglage. |
+| « Tests : en attente de ton accord » | L'agent a changé plus que la mise à jour de Michel. Lis la modification, puis **Lancer les tests** (ou `michel fix test <tentative> --yes`), ou valide sans les lancer. |
 | « Tests : pas lancés », aucune commande de test | Indique-la : `michel project set <nom> --test-cmd "…"`. |
 | « Tests : pas lancés », projet yarn ou pnpm | Michel n'installe pas avec yarn ni pnpm : vérifie toi-même que ton site marche avant de fusionner. |
 | « Tests : pas lancés », installation refusée | La page dit quel réglage bloque : retire-le, ou vérifie toi-même que ton site marche avant de fusionner. |
