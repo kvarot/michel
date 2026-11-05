@@ -13,8 +13,8 @@ func TestRuleRoot(t *testing.T) {
 	cases := []tc{{"relative/data", "", false}}
 	if runtime.GOOS == "windows" {
 		cases = append(cases,
-			tc{`C:\Users\demo\michel`, "//c/Users/demo/michel", true},
-			tc{`\\?\D:\data\michel`, "//d/data/michel", true},
+			tc{`C:\Work\michel`, "//c/Work/michel", true},
+			tc{`\\?\E:\srv\michel`, "//e/srv/michel", true},
 			tc{`\\server\share\michel`, "", false},
 			tc{`\\?\UNC\server\share\michel`, "", false})
 	} else {
