@@ -31,16 +31,38 @@
           <p class="m-prop__summary"><MaskedText :text="p.summary" /></p>
         </div>
         <p class="m-small">{{ $t(rescanText) }}</p>
-        <p v-if="p.tests_status === 'not_run'" class="m-prop__warn m-small">{{ $t('fix.proposal.tests_not_run_hint') }}</p>
-        <p v-else-if="p.tests_status === 'failed'" class="m-prop__warn m-small">{{ $t('fix.proposal.tests_failed_hint') }}</p>
+        <p v-if="testsKey === 'not_run'" class="m-prop__warn m-small">{{ $t('fix.proposal.tests_not_run_hint') }}</p>
+        <p v-else-if="testsKey === 'failed'" class="m-prop__warn m-small">{{ $t('fix.proposal.tests_failed_hint') }}</p>
+        <div v-else-if="testsKey === 'awaiting'" class="m-prop__warn m-small m-prop__await">
+          <p>{{ $t('fix.proposal.tests_awaiting_hint') }}</p>
+          <template v-if="codeFiles.shown.length">
+            <p>{{ $t('fix.proposal.code_files') }}</p>
+            <ul class="m-prop__files">
+              <li v-for="f in codeFiles.shown" :key="f" class="m-code">{{ f }}</li>
+            </ul>
+            <p v-if="codeFiles.more">{{ $t('fix.proposal.code_files_more', { n: codeFiles.more }) }}</p>
+          </template>
+          <p v-else>{{ $t('fix.proposal.code_files_deps') }}</p>
+          <v-btn variant="text" size="small" class="m-prop__see" @click="openChange">{{ $t('fix.proposal.read_change') }}</v-btn>
+        </div>
         <p v-if="p.risk > 0" class="m-muted m-small">{{ $t('fix.proposal.risk', { risk: p.risk }) }}</p>
 
         <template v-if="approvable">
           <div class="m-prop__actions">
-            <v-btn color="primary" variant="flat" :loading="approving" :disabled="approving || refusing" @click="$emit('approve')">
+            <v-btn
+              v-if="testsRunnable"
+              color="primary"
+              variant="outlined"
+              :loading="runningTests"
+              :disabled="busy"
+              @click="$emit('run-tests', p.hash)"
+            >
+              {{ $t('fix.proposal.run_tests') }}
+            </v-btn>
+            <v-btn color="primary" variant="flat" :loading="approving" :disabled="busy" @click="$emit('approve')">
               {{ $t('fix.proposal.approve') }}
             </v-btn>
-            <v-btn variant="outlined" :loading="refusing" :disabled="approving || refusing" @click="refuseOpen = true">
+            <v-btn variant="outlined" :loading="refusing" :disabled="busy" @click="refuseOpen = true">
               {{ $t('fix.proposal.refuse') }}
             </v-btn>
           </div>
@@ -50,13 +72,20 @@
             <v-progress-circular indeterminate size="16" width="2" color="primary" />
             {{ $t('fix.proposal.approving') }}
           </p>
-          <p v-else class="m-muted m-small">{{ $t('fix.proposal.approve_hint') }}</p>
+          <p v-else-if="runningTests" class="m-voice m-prop__busy" role="status">
+            <v-progress-circular indeterminate size="16" width="2" color="primary" />
+            {{ $t('fix.proposal.running_tests') }}
+          </p>
+          <template v-else>
+            <p v-if="testsKey === 'awaiting'" class="m-muted m-small">{{ $t('fix.proposal.approve_untested') }}</p>
+            <p class="m-muted m-small">{{ $t('fix.proposal.approve_hint') }}</p>
+          </template>
         </template>
 
         <v-btn v-if="!$ui.advanced && !showChange" variant="text" size="small" class="m-prop__see" @click="showChange = true">
           {{ $t('fix.proposal.see_change') }}
         </v-btn>
-        <details v-if="$ui.advanced || showChange" class="m-prop__detail" :open="showChange || undefined">
+        <details v-if="$ui.advanced || showChange" ref="detail" class="m-prop__detail" :open="showChange || undefined">
           <summary>{{ $t('fix.proposal.detail') }}</summary>
           <h3 class="m-prop__label">{{ $t('fix.proposal.files') }}</h3>
           <ul class="m-prop__files">
@@ -69,7 +98,7 @@
           <h3 class="m-prop__label">{{ $t('fix.proposal.tests') }}</h3>
           <p class="m-small">{{ $t(`fix.proposal.tests_${testsKey}`) }}</p>
           <pre v-if="p.tests_output" class="m-code m-prop__pre"><MaskedText :text="p.tests_output" /></pre>
-          <p v-else-if="p.tests_status !== 'not_run'" class="m-muted m-small">{{ $t('fix.proposal.tests_output_none') }}</p>
+          <p v-else-if="testsKey === 'passed' || testsKey === 'failed'" class="m-muted m-small">{{ $t('fix.proposal.tests_output_none') }}</p>
           <template v-if="$ui.advanced && commands.length">
             <h3 class="m-prop__label">{{ $t('fix.proposal.commands') }}</h3>
             <ul class="m-prop__files">
@@ -120,7 +149,7 @@
 import FieldHelp from './FieldHelp.vue'
 import MaskedText from './MaskedText.vue'
 import { severityOf } from '../lib/digestView.js'
-import { canApprove, proposalFacts, proposalSentence } from '../lib/fixView.js'
+import { canApprove, canRunTests, codeFilesShown, proposalFacts, proposalSentence, testsState } from '../lib/fixView.js'
 import { plainSentence } from '../lib/modeView.js'
 import { cameBack, rescanKey } from '../lib/pathView.js'
 
@@ -139,10 +168,13 @@ export default {
     sheetLoading: { type: Boolean, default: false },
     approving: { type: Boolean, default: false },
     refusing: { type: Boolean, default: false },
+    // runningTests: the tests the person asked for are running.
+    runningTests: { type: Boolean, default: false },
     // updated says the agent replaced the proposal since it was first shown.
     updated: { type: Boolean, default: false },
   },
-  emits: ['approve', 'refuse'],
+  // run-tests carries the hash of the proposal shown.
+  emits: ['approve', 'refuse', 'run-tests'],
   data() {
     // showChange opens the diff and the test output in the simple mode.
     return { refuseOpen: false, reason: '', showChange: false }
@@ -175,8 +207,17 @@ export default {
       return canApprove(this.attempt)
     },
     testsKey() {
-      const s = this.p?.tests_status
-      return ['passed', 'failed', 'not_run'].includes(s) ? s : 'not_run'
+      return testsState(this.p?.tests_status)
+    },
+    testsRunnable() {
+      return canRunTests(this.attempt)
+    },
+    // codeFiles: the code files the agent changed, 10 at most, and how many more.
+    codeFiles() {
+      return codeFilesShown(this.p?.code_files)
+    },
+    busy() {
+      return this.approving || this.refusing || this.runningTests
     },
     // commands: what Michel ran for the proposal (update, install, tests).
     commands() {
@@ -219,6 +260,16 @@ export default {
     strip(text) {
       return plainSentence(text, this.sheet)
     },
+    // openChange shows the change the tests would run, folded below.
+    openChange() {
+      this.showChange = true
+      this.$nextTick(() => {
+        const d = this.$refs.detail
+        if (!d) return
+        d.open = true
+        if (typeof d.scrollIntoView === 'function') d.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      })
+    },
     refuse() {
       this.refuseOpen = false
       this.$emit('refuse', this.reason.trim())
@@ -242,6 +293,7 @@ export default {
 .m-prop__summary { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .m-prop__note { padding: 0.4rem 0.7rem; border-radius: 8px; background: rgba(var(--v-theme-info), 0.12); }
 .m-prop__warn { padding: 0.4rem 0.7rem; border-radius: 8px; background: rgba(var(--v-theme-warning), 0.12); }
+.m-prop__await { display: grid; gap: 0.35rem; }
 .m-prop__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.25rem; }
 .m-prop__busy { display: flex; align-items: center; gap: 0.5rem; }
 .m-prop__detail summary { cursor: pointer; font-size: 0.9rem; font-weight: 600; color: rgb(var(--v-theme-primary)); padding: 0.25rem 0; }

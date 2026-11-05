@@ -176,9 +176,11 @@
           :sheet-loading="sheetLoading"
           :approving="approving"
           :refusing="refusing"
+          :running-tests="runningTests"
           :updated="proposalUpdated"
           @approve="approve"
           @refuse="refuse"
+          @run-tests="runTests"
         />
       </div>
     </div>
@@ -256,6 +258,8 @@ export default {
       focusGuide: false,
       approving: false,
       refusing: false,
+      // runningTests: the tests the person asked for run now.
+      runningTests: false,
       // holdBusy is the answer to a held attempt running: withdraw, continue, or ''.
       holdBusy: '',
       // acting is the server fix action running: snapshot, applied, handover, resolve, again.
@@ -736,7 +740,8 @@ export default {
           this.activity = activityLine(d, this.lang)
           break
         case 'proposal':
-          if (this.shownHash && d.hash !== this.shownHash) this.proposalUpdated = true
+          // A run of the tests the person asked for brings its own new proposal: not the agent's.
+          if (this.shownHash && d.hash !== this.shownHash && !this.runningTests) this.proposalUpdated = true
           this.current = { ...this.current, proposal: d }
           this.shownHash = d.hash || ''
           break
@@ -868,6 +873,36 @@ export default {
       } finally {
         this.approving = false
         this.guardFocus()
+      }
+    },
+    /**
+     * runTests runs the tests of the proposal on screen (its hash), on the
+     * person's click: the answer is the attempt with a new proposal holding
+     * the result. When the proposal changed meanwhile (409), nothing replaced
+     * it: the attempt is read again and the page says the proposal changed.
+     */
+    async runTests() {
+      if (!this.current || !this.shownHash || this.runningTests || this.approving) return
+      const id = this.current.id
+      this.runningTests = true
+      this.actionError = null
+      try {
+        const v = await api.post(this.q(`/fix/${encodeURIComponent(id)}/run-tests`), { hash: this.shownHash })
+        if (!this.alive || this.current?.id !== id) return
+        // The new proposal is the clicked one with its result: not « replaced by the agent ».
+        this.show(v)
+        this.proposalUpdated = false
+      } catch (err) {
+        if (err?.status === 401) return
+        this.actionError = err
+        if (this.alive && err?.status === 409) {
+          await this.openAttempt(id)
+          if (!this.alive) return
+          this.actionError = err
+          if (err?.data?.code === 'fix.err.stale_proposal') this.proposalUpdated = true
+        }
+      } finally {
+        this.runningTests = false
       }
     },
     /**

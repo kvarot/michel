@@ -175,9 +175,42 @@ export function proposalSentence(facts, lang) {
   if (typeof facts.sites === 'number') {
     parts.push(facts.sites > 0 ? t('fix.proposal.sites', { n: facts.sites }) : t('fix.proposal.no_sites'))
   }
-  const tests = ['passed', 'failed', 'not_run'].includes(facts.tests) ? facts.tests : 'not_run'
-  parts.push(t(`fix.proposal.tests_${tests}`))
+  parts.push(t(`fix.proposal.tests_${testsState(facts.tests)}`))
   return t('fix.proposal.sentence', { head, rest: parts.join(', ') })
+}
+
+/** The tests statuses the page knows; any other reads as not run, never as passed. */
+const testsStates = ['passed', 'failed', 'not_run', 'awaiting']
+
+/**
+ * testsState is the tests status of a proposal as the page shows it: passed,
+ * failed, not_run or awaiting (the agent changed Michel's tree: the tests
+ * wait for the person's click). An unknown value is not_run.
+ * @param {string} s
+ * @returns {'passed'|'failed'|'not_run'|'awaiting'}
+ */
+export function testsState(s) {
+  return testsStates.includes(s) ? s : 'not_run'
+}
+
+/** How many code files the proposal names before "and N more". */
+export const maxCodeFilesShown = 10
+
+/**
+ * codeFilesShown bounds the list of the code files the agent changed:
+ * the first maxCodeFilesShown, and how many more.
+ * @param {string[]|undefined} files
+ * @returns {{shown: string[], more: number}}
+ */
+export function codeFilesShown(files) {
+  const list = Array.isArray(files) ? files : []
+  return { shown: list.slice(0, maxCodeFilesShown), more: Math.max(0, list.length - maxCodeFilesShown) }
+}
+
+/** @param {object|null} attempt @returns {boolean} whether « Lancer les tests » may be offered: a proposed attempt whose tests wait and can run. */
+export function canRunTests(attempt) {
+  const p = attempt?.proposal
+  return canApprove(attempt) && p.tests_status === 'awaiting' && p.can_run_tests === true
 }
 
 /** @param {object|null} attempt @returns {boolean} whether Valider may be offered: a proposed attempt with its proposal. */
