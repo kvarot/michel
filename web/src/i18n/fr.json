@@ -1543,5 +1543,8 @@
   "findings.unread": "Michel n'a pas pu lire la liste de tes projets.",
   "findings.partial.one": "La liste de {names} n'a pas pu être lue : ses failles manquent ici.",
   "findings.partial.other": "Les listes de {names} n'ont pas pu être lues : leurs failles manquent ici.",
-  "findings.scroll": "Le tableau défile de côté."
+  "findings.scroll": "Le tableau défile de côté.",
+  "overview.todo_title": "À faire",
+  "overview.weeks.col_week": "Semaine",
+  "overview.reading": "Michel lit les listes de tes projets…"
 }

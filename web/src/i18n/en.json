@@ -1543,5 +1543,8 @@
   "findings.unread": "Michel could not read the list of your projects.",
   "findings.partial.one": "The list of {names} could not be read: its flaws are missing here.",
   "findings.partial.other": "The lists of {names} could not be read: their flaws are missing here.",
-  "findings.scroll": "The table scrolls sideways."
+  "findings.scroll": "The table scrolls sideways.",
+  "overview.todo_title": "To do",
+  "overview.weeks.col_week": "Week",
+  "overview.reading": "Michel is reading the lists of your projects…"
 }

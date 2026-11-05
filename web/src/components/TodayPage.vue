@@ -27,6 +27,19 @@
         {{ $t('today.failed_scans', { n: digest.failed_scans }) }}
       </v-alert>
 
+      <OverviewPanel
+        v-if="!nothingWatched"
+        :digest="readDigest"
+        :attempts="attempts"
+        :projects="projectViews"
+        :servers="servers"
+        :runs="runs"
+        :lists="allLists"
+        :lists-state="listsState"
+        :now="now"
+      />
+
+      <h2 v-if="todo.lines.length && !nothingWatched" class="m-todo__list-title">{{ $t('overview.todo_title') }}</h2>
       <ul v-if="todo.lines.length" class="m-panel m-todo__list" :aria-label="$t('todo.list')">
         <li v-for="line in todo.lines" :key="line.id" class="m-todo__row">
           <span class="m-small m-todo__word" :class="`m-tag--${line.tone}`">{{ line.word }}</span>
@@ -78,9 +91,11 @@
 import ExploitedBanner from './ExploitedBanner.vue'
 import FirstSteps from './FirstSteps.vue'
 import OsvBanner from './OsvBanner.vue'
+import OverviewPanel from './OverviewPanel.vue'
 import ReadingList from './ReadingList.vue'
 import { api } from '../api.js'
 import { dismissGuide, emptyInstall, guideFlaw, guideGitQuestion, guideSteps, guideUnseen, guideVisible, guideWaiting, helpLostNow } from '../lib/guideView.js'
+import { readAllFindings } from '../lib/findingsView.js'
 import { save } from '../lib/storage.js'
 import { buildTodo, projectsToRead, serversToRead, unseenBelow } from '../lib/todoView.js'
 
@@ -89,7 +104,7 @@ const waitEvery = 5000
 
 export default {
   name: 'TodayPage',
-  components: { ExploitedBanner, FirstSteps, OsvBanner, ReadingList },
+  components: { ExploitedBanner, FirstSteps, OsvBanner, OverviewPanel, ReadingList },
   props: {
     digest: { type: Object, required: true },
     meta: { type: Object, default: null },
@@ -115,6 +130,12 @@ export default {
       timer: null,
       details: {},
       findings: {},
+      // runs is GET /digests?last=100, null when it could not be read: the weekly chart.
+      runs: null,
+      // allLists holds the findings of every project (null for a list not read);
+      // listsState is reading, read, or unread when the projects could not be read.
+      allLists: {},
+      listsState: 'reading',
       now: new Date(),
       // seq drops the answers of a reading that a newer one replaced.
       seq: 0,
@@ -193,7 +214,7 @@ export default {
       const lang = `lang=${encodeURIComponent(this.$ui.lang)}`
       const read = (path) => api.get(path).then((r) => r || []).catch(() => null)
       const digest = this.digest
-      const [attempts, servers, projectViews] = await Promise.all([read(`/fixes?${lang}`), read(`/targets?${lang}`), read(`/projects?${lang}`)])
+      const [attempts, servers, projectViews, runs] = await Promise.all([read(`/fixes?${lang}`), read(`/targets?${lang}`), read(`/projects?${lang}`), read('/digests?last=100')])
       if (seq !== this.seq) return
       const wanted = serversToRead(servers)
       const toRead = projectsToRead(digest, attempts)
@@ -216,8 +237,15 @@ export default {
       this.projectViews = projectViews
       this.details = details
       this.findings = findings
+      this.runs = runs
       this.now = new Date()
       this.loaded = true
+      // The overview counts every open flaw: the lists not read yet come after the to-do list.
+      readAllFindings(read, this.$ui.lang, { projects: projectViews, known: findings }).then((all) => {
+        if (seq !== this.seq) return
+        this.allLists = all.lists
+        this.listsState = all.projects ? 'read' : 'unread'
+      })
       // A check that runs ends without a click: ask the digest again, which reads the rest.
       if (this.guideShown && guideWaiting(projectViews, servers)) this.timer = setTimeout(() => this.$emit('decided'), waitEvery)
     },
@@ -235,15 +263,17 @@ export default {
 <style scoped>
 .m-todo__loading { display: grid; gap: 0.9rem; justify-items: start; }
 .m-todo__loading p { margin: 0; }
-.m-todo__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem 1rem; padding-bottom: 1.25rem; }
+.m-todo__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem 1rem; padding-bottom: 1rem; }
+.m-todo__head h1 { margin: 0; }
 .m-todo__say { min-width: 0; }
 .m-todo__sub { margin: 0.5rem 0 0; }
 .m-todo__refresh { flex: none; margin-right: -0.5rem; }
 .m-block { margin-bottom: 1.25rem; }
 .m-todo__notice { margin: 0 0 1.25rem; outline: none; }
 .m-todo__empty-action { margin-bottom: 1.25rem; }
+.m-todo__list-title { font-size: 1.05rem; font-weight: 700; margin: 0 0 0.5rem; }
 .m-todo__list { list-style: none; margin: 0; padding: 0; }
-.m-todo__row { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0.9rem; }
+.m-todo__row { display: flex; align-items: center; gap: 0.75rem; padding: 0.65rem 0.9rem; }
 .m-todo__row + .m-todo__row { border-top: 1px solid var(--m-line); }
 .m-todo__word { flex: none; min-width: 5.75rem; justify-content: center; }
 .m-todo__text { flex: 1 1 auto; min-width: 0; }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   ageCounts, ageOf, allListed, barHeight, openBySeverity, parkSummary, proposedCount, provenFixedCount,
-  severityShares, signalCounts, weekKey, weekStart, weeklyChanges, weeklyMax,
+  longDay, severityShares, shortDay, signalCounts, weekKey, weekStart, weeklyChanges, weeklyMax,
 } from './overviewView.js'
 
 // The weeks are the person's: the tests run on a clock with a summer time.
@@ -195,5 +195,15 @@ describe('signals', () => {
   test('allListed keeps only the lists that were read', () => {
     expect(allListed({ shop: [{ id: '1' }], blog: null, demo: [] })).toEqual([{ id: '1' }])
     expect(allListed(null)).toEqual([])
+  })
+})
+
+describe('days of the axis', () => {
+  test('shortDay and longDay follow the language', () => {
+    const d = new Date(2026, 10, 2)
+    expect(shortDay(d, 'fr')).toBe('02/11')
+    expect(shortDay(d, 'en')).toBe('11-02')
+    expect(longDay(d, 'fr')).toBe('02/11/2026')
+    expect(longDay(d, 'en')).toBe('2026-11-02')
   })
 })

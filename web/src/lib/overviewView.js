@@ -265,3 +265,25 @@ export function barHeight(n, max, full) {
 export function weeklyMax(weeks) {
   return Math.max(0, ...(weeks || []).flatMap((w) => [w.fresh || 0, w.gone || 0]))
 }
+
+/**
+ * shortDay names a local day for the axis of a chart: 02/11 in French,
+ * 11-02 in English.
+ * @param {Date} d
+ * @param {string} lang
+ */
+export function shortDay(d, lang) {
+  const day = String(d.getDate()).padStart(2, '0')
+  const mo = String(d.getMonth() + 1).padStart(2, '0')
+  return lang === 'fr' ? `${day}/${mo}` : `${mo}-${day}`
+}
+
+/**
+ * longDay names a local day in full: 02/11/2026 in French, 2026-11-02 in English.
+ * @param {Date} d
+ * @param {string} lang
+ */
+export function longDay(d, lang) {
+  const y = String(d.getFullYear()).padStart(4, '0')
+  return lang === 'fr' ? `${shortDay(d, lang)}/${y}` : `${y}-${shortDay(d, lang)}`
+}
