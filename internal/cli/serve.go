@@ -96,6 +96,10 @@ func serveScanProject(cmd *cobra.Command, deps *Deps) func(ctx context.Context, 
 			return err
 		}
 		r, _, err := scanOneProject(ctx, cmd, deps, p, true)
+		if errors.Is(err, scan.ErrScanRunning) {
+			fmt.Fprintln(deps.Stderr, deps.T("cli.scan.error_line", p.Name, deps.T("cli.scan.already_running", p.Name)))
+			return err
+		}
 		if err != nil {
 			// The page only says it failed: the reason may name files.
 			fmt.Fprintln(deps.Stderr, deps.T("cli.scan.error_line", p.Name, err))

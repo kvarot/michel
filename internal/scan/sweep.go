@@ -3,6 +3,7 @@ package scan
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -18,6 +19,15 @@ const ScanInterrupted = "interrupted"
 // treats it as interrupted. A real scan takes minutes; an hour leaves room
 // for two processes scanning at the same time.
 const StaleScanAfter = time.Hour
+
+// ErrScanRunning means another scan of the same project is running (in this
+// process or another one) and started less than StaleScanAfter ago: a
+// project is scanned by one process at a time.
+var ErrScanRunning = errors.New("a scan of this project is already running")
+
+// errMarkedElsewhere means another process marked this scan interrupted
+// (SweepStale) while it ran: its end is not stored over that status.
+var errMarkedElsewhere = errors.New("the scan was marked interrupted by another Michel")
 
 // interruptedError is the stored (English) error of an interrupted scan; the
 // display translates it from the status.

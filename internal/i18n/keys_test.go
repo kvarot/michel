@@ -37,7 +37,7 @@ var dynamicPrefixes = []string{
 	// The other api.project.* are named literally.
 	"api.project.bad_name", "api.project.duplicate", "api.project.forbidden_path", "api.project.no_database",
 	"api.project.not_dir", "api.project.nothing_to_scan", "api.project.relative_path", "api.project.scan_failed",
-	"api.project.scan_running", "api.project.scan_unavailable",
+	"api.project.scan_running", "api.project.scan_unavailable", "api.project.scan_elsewhere",
 	// api.target.* are named by the refusals of the server routes (servererr.Key),
 	// their hints (the key and _hint) and the state of a server.
 	"api.target.",

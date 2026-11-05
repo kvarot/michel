@@ -453,6 +453,8 @@ func codeOfScan(err error) string {
 		return "api.project.no_database"
 	case errors.Is(err, ErrNothingToScan):
 		return "api.project.nothing_to_scan"
+	case errors.Is(err, scan.ErrScanRunning):
+		return "api.project.scan_elsewhere"
 	}
 	return "api.project.scan_failed"
 }
