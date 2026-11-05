@@ -783,7 +783,7 @@ func (s *server) targetState(lang i18n.Lang, t target.Target, v TargetView, run 
 // targetHistory lists the last checks from the audit log: the counts of
 // each, nothing else.
 func (s *server) targetHistory(ctx context.Context, id string) ([]TargetCheckView, error) {
-	rows, err := s.deps.Store.DB().QueryContext(ctx, `SELECT ts, evidence FROM audit_event WHERE action = 'target.check' AND target = ? ORDER BY rowid DESC LIMIT ?`, id, maxTargetHistory)
+	rows, err := s.deps.Store.DB().QueryContext(ctx, `SELECT ts, evidence FROM audit_event WHERE action = 'target.check' AND target = ? ORDER BY seq DESC LIMIT ?`, id, maxTargetHistory)
 	if err != nil {
 		return nil, err
 	}

@@ -113,7 +113,7 @@ func TestSecretSetFromStdinNeverPrintsValue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if names, _ := st.List(); !reflect.DeepEqual(names, []string{"smtp-password"}) {
+	if names, _ := st.List(); !reflect.DeepEqual(names, []string{"audit-key", "smtp-password"}) {
 		t.Errorf("names after refusals = %v", names)
 	}
 	if n := len(auditRows(t, dir, "secret.set")); n != 1 {

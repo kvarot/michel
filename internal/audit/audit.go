@@ -3,6 +3,7 @@ package audit
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -11,19 +12,26 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/kvarot/michel/internal/egress"
+	"github.com/kvarot/michel/internal/secret"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/oklog/ulid/v2"
 )
 
-// Event is one audit entry. ID, TS, PrevHash and Hash are filled by Record.
+// Event is one audit entry. ID, TS, Seq, PrevHash and Hash are filled by Record.
 type Event struct {
 	ID, TS, Actor, Action, Target, Result, CorrelationID string
 	Evidence                                             map[string]any
 	PrevHash, Hash                                       string
+	// Seq is the place of the event in the chain, from 1.
+	Seq int64 `json:",omitempty"`
+	// HMAC is the seal of the event: HMAC-SHA256 of Hash with the key of
+	// the secret store (hex), "" when the log is not sealed.
+	HMAC string `json:",omitempty"`
 }
 
 // Logger appends events to the chain. It is safe for concurrent use.
@@ -33,6 +41,57 @@ type Logger struct {
 	mu      sync.Mutex
 	entropy *ulid.MonotonicEntropy
 	commit  func(*sql.Tx) error // tests replace it to simulate a failed commit
+	key     []byte              // the seal key; nil writes no seal
+}
+
+// SetKey makes the logger seal every event it writes with key (see Event.HMAC).
+func (l *Logger) SetKey(key []byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.key = append([]byte(nil), key...)
+}
+
+// seal is the HMAC of an event's hash with key, hex.
+func seal(key []byte, hash string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(hash))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// keySize is the size of a seal key.
+const keySize = 32
+
+// LoadKey reads the seal key from the secret store; ok is false when there
+// is none yet.
+func LoadKey(s secret.Store) (key []byte, ok bool, err error) {
+	v, err := s.Get(secret.ReservedAuditKey)
+	if errors.Is(err, secret.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot read the key of the audit seals: %w", err)
+	}
+	key, err = hex.DecodeString(strings.TrimSpace(string(v)))
+	if err != nil || len(key) != keySize {
+		return nil, false, errors.New("the key of the audit seals is damaged")
+	}
+	return key, true, nil
+}
+
+// LoadOrCreateKey reads the seal key, creating 32 random bytes the first time.
+func LoadOrCreateKey(s secret.Store) ([]byte, error) {
+	key, ok, err := LoadKey(s)
+	if err != nil || ok {
+		return key, err
+	}
+	key = make([]byte, keySize)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("cannot create the key of the audit seals: %w", err)
+	}
+	if err := s.Set(secret.ReservedAuditKey, []byte(hex.EncodeToString(key))); err != nil {
+		return nil, fmt.Errorf("cannot save the key of the audit seals: %w", err)
+	}
+	return key, nil
 }
 
 // NewLogger builds a Logger writing to s. now gives the event time.
@@ -82,25 +141,30 @@ func (l *Logger) Record(ctx context.Context, e Event) (Event, error) {
 		return Event{}, fmt.Errorf("cannot write to the audit log: %w", err)
 	}
 	defer tx.Rollback()
-	prev := ""
-	err = tx.QueryRowContext(ctx, `SELECT hash FROM audit_event ORDER BY rowid DESC LIMIT 1`).Scan(&prev)
+	prev, last := "", int64(0)
+	err = tx.QueryRowContext(ctx, `SELECT seq, hash FROM audit_event ORDER BY seq DESC LIMIT 1`).Scan(&last, &prev)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Event{}, fmt.Errorf("cannot read the audit chain: %w", err)
 	}
-	e.PrevHash = prev
+	e.PrevHash, e.Seq = prev, last+1
 	canon, err := canonical(e, evJSON)
 	if err != nil {
 		return Event{}, err
 	}
 	e.Hash = chainHash(prev, canon)
+	if l.key != nil {
+		e.HMAC = seal(l.key, e.Hash)
+	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO audit_event
-		(id, ts, actor, action, target, result, correlation_id, evidence, prev_hash, hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.TS, e.Actor, e.Action, e.Target, e.Result, e.CorrelationID, string(evJSON), e.PrevHash, e.Hash); err != nil {
+		(seq, id, ts, actor, action, target, result, correlation_id, evidence, prev_hash, hash, hmac)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.Seq, e.ID, e.TS, e.Actor, e.Action, e.Target, e.Result, e.CorrelationID, string(evJSON), e.PrevHash, e.Hash, e.HMAC); err != nil {
 		return Event{}, fmt.Errorf("cannot write to the audit log: %w", err)
 	}
+	// The count of the head anchor is kept in the database and moves with the
+	// event, in the same transaction: the table is never counted.
 	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_event`).Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, `UPDATE audit_anchor SET events = events + 1 WHERE id = 1 RETURNING events`).Scan(&count); err != nil {
 		return Event{}, fmt.Errorf("cannot count the audit chain: %w", err)
 	}
 	if err := l.commit(tx); err != nil {

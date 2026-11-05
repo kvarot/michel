@@ -17,6 +17,7 @@ import (
 	"github.com/kvarot/michel/internal/egress"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
+	"github.com/kvarot/michel/internal/secret"
 	"github.com/kvarot/michel/internal/source"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/spf13/cobra"
@@ -190,6 +191,17 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 				deps.Close()
 				return deps.Wrapf("cli.root.sources_sync", err)
 			}
+			// integrity_protection: required seals every event with a key of the
+			// secret store, made at the first start. A store that cannot be opened
+			// does not stop the command (a digest still goes out): its events are
+			// unsealed, which michel audit verify reports.
+			if sealRequired(p) {
+				if key, err := loadSealKey(dir, true); err != nil {
+					fmt.Fprintln(deps.Stderr, deps.T("cli.root.audit_key", err))
+				} else {
+					deps.Audit.SetKey(key)
+				}
+			}
 			if _, err := deps.Audit.Record(context.Background(), audit.Event{
 				Actor: "cli", Action: "app.start", Target: buildinfo.Version, Result: "ok",
 				Evidence: map[string]any{
@@ -239,6 +251,32 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 	root.AddCommand(newTargetCmd(deps))
 	root.AddCommand(newWatchCmd(deps))
 	return root
+}
+
+// sealRequired says whether the policy wants the audit events sealed: any
+// integrity_protection but none.
+func sealRequired(p policy.Policy) bool {
+	return p.Sovereignty.Audit.IntegrityProtection != "none"
+}
+
+// loadSealKey reads the key of the audit seals from the secret store of dir,
+// creating it when create is true. Without create nothing is written: a
+// missing secrets folder or key is a nil key.
+func loadSealKey(dir string, create bool) ([]byte, error) {
+	if !create {
+		if _, err := os.Stat(filepath.Join(dir, "secrets")); err != nil {
+			return nil, nil
+		}
+	}
+	sec, err := secret.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	if create {
+		return audit.LoadOrCreateKey(sec)
+	}
+	key, _, err := audit.LoadKey(sec)
+	return key, err
 }
 
 // ExitCode returns the process exit code for an error returned by Execute.

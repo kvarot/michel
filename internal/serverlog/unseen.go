@@ -237,7 +237,8 @@ func (r *Repo) SetFailures(ctx context.Context, targetID string, fs []Failure, a
 		return fmt.Errorf("cannot save the log failure: %w", err)
 	}
 	for _, f := range fs {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO log_failure (target_id, source_id, reason, at) VALUES (?,?,?,?)`, targetID, f.SourceID, f.Reason, ts(at)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO log_failure (target_id, source_id, reason, at) VALUES (?,?,?,?)
+			ON CONFLICT (target_id, source_id) DO UPDATE SET reason = excluded.reason, at = excluded.at`, targetID, f.SourceID, f.Reason, ts(at)); err != nil {
 			return fmt.Errorf("cannot save the log failure: %w", err)
 		}
 	}

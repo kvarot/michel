@@ -60,7 +60,7 @@ func cutUTF8(s string, n int) string {
 	return s[:n]
 }
 
-// Save stores a (insert or replace). Snippets are not stored, and the
+// Save stores a, replacing the analysis of the same finding. Snippets are not stored, and the
 // call sites and changelog excerpt are capped.
 func (r *Repo) Save(ctx context.Context, a Analysis) error {
 	sites := make([]storedSite, 0, len(a.Calls.Sites))

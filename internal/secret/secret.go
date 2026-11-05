@@ -25,6 +25,11 @@ var namePattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 // serve and never by michel secret set.
 const ReservedAPIToken = "api-token"
 
+// ReservedAuditKey is the name of the key that seals the audit log
+// (integrity_protection: required), created by Michel at its first start and
+// never by michel secret set.
+const ReservedAuditKey = "audit-key"
+
 // GitHubToken is the name of the GitHub token: when set, it goes with the
 // GitHub API requests of the sources (advisories, repository status,
 // discovery) and raises the request budget of an update.

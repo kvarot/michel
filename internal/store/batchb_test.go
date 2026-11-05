@@ -62,3 +62,48 @@ func TestMigration0024AddsAutoScanToAnOldDatabase(t *testing.T) {
 		t.Errorf("auto_scan = %d, %v", auto, err)
 	}
 }
+
+// 0026 numbers the events of an old database in their order (the old rowid
+// column, copied as seq), keeps every hashed field and counts them in the
+// anchor.
+func TestMigration0026KeepsTheChainOfAnOldDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "michel.db")
+	var seed []string
+	for _, r := range []struct{ rowid, id, prev, hash string }{{"1", "e1", "", "h1"}, {"2", "e2", "h1", "h2"}, {"5", "e5", "h2", "h5"}} {
+		seed = append(seed, `INSERT INTO audit_event (rowid, id, ts, actor, action, target, result, correlation_id, evidence, prev_hash, hash)
+			VALUES (`+r.rowid+`, '`+r.id+`', '2026-01-01T00:00:00Z', 'cli', 'app.start', 'v', 'ok', '', '{}', '`+r.prev+`', '`+r.hash+`')`)
+	}
+	oldDatabase(t, path, 22, seed...)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rows, err := s.DB().Query(`SELECT seq, id, prev_hash, hash, hmac FROM audit_event ORDER BY seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for rows.Next() {
+		var seq int
+		var id, prev, hash, mac string
+		if err := rows.Scan(&seq, &id, &prev, &hash, &mac); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, strconv.Itoa(seq)+":"+id+":"+prev+">"+hash+":"+mac)
+	}
+	rows.Close()
+	if strings.Join(got, " ") != "1:e1:>h1: 2:e2:h1>h2: 5:e5:h2>h5:" {
+		t.Errorf("events = %v", got)
+	}
+	var events int
+	if err := s.DB().QueryRow(`SELECT events FROM audit_anchor WHERE id = 1`).Scan(&events); err != nil || events != 3 {
+		t.Errorf("anchor = %d %v", events, err)
+	}
+	for _, idx := range []string{"idx_audit_event_action", "idx_audit_event_action_target"} {
+		var n int
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s: n=%d err=%v", idx, n, err)
+		}
+	}
+}
