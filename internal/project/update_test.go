@@ -72,7 +72,7 @@ func TestUpdateRefusalsAreAudited(t *testing.T) {
 	}
 	rows := f.updateRows(t)
 	if len(rows) != 3 || rows[0].result != "denied" || rows[0].evidence["reason"] != "api.project.patch.bad_level" ||
-		rows[1].result != "denied" || rows[2].result != "not_found" || rows[2].target != "ghost" {
+		rows[1].result != "denied" || rows[2].result != "not_found" || rows[2].target != "ghost" || rows[2].evidence["reason"] != "api.project_not_found" {
 		t.Fatalf("rows = %+v", rows)
 	}
 }

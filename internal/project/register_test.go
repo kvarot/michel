@@ -249,3 +249,29 @@ func TestRegisterStorageErrorIsAuditedError(t *testing.T) {
 		t.Errorf("audit = %+v", rows)
 	}
 }
+
+// A caller that goes away right after the store write (Ctrl-C, a closed page)
+// does not cost the trace: the audit row is written and the project stays.
+func TestRegisterAndUpdateKeepTheirTraceWhenTheCallerGoesAway(t *testing.T) {
+	f := newRegFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	// The logger reads its clock once the store write is done: cancel there.
+	f.log = audit.NewLogger(f.st, func() time.Time { cancel(); return time.Now() })
+	if _, err := Register(ctx, f.repo, f.log, RegisterRequest{Actor: "test", Name: "demo", Path: t.TempDir(), Folders: f.folders}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if rows := f.rows(t); len(rows) != 1 || rows[0].result != "ok" {
+		t.Errorf("add rows = %+v", rows)
+	}
+	if n := f.count(t); n != 1 {
+		t.Errorf("projects = %d", n)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	three := 3
+	if _, err := Update(ctx, f.repo, f.log, UpdateRequest{Actor: "test", Name: "demo", Patch: Patch{FixLevel: &three}}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if rows := f.updateRows(t); len(rows) != 1 || rows[0].result != "ok" {
+		t.Errorf("update rows = %+v", rows)
+	}
+}

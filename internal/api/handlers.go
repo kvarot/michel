@@ -208,10 +208,6 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 	if !s.readJSONHint(w, r, &body, i18n.T(lang, "api.project.patch.bad_json_hint")) {
 		return
 	}
-	if body.FixLevel == nil && body.AutoFixMinor == nil {
-		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.nothing"), i18n.T(lang, "api.project.patch.bad_json_hint"))
-		return
-	}
 	p, err := project.Update(ctx, project.NewRepo(s.deps.Store), s.deps.Audit, project.UpdateRequest{
 		Actor: decisionAuthor, Name: r.PathValue("name"),
 		Patch: project.Patch{FixLevel: body.FixLevel, AutoFixMinor: body.AutoFixMinor},
@@ -222,6 +218,9 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 	case errors.As(err, &auditErr):
 		s.auditFailed(w, r)
+		return
+	case errors.As(err, &refusal) && refusal.Key == "api.project.patch.nothing":
+		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.nothing"), i18n.T(lang, "api.project.patch.bad_json_hint"))
 		return
 	case errors.As(err, &refusal) && refusal.Key == "api.project.patch.bad_level":
 		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.bad_level"), i18n.T(lang, "api.project.patch.bad_level_hint"))
@@ -462,6 +461,9 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.finding_not_found"), "")
 		return
 	}
+	// validateDecision above already ran decide.Validate; ValidateFor only adds
+	// the check that needs the finding, so ErrNoFixForExposure is the only
+	// refusal left to handle here.
 	if err := decide.ValidateFor(f, &d, now); errors.Is(err, decide.ErrNoFixForExposure) {
 		refuse("api.target.exposure_no_fix")
 		return

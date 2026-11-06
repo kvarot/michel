@@ -720,6 +720,14 @@ func TestPatchProjectRefusalsAreAudited(t *testing.T) {
 	if n := count("denied"); n != 1 {
 		t.Errorf("denied rows = %d", n)
 	}
+	// An empty patch is refused by project.Update, audited like the others.
+	if resp, body := f.do("PATCH", "/api/v1/projects/demo", testToken, `{}`); resp.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(body, i18n.T(i18n.EN, "api.project.patch.nothing")) || !strings.Contains(body, i18n.T(i18n.EN, "api.project.patch.bad_json_hint")) {
+		t.Fatalf("empty patch: %d %s", resp.StatusCode, body)
+	}
+	if n := count("denied"); n != 2 {
+		t.Errorf("denied rows after the empty patch = %d", n)
+	}
 	if resp, _ := f.do("PATCH", "/api/v1/projects/nope", testToken, `{"fix_level":1}`); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown: %d", resp.StatusCode)
 	}

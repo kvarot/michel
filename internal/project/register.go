@@ -123,6 +123,9 @@ func Register(ctx context.Context, repo *Repo, log *audit.Logger, req RegisterRe
 		}
 		return failed(err)
 	}
+	// No project without its trace: the audit write and the purge must not be
+	// skipped because the caller went away (Ctrl-C, a closed page).
+	ctx = context.WithoutCancel(ctx)
 	if _, err := log.Record(ctx, audit.Event{Actor: req.Actor, Action: "project.add", Target: added.Name, Result: "ok",
 		Evidence: map[string]any{"path": added.Path, "classification": string(added.Classification), "fix_level": added.FixLevel}}); err != nil {
 		// No project without its trace.

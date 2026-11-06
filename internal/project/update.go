@@ -103,7 +103,7 @@ func Update(ctx context.Context, repo *Repo, log *audit.Logger, req UpdateReques
 	p, err := get(ctx, req.Name)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return record("not_found", "project not found", err)
+			return record("not_found", "api.project_not_found", err)
 		}
 		return record("error", boundedForAudit(err.Error(), maxPathLen), err)
 	}
@@ -155,6 +155,9 @@ func Update(ctx context.Context, repo *Repo, log *audit.Logger, req UpdateReques
 		}
 		return record("error", boundedForAudit(err.Error(), maxPathLen), err)
 	}
+	// No project change without its trace: the audit write must not be skipped
+	// because the caller went away (Ctrl-C, a closed page).
+	ctx = context.WithoutCancel(ctx)
 	if _, err := log.Record(ctx, audit.Event{Actor: req.Actor, Action: "project.update", Target: p.Name, Result: "ok", Evidence: ev}); err != nil {
 		return p, &AuditError{Err: err}
 	}
