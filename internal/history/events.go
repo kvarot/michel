@@ -64,6 +64,8 @@ func AddFindingEvent(ctx context.Context, tx *sql.Tx, findingID string, at time.
 	if detail == nil {
 		detail = map[string]any{}
 	}
+	// The guard covers flat string values only: no writer puts a nested
+	// map or a list in a detail.
 	for k, v := range detail {
 		if s, ok := v.(string); ok && strings.ContainsAny(s, `/\`) {
 			return fmt.Errorf("%w (%s)", errPathInDetail, k)

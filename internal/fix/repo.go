@@ -315,6 +315,8 @@ func (r *Repo) SetState(ctx context.Context, id string, from []State, to State, 
 		}
 		return nil
 	}
+	// Roll back now, not at the deferred call: it frees the write lock of
+	// the transaction before GetAttempt reads on another connection.
 	tx.Rollback()
 	if _, err := r.GetAttempt(ctx, id); err != nil {
 		return err

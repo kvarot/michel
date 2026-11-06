@@ -277,6 +277,9 @@ func (r *Report) countAttempts(ctx context.Context, db *sql.DB, tracked map[stri
 		if err != nil {
 			return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
 		}
+		// The states are fix.StateProposed, fix.StateApplied and
+		// fix.StateProvenFixed: history cannot import the fix package,
+		// which imports it.
 		if state == "applied" || state == "proven_fixed" {
 			fixed[id] = append(fixed[id], t)
 		}
@@ -373,8 +376,8 @@ func oldestOpen(ctx context.Context, db *sql.DB, ids []string) (*OldestOpen, err
 // countChecks counts the checks started in the period. A project check is
 // a scan row of an active project: ok, partial or empty is done, failed or
 // interrupted is failed, one still running is neither. A server check is
-// an inventory: Michel stores one for each check that succeeded and
-// nothing for a check that failed, which stays not read.
+// an inventory of an active server: Michel stores one for each check that
+// succeeded and nothing for a check that failed, which stays not read.
 func (r *Report) countChecks(ctx context.Context, db *sql.DB, start, end time.Time) error {
 	rows, err := db.QueryContext(ctx, `SELECT s.status, s.started_at FROM scan s JOIN project p ON p.id = s.project_id WHERE p.active = 1`)
 	if err != nil {
@@ -394,6 +397,9 @@ func (r *Report) countChecks(ctx context.Context, db *sql.DB, start, end time.Ti
 		if !in(t, start, end) {
 			continue
 		}
+		// The statuses are scan.ScanOK, scan.ScanPartial, scan.ScanEmpty,
+		// scan.ScanFailed and scan.ScanInterrupted: history cannot import
+		// the scan package, which imports it.
 		switch status {
 		case "ok", "partial", "empty":
 			r.Checks.Projects.Done++
@@ -406,7 +412,7 @@ func (r *Report) countChecks(ctx context.Context, db *sql.DB, start, end time.Ti
 		return fmt.Errorf("cannot read the checks of the projects: %w", err)
 	}
 
-	rows, err = db.QueryContext(ctx, `SELECT at FROM target_inventory`)
+	rows, err = db.QueryContext(ctx, `SELECT i.at FROM target_inventory i JOIN target t ON t.id = i.target_id WHERE t.active = 1`)
 	if err != nil {
 		return fmt.Errorf("cannot read the checks of the servers: %w", err)
 	}
@@ -430,10 +436,13 @@ func (r *Report) countChecks(ctx context.Context, db *sql.DB, start, end time.Ti
 	return nil
 }
 
-// countServers counts the server findings seen and gone in the period.
+// countServers counts the server findings seen and gone in the period, on
+// the active servers only, like the list of the findings of a server
+// (scan.Repo.ListServerFindings: source_key empty).
 func (r *Report) countServers(ctx context.Context, db *sql.DB, start, end time.Time) error {
 	rows, err := db.QueryContext(ctx, `SELECT e.at, e.kind FROM finding_event e JOIN finding f ON f.id = e.finding_id
-		WHERE f.kind IN (`+serverKinds+`)`)
+		JOIN target t ON t.id = f.project_id
+		WHERE t.active = 1 AND f.source_key = '' AND f.kind IN (`+serverKinds+`)`)
 	if err != nil {
 		return fmt.Errorf("cannot read the history of the server findings: %w", err)
 	}

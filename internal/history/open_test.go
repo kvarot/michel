@@ -25,6 +25,8 @@ func testDB(t *testing.T) *sql.DB {
 	mustExec(t, db, `INSERT INTO project (id, name, source_type, path, classification, active, created_at)
 		VALUES ('p1', 'demo', 'local_path', 'x', 'normal', 1, '2026-01-01T00:00:00Z'),
 		       ('p2', 'old', 'local_path', 'y', 'normal', 0, '2026-01-01T00:00:00Z')`)
+	mustExec(t, db, `INSERT INTO target (id, name, host, kind, env, classification, active, created_at)
+		VALUES ('t1', 'web1', 'web1.example', 'vps', 'prod', 'normal', 1, '2026-01-01T00:00:00Z')`)
 	return db
 }
 
@@ -99,7 +101,7 @@ func TestOpenAtReplaysSameDayChanges(t *testing.T) {
 	addEvent(t, db, "f2", d1.Add(time.Hour), KindGone, nil)
 
 	now := time.Date(2026, 10, 12, 12, 0, 0, 0, paris)
-	days, err := OpenByDay(context.Background(), db, now, paris, 4, sev)
+	days, _, err := OpenByDay(context.Background(), db, now, paris, 4, sev)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +197,7 @@ func TestOpenByDayExcludesServerAndInactive(t *testing.T) {
 	for _, id := range []string{"f1", "f2", "f3", "f4", "f5", "f6"} {
 		addEvent(t, db, id, base, KindSeen, nil)
 	}
-	days, err := OpenByDay(context.Background(), db, base.Add(24*time.Hour), time.UTC, 2, func(r FindingRow) string { return "x" + r.SeverityLabel })
+	days, _, err := OpenByDay(context.Background(), db, base.Add(24*time.Hour), time.UTC, 2, func(r FindingRow) string { return "x" + r.SeverityLabel })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,9 +209,12 @@ func TestOpenByDayExcludesServerAndInactive(t *testing.T) {
 func TestOpenByDayFlagsReconstructedDays(t *testing.T) {
 	db := testDB(t)
 	mustExec(t, db, `UPDATE history_start SET at = '2026-09-02T12:00:00Z' WHERE id = 1`)
-	days, err := OpenByDay(context.Background(), db, time.Date(2026, 9, 3, 8, 0, 0, 0, time.UTC), time.UTC, 3, sev)
+	days, start, err := OpenByDay(context.Background(), db, time.Date(2026, 9, 3, 8, 0, 0, 0, time.UTC), time.UTC, 3, sev)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !start.Equal(time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)) {
+		t.Errorf("history start = %v", start)
 	}
 	var got []string
 	for _, d := range days {
@@ -302,7 +307,7 @@ func TestOpenByDayIsFast(t *testing.T) {
 		t.Fatal(err)
 	}
 	began := time.Now()
-	days, err := OpenByDay(context.Background(), db, start.AddDate(1, 0, 0), time.UTC, 365, sev)
+	days, _, err := OpenByDay(context.Background(), db, start.AddDate(1, 0, 0), time.UTC, 365, sev)
 	if err != nil {
 		t.Fatal(err)
 	}

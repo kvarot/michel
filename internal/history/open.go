@@ -45,7 +45,10 @@ type Tracked struct {
 
 // OpenAt is the rule of an open finding at instant at, once every change at
 // or before at is applied: the finding was seen, is not gone, and no ignore
-// decision is in force. A fix or defer decision leaves it open.
+// decision is in force. A fix or defer decision leaves it open. events are
+// the events of one finding in seq order, which is their time order: each
+// writer numbers an event after the ones already stored, at the instant of
+// the change.
 func OpenAt(events []Event, ignores []Span, at time.Time) bool {
 	seen, gone := false, false
 	for _, e := range events {
@@ -119,15 +122,16 @@ func HistoryStart(ctx context.Context, db *sql.DB) (time.Time, error) {
 // OpenByDay counts, for each of the days local days ending today, the
 // findings open at the end of the day, by severity(row): the current
 // effective severity, applied to the whole history. Server findings and
-// findings of removed projects are left out.
-func OpenByDay(ctx context.Context, db *sql.DB, now time.Time, loc *time.Location, days int, severity func(FindingRow) string) ([]Day, error) {
+// findings of removed projects are left out. It also returns when the
+// history began to be written (HistoryStart), read once for the days.
+func OpenByDay(ctx context.Context, db *sql.DB, now time.Time, loc *time.Location, days int, severity func(FindingRow) string) ([]Day, time.Time, error) {
 	start, err := HistoryStart(ctx, db)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	tracked, err := LoadTracked(ctx, db)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	sev := make([]string, len(tracked))
 	for i, x := range tracked {
@@ -144,7 +148,7 @@ func OpenByDay(ctx context.Context, db *sql.DB, now time.Time, loc *time.Locatio
 		}
 		out = append(out, day)
 	}
-	return out, nil
+	return out, start, nil
 }
 
 // LoadTracked reads, in three queries, the findings of the active projects

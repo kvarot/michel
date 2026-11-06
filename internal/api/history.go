@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/kvarot/michel/internal/decide"
@@ -92,20 +91,14 @@ func (s *server) statsOpen(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	days := defaultStatDays
 	if q, set := r.URL.Query()["days"]; set {
-		n, err := strconv.Atoi(strings.TrimSpace(q[0]))
+		n, err := strconv.Atoi(q[0])
 		if err != nil || n < 1 || n > maxStatDays {
 			s.fail(w, http.StatusBadRequest, i18n.T(s.answerLang(r), "api.bad_days"), i18n.T(s.answerLang(r), "api.bad_days_hint", maxStatDays))
 			return
 		}
 		days = n
 	}
-	db := s.deps.Store.DB()
-	start, err := history.HistoryStart(ctx, db)
-	if err != nil {
-		s.internal(w, r)
-		return
-	}
-	list, err := history.OpenByDay(ctx, db, s.deps.Now(), time.Local, days, reportSeverity)
+	list, start, err := history.OpenByDay(ctx, s.deps.Store.DB(), s.deps.Now(), time.Local, days, reportSeverity)
 	if err != nil {
 		s.internal(w, r)
 		return

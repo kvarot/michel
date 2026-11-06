@@ -126,29 +126,36 @@ func attemptEntries(ctx context.Context, db *sql.DB, findingID string) ([]Entry,
 		return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
 	}
 	defer rows.Close()
-	var all []Entry
+	// The attempt id and the state stay typed until the entries are built.
+	type state struct {
+		attemptID, state string
+		at               time.Time
+		reconstructed    bool
+	}
+	var all []state
 	for rows.Next() {
-		var id, at, state string
+		var id, at, st string
 		var rec int
-		if err := rows.Scan(&id, &at, &state, &rec); err != nil {
+		if err := rows.Scan(&id, &at, &st, &rec); err != nil {
 			return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
 		}
 		t, err := parseAt(at)
 		if err != nil {
 			return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
 		}
-		all = append(all, Entry{At: t, Kind: KindAttempt, Detail: map[string]any{"attempt_id": id, "state": state}, Reconstructed: rec != 0})
+		all = append(all, state{attemptID: id, state: st, at: t, reconstructed: rec != 0})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("cannot read the fix attempts: %w", err)
 	}
 	var out []Entry
-	for i, e := range all {
-		last := i == len(all)-1 || all[i+1].Detail["attempt_id"] != e.Detail["attempt_id"]
-		if hiddenStates[e.Detail["state"].(string)] && !last {
+	for i, s := range all {
+		last := i == len(all)-1 || all[i+1].attemptID != s.attemptID
+		if hiddenStates[s.state] && !last {
 			continue
 		}
-		out = append(out, e)
+		out = append(out, Entry{At: s.at, Kind: KindAttempt, Detail: map[string]any{"attempt_id": s.attemptID, "state": s.state},
+			Reconstructed: s.reconstructed})
 	}
 	return out, nil
 }

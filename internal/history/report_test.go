@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -244,5 +245,102 @@ func TestParsePeriod(t *testing.T) {
 	}
 	if _, _, err := ParsePeriod("2026-08-01", "2026-10-01", loc, now); err != nil {
 		t.Errorf("62 days are refused: %v", err)
+	}
+}
+
+func TestReportCountsOnlyActiveServers(t *testing.T) {
+	loc := paris(t)
+	db := testDB(t)
+	day := func(d, h int) time.Time { return time.Date(2026, 10, d, h, 0, 0, 0, loc) }
+	// t2 is an inactive server; t3 was removed: its findings are kept,
+	// its target row and inventories are gone.
+	mustExec(t, db, `INSERT INTO target (id, name, host, kind, env, classification, active, created_at)
+		VALUES ('t2', 'web2', 'web2.example', 'vps', 'prod', 'normal', 0, '2026-01-01T00:00:00Z')`)
+	for _, owner := range []string{"t1", "t2", "t3"} {
+		id := "fs-" + owner
+		addFinding(t, db, id, owner, "server_package", "high", day(6, 9))
+		addEvent(t, db, id, day(6, 9), KindSeen, nil)
+		addEvent(t, db, id, day(8, 9), KindGone, nil)
+	}
+	// a finding of t1 coming from a source is not a server finding.
+	addFinding(t, db, "fs-src", "t1", "server_package", "high", day(6, 9))
+	mustExec(t, db, `UPDATE finding SET source_key = 'src' WHERE id = 'fs-src'`)
+	addEvent(t, db, "fs-src", day(6, 9), KindSeen, nil)
+	addInventory(t, db, "t1", day(6, 9))
+	addInventory(t, db, "t2", day(6, 9))
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, loc)
+	r, err := BuildReport(context.Background(), db, "2026-10-05", "2026-10-11", loc, now, sev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Servers != (ServerCounts{Found: 1, Closed: 1}) {
+		t.Errorf("servers = %+v", r.Servers)
+	}
+	if r.Checks.Servers.Done != 1 {
+		t.Errorf("server checks = %+v", r.Checks.Servers)
+	}
+}
+
+func TestBuildReportIsFast(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
+	db := testDB(t)
+	start := time.Date(2025, 11, 6, 8, 0, 0, 0, time.UTC)
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := tx.Exec(q, args...); err != nil {
+			t.Fatalf("%v\n%s", err, q)
+		}
+	}
+	labels := []string{"critical", "high", "medium", "low", "unknown"}
+	states := []string{"preparing", "proposed", "approved", "applied", "proven_fixed"}
+	for i := 0; i < 5000; i++ {
+		id := fmt.Sprintf("f%05d", i)
+		seen := start.Add(time.Duration(i%365) * 24 * time.Hour)
+		exec(`INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id, severity_label,
+			installed_version, status, first_seen_scan, last_seen_scan, first_seen_at, last_seen_at)
+			VALUES (?, 'p1', 'composer.lock', 'npm', 'pkg', ?, ?, '1.0.0', 'new', 's1', 's1', ?, ?)`,
+			id, "OSV-"+id, labels[i%5], rfc(seen), rfc(seen))
+		for n, e := range []struct {
+			at   time.Time
+			kind string
+		}{{seen, KindSeen}, {seen.Add(72 * time.Hour), KindGone}, {seen.Add(120 * time.Hour), KindBack}} {
+			exec(`INSERT INTO finding_event (finding_id, seq, at, kind, detail) VALUES (?, ?, ?, ?, '{}')`, id, n+1, rfc(e.at), e.kind)
+		}
+		exec(`INSERT INTO decision (id, finding_id, project_id, action, author, created_at, superseded_at)
+			VALUES (?, ?, 'p1', 'ignore', 'web', ?, ?)`, "d"+id, id, rfc(seen.Add(200*time.Hour)), rfc(seen.Add(400*time.Hour)))
+		exec(`INSERT INTO fix_attempt (id, finding_id, project_id, origin, state, created_at, updated_at)
+			VALUES (?, ?, 'p1', 'web', 'proven_fixed', ?, ?)`, "a"+id, id, rfc(seen), rfc(seen.Add(5*time.Hour)))
+		for n, state := range states {
+			exec(`INSERT INTO fix_attempt_event (attempt_id, seq, at, state, reconstructed) VALUES (?, ?, ?, ?, 0)`,
+				"a"+id, n+1, rfc(seen.Add(time.Duration(n)*time.Hour)), state)
+		}
+	}
+	// 7 300 checks: 20 a day for a year.
+	for i := 0; i < 7300; i++ {
+		exec(`INSERT INTO scan (id, project_id, started_at, status) VALUES (?, 'p1', ?, 'ok')`,
+			fmt.Sprintf("s%05d", i), rfc(start.Add(time.Duration(i)*72*time.Minute)))
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	now := start.AddDate(1, 0, 0)
+	began := time.Now()
+	r, err := BuildReport(context.Background(), db, "2026-09-01", "2026-10-31", time.UTC, now, sev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(began)
+	t.Logf("BuildReport took %v", took)
+	if took > time.Second {
+		t.Errorf("BuildReport took %v for 5 000 findings and 61 days", took)
+	}
+	if r.Checks.Projects.Done == 0 || len(r.Found) == 0 {
+		t.Errorf("report = %+v", r)
 	}
 }

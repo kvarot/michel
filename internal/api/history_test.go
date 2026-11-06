@@ -61,7 +61,11 @@ func (f *fixture) outsideFindings() (server, removed string) {
 func TestTimelineRoute(t *testing.T) {
 	f := newFixture(t, nil)
 	id := f.ids["ACME-2026-0001"]
-	f.event(id, now.Add(-2*time.Hour), history.KindSeen)
+	// the seen event was reconstructed by the migration.
+	if _, err := f.st.DB().Exec(`INSERT INTO finding_event (finding_id, seq, at, kind, detail) VALUES (?, 1, ?, 'seen', '{"reconstructed":true}')`,
+		id, ts(now.Add(-2*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
 	f.event(id, now.Add(-time.Hour), history.KindGone)
 	var got struct {
 		Entries []struct {
@@ -76,6 +80,11 @@ func TestTimelineRoute(t *testing.T) {
 	if len(got.Entries) != 2 || got.Entries[0].Kind != "gone" || got.Entries[1].Kind != "seen" ||
 		got.Entries[0].At != ts(now.Add(-time.Hour)) || got.Entries[0].Detail == nil || got.Entries[0].Reconstructed {
 		t.Errorf("entries = %+v", got.Entries)
+	}
+	if len(got.Entries) == 2 {
+		if _, ok := got.Entries[1].Detail["reconstructed"]; !got.Entries[1].Reconstructed || ok {
+			t.Errorf("the reconstructed entry = %+v", got.Entries[1])
+		}
 	}
 	if _, err := time.Parse(time.RFC3339, got.HistoryStart); err != nil {
 		t.Errorf("history_start = %q", got.HistoryStart)
@@ -94,6 +103,11 @@ func TestStatsOpenRoute(t *testing.T) {
 	f.event(f.ids["ACME-2026-0002"], now.Add(-30*24*time.Hour), history.KindSeen)
 	f.event(f.ids["ACME-2026-0002"], now.Add(-10*24*time.Hour), history.KindGone)
 	f.outsideFindings()
+	// the history began to be written 20 days ago: the days before are
+	// reconstructed.
+	if _, err := f.st.DB().Exec(`UPDATE history_start SET at = ? WHERE id = 1`, ts(now.Add(-20*24*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
 	type answer struct {
 		Days []struct {
 			Date          string         `json:"date"`
@@ -120,15 +134,18 @@ func TestStatsOpenRoute(t *testing.T) {
 			t.Errorf("open = %v, want %v", last.Open, want)
 		}
 	}
-	if _, err := time.Parse(time.RFC3339, def.HistoryStart); err != nil {
+	if def.HistoryStart != ts(now.Add(-20*24*time.Hour)) {
 		t.Errorf("history_start = %q", def.HistoryStart)
+	}
+	if !def.Days[0].Reconstructed || def.Days[80].Reconstructed || last.Reconstructed {
+		t.Errorf("reconstructed = %v %v %v", def.Days[0].Reconstructed, def.Days[80].Reconstructed, last.Reconstructed)
 	}
 	var year answer
 	f.get("/api/v1/stats/open?days=365", &year)
 	if len(year.Days) != 365 {
 		t.Errorf("%d days for days=365", len(year.Days))
 	}
-	for _, bad := range []string{"0", "366", "-1", "abc", "1.5"} {
+	for _, bad := range []string{"0", "366", "-1", "abc", "1.5", "%205", "5%20"} {
 		if resp, body := f.do("GET", "/api/v1/stats/open?days="+bad, testToken, ""); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("days=%s = %d %s", bad, resp.StatusCode, body)
 		}
@@ -199,7 +216,13 @@ func TestReportsRefusesBadRange(t *testing.T) {
 			t.Errorf("%s = %d %s", q, resp.StatusCode, body)
 		}
 	}
-	f.get("/api/v1/reports?from="+today(-61)+"&to="+today(0), nil)
+	var got struct {
+		From string `json:"from"`
+	}
+	f.get("/api/v1/reports?from="+today(-61)+"&to="+today(0), &got)
+	if got.From != today(-61) {
+		t.Errorf("from = %q", got.From)
+	}
 }
 
 func TestReportNoPathOrSecret(t *testing.T) {
