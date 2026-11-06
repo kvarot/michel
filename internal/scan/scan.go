@@ -656,6 +656,11 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		if err := insertManifests(ctx, tx, res.ScanID, manifests); err != nil {
 			return err
 		}
+		if status == ScanOK {
+			if err := replaceComponents(ctx, tx, p.ID, res.ScanID, componentsOf(vr, p.Path, accepted)); err != nil {
+				return err
+			}
+		}
 		current, err := currentDecisions(ctx, tx, p.ID)
 		if err != nil {
 			return err
