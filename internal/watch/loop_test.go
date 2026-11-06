@@ -345,3 +345,46 @@ func TestClaimSourcesOncePerDay(t *testing.T) {
 		t.Errorf("next day = %v %v", got, err)
 	}
 }
+
+// A check stopped with serve (interrupted) or left running by a crash is not
+// the check of the day: after a restart the project is checked again. A
+// failed check counts.
+func TestLastStartsIgnoresInterruptedAndRunning(t *testing.T) {
+	r := newRig(t, at("2026-11-05", "08:00"), "demo", "shop", "blog")
+	for _, row := range [][3]string{
+		{"p0", "2026-11-05T06:00:00Z", "ok"},
+		{"p0", "2026-11-05T07:10:00Z", "interrupted"},
+		{"p1", "2026-11-05T07:20:00Z", "running"},
+		{"p2", "2026-11-05T06:30:00Z", "failed"},
+	} {
+		if _, err := r.st.DB().Exec(`INSERT INTO scan (id, project_id, started_at, status) VALUES (?,?,?,?)`,
+			row[0]+row[1], row[0], row[1], row[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last, err := NewRepo(r.st).LastStarts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := last["p0"].UTC().Format(time.RFC3339); got != "2026-11-05T06:00:00Z" {
+		t.Errorf("demo: last start %s, want the ok one", got)
+	}
+	if _, has := last["p1"]; has {
+		t.Errorf("shop: a running row counts as a check: %v", last["p1"])
+	}
+	if got := last["p2"].UTC().Format(time.RFC3339); got != "2026-11-05T06:30:00Z" {
+		t.Errorf("blog: last start %s, want the failed one", got)
+	}
+}
+
+func TestLoopChecksAgainAfterAnInterruptedCheck(t *testing.T) {
+	r := newRig(t, at("2026-11-05", "08:00"), "demo")
+	if _, err := r.st.DB().Exec(`INSERT INTO scan (id, project_id, started_at, status) VALUES ('s1','p0',?,'interrupted')`,
+		at("2026-11-05", "07:10").UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	r.look(3)
+	if got := r.scanned(); len(got) != 1 {
+		t.Errorf("after an interrupted check: scans %v", got)
+	}
+}

@@ -19,10 +19,16 @@ type Repo struct{ s *store.Store }
 // NewRepo returns the watch's view of s.
 func NewRepo(s *store.Store) *Repo { return &Repo{s: s} }
 
-// LastStarts maps each project id to the start of its newest scan, whatever
-// its status: a failed check is a check of the day too.
+// countedStatuses is the SQL filter of the scans that count as a check of
+// the day: a failed check does, an interrupted one (serve stopped during it)
+// or one still running (in progress elsewhere, or left by a crash) does not.
+const countedStatuses = `status NOT IN ('interrupted', 'running')`
+
+// LastStarts maps each project id to the start of its newest scan that
+// counts as a check (see countedStatuses): a failed check is a check of the
+// day too.
 func (r *Repo) LastStarts(ctx context.Context) (map[string]time.Time, error) {
-	rows, err := r.s.DB().QueryContext(ctx, `SELECT project_id, MAX(started_at) FROM scan GROUP BY project_id`)
+	rows, err := r.s.DB().QueryContext(ctx, `SELECT project_id, MAX(started_at) FROM scan WHERE `+countedStatuses+` GROUP BY project_id`)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the last checks: %w", err)
 	}

@@ -12,8 +12,12 @@ import (
 )
 
 // Retries of a failed check: at most MaxRetries more tries in the day,
-// RetryAfter apart. In memory, as the retries of the digest: a restart of
-// serve may try once more, never in a loop.
+// RetryAfter apart. In memory, as the retries of the digest. After a restart
+// of serve, a project whose check of the day failed and was recorded as
+// failed waits for tomorrow (its failed scan counts); one whose failure left
+// no scan (no database) is tried once more at each restart, never in a loop;
+// one whose check was interrupted, or left running by a crash, is checked
+// again.
 const (
 	MaxRetries = 2
 	RetryAfter = 30 * time.Minute
