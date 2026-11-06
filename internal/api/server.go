@@ -225,6 +225,7 @@ func (s *server) routes() {
 	s.sourceRoutes()
 	s.fixRoutes()
 	s.targetRoutes()
+	s.historyRoutes()
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.not_found"), "")
 	})
