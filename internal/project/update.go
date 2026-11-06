@@ -166,7 +166,7 @@ func Update(ctx context.Context, repo *Repo, log *audit.Logger, req UpdateReques
 	if _, err := log.Record(ctx, audit.Event{Actor: req.Actor, Action: "project.update", Target: p.Name, Result: "ok", Evidence: ev}); err != nil {
 		return p, &AuditError{Err: err}
 	}
-	if pt.GateThreshold != nil {
+	if pt.GateThreshold != nil && fromThreshold != p.GateThreshold {
 		if _, err := log.Record(ctx, audit.Event{Actor: req.Actor, Action: "project.threshold", Target: p.Name, Result: "ok",
 			Evidence: map[string]any{"from": string(fromThreshold), "to": string(p.GateThreshold)}}); err != nil {
 			return p, &AuditError{Err: err}
