@@ -388,3 +388,102 @@ func TestLoopChecksAgainAfterAnInterruptedCheck(t *testing.T) {
 		t.Errorf("after an interrupted check: scans %v", got)
 	}
 }
+
+func (r *rig) watchDays() int {
+	r.t.Helper()
+	var n int
+	if err := r.st.DB().QueryRow(`SELECT COUNT(*) FROM watch_day`).Scan(&n); err != nil {
+		r.t.Fatal(err)
+	}
+	return n
+}
+
+// The day's source read cannot be recorded: the next look tries again, and
+// the sources are read once it can.
+func TestLoopClaimErrorTriesTheSourcesAgain(t *testing.T) {
+	r := newRig(t, at("2026-11-05", "08:00"), "demo")
+	if _, err := r.st.DB().Exec(`ALTER TABLE watch_day RENAME TO watch_day_off`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Loop(ctx, r.deps(), 5*time.Millisecond); close(done) }()
+	wait := func(n int32) {
+		start := r.ticks.Load()
+		for r.ticks.Load()-start < n {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	wait(3)
+	r.mu.Lock()
+	before := r.sources
+	r.mu.Unlock()
+	if before != 0 {
+		t.Fatalf("sources read without a claim: %d", before)
+	}
+	if _, err := r.st.DB().Exec(`ALTER TABLE watch_day_off RENAME TO watch_day`); err != nil {
+		t.Fatal(err)
+	}
+	wait(3)
+	cancel()
+	<-done
+	if r.sources != 1 {
+		t.Errorf("sources after the claim works again: %d, want 1", r.sources)
+	}
+}
+
+// serve stops during the source read: the day's claim is let go, so the
+// next serve reads the sources.
+func TestLoopCancelledSourceReadReleasesTheDay(t *testing.T) {
+	r := newRig(t, at("2026-11-05", "08:00"), "demo")
+	d := r.deps()
+	entered := make(chan struct{}, 1)
+	d.Sources = func(ctx context.Context) error {
+		entered <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Loop(ctx, d, 5*time.Millisecond); close(done) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sources were not read")
+	}
+	cancel()
+	<-done
+	if n := r.watchDays(); n != 0 {
+		t.Fatalf("the day stays claimed after a stopped read: %d rows", n)
+	}
+	r.look(3)
+	if r.sources != 1 {
+		t.Errorf("sources after a restart: %d, want 1", r.sources)
+	}
+}
+
+// A failed source read is not tried again in the same serve (no loop), but
+// the day is let go so a restart tries again.
+func TestLoopFailedSourceReadReleasesTheDay(t *testing.T) {
+	r := newRig(t, at("2026-11-05", "08:00"), "demo")
+	d := r.deps()
+	var reads atomic.Int32
+	d.Sources = func(context.Context) error { reads.Add(1); return errors.New("no network") }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Loop(ctx, d, 5*time.Millisecond); close(done) }()
+	for start := r.ticks.Load(); r.ticks.Load()-start < 4; {
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if n := reads.Load(); n != 1 {
+		t.Errorf("reads in one serve: %d, want 1", n)
+	}
+	if n := r.watchDays(); n != 0 {
+		t.Errorf("the day stays claimed after a failed read: %d rows", n)
+	}
+	if got := r.scanned(); len(got) != 1 {
+		t.Errorf("scans = %v", got)
+	}
+}

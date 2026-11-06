@@ -62,6 +62,10 @@ func Loop(ctx context.Context, d Deps, every time.Duration) {
 		log = slog.Default()
 	}
 	window, tries := "", map[string]*try{}
+	// sourcesDone is the window whose source read this process has handled
+	// (read, failed, or claimed by another process); claimWarned the window
+	// whose claim error was already logged.
+	sourcesDone, claimWarned := "", ""
 	look := func() {
 		h, m, on := d.Policy().WatchHour()
 		if !on {
@@ -74,16 +78,39 @@ func Loop(ctx context.Context, d Deps, every time.Duration) {
 		}
 		// The tries are those of this hour of this day: a new day, or a new
 		// hour in the policy, starts again from the database.
-		if key := start.Format(time.RFC3339); key != window {
+		key := start.Format(time.RFC3339)
+		if key != window {
 			window, tries = key, map[string]*try{}
-			claimed, err := d.Repo.ClaimSources(ctx, start.Format("2006-01-02"), now)
+		}
+		// The source read of the day is claimed in the database, then read.
+		// A claim that cannot be recorded is tried again at the next look. A
+		// read stopped with serve, or failed, lets the day go so a later serve
+		// reads again; this one does not, so a failing read never loops.
+		if key != sourcesDone {
+			day := start.Format("2006-01-02")
+			claimed, err := d.Repo.ClaimSources(ctx, day, now)
 			switch {
 			case err != nil:
-				if ctx.Err() == nil {
-					log.Warn("serve: the daily watch cannot record its source read; the sources are not read today", "err", err)
+				if ctx.Err() == nil && claimWarned != key {
+					claimWarned = key
+					log.Warn("serve: the daily watch cannot record its source read; it tries again at the next look", "err", err)
 				}
-			case claimed:
-				if err := d.Sources(ctx); err != nil && ctx.Err() == nil {
+			case !claimed:
+				sourcesDone = key
+			default:
+				err := d.Sources(ctx)
+				if err != nil {
+					rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+					if rerr := d.Repo.ReleaseSources(rctx, day); rerr != nil {
+						log.Warn("serve: the daily watch cannot let go of its source read of the day", "err", rerr)
+					}
+					cancel()
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				sourcesDone = key
+				if err != nil {
 					log.Warn("serve: the daily watch could not read every source; the checks go on with the data already here", "err", err)
 				}
 			}

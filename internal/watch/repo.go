@@ -95,3 +95,12 @@ func (r *Repo) ClaimSources(ctx context.Context, day string, at time.Time) (bool
 	}
 	return n == 1, nil
 }
+
+// ReleaseSources forgets the source read of the local day (YYYY-MM-DD), so
+// the next claim of that day succeeds: the read was stopped or failed.
+func (r *Repo) ReleaseSources(ctx context.Context, day string) error {
+	if _, err := r.s.DB().ExecContext(ctx, `DELETE FROM watch_day WHERE day = ?`, day); err != nil {
+		return fmt.Errorf("cannot let go of the source read of the day: %w", err)
+	}
+	return nil
+}
