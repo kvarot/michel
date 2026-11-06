@@ -29,6 +29,7 @@ const (
 	ReasonSealMismatch   = "seal mismatch"
 	ReasonSealMissing    = "seal missing"
 	ReasonSealKeyMissing = "seal key missing"
+	ReasonSealedAnchor   = "sealed anchor missing or wrong"
 )
 
 // VerifyOptions say how much Verify checks. Required (integrity_protection:
@@ -40,9 +41,14 @@ type VerifyOptions struct {
 }
 
 // Failed says whether the result is a failure: a broken event, a truncated
-// tail, or, when the protection is required, an absent anchor with events.
+// tail, a sealed anchor that is missing or wrong, seals that cannot be
+// checked, or, when the protection is required, an absent anchor with events.
 func (r VerifyResult) Failed(required bool) bool {
-	return r.Broken != nil || r.Reason == ReasonTailTruncated || (required && r.Reason == ReasonHeadAbsent && r.Checked > 0)
+	switch r.Reason {
+	case ReasonTailTruncated, ReasonSealedAnchor, ReasonSealKeyMissing:
+		return true
+	}
+	return r.Broken != nil || (required && r.Reason == ReasonHeadAbsent && r.Checked > 0)
 }
 
 // Verify is VerifyWith without the seals: the chain and the head anchor only.
@@ -57,11 +63,19 @@ func Verify(ctx context.Context, s *store.Store) (VerifyResult, error) {
 // The Reason is "tail truncated" when the chain no longer holds the event the
 // head points at (fewer events than the head count) or holds a different one
 // (hash mismatch at that position). When the file is missing the Reason is
-// "head anchor absent", a failure only when the protection is required. With
-// opt.Required, every event from the first sealed one on must carry a seal
-// made with opt.Key: a wrong seal, a seal removed, or a seal that cannot be
-// checked for want of the key is a broken event. Events before the first
-// sealed one were written before the protection and are only counted.
+// "head anchor absent", a failure only when the protection is required.
+//
+// With opt.Required the seals are checked against the sealed anchor of the
+// database, which only the key can make (see LoadOrCreateKey): every event
+// from its start on must carry a seal made with opt.Key, and the event it
+// points at must still be in the chain, unchanged. A wrong seal or a seal
+// removed is a broken event; an anchor missing or not made with the key is
+// "sealed anchor missing or wrong"; a removed tail is "tail truncated"
+// (Expected is then the place of the last sealed event). Events before the
+// start were written before the protection: they are only counted. Without
+// the key, seals cannot be checked: "seal key missing" once the protection
+// began. Someone who can write the database and audit.head but has not the
+// key can therefore neither drop nor rewrite sealed events unseen.
 func VerifyWith(ctx context.Context, s *store.Store, opt VerifyOptions) (VerifyResult, error) {
 	n, h, ok := readHead(s.Path())
 	return verifyAgainst(ctx, s, n, h, ok, opt)
@@ -69,6 +83,15 @@ func VerifyWith(ctx context.Context, s *store.Store, opt VerifyOptions) (VerifyR
 
 // verifyAgainst walks the chain and checks it against a head read earlier.
 func verifyAgainst(ctx context.Context, s *store.Store, headCount int, headHash string, headOK bool, opt VerifyOptions) (VerifyResult, error) {
+	// The sealed anchor is read before the walk, as the head: events written
+	// after are walked and checked as any other.
+	var anchor sealedAnchor
+	if opt.Required {
+		var err error
+		if anchor, err = readSealedAnchor(ctx, s.DB()); err != nil {
+			return VerifyResult{}, err
+		}
+	}
 	rows, err := s.DB().QueryContext(ctx, `SELECT seq, id, ts, actor, action, target, result,
 		correlation_id, evidence, prev_hash, hash, hmac FROM audit_event ORDER BY seq`)
 	if err != nil {
@@ -79,6 +102,8 @@ func verifyAgainst(ctx context.Context, s *store.Store, headCount int, headHash 
 	prev := ""
 	atHead := "" // hash of the event at position headCount, once walked
 	sealedSeen := false
+	anchorOK := anchor.valid(opt.Key)
+	atAnchor := "" // hash of the event at anchor.Seq, once walked
 	for rows.Next() {
 		var e Event
 		var evidence string
@@ -98,8 +123,9 @@ func verifyAgainst(ctx context.Context, s *store.Store, headCount int, headHash 
 			}
 		}
 		if reason == "" && opt.Required {
+			mustSeal := sealedSeen || (anchorOK && e.Seq >= anchor.From)
 			switch {
-			case e.HMAC == "" && sealedSeen:
+			case e.HMAC == "" && mustSeal:
 				reason = ReasonSealMissing
 			case e.HMAC == "":
 				res.Unsealed++
@@ -121,6 +147,9 @@ func verifyAgainst(ctx context.Context, s *store.Store, headCount int, headHash 
 		if res.Checked == headCount {
 			atHead = e.Hash
 		}
+		if anchorOK && e.Seq == anchor.Seq {
+			atAnchor = e.Hash
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return res, err
@@ -131,6 +160,21 @@ func verifyAgainst(ctx context.Context, s *store.Store, headCount int, headHash 
 		res.Reason = ReasonHeadAbsent
 	case headCount > 0 && (res.Checked < headCount || atHead != headHash):
 		res.Reason, res.Expected = ReasonTailTruncated, headCount
+	}
+	if !opt.Required || res.Reason == ReasonTailTruncated {
+		return res, nil
+	}
+	// The sealed anchor is more trustworthy than the head file: its failures
+	// win over an absent head.
+	switch {
+	case opt.Key == nil:
+		if anchor.From > 0 {
+			res.Reason = ReasonSealKeyMissing
+		}
+	case !anchorOK:
+		res.Reason = ReasonSealedAnchor
+	case anchor.Seq > 0 && atAnchor != anchor.Head:
+		res.Reason, res.Expected = ReasonTailTruncated, int(anchor.Seq)
 	}
 	return res, nil
 }

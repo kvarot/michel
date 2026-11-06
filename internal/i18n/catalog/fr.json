@@ -335,6 +335,7 @@
   "cli.audit.list.read_failed": "impossible de lire le journal d'audit : %v",
   "cli.audit.verify.broken_event": "audit : le journal est abîmé à l'événement %s : %s",
   "cli.audit.verify.broken_head": "audit : le journal est abîmé : le fichier qui marque la fin du journal (%s) manque alors que le journal contient %d événements, donc Michel ne peut pas exclure que les derniers aient été supprimés",
+  "cli.audit.verify.broken_sealed_anchor": "audit : le journal est abîmé : la marque scellée, qui dit où commencent les sceaux et quel est le dernier événement scellé, manque ou n'a pas été faite avec la clé des sceaux, donc Michel ne peut pas exclure que des événements scellés aient été supprimés ou réécrits",
   "cli.audit.verify.broken_tail": "audit : le journal est abîmé à la fin : des événements ont disparu (%d attendus, %d trouvés)",
   "cli.audit.verify.head_absent": "audit : le fichier qui marque la fin du journal est introuvable (%s manque). Michel ne peut donc pas vérifier si les derniers événements ont été supprimés. Il sera recréé au prochain événement enregistré.",
   "cli.audit.verify.key_missing": "audit : le journal est abîmé : les événements sont scellés, mais Michel ne peut pas lire la clé des sceaux (secret audit-key), donc il ne peut pas les vérifier",

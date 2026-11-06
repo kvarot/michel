@@ -68,3 +68,27 @@ func TestSecretSetRefusesTheAuditKey(t *testing.T) {
 		}
 	}
 }
+
+// Without the key, stripping every seal and blanking the sealed anchor is
+// still caught.
+func TestAuditVerifyCatchesABlankedSealedAnchor(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, _, err := run(t, dir, "noop"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`UPDATE audit_event SET hmac = ''`,
+		`UPDATE audit_anchor SET sealed_from = 0, sealed_seq = 0, sealed_head = '', sealed_mac = ''`} {
+		if _, err := s.DB().Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	_, out, _, err := run(t, dir, "--lang", "fr", "audit", "verify")
+	if ExitCode(err) != ExitCodeAuditBroken || !strings.Contains(out, "marque scellée") {
+		t.Errorf("blanked anchor: %v\n%s", err, out)
+	}
+}

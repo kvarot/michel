@@ -335,6 +335,7 @@
   "cli.audit.list.read_failed": "cannot read the audit log: %v",
   "cli.audit.verify.broken_event": "audit: BROKEN at event %s: %s",
   "cli.audit.verify.broken_head": "audit: BROKEN: the head anchor %s is missing while the log holds %d events, so the removal of the newest events cannot be ruled out",
+  "cli.audit.verify.broken_sealed_anchor": "audit: BROKEN: the sealed anchor, which marks where the seals begin and the last sealed event, is missing or was not made with the key of the seals, so the removal or rewriting of sealed events cannot be ruled out",
   "cli.audit.verify.broken_tail": "audit: BROKEN at tail: tail truncated (expected %d events, found %d)",
   "cli.audit.verify.head_absent": "audit: head anchor absent (%s is missing), so the removal of the newest events cannot be checked. The next recorded event writes it again.",
   "cli.audit.verify.key_missing": "audit: BROKEN: the events are sealed, but the key of the seals (secret audit-key) cannot be read, so they cannot be checked",

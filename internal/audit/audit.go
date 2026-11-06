@@ -79,24 +79,40 @@ func LoadKey(s secret.Store) (key []byte, ok bool, err error) {
 }
 
 // LoadOrCreateKey reads the seal key, creating 32 random bytes the first
-// time. Several processes may start at once on a fresh data folder: the key
-// is created only when none is stored (secret.Creator), else the stored
-// value is read back after the write, so every process seals with the key
-// that stays.
-func LoadOrCreateKey(s secret.Store) ([]byte, error) {
+// time. Making the key starts the protection: in the same transaction of st,
+// the sealed anchor marks the next event as the first that must be sealed.
+// The transaction holds the write lock of the database, so of several
+// processes starting at once on a fresh data folder one makes the key and
+// the others read it; the secret is also created only when none is stored
+// (secret.Creator), and read back, so every process seals with the stored key.
+func LoadOrCreateKey(ctx context.Context, s secret.Store, st *store.Store) ([]byte, error) {
 	key, ok, err := LoadKey(s)
 	if err != nil || ok {
+		return key, err
+	}
+	tx, err := st.DB().BeginTx(ctx, nil) // immediate: one maker at a time
+	if err != nil {
+		return nil, fmt.Errorf("cannot start the seals of the audit log: %w", err)
+	}
+	defer tx.Rollback()
+	if key, ok, err := LoadKey(s); err != nil || ok {
 		return key, err
 	}
 	key = make([]byte, keySize)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("cannot create the key of the audit seals: %w", err)
 	}
+	if err := startSealing(ctx, tx, key); err != nil {
+		return nil, err
+	}
 	value := []byte(hex.EncodeToString(key))
 	if c, ok := s.(secret.Creator); ok {
 		err = c.Create(secret.ReservedAuditKey, value)
 		if errors.Is(err, secret.ErrExists) {
-			err = nil
+			// Made meanwhile by a process outside the lock: use it, and
+			// leave the anchor to its maker.
+			tx.Rollback()
+			return readBackKey(s)
 		}
 	} else {
 		err = s.Set(secret.ReservedAuditKey, value)
@@ -104,7 +120,15 @@ func LoadOrCreateKey(s secret.Store) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot save the key of the audit seals: %w", err)
 	}
-	key, ok, err = LoadKey(s)
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("cannot start the seals of the audit log: %w", err)
+	}
+	return readBackKey(s)
+}
+
+// readBackKey reads the key that is stored, after a write.
+func readBackKey(s secret.Store) ([]byte, error) {
+	key, ok, err := LoadKey(s)
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +211,17 @@ func (l *Logger) Record(ctx context.Context, e Event) (Event, error) {
 	if err := tx.QueryRowContext(ctx, `UPDATE audit_anchor SET events = events + 1 WHERE id = 1 RETURNING events`).Scan(&count); err != nil {
 		return Event{}, fmt.Errorf("cannot count the audit chain: %w", err)
 	}
+	anchored := true
+	if l.key != nil {
+		if anchored, err = advanceSealedAnchor(ctx, tx, l.key, e); err != nil {
+			return Event{}, err
+		}
+	}
 	if err := l.commit(tx); err != nil {
 		return Event{}, fmt.Errorf("cannot write to the audit log: %w", err)
+	}
+	if !anchored {
+		slog.Warn("audit: the sealed anchor is missing or does not match the chain (events removed or changed?); audit verify reports it")
 	}
 	// The head is written only once the event is durable, so it never points
 	// past the chain. It is written under l.mu, so heads from this process

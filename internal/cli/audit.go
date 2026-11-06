@@ -27,7 +27,7 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 			var opt audit.VerifyOptions
 			if required {
 				dir, _ := cmd.Flags().GetString("data-dir")
-				key, err := loadSealKey(dir, false)
+				key, err := loadSealKey(cmd.Context(), dir, nil)
 				if err != nil {
 					// Read-only: a key that cannot be read leaves the seals unchecked,
 					// which the walk reports at the first sealed event.
@@ -58,7 +58,14 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 				}
 				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
 			}
-			if res.Broken != nil && res.Reason == audit.ReasonSealKeyMissing {
+			if res.Reason == audit.ReasonSealedAnchor {
+				msg := deps.T("cli.audit.verify.broken_sealed_anchor")
+				if !asJSON {
+					fmt.Fprintln(deps.Stdout, msg)
+				}
+				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
+			}
+			if res.Reason == audit.ReasonSealKeyMissing {
 				msg := deps.T("cli.audit.verify.key_missing")
 				if !asJSON {
 					fmt.Fprintln(deps.Stdout, msg)

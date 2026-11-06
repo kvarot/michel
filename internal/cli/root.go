@@ -196,7 +196,7 @@ func NewRootCmd(deps *Deps) *cobra.Command {
 			// does not stop the command (a digest still goes out): its events are
 			// unsealed, which michel audit verify reports.
 			if sealRequired(p) {
-				if key, err := loadSealKey(dir, true); err != nil {
+				if key, err := loadSealKey(cmd.Context(), dir, st); err != nil {
 					fmt.Fprintln(deps.Stderr, deps.T("cli.root.audit_key", err))
 				} else {
 					deps.Audit.SetKey(key)
@@ -259,11 +259,12 @@ func sealRequired(p policy.Policy) bool {
 	return p.Sovereignty.Audit.IntegrityProtection != "none"
 }
 
-// loadSealKey reads the key of the audit seals from the secret store of dir,
-// creating it when create is true. Without create nothing is written: a
-// missing secrets folder or key is a nil key.
-func loadSealKey(dir string, create bool) ([]byte, error) {
-	if !create {
+// loadSealKey reads the key of the audit seals from the secret store of dir.
+// With st it creates the key when there is none, which starts the seals of
+// the log in st. Without st nothing is written: a missing secrets folder or
+// key is a nil key.
+func loadSealKey(ctx context.Context, dir string, st *store.Store) ([]byte, error) {
+	if st == nil {
 		if _, err := os.Stat(filepath.Join(dir, "secrets")); err != nil {
 			return nil, nil
 		}
@@ -272,8 +273,8 @@ func loadSealKey(dir string, create bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if create {
-		return audit.LoadOrCreateKey(sec)
+	if st != nil {
+		return audit.LoadOrCreateKey(ctx, sec, st)
 	}
 	key, _, err := audit.LoadKey(sec)
 	return key, err
