@@ -119,12 +119,12 @@ describe('summary', () => {
       gone_elsewhere: { ...zeros(), medium: 4 },
       fixes: { proposed: 2, applied: 1, proven: 1 },
     })
-    expect(summary(r, 'fr', today)).toBe('La semaine du 02/11/2026 au 08/11/2026 : 4 failles trouvées, 6 corrigées, 2 correctifs proposés à ta validation.')
+    expect(summary(r, 'fr', today)).toBe('La semaine du 02/11/2026 au 08/11/2026 : 4 failles trouvées, 6 corrigées, 2 corrections proposées à ta validation.')
     expect(summary(r, 'en', today)).toBe('The week of 2026-11-02 to 2026-11-08: 4 flaws found, 6 fixed, 2 fixes submitted for your approval.')
   })
   test('the current week and the current month say « this week » and « this month »', () => {
     const r = report({ from: '2026-11-16', to: '2026-11-22', found: { ...zeros(), high: 4 } })
-    expect(summary(r, 'fr', today)).toBe('Cette semaine : 4 failles trouvées, 0 corrigée, 0 correctif proposé à ta validation.')
+    expect(summary(r, 'fr', today)).toBe('Cette semaine : 4 failles trouvées, 0 corrigée, 0 correction proposée à ta validation.')
     const m = report({ from: '2026-11-01', to: '2026-11-30' })
     expect(summary(m, 'en', today)).toBe('This month: 0 flaws found, 0 fixed, 0 fixes submitted for your approval.')
     const past = report({ from: '2026-10-01', to: '2026-10-31' })
@@ -133,17 +133,17 @@ describe('summary', () => {
   })
   test('one of each is singular', () => {
     const r = report({ from: '2026-11-02', to: '2026-11-08', found: { ...zeros(), low: 1 }, gone_elsewhere: { ...zeros(), low: 1 }, fixes: { proposed: 1, applied: 0, proven: 0 } })
-    expect(summary(r, 'fr', today)).toContain(': 1 faille trouvée, 1 corrigée, 1 correctif proposé à ta validation.')
+    expect(summary(r, 'fr', today)).toContain(': 1 faille trouvée, 1 corrigée, 1 correction proposée à ta validation.')
     expect(summary(r, 'en', today)).toContain(': 1 flaw found, 1 fixed, 1 fix submitted for your approval.')
   })
   test('an empty period gives zeros, not « not read »', () => {
     const fr = summary(report(), 'fr', today)
-    expect(fr).toContain('0 faille trouvée, 0 corrigée, 0 correctif proposé')
+    expect(fr).toContain('0 faille trouvée, 0 corrigée, 0 correction proposée')
     expect(fr).not.toContain('non lu')
   })
   test('a count that cannot be read says « non lu », never 0', () => {
     const r = report({ from: '2026-11-02', to: '2026-11-08', found: null, gone_by_michel: { high: 'x' }, fixes: { proposed: null } })
-    expect(summary(r, 'fr', today)).toBe('La semaine du 02/11/2026 au 08/11/2026 : failles trouvées : non lu, corrigées : non lu, correctifs proposés : non lu.')
+    expect(summary(r, 'fr', today)).toBe('La semaine du 02/11/2026 au 08/11/2026 : failles trouvées : non lu, corrigées : non lu, corrections proposées : non lu.')
     expect(summary(r, 'en', today)).toBe('The week of 2026-11-02 to 2026-11-08: flaws found: not read, fixed: not read, fixes submitted: not read.')
   })
   test('no report gives no sentence', () => {

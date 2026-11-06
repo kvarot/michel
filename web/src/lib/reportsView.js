@@ -4,7 +4,7 @@
 // No DOM, no fetch, no storage. Vitest covers them (reportsView.test.js).
 import { translate } from '../i18n/index.js'
 import { severities } from './digestView.js'
-import { localDay } from './openCurveView.js'
+import { dayKey, localDay } from './openCurveView.js'
 import { longDay } from './overviewView.js'
 
 /** The kinds of period a report covers. */
@@ -18,11 +18,6 @@ function isCount(v) {
 /** count is v when it is a count, null otherwise. */
 function count(v) {
   return isCount(v) ? v : null
-}
-
-/** dayKey is a local day as YYYY-MM-DD. */
-export function dayKey(d) {
-  return `${String(d.getFullYear()).padStart(4, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 /** toDay reads a Date or a YYYY-MM-DD as a local day at 00:00, null when it cannot. */
@@ -46,7 +41,8 @@ function bounds(kind, d) {
 
 /** monthName names the month of d with its year, lower case in French (« octobre 2026 »). */
 function monthName(d, lang) {
-  return new Intl.DateTimeFormat(lang === 'fr' ? 'fr-FR' : 'en-GB', { month: 'long', year: 'numeric' }).format(d)
+  const name = new Intl.DateTimeFormat(lang === 'fr' ? 'fr-FR' : 'en-GB', { month: 'long', year: 'numeric' }).format(d)
+  return lang === 'fr' ? name.toLocaleLowerCase('fr-FR') : name
 }
 
 /** capital puts the first letter in upper case. */

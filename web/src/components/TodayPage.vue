@@ -226,6 +226,7 @@ export default {
       // The digests sent are read once, then again after « Actualiser », a
       // decision or a change of language (findingsCache).
       const keptRuns = findingsCache.runs(ui)
+      this.openStatsState = 'reading'
       api.openStats(90).then((stats) => {
         if (seq !== this.seq) return
         this.openStats = stats

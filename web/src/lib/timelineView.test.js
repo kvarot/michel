@@ -18,25 +18,25 @@ describe('lines: the words of each kind', () => {
     [{ kind: 'gone' }, "N'est plus trouvée", 'No longer found'],
     [{ kind: 'back' }, 'Revenue', 'Came back'],
     [{ kind: 'reopened', detail: { reason: 'due_reached' } }, 'Remise à traiter : la date que tu avais fixée est arrivée', 'Back on your list: the date you set has come'],
-    [{ kind: 'reopened', detail: { reason: 'kev_changed' } }, "Remise à traiter : ce qu'on sait des attaques qui l'utilisent a changé", 'Back on your list: what is known of attacks using it changed'],
+    [{ kind: 'reopened', detail: { reason: 'kev_changed' } }, "Remise à traiter : les informations sur les attaques qui l'exploitent ont changé", 'Back on your list: what is known of attacks using it changed'],
     [{ kind: 'reopened' }, 'Remise à traiter : la situation a changé', 'Back on your list: something changed'],
-    [{ kind: 'decision', detail: { action: 'fix', author: 'web' } }, 'Décision : la corriger, prise sur la page de Michel', "Decision: fix it, made on Michel's page"],
+    [{ kind: 'decision', detail: { action: 'fix', author: 'web' } }, 'Décision : la corriger, prise dans Michel', "Decision: fix it, made in Michel"],
     [{ kind: 'decision', detail: { action: 'ignore', author: 'cli' } }, "Décision : l'ignorer, prise en ligne de commande", 'Decision: ignore it, made from the command line'],
-    [{ kind: 'decision', detail: { action: 'defer', author: 'web', due: '2026-12-01T00:00:00+01:00' } }, "Décision : la reporter jusqu'au 01/12/2026, prise sur la page de Michel", "Decision: put it off until 2026-12-01, made on Michel's page"],
-    [{ kind: 'decision', detail: { action: 'fix', author: 'web', superseded_at: '2026-11-03T10:00:00Z', reason: 'redecided' } }, "Décision : la corriger, prise sur la page de Michel. Remplacée le 03/11/2026 par une nouvelle décision", "Decision: fix it, made on Michel's page. Replaced on 2026-11-03 by a new decision"],
-    [{ kind: 'decision', detail: { action: 'defer', author: 'web', superseded_at: '2026-11-03T10:00:00Z', reason: 'severity_changed' } }, "Décision : la reporter, prise sur la page de Michel. Plus valable depuis le 03/11/2026 : la gravité a changé", "Decision: put it off, made on Michel's page. No longer in force since 2026-11-03: the severity changed"],
+    [{ kind: 'decision', detail: { action: 'defer', author: 'web', due: '2026-12-01T00:00:00+01:00' } }, "Décision : la reporter jusqu'au 01/12/2026, prise dans Michel", "Decision: put it off until 2026-12-01, made in Michel"],
+    [{ kind: 'decision', detail: { action: 'fix', author: 'web', superseded_at: '2026-11-03T10:00:00Z', reason: 'redecided' } }, "Décision : la corriger, prise dans Michel. Remplacée le 03/11/2026 par une nouvelle décision", "Decision: fix it, made in Michel. Replaced on 2026-11-03 by a new decision"],
+    [{ kind: 'decision', detail: { action: 'defer', author: 'web', superseded_at: '2026-11-03T10:00:00Z', reason: 'severity_changed' } }, "Décision : la reporter, prise dans Michel. Plus valable depuis le 03/11/2026 : la gravité a changé", "Decision: put it off, made in Michel. No longer in force since 2026-11-03: the severity changed"],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'preparing' } }, 'Correction lancée : Michel commence à la préparer', 'Fix launched: Michel starts preparing it'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'proposed' } }, 'Correction proposée : elle attend ta validation', 'Fix proposed: it waits for your approval'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'approved' } }, 'Correction validée', 'Fix approved'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'refused' } }, 'Correction refusée', 'Fix refused'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'applied' } }, 'Correction appliquée : la branche est prête', 'Fix applied: the branch is ready'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'proven_fixed' } }, 'Correction vérifiée : un nouveau contrôle ne trouve plus la faille', 'Fix proven: a new check no longer finds the flaw'],
-    [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'inconclusive' } }, "Correction pas confirmée : Michel n'a pas pu vérifier qu'elle marche", 'Fix not confirmed: Michel could not check that it works'],
+    [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'inconclusive' } }, "Correction non confirmée : Michel n'a pas pu vérifier qu'elle fonctionne", 'Fix not confirmed: Michel could not check that it works'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'failed' } }, "La correction n'a pas abouti", 'The fix did not succeed'],
-    [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'withdrawn' } }, 'Correction arrêtée avant de démarrer', 'Fix stopped before it started'],
+    [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'withdrawn' } }, "Correction annulée avant le démarrage de l'agent", 'Fix cancelled before the agent started'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'superseded' } }, 'Correction remplacée par une plus récente', 'Fix replaced by a newer one'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'held' } }, 'Correction en attente de ta réponse', 'Fix waiting for your answer'],
-    [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'running' } }, 'Michel applique la correction', 'Michel is applying the fix'],
+    [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'running' } }, "Correction en cours : Michel l'applique", 'Fix in progress: Michel is applying it'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'unknown' } }, 'Michel ne sait pas si la correction a abouti', 'Michel does not know whether the fix worked'],
     [{ kind: 'attempt', detail: { attempt_id: 'a1', state: 'odd' } }, 'Correction : étape inconnue', 'Fix: unknown step'],
     [{ kind: 'odd' }, 'Changement inconnu', 'Unknown change'],
@@ -90,10 +90,10 @@ describe('reconstructed entries', () => {
   })
   test('the note says from when the history is whole, only when a line is reconstructed', () => {
     const rec = [{ at: '2026-10-01T00:00:00Z', kind: 'seen', reconstructed: true }]
-    expect(historyNote(rec, '2026-11-06T09:00:00Z', 'fr')).toBe("Avant le 06/11, Michel ne gardait que le dernier changement d'une faille. Les lignes marquées « reconstituée » en sont déduites.")
-    expect(historyNote(rec, '2026-11-06T09:00:00Z', 'en')).toBe('Before 11-06, Michel only kept the last change of a flaw. The lines marked « reconstructed » are worked out from it.')
+    expect(historyNote(rec, '2026-11-06T09:00:00Z', 'fr')).toBe("Avant le 06/11, Michel ne gardait que le dernier changement d'une faille. Les événements marqués « reconstitué » en sont déduits.")
+    expect(historyNote(rec, '2026-11-06T09:00:00Z', 'en')).toBe('Before 11-06, Michel only kept the last change of a flaw. The events marked « reconstructed » are worked out from it.')
     expect(historyNote([{ at: '2026-11-06T10:00:00Z', kind: 'seen' }], '2026-11-06T09:00:00Z', 'fr')).toBe('')
-    expect(historyNote(rec, 'x', 'fr')).toBe("Avant, Michel ne gardait que le dernier changement d'une faille. Les lignes marquées « reconstituée » en sont déduites.")
+    expect(historyNote(rec, 'x', 'fr')).toBe("Avant, Michel ne gardait que le dernier changement d'une faille. Les événements marqués « reconstitué » en sont déduits.")
   })
 })
 

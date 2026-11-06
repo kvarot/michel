@@ -4,7 +4,7 @@
     <p class="m-small m-muted m-curve__line">{{ $t('curve.hint') }}</p>
     <p v-if="state === 'reading'" class="m-small m-muted m-curve__line" role="status">{{ $t('curve.reading') }}</p>
     <p v-else-if="state === 'unread' || !s" class="m-small m-unread m-curve__line"><span aria-hidden="true">— </span>{{ $t('curve.unread') }}</p>
-    <p v-else-if="!s.summary" class="m-small m-muted m-curve__line">{{ summary }}</p>
+    <p v-else-if="!s.summary || !s.max" class="m-small m-muted m-curve__line">{{ summary }}</p>
     <template v-else>
       <ul class="m-curve__legend m-small">
         <li v-for="p in s.paths" :key="p.severity">

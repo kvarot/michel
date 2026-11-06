@@ -24,7 +24,7 @@ export function localDay(text) {
 }
 
 /** dayKey is a local day as YYYY-MM-DD. */
-function dayKey(d) {
+export function dayKey(d) {
   return `${String(d.getFullYear()).padStart(4, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
@@ -129,9 +129,10 @@ function long(date, lang) {
 }
 
 /**
- * summaryText is the equivalent text of the curve: the start, the end, the
- * highest and the lowest. '' when the curve cannot be read; it says there
- * is no data when there is no day.
+ * summaryText is the equivalent text of the curve: the start, the end with
+ * its count by severity, the highest and the lowest. '' when the curve
+ * cannot be read; it says there is no data when there is no day, and one
+ * sentence when every day is at 0 (no chart then).
  * @param {ReturnType<typeof series>} s
  * @param {string} lang
  */
@@ -139,12 +140,16 @@ export function summaryText(s, lang) {
   if (!s) return ''
   const t = (key, params) => translate(lang, key, params)
   if (!s.summary) return t('curve.no_data')
+  if (!s.max) return t('curve.none')
   const m = s.summary
+  const lastOpen = s.stack[s.stack.length - 1].open
+  const bySeverity = severities.map((sev) => t('curve.summary.sev_count', { severity: t(`severity.${sev}`).toLocaleLowerCase(lang), count: lastOpen[sev] })).join(', ')
   return [
     t('curve.summary.day', { n: m.start, date: long(m.startDate, lang) }),
     t('curve.summary.day', { n: m.end, date: long(m.endDate, lang) }),
-    t('curve.summary.highest', { count: m.highest, date: long(m.highestDate, lang) }),
-    t('curve.summary.lowest', { count: m.lowest, date: long(m.lowestDate, lang) }),
+    t('curve.summary.by_severity', { list: bySeverity }),
+    t('curve.summary.highest', { n: m.highest, count: m.highest, date: long(m.highestDate, lang) }),
+    t('curve.summary.lowest', { n: m.lowest, count: m.lowest, date: long(m.lowestDate, lang) }),
   ].join(' ')
 }
 

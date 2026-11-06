@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { reconstructedNote, series, severityNote, summaryText } from './openCurveView.js'
+import { dayKey, reconstructedNote, series, severityNote, summaryText } from './openCurveView.js'
 
 process.env.TZ = 'Europe/Paris'
 
@@ -75,8 +75,8 @@ describe('series: the reconstructed part', () => {
     expect(s.paths.every((p) => p.line === '' && p.area === '')).toBe(true)
   })
   test('the sentence says it, with the day as JJ/MM', () => {
-    expect(reconstructedNote(series(days), 'fr')).toBe('Avant le 01/11, Michel ne gardait que le dernier changement de chaque faille : la partie en pointillés en est déduite, elle peut être un peu fausse.')
-    expect(reconstructedNote(series(days), 'en')).toBe('Before 11-01, Michel only kept the last change of each flaw: the dashed part is worked out from it and may be a little off.')
+    expect(reconstructedNote(series(days), 'fr')).toBe('Avant le 01/11, Michel ne gardait que le dernier changement de chaque faille. La partie en pointillés est donc déduite et peut être un peu fausse.')
+    expect(reconstructedNote(series(days), 'en')).toBe('Before 11-01, Michel only kept the last change of each flaw. The dashed part is therefore worked out and may be a little off.')
     expect(reconstructedNote(series(days.slice(2)), 'fr')).toBe('')
   })
 })
@@ -87,9 +87,18 @@ describe('series: the summary', () => {
     expect(series([day('2026-11-01', { low: 2 }), day('2026-11-02', { low: 2 })]).summary.highestDate).toBe('2026-11-02')
   })
   test('the equivalent text says them in words', () => {
-    expect(summaryText(series(days), 'fr')).toBe('Le 30/10/2026, 3 failles ouvertes. Le 02/11/2026, 6 failles ouvertes. Au plus haut : 6, le 02/11/2026. Au plus bas : 1, le 01/11/2026.')
-    expect(summaryText(series(days), 'en')).toBe('On 2026-10-30, 3 open flaws. On 2026-11-02, 6 open flaws. Highest: 6, on 2026-11-02. Lowest: 1, on 2026-11-01.')
+    expect(summaryText(series(days), 'fr')).toBe('Le 30/10/2026, 3 failles ouvertes. Le 02/11/2026, 6 failles ouvertes. Par gravité ce jour-là : critique 0, élevée 1, moyenne 4, faible 0, non notée 1. Maximum : 6 failles ouvertes, le 02/11/2026. Minimum : 1 faille ouverte, le 01/11/2026.')
+    expect(summaryText(series(days), 'en')).toBe('On 2026-10-30, 3 open flaws. On 2026-11-02, 6 open flaws. By severity that day: critical 0, high 1, medium 4, low 0, not rated 1. Highest: 6 open flaws, on 2026-11-02. Lowest: 1 open flaw, on 2026-11-01.')
     expect(summaryText(series([day('2026-11-02', { low: 1 })]), 'fr')).toContain('Le 02/11/2026, 1 faille ouverte.')
+  })
+  test('every day at 0: one sentence instead of the chart', () => {
+    const s = series([day('2026-11-01', {}), day('2026-11-02', {})])
+    expect(s.max).toBe(0)
+    expect(summaryText(s, 'fr')).toBe('Aucune faille ouverte sur ces 90 jours.')
+    expect(summaryText(s, 'en')).toBe('No open flaw over these 90 days.')
+  })
+  test('dayKey writes a local day as YYYY-MM-DD', () => {
+    expect(dayKey(new Date(2026, 0, 5))).toBe('2026-01-05')
   })
   test('an empty list gives no path and says there is no data', () => {
     const s = series([])
