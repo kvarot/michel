@@ -741,3 +741,26 @@ func TestPatchProjectRefusalsAreAudited(t *testing.T) {
 		t.Errorf("removed project: %d", resp.StatusCode)
 	}
 }
+
+func TestAPIPatchThresholdAudited(t *testing.T) {
+	f := newFixture(t, nil)
+	resp, body := f.do("PATCH", "/api/v1/projects/demo", testToken, `{"gate_threshold":"strict"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	got, err := project.NewRepo(f.st).Get(context.Background(), "demo")
+	if err != nil || got.GateThreshold != project.ThresholdStrict {
+		t.Fatalf("stored = %q, %v", got.GateThreshold, err)
+	}
+	rows := f.auditRows("project.threshold")
+	if len(rows) != 1 || rows[0].evidence["from"] != "normal" || rows[0].evidence["to"] != "strict" {
+		t.Fatalf("audit rows = %+v", rows)
+	}
+	resp, body = f.do("PATCH", "/api/v1/projects/demo", testToken, `{"gate_threshold":"loose"}`)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "api.project.bad_threshold") {
+		t.Fatalf("loose: status %d: %s", resp.StatusCode, body)
+	}
+	if rows := f.auditRows("project.threshold"); len(rows) != 1 {
+		t.Errorf("a refused value wrote a threshold event: %+v", rows)
+	}
+}

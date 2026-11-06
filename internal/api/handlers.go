@@ -198,6 +198,8 @@ func (s *server) projectView(ctx context.Context, lang i18n.Lang, p project.Proj
 type projectPatch struct {
 	FixLevel     *int  `json:"fix_level"`
 	AutoFixMinor *bool `json:"auto_fix_minor"`
+	// GateThreshold is soft, normal or strict.
+	GateThreshold *project.Threshold `json:"gate_threshold"`
 }
 
 // patchProject changes the fix levels and the automatic minor fixes of a
@@ -210,7 +212,7 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := project.Update(ctx, project.NewRepo(s.deps.Store), s.deps.Audit, project.UpdateRequest{
 		Actor: decisionAuthor, Name: r.PathValue("name"),
-		Patch: project.Patch{FixLevel: body.FixLevel, AutoFixMinor: body.AutoFixMinor},
+		Patch: project.Patch{FixLevel: body.FixLevel, AutoFixMinor: body.AutoFixMinor, GateThreshold: body.GateThreshold},
 	})
 	var refusal *project.RefusalError
 	var auditErr *project.AuditError
@@ -224,6 +226,10 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.As(err, &refusal) && refusal.Key == "api.project.patch.bad_level":
 		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.bad_level"), i18n.T(lang, "api.project.patch.bad_level_hint"))
+		return
+	case errors.As(err, &refusal) && refusal.Key == "api.project.bad_threshold":
+		writeJSON(w, http.StatusBadRequest, FixErrorBody{Error: i18n.T(lang, "api.project.bad_threshold"),
+			Hint: i18n.T(lang, "api.project.bad_threshold_hint"), Code: "api.project.bad_threshold"})
 		return
 	case errors.Is(err, project.ErrNotFound):
 		s.fail(w, http.StatusNotFound, i18n.T(lang, "api.project_not_found"), "")

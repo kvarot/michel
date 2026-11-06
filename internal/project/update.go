@@ -15,6 +15,7 @@ type Patch struct {
 	FixLevel       *int
 	AutoFixMinor   *bool
 	AutoScan       *bool
+	GateThreshold  *Threshold
 	TestCmd        *string
 	InstallCmd     *string
 	CorePackages   *[]string
@@ -33,7 +34,7 @@ func (p Patch) fields() []string {
 	}{
 		{"core_packages", p.CorePackages != nil}, {"exclude", p.Exclude != nil}, {"tech", p.Tech != nil},
 		{"risk_overrides", len(p.RiskOverrides) > 0}, {"fix_level", p.FixLevel != nil},
-		{"auto_fix_minor", p.AutoFixMinor != nil}, {"auto_scan", p.AutoScan != nil},
+		{"auto_fix_minor", p.AutoFixMinor != nil}, {"auto_scan", p.AutoScan != nil}, {"gate_threshold", p.GateThreshold != nil},
 		{"classification", p.Classification != nil}, {"test_cmd", p.TestCmd != nil}, {"install_cmd", p.InstallCmd != nil},
 	} {
 		if f.set {
@@ -133,6 +134,10 @@ func Update(ctx context.Context, repo *Repo, log *audit.Logger, req UpdateReques
 	if pt.AutoScan != nil {
 		p.AutoScan, ev["auto_scan"] = *pt.AutoScan, *pt.AutoScan
 	}
+	fromThreshold := p.GateThreshold
+	if pt.GateThreshold != nil {
+		p.GateThreshold, ev["gate_threshold"] = *pt.GateThreshold, string(*pt.GateThreshold)
+	}
 	if pt.Classification != nil {
 		p.Classification = *pt.Classification
 	}
@@ -161,6 +166,12 @@ func Update(ctx context.Context, repo *Repo, log *audit.Logger, req UpdateReques
 	if _, err := log.Record(ctx, audit.Event{Actor: req.Actor, Action: "project.update", Target: p.Name, Result: "ok", Evidence: ev}); err != nil {
 		return p, &AuditError{Err: err}
 	}
+	if pt.GateThreshold != nil {
+		if _, err := log.Record(ctx, audit.Event{Actor: req.Actor, Action: "project.threshold", Target: p.Name, Result: "ok",
+			Evidence: map[string]any{"from": string(fromThreshold), "to": string(p.GateThreshold)}}); err != nil {
+			return p, &AuditError{Err: err}
+		}
+	}
 	return p, nil
 }
 
@@ -169,6 +180,9 @@ func Update(ctx context.Context, repo *Repo, log *audit.Logger, req UpdateReques
 func updateRefusalKey(err error) string {
 	if errors.Is(err, ErrInvalidFixLevel) {
 		return "api.project.patch.bad_level"
+	}
+	if errors.Is(err, ErrInvalidThreshold) {
+		return "api.project.bad_threshold"
 	}
 	if errors.Is(err, ErrNotFound) {
 		return ""

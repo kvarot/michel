@@ -187,6 +187,8 @@
   "api.not_found": "This API address does not exist.",
   "api.plugin_run_not_found": "No plugin run has this id.",
   "api.project.add.bad_json_hint": "Send one JSON object with only the fields path and name.",
+  "api.project.bad_threshold": "The gate threshold must be soft, normal or strict.",
+  "api.project.bad_threshold_hint": "Send gate_threshold as soft, normal or strict.",
   "api.project.bad_name": "This project name will not do.",
   "api.project.bad_name_hint": "Pick a name of 64 characters at most: letters and digits, with spaces, dots or dashes inside if you wish.",
   "api.project.duplicate": "Michel already follows this folder, or a project already has this name.",

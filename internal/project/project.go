@@ -26,10 +26,13 @@ type Project struct {
 	FixLevel int `json:"fix_level"`
 	// AutoFixMinor lets Michel start a fix alone for minor and patch updates
 	// when FixLevel is 2.
-	AutoFixMinor bool   `json:"auto_fix_minor"`
-	TestCmd      string `json:"test_cmd"`
-	InstallCmd   string `json:"install_cmd"`
-	Active       bool   `json:"active"`
+	AutoFixMinor bool `json:"auto_fix_minor"`
+	// GateThreshold is how strict the guards are for this project: soft,
+	// normal (the default) or strict.
+	GateThreshold Threshold `json:"gate_threshold"`
+	TestCmd       string    `json:"test_cmd"`
+	InstallCmd    string    `json:"install_cmd"`
+	Active        bool      `json:"active"`
 	// AutoScan lets the daily watch of michel serve check the project (true
 	// on creation).
 	AutoScan bool `json:"auto_scan"`
@@ -54,7 +57,22 @@ type Project struct {
 	FixLevelSet bool `json:"-"`
 }
 
+// Threshold is how strict the guards of a project are.
+type Threshold string
+
+const (
+	ThresholdSoft   Threshold = "soft"
+	ThresholdNormal Threshold = "normal"
+	ThresholdStrict Threshold = "strict"
+)
+
+// Valid reports whether t is one of the three thresholds.
+func (t Threshold) Valid() bool {
+	return t == ThresholdSoft || t == ThresholdNormal || t == ThresholdStrict
+}
+
 var (
+	ErrInvalidThreshold      = errors.New("gate threshold must be soft, normal or strict")
 	ErrNotADirectory         = errors.New("path is not an existing directory")
 	ErrDuplicateName         = errors.New("a project with this name already exists")
 	ErrEmptyName             = errors.New("project name is empty")
