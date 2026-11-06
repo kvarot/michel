@@ -159,6 +159,11 @@ func Register(ctx context.Context, d Deps, req RegisterRequest) (Target, error) 
 	if err != nil {
 		return Target{}, err
 	}
+	// Once the server is stored, the work ends even if the caller goes away
+	// (a closed page): a rule written to the policy file but not recorded
+	// would count as the user's and never be taken back, and a rollback or a
+	// trace skipped on a cancelled context would leave a server half added.
+	ctx = context.WithoutCancel(ctx)
 	for _, l := range req.Links {
 		l.TargetID = added.ID
 		if err := d.Repo.Link(ctx, l); err != nil {

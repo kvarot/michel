@@ -243,3 +243,29 @@ func TestRegisterAuditFailureKeepsTheServer(t *testing.T) {
 		t.Errorf("servers = %+v", list)
 	}
 }
+
+// A caller that goes away while the rules are written (a closed page) leaves
+// no rule behind that Michel would not know as its own, and no server
+// without its trace: once the server is stored, Register ends its work.
+func TestRegisterEndsItsWorkWhenTheCallerGoesAway(t *testing.T) {
+	f := newRegFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := f.deps()
+	// Current is read when the rule step starts: the caller goes away there.
+	d.Current = func() policy.Policy { cancel(); return policy.Defaults() }
+	got, err := Register(ctx, d, RegisterRequest{Host: "192.0.2.33", User: "d"})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	rule := policy.AllowRule{Host: "192.0.2.33", Purpose: policy.PurposeTargetSSH}
+	if owned, err := f.repo.OwnedOnly(context.Background(), []policy.AllowRule{rule}); err != nil || len(owned) != 1 {
+		t.Errorf("the rule written is not recorded as Michel's: %v %v\n%s", owned, err, f.policyText())
+	}
+	if list, _ := f.repo.List(context.Background()); len(list) != 1 || list[0].ID != got.ID {
+		t.Errorf("servers = %+v", list)
+	}
+	if rows := f.addRows(t); len(rows) != 1 {
+		t.Errorf("audit = %+v", rows)
+	}
+}
