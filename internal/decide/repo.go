@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/audit"
+	"github.com/kvarot/michel/internal/history"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/oklog/ulid/v2"
@@ -131,7 +132,7 @@ func (r *Repo) Set(ctx context.Context, d Decision, now time.Time) (Decision, er
 		d.SeenSeverity, string(fx), "", "", seenKEV); err != nil {
 		return Decision{}, fmt.Errorf("cannot save the decision: %w", err)
 	}
-	if err := setStatus(ctx, tx, d.FindingID, scan.StatusDecided, ts); err != nil {
+	if err := setStatus(ctx, tx, d.FindingID, scan.StatusDecided, ts, ""); err != nil {
 		return Decision{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -141,14 +142,24 @@ func (r *Repo) Set(ctx context.Context, d Decision, now time.Time) (Decision, er
 }
 
 // setStatus moves a finding to status; status_changed_at changes only when
-// the status does.
-func setStatus(ctx context.Context, tx *sql.Tx, findingID, status, ts string) error {
+// the status does. It writes the events of the change in the history, reason
+// being the reason of the supersession the change carries ("" if none); the
+// status before the change is read inside tx.
+func setStatus(ctx context.Context, tx *sql.Tx, findingID, status, ts string, reason Reason) error {
+	var from string
+	err := tx.QueryRowContext(ctx, `SELECT status FROM finding WHERE id = ?`, findingID).Scan(&from)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // no such finding: nothing to move
+	}
+	if err != nil {
+		return fmt.Errorf("cannot read the finding: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE finding SET status = ?,
 		status_changed_at = CASE WHEN status <> ? THEN ? ELSE status_changed_at END WHERE id = ?`,
 		status, status, ts, findingID); err != nil {
 		return fmt.Errorf("cannot update the finding: %w", err)
 	}
-	return nil
+	return history.AddStatusEvents(ctx, tx, findingID, from, status, string(reason), parseTime(ts))
 }
 
 // Current returns the decision in force for a finding (ok=false if none).
@@ -194,7 +205,7 @@ func (r *Repo) Supersede(ctx context.Context, tx *sql.Tx, findingID string, reas
 		WHERE finding_id = ? AND superseded_at = ''`, ts, string(reason), findingID); err != nil {
 		return fmt.Errorf("cannot supersede the decision: %w", err)
 	}
-	return setStatus(ctx, tx, findingID, scan.StatusPending, ts)
+	return setStatus(ctx, tx, findingID, scan.StatusPending, ts, reason)
 }
 
 // List returns the decisions of a project, newest first; filter: "" (current only), "fix"|"defer"|"ignore" (current with that action), "superseded", "all".
@@ -282,7 +293,7 @@ func (r *Repo) expire(ctx context.Context, tx *sql.Tx, due []Decision, now time.
 		} else if n == 0 {
 			continue
 		}
-		if err := setStatus(ctx, tx, d.FindingID, scan.StatusPending, ts); err != nil {
+		if err := setStatus(ctx, tx, d.FindingID, scan.StatusPending, ts, DueReached); err != nil {
 			return nil, err
 		}
 		done = append(done, d)

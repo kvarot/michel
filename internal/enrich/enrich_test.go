@@ -339,6 +339,31 @@ func TestApplySupersedesIgnoreWhenKEVAppears(t *testing.T) {
 	}
 }
 
+func TestApplyKEVChangeWritesReopenedEvent(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.seedFinding(t, "f1", scan.StatusNew, "low", "CVE-2024-0001")
+	f.decide(t, "f1", "ignore", 0)
+	if _, err := f.st.DB().Exec(`INSERT INTO kev (cve, date_added) VALUES ('CVE-2024-0001', '2026-10-25')`); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := Apply(ctx, f.deps); err != nil || res.Superseded != 1 {
+		t.Fatalf("Apply = %+v %v", res, err)
+	}
+	var at, kind, detail string
+	if err := f.st.DB().QueryRow(`SELECT at, kind, detail FROM finding_event WHERE finding_id = 'f1' ORDER BY seq DESC LIMIT 1`).
+		Scan(&at, &kind, &detail); err != nil {
+		t.Fatal(err)
+	}
+	var d map[string]any
+	if err := json.Unmarshal([]byte(detail), &d); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "reopened" || d["reason"] != "kev_changed" || at != now.Format(time.RFC3339) {
+		t.Errorf("last event = %s %s %s", at, kind, detail)
+	}
+}
+
 func TestApplyLeavesFixDecisionWhenKEVUnchanged(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

@@ -57,6 +57,7 @@
         <SourcesPage v-else-if="page === 'sources'" @changed="markStale" />
         <ProjectsPage v-else-if="page === 'projects'" :digest="digest" @decided="decided" @changed="markStale" />
         <ResolvedPage v-else-if="page === 'resolved'" />
+        <ReportsPage v-else-if="page === 'reports'" :route="reportsRoute" />
         <SettingsPanel
           v-else-if="page === 'settings'"
           :meta="meta"
@@ -81,6 +82,7 @@ import AppNav from './components/AppNav.vue'
 import TodayPage from './components/TodayPage.vue'
 import ProjectsPage from './components/ProjectsPage.vue'
 import ResolvedPage from './components/ResolvedPage.vue'
+import ReportsPage from './components/ReportsPage.vue'
 import SourcesPage from './components/SourcesPage.vue'
 import FixPage from './components/FixPage.vue'
 import FindingsPage from './components/FindingsPage.vue'
@@ -93,6 +95,12 @@ import { findingsCache } from './lib/findingsCache.js'
 import { filtersFromHash } from './lib/findingsView.js'
 import { openBadge, pageOf, navMode } from './lib/navView.js'
 import { serversRoute } from './lib/serversView.js'
+import { reportsRoute } from './lib/reportsView.js'
+
+/** reportsOf is the Reports page's {period, at} in the address (a week by default). */
+function reportsOf(hash) {
+  return reportsRoute(hash) || { period: 'week', at: '' }
+}
 
 /** serversOf is the Servers page's {id} in the address ('' for the list). */
 function serversOf(hash) {
@@ -106,7 +114,7 @@ function routeOf(hash) {
 
 export default {
   name: 'App',
-  components: { AppNav, TodayPage, ProjectsPage, ResolvedPage, SourcesPage, FixPage, FindingsPage, ServersPage, SettingsPanel },
+  components: { AppNav, TodayPage, ProjectsPage, ResolvedPage, ReportsPage, SourcesPage, FixPage, FindingsPage, ServersPage, SettingsPanel },
   data() {
     return {
       state: 'loading', // loading | unauthorized | offline | error | ready
@@ -124,6 +132,8 @@ export default {
       fixRoute: routeOf(window.location.hash),
       // serversRoute is the server whose sheet the Servers page shows.
       serversRoute: serversOf(window.location.hash),
+      // reportsRoute is the period the Reports page shows.
+      reportsRoute: reportsOf(window.location.hash),
       // findingsRoute is the filters the Findings page shows.
       findingsRoute: filtersFromHash(window.location.hash),
       // stale is set when another page changed something the digest shows.
@@ -183,6 +193,7 @@ export default {
       this.page = pageOf(window.location.hash)
       this.fixRoute = routeOf(window.location.hash)
       this.serversRoute = serversOf(window.location.hash)
+      if (this.page === 'reports') this.reportsRoute = reportsOf(window.location.hash)
       // A new object each time: the page wrote its search without telling (replaceState),
       // so a click on « Failles » must reach it even when the filters look unchanged.
       if (this.page === 'findings') this.findingsRoute = filtersFromHash(window.location.hash)

@@ -36,6 +36,8 @@
         :runs="runs"
         :lists="allLists"
         :lists-state="listsState"
+        :open-stats="openStats"
+        :open-stats-state="openStatsState"
         :now="now"
       />
 
@@ -133,6 +135,9 @@ export default {
       findings: {},
       // runs is GET /digests?last=100, null when it could not be read: the weekly chart.
       runs: null,
+      // openStats is GET /stats/open?days=90, null when it could not be read: the curve.
+      openStats: null,
+      openStatsState: 'reading',
       // allLists holds the findings of every project (null for a list not read);
       // listsState is reading, read, or unread when the projects could not be read.
       allLists: {},
@@ -221,6 +226,16 @@ export default {
       // The digests sent are read once, then again after « Actualiser », a
       // decision or a change of language (findingsCache).
       const keptRuns = findingsCache.runs(ui)
+      this.openStatsState = 'reading'
+      api.openStats(90).then((stats) => {
+        if (seq !== this.seq) return
+        this.openStats = stats
+        this.openStatsState = 'read'
+      }).catch(() => {
+        if (seq !== this.seq) return
+        this.openStats = null
+        this.openStatsState = 'unread'
+      })
       const [attempts, servers, projectViews, runs] = await Promise.all([read(`/fixes?${lang}`), read(`/targets?${lang}`), read(`/projects?${lang}`), keptRuns || read('/digests?last=100')])
       if (seq !== this.seq) return
       findingsCache.keepRuns(ui, runs)

@@ -99,6 +99,7 @@
             <p class="m-code m-small">{{ actionError.data.detail }}</p>
           </details>
         </v-alert>
+        <FindingTimeline v-if="showsTimeline" :finding-id="selectedFinding.id" />
         <div v-if="serverOnly && !waiting && !viewLoading" class="m-fix__server">
           <h2 class="m-fix__server-title">{{ $t('srvfix.center_title', { name: current.server.target.name }) }}</h2>
           <p class="m-muted m-small">{{ $t('srvfix.no_agent_chat') }}</p>
@@ -203,6 +204,7 @@
 import AiConsentDialog from './AiConsentDialog.vue'
 import DecisionPanel from './DecisionPanel.vue'
 import FailureGuide from './FailureGuide.vue'
+import FindingTimeline from './FindingTimeline.vue'
 import FixChat from './FixChat.vue'
 import FixProposal from './FixProposal.vue'
 import ServerProposal from './ServerProposal.vue'
@@ -223,7 +225,7 @@ const listEvery = 15000
 // its conversation is folded. route is {attempt, finding} from the address.
 export default {
   name: 'FixPage',
-  components: { AiConsentDialog, DecisionPanel, FailureGuide, FixChat, FixProposal, ServerProposal },
+  components: { AiConsentDialog, DecisionPanel, FailureGuide, FindingTimeline, FixChat, FixProposal, ServerProposal },
   props: {
     route: { type: Object, default: () => ({ attempt: '', finding: '' }) },
   },
@@ -317,6 +319,11 @@ export default {
     projectOfSelected() {
       const name = this.current?.project || this.sheetOfSelected?.project || this.selectedFinding?.project
       return (name && this.projects.find((p) => p.name === name)) || null
+    },
+    // showsTimeline: what happened to the flaw, under its guide; a project's flaw only.
+    showsTimeline() {
+      const f = this.selectedFinding
+      return !this.waiting && !this.viewLoading && !!f?.id && !this.isServer && !String(f.kind || this.sheetOfSelected?.kind || '').startsWith('server_')
     },
     // showsWork: the middle is on the flaw itself, not on a wait or a server's own view.
     showsWork() {

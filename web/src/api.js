@@ -77,6 +77,18 @@ export const api = {
   del(path, body) {
     return request('DELETE', path, body)
   },
+  /** timeline reads what happened to a flaw of a project: {entries, history_start}, newest first. */
+  timeline(findingId) {
+    return request('GET', `/findings/${encodeURIComponent(findingId)}/timeline`)
+  },
+  /** openStats reads the open flaws of the projects at the end of each of the last days days: {days, history_start}. */
+  openStats(days = 90) {
+    return request('GET', `/stats/open?days=${encodeURIComponent(days)}`)
+  },
+  /** report reads what happened from from to to (local days YYYY-MM-DD, to included). */
+  report(from, to) {
+    return request('GET', `/reports?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+  },
   /**
    * stream reads the text/event-stream at path with the token (fetch, since
    * EventSource cannot send it) and calls onEvent({event, id, data}) with

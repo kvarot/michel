@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kvarot/michel/internal/history"
 	"github.com/kvarot/michel/internal/serverfix"
 	"github.com/kvarot/michel/internal/store"
 	"github.com/kvarot/michel/internal/target"
@@ -101,7 +102,12 @@ func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	if a.Work.Server != nil {
 		busy = serverBusyStates
 	}
-	res, err := r.s.DB().ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`)
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return Attempt{}, fmt.Errorf("cannot save the fix attempt: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `INSERT INTO fix_attempt (`+attemptCols+`)
 		SELECT ?,?,?,?,?,?,?,?,?,?,?,'','','',''
 		WHERE NOT EXISTS (SELECT 1 FROM fix_attempt WHERE project_id = ? AND state IN `+busy+`)`,
 		a.ID, a.FindingID, a.ProjectID, a.Origin, string(a.State), a.CloneDir, a.SessionID, a.Cause, ts(now), ts(now), work, a.ProjectID)
@@ -110,6 +116,12 @@ func (r *Repo) CreateAttempt(ctx context.Context, a Attempt) (Attempt, error) {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return Attempt{}, ErrBusy
+	}
+	if err := history.AddAttemptEvent(ctx, tx, a.ID, now, string(a.State)); err != nil {
+		return Attempt{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Attempt{}, fmt.Errorf("cannot save the fix attempt: %w", err)
 	}
 	return a, nil
 }
@@ -153,6 +165,9 @@ func (r *Repo) Approve(ctx context.Context, id, by, proposalID, hash string) err
 	if _, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET state = ?, approved_by = ?, approved_proposal = ?, approved_hash = ?, updated_at = ? WHERE id = ?`,
 		string(StateApproved), by, proposalID, hash, ts(now), id); err != nil {
 		return fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	if err := history.AddAttemptEvent(ctx, tx, id, now, string(StateApproved)); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("cannot change the fix attempt: %w", err)
@@ -270,18 +285,39 @@ func (r *Repo) SetState(ctx context.Context, id string, from []State, to State, 
 		return ErrBadTransition
 	}
 	marks := strings.TrimSuffix(strings.Repeat("?,", len(from)), ",")
-	args := []any{string(to), cause, cause, ts(r.now()), id}
+	now := r.now()
+	args := []any{string(to), cause, cause, ts(now), id}
 	for _, f := range from {
 		args = append(args, string(f))
 	}
-	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, cause = CASE WHEN ? = '' THEN cause ELSE ? END, updated_at = ?
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	defer tx.Rollback()
+	var before string
+	if err := tx.QueryRowContext(ctx, `SELECT state FROM fix_attempt WHERE id = ?`, id).Scan(&before); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("cannot read the fix attempt: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET state = ?, cause = CASE WHEN ? = '' THEN cause ELSE ? END, updated_at = ?
 		WHERE id = ? AND state IN (`+marks+`)`, args...)
 	if err != nil {
 		return fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
+		if before != string(to) {
+			if err := history.AddAttemptEvent(ctx, tx, id, now, string(to)); err != nil {
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("cannot change the fix attempt: %w", err)
+		}
 		return nil
 	}
+	// Roll back now, not at the deferred call: it frees the write lock of
+	// the transaction before GetAttempt reads on another connection.
+	tx.Rollback()
 	if _, err := r.GetAttempt(ctx, id); err != nil {
 		return err
 	}
@@ -938,10 +974,16 @@ func (r *Repo) PurgeBackups(ctx context.Context, before time.Time) (int, error) 
 // server is running, applied or unknown (serverRunStates). deadline is when
 // the run's own bound ends.
 func (r *Repo) Claim(ctx context.Context, id string, deadline time.Time) (bool, error) {
-	res, err := r.s.DB().ExecContext(ctx, `UPDATE fix_attempt SET state = ?, updated_at = ?, run_deadline = ? WHERE id = ? AND state = ?
+	now := r.now()
+	tx, err := r.s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE fix_attempt SET state = ?, updated_at = ?, run_deadline = ? WHERE id = ? AND state = ?
 		AND NOT EXISTS (SELECT 1 FROM fix_attempt o WHERE o.project_id = (SELECT p.project_id FROM fix_attempt p WHERE p.id = ?)
 			AND o.id <> ? AND o.state IN `+serverRunStates+`)`,
-		string(StateRunning), ts(r.now()), ts(deadline), id, string(StateApproved), id, id)
+		string(StateRunning), ts(now), ts(deadline), id, string(StateApproved), id, id)
 	if err != nil {
 		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
@@ -949,7 +991,16 @@ func (r *Repo) Claim(ctx context.Context, id string, deadline time.Time) (bool, 
 	if err != nil {
 		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
 	}
-	return n == 1, nil
+	if n != 1 {
+		return false, nil
+	}
+	if err := history.AddAttemptEvent(ctx, tx, id, now, string(StateRunning)); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("cannot change the fix attempt: %w", err)
+	}
+	return true, nil
 }
 
 // RunEnd is an attempt that is running or applied, with the end of its

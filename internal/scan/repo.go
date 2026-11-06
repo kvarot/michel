@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kvarot/michel/internal/history"
 	"github.com/kvarot/michel/internal/store"
 )
 
@@ -366,6 +367,9 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 				boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, sourceKey, f.RuleID, f.Location, f.Fingerprint, boolInt(f.Mitigation), f.SAPI); err != nil {
 				return 0, 0, 0, 0, nil, fmt.Errorf("cannot save finding %s: %w", label(f), err)
 			}
+			if err := history.AddStatusEvents(ctx, tx, f.ID, "", StatusNew, "", now); err != nil {
+				return 0, 0, 0, 0, nil, err
+			}
 			newN++
 			continue
 		}
@@ -394,6 +398,9 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 			boolInt(f.KEV), f.KEVAdded, f.EPSS, f.EPSSPercentile, f.CVSSEnriched, f.Location, boolInt(f.Mitigation), f.SAPI, status, ts, f.ID); err != nil {
 			return 0, 0, 0, 0, nil, fmt.Errorf("cannot update finding %s: %w", label(f), err)
 		}
+		if err := history.AddStatusEvents(ctx, tx, f.ID, k.status, status, reason, now); err != nil {
+			return 0, 0, 0, 0, nil, err
+		}
 		if k.status == StatusGone {
 			reappeared++
 		} else {
@@ -412,6 +419,9 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 		}
 		if _, err := closeStmt.ExecContext(ctx, StatusGone, StatusGone, ts, id); err != nil {
 			return 0, 0, 0, 0, nil, fmt.Errorf("cannot close finding %s: %w", id, err)
+		}
+		if err := history.AddStatusEvents(ctx, tx, id, k.status, StatusGone, "", now); err != nil {
+			return 0, 0, 0, 0, nil, err
 		}
 		gone++
 	}

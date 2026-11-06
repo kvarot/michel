@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,5 +241,119 @@ func TestAddProposalIfCurrentSupersedes(t *testing.T) {
 	}
 	if _, err := r.AddProposalIfCurrent(ctx, Proposal{AttemptID: a.ID, Summary: "x", Hash: "h3"}, "h2"); !errors.Is(err, ErrBadTransition) {
 		t.Errorf("on an approved attempt: %v, want ErrBadTransition", err)
+	}
+}
+
+func attemptEvents(t *testing.T, r *Repo, id string) []string {
+	t.Helper()
+	rows, err := r.s.DB().Query(`SELECT seq, state, reconstructed FROM fix_attempt_event WHERE attempt_id = ? ORDER BY seq`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	want := 1
+	for rows.Next() {
+		var seq, rec int
+		var state string
+		if err := rows.Scan(&seq, &state, &rec); err != nil {
+			t.Fatal(err)
+		}
+		if seq != want || rec != 0 {
+			t.Errorf("event %s: seq %d (want %d), reconstructed %d", state, seq, want, rec)
+		}
+		want++
+		out = append(out, state)
+	}
+	return out
+}
+
+func TestAttemptEventsFollowStates(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+	a := newAttempt(t, r, "f1", "p1", OriginAgent)
+	if err := r.SetState(ctx, a.ID, []State{StatePreparing}, StateProposed, ""); err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.AddProposal(ctx, Proposal{AttemptID: a.ID, Hash: "h1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Approve(ctx, a.ID, "test", p.ID, "h1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetState(ctx, a.ID, []State{StateApproved}, StateApplied, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetState(ctx, a.ID, []State{StateApplied}, StateProvenFixed, ""); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(attemptEvents(t, r, a.ID), ",")
+	if want := "preparing,proposed,approved,applied,proven_fixed"; got != want {
+		t.Errorf("events = %s, want %s", got, want)
+	}
+	b := newAttempt(t, r, "f2", "p2", OriginAgent)
+	if err := r.SetState(ctx, b.ID, []State{StatePreparing}, StateApproved, ""); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := r.Claim(ctx, b.ID, t0.Add(time.Hour)); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if got := strings.Join(attemptEvents(t, r, b.ID), ","); got != "preparing,approved,running" {
+		t.Errorf("events = %s", got)
+	}
+}
+
+func TestAttemptEventNotWrittenWhenStateKept(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+	a := newAttempt(t, r, "f1", "p1", OriginAgent)
+	if err := r.SetState(ctx, a.ID, []State{StatePreparing}, StateProposed, ""); err != nil {
+		t.Fatal(err)
+	}
+	// the touch of lockProposed and a same-state SetState keep the state
+	if err := r.SetState(ctx, a.ID, []State{StateProposed}, StateProposed, "cause"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.s.DB().Exec(`UPDATE fix_attempt SET updated_at = updated_at WHERE id = ?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(attemptEvents(t, r, a.ID), ","); got != "preparing,proposed" {
+		t.Errorf("events = %s", got)
+	}
+	// a stale approval touches the row and fails: no event either
+	if err := r.Approve(ctx, a.ID, "test", "nope", "h"); !errors.Is(err, ErrStaleProposal) {
+		t.Fatalf("approve = %v", err)
+	}
+	if got := strings.Join(attemptEvents(t, r, a.ID), ","); got != "preparing,proposed" {
+		t.Errorf("events after stale approve = %s", got)
+	}
+}
+
+func TestAttemptEventNotWrittenWhenUpdateMissed(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+	a := newAttempt(t, r, "f1", "p1", OriginAgent)
+	if err := r.SetState(ctx, a.ID, []State{StateApplied}, StateProvenFixed, ""); !errors.Is(err, ErrBadTransition) {
+		t.Fatalf("set state = %v", err)
+	}
+	if ok, err := r.Claim(ctx, a.ID, t0); err != nil || ok {
+		t.Fatalf("claim of a preparing attempt = %v, %v", ok, err)
+	}
+	if err := r.SetState(ctx, "nope", []State{StatePreparing}, StateFailed, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown = %v", err)
+	}
+	if got := strings.Join(attemptEvents(t, r, a.ID), ","); got != "preparing" {
+		t.Errorf("events = %s", got)
+	}
+	if n := len(attemptEvents(t, r, "nope")); n != 0 {
+		t.Errorf("events of an unknown attempt = %d", n)
+	}
+	if _, err := r.CreateAttempt(ctx, Attempt{FindingID: "f2", ProjectID: "p1", Origin: OriginAgent}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("busy = %v", err)
+	}
+	var n int
+	if err := r.s.DB().QueryRow(`SELECT COUNT(*) FROM fix_attempt_event`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("rows = %d, %v (a busy create writes none)", n, err)
 	}
 }
