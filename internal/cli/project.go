@@ -14,6 +14,7 @@ import (
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
+	"github.com/kvarot/michel/internal/scan"
 	"github.com/spf13/cobra"
 )
 
@@ -29,27 +30,58 @@ func projectRepo(deps *Deps) *project.Repo {
 	return r
 }
 
-// addDenialMessage turns a validation error into a plain-language message in
-// lang. The audit log stores it in English; the user reads it in deps.Lang.
-func addDenialMessage(lang i18n.Lang, path, name string, err error) string {
-	switch {
-	case errors.Is(err, project.ErrNotADirectory):
-		return i18n.T(lang, "cli.project.add.not_dir", path)
-	case errors.Is(err, project.ErrDuplicateName):
-		return i18n.T(lang, "cli.project.add.duplicate", name, name)
-	case errors.Is(err, project.ErrEmptyName):
-		return i18n.T(lang, "cli.project.add.empty_name")
-	case errors.Is(err, project.ErrInvalidFixLevel):
-		return i18n.T(lang, "cli.project.add.bad_fix_level")
-	case errors.Is(err, project.ErrInvalidClassification):
-		return i18n.T(lang, "cli.project.add.bad_classification")
-	case errors.Is(err, project.ErrInvalidExclude):
-		return i18n.T(lang, "cli.project.add.bad_exclude", err)
-	case errors.Is(err, project.ErrInvalidTech):
-		return i18n.T(lang, "cli.project.add.bad_tech", err)
-	default:
-		return i18n.T(lang, "cli.project.add.invalid", err)
+// addDenialMessage turns a refusal of project.Register into a plain-language
+// message in deps.Lang. The audit keeps the key of the reason.
+func addDenialMessage(deps *Deps, path, name string, re *project.RefusalError) string {
+	switch re.Key {
+	case "api.project.bad_name":
+		if name == "" {
+			return deps.T("cli.project.add.empty_name")
+		}
+		return deps.T("cli.project.add.refused", deps.T(re.Key), deps.T(re.Key+"_hint"))
+	case "api.project.relative_path", "api.project.forbidden_path":
+		return deps.T("cli.project.add.refused", deps.T(re.Key), deps.T(re.Key+"_hint"))
+	case "api.project.not_dir":
+		return deps.T("cli.project.add.not_dir", scan.SanitizeText(path))
+	case "api.project.duplicate":
+		if errors.Is(re, project.ErrDuplicateFolder) {
+			return deps.T("cli.project.add.duplicate_folder")
+		}
+		return deps.T("cli.project.add.duplicate", name, name)
+	case "cli.project.add.bad_fix_level":
+		return deps.T("cli.project.add.bad_fix_level")
+	case "cli.project.add.bad_classification":
+		return deps.T("cli.project.add.bad_classification")
+	case "cli.project.add.bad_exclude":
+		return deps.T("cli.project.add.bad_exclude", re.Err)
+	case "cli.project.add.bad_tech":
+		return deps.T("cli.project.add.bad_tech", re.Err)
 	}
+	return deps.T("cli.project.add.invalid", re)
+}
+
+// addFailure is the error michel project add shows for a failure of
+// project.Register, which has already written its trace (or says it could not).
+func addFailure(deps *Deps, path, name string, err error) error {
+	var re *project.RefusalError
+	var ae *project.AuditError
+	unaudited := errors.As(err, &ae)
+	msg := ""
+	switch {
+	case errors.As(err, &re):
+		msg = addDenialMessage(deps, path, name, re)
+	case unaudited && ae.After == nil:
+		// Added, then purged: no project without its trace.
+		return deps.Wrapf("cli.project.add.audit_failed", ae.Err, name)
+	case unaudited:
+		msg = deps.T("cli.project.add.save_failed", ae.After)
+	default:
+		msg = deps.T("cli.project.add.save_failed", err)
+	}
+	if unaudited {
+		return deps.Wrapf("cli.common.audit_also", ae.Err, msg)
+	}
+	return errors.New(msg)
 }
 
 func newProjectAddCmd(deps *Deps) *cobra.Command {
@@ -63,48 +95,27 @@ func newProjectAddCmd(deps *Deps) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			// The one difference with the page: a relative path is made
+			// absolute first.
 			path, err := filepath.Abs(args[0])
 			if err != nil {
 				path = args[0]
 			}
-			path = filepath.Clean(path)
-			p := project.Project{
-				Name: name, Path: path, Classification: policy.Classification(class),
+			dataDir, _ := cmd.Flags().GetString("data-dir")
+			if abs, err := filepath.Abs(dataDir); err == nil && dataDir != "" {
+				dataDir = abs
+			}
+			home, _ := userHomeDir()
+			added, err := project.Register(ctx, projectRepo(deps), deps.Audit, project.RegisterRequest{
+				Actor: "cli", Name: name, Path: path, Classification: policy.Classification(class),
 				FixLevel: fixLevel, FixLevelSet: cmd.Flags().Changed("fix-level"),
 				AutoFixMinor: autoFixMinor,
 				TestCmd:      testCmd, InstallCmd: installCmd,
 				CorePackages: cleanList(corePkgs), Exclude: cleanList(exclude), Tech: cleanList(tech),
-			}
-			added, err := projectRepo(deps).Add(ctx, p)
+				Folders: project.Folders{DataDir: dataDir, Home: home},
+			})
 			if err != nil {
-				// The audit log keeps the English reason; the user reads it in their language.
-				result := "denied"
-				reason, msg := addDenialMessage(i18n.EN, path, name, err), addDenialMessage(deps.Lang, path, name, err)
-				if !isValidationErr(err) {
-					result = "error"
-					reason, msg = i18n.T(i18n.EN, "cli.project.add.save_failed", err), deps.T("cli.project.add.save_failed", err)
-				}
-				ev := map[string]any{"path": path, "reason": reason}
-				if class != "" {
-					ev["classification"] = class
-				}
-				if cmd.Flags().Changed("fix-level") {
-					ev["fix_level"] = fixLevel
-				}
-				if _, aerr := deps.Audit.Record(ctx, audit.Event{
-					Actor: "cli", Action: "project.add", Target: name, Result: result, Evidence: ev,
-				}); aerr != nil {
-					return deps.Wrapf("cli.common.audit_also", aerr, msg)
-				}
-				return errors.New(msg)
-			}
-			if _, err := deps.Audit.Record(ctx, audit.Event{
-				Actor: "cli", Action: "project.add", Target: added.Name, Result: "ok",
-				Evidence: map[string]any{
-					"path": added.Path, "classification": string(added.Classification), "fix_level": added.FixLevel,
-				},
-			}); err != nil {
-				return deps.Wrapf("cli.project.add.audit_failed", err, added.Name)
+				return addFailure(deps, path, strings.TrimSpace(name), err)
 			}
 			if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
 				return json.NewEncoder(deps.Stdout).Encode(added)
