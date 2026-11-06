@@ -85,6 +85,10 @@ export const api = {
   openStats(days = 90) {
     return request('GET', `/stats/open?days=${encodeURIComponent(days)}`)
   },
+  /** report reads what happened from from to to (local days YYYY-MM-DD, to included). */
+  report(from, to) {
+    return request('GET', `/reports?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+  },
   /**
    * stream reads the text/event-stream at path with the token (fetch, since
    * EventSource cannot send it) and calls onEvent({event, id, data}) with

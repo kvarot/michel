@@ -197,3 +197,32 @@ body, .v-application { font-family: var(--m-ui); }
 
 /* A number Michel could not read: a dash, never a 0, and a short sentence. */
 .m-unread { color: rgb(var(--v-theme-secondary)); }
+
+/*
+ * The printed sheet (the « Imprimer » button of the Reports page): no menu,
+ * no button, no banner; black text on white; a severity stays a word and a
+ * shape (a diamond for critical, a hollow square for not rated), drawn in
+ * black; a table row never splits across two pages.
+ */
+@media print {
+  @page { margin: 15mm; }
+  .v-navigation-drawer, .v-bottom-navigation, .m-top, .m-skip, .m-no-print,
+  .v-btn, .v-btn-toggle, .v-alert, .v-snackbar, .m-exploited { display: none !important; }
+  html, body, .v-application, .v-main, .m-main, .m-panel, .m-card {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .v-main { padding: 0 !important; --v-layout-left: 0px; --v-layout-bottom: 0px; --v-layout-top: 0px; }
+  .m-main { max-width: none !important; padding: 0 !important; }
+  *, *::before, *::after { color: #000 !important; box-shadow: none !important; text-shadow: none !important; }
+  .m-muted, .m-unread { color: #000 !important; }
+  .m-unread { font-style: italic; }
+  .m-sev::before { background: #000 !important; }
+  .m-sev--unknown::before { background: transparent !important; border-color: #000 !important; }
+  .m-tag { border-color: #000 !important; }
+  a { text-decoration: none; }
+  table { page-break-inside: auto; }
+  thead { display: table-header-group; }
+  tr, th, td { page-break-inside: avoid; break-inside: avoid; }
+  h1, h2, h3 { page-break-after: avoid; break-after: avoid; }
+}

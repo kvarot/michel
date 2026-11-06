@@ -64,6 +64,7 @@
     </div>
 
     <OpenCurve :stats="openStats" :state="openStatsState" />
+    <p class="m-small m-ov__reports"><a href="#/reports">{{ $t('reports.overview_link') }}</a></p>
 
     <div class="m-ov__cards">
       <article class="m-card" aria-labelledby="ov-weeks">
@@ -268,6 +269,7 @@ export default {
 .m-ov__failed { color: rgb(var(--v-theme-warning)); font-weight: 700; }
 .m-ov__partial { font-weight: 600; }
 .m-ov__cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+.m-ov__reports { margin: 0.5rem 0 0; }
 .m-ov__cards .m-card { display: grid; gap: 0.5rem; align-content: start; }
 .m-ov__legend { list-style: none; margin: 0; padding: 0; display: flex; gap: 1rem; }
 .m-ov__legend li { display: inline-flex; align-items: center; gap: 0.35rem; }
