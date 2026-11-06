@@ -168,8 +168,7 @@ func TestSyncInsertsThenKeepsUserChoices(t *testing.T) {
 		t.Errorf("nginx = %+v", nginx)
 	}
 	// An entry dropped by a newer catalog is hidden, never deleted.
-	ins, upd, err = syncEntries(ctx, r, next[1:], CatalogVersion+2)
-	if err != nil {
+	if _, _, err := syncEntries(ctx, r, next[1:], CatalogVersion+2); err != nil {
 		t.Fatal(err)
 	}
 	if dropped := get(t, r, next[0].Key); !dropped.Hidden {

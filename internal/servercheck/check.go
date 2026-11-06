@@ -408,7 +408,7 @@ func TryLock(id string) (unlock func(), ok bool) {
 	}
 }
 
-// ErrInactive: the server is turned off in Michel; it is not checked.
+// ErrInactive means the server is turned off in Michel; it is not checked.
 var ErrInactive = errors.New("this server is turned off in Michel: turn it back on to check it")
 
 func newRunID() string { return ulid.Make().String() }

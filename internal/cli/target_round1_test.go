@@ -76,7 +76,7 @@ func TestTargetAddRefusesBadHostsAndNames(t *testing.T) {
 		{"add", "*.example.test", "--user", "d"},
 		{"add", "192.0.2.5", "--user", "d", "--site-url", "https://*.example.test/"},
 		{"add", "192.0.2.5", "--user", "d", "--name", strings.Repeat("x", 65)},
-		{"add", "192.0.2.5", "--user", "d", "--name", "a​b"},
+		{"add", "192.0.2.5", "--user", "d", "--name", "a\u200bb"},
 	} {
 		if _, _, _, err := run(t, e.dir, append([]string{"target"}, tc...)...); err == nil {
 			t.Errorf("%v was accepted", tc)

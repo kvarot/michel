@@ -122,12 +122,6 @@ func (h *host) ini() map[string]string {
 	return out
 }
 
-func (h *host) reloadCount() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.reloads
-}
-
 // ExposePHP tells whether the site sends its PHP version (expose_php).
 func (h *host) ExposePHP() bool { return h.ini()["expose_php"] == "1" }
 

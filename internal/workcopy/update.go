@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// ErrInvalidUpdate: an update argv that is not one of the closed forms.
+// ErrInvalidUpdate means an update argv that is not one of the closed forms.
 var ErrInvalidUpdate = errors.New("the update command is not one Michel runs")
 
 // Shapes of the arguments of an update command (the package names and

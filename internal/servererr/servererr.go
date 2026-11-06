@@ -14,8 +14,8 @@ import (
 	"github.com/kvarot/michel/internal/target"
 )
 
-// Check failed generically: the key of a check that ended for another
-// reason.
+// CheckFailed is the key of a check that failed generically: one that
+// ended for another reason.
 const CheckFailed = "api.target.check_failed"
 
 // Unreachable is the key of a server that could not be reached.

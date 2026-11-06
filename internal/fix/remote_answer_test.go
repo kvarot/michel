@@ -491,8 +491,8 @@ func TestAuditSurvivesACancelledContext(t *testing.T) {
 func TestPathInTheHintIsDelimited(t *testing.T) {
 	long := strings.Repeat("x", 300)
 	for _, lang := range []i18n.Lang{i18n.FR, i18n.EN} {
-		s := ExplainHint(lang, &workcopy.GitFailure{Class: "ignored", Path: "a\nb\tc‮d⁦e‏f g h­i\x07j"})
-		if strings.ContainsAny(s, "\n\t‮⁦‏  ­\x07") {
+		s := ExplainHint(lang, &workcopy.GitFailure{Class: "ignored", Path: "a\nb\tc\u202ed\u2066e\u200ff g h\u00adi\x07j"})
+		if strings.ContainsAny(s, "\n\t\u202e\u2066\u200f  \u00ad\x07") {
 			t.Errorf("%s: %q", lang, s)
 		}
 		want := map[i18n.Lang]string{i18n.FR: "« a?b?c?d?e?f?g?h?i?j »", i18n.EN: `"a?b?c?d?e?f?g?h?i?j"`}[lang]

@@ -28,7 +28,7 @@ import (
 	"github.com/kvarot/michel/internal/egress"
 )
 
-// DialAddrForTest, when set, gives the address the tunnel to host really
+// DialAddrForTest gives, when set, the address the tunnel to host really
 // dials (a local TLS test server standing for host:443). Its host must be
 // host itself: only the port may change, so the allowlist check and the
 // Attempt stay on the host the client asked for. Tests only: production code

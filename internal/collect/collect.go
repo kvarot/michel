@@ -98,12 +98,6 @@ func (d Deps) now() time.Time {
 	return time.Now()
 }
 
-// errStop ends a collection early: the connection is gone or the time is up.
-type errStop struct{ err error }
-
-func (e errStop) Error() string { return e.err.Error() }
-func (e errStop) Unwrap() error { return e.err }
-
 // collector holds one collection.
 type collector struct {
 	ctx   context.Context

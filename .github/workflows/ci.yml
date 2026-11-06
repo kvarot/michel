@@ -30,10 +30,9 @@ jobs:
           go-version: '1.27.x'
       - run: go test -race ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-      # Not blocking yet: findings that predate this job (U1000, SA4006, SA4009,
-      # SA4010, SA1019) are listed in the audit and fixed in their own change.
-      - run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
-        continue-on-error: true
+      # Blocking, at a fixed version: a new release may add checks, which
+      # come in with a deliberate bump of this version.
+      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
   web:
     runs-on: ubuntu-latest

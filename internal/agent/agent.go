@@ -66,13 +66,6 @@ func (d Deps) exec() workcopy.ExecFunc {
 	return workcopy.DefaultExec
 }
 
-func (d Deps) now() time.Time {
-	if d.Now != nil {
-		return d.Now()
-	}
-	return time.Now()
-}
-
 func (d Deps) home() (string, error) {
 	if d.Home != "" {
 		return d.Home, nil
