@@ -481,7 +481,7 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 	if !validateDecision(refuse, &d, now) {
 		return
 	}
-	f, p, found, err := s.lookup(ctx, r.PathValue("id"))
+	f, _, found, err := s.lookup(ctx, r.PathValue("id"))
 	if err != nil {
 		s.internal(w, r)
 		return
@@ -495,7 +495,7 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Read the finding again: its status changed.
-	f, p, found, err = s.lookup(ctx, f.ID)
+	f, p, found, err := s.lookup(ctx, f.ID)
 	if err != nil || !found {
 		s.internal(w, r)
 		return

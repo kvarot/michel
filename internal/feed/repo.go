@@ -16,7 +16,7 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// ErrItemNotFound: no item has that id.
+// ErrItemNotFound means no item has that id.
 var ErrItemNotFound = errors.New("feed item not found")
 
 // Repo reads and writes feed_item.

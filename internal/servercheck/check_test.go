@@ -331,7 +331,6 @@ type env struct {
 	st     *store.Store
 	deps   CheckDeps
 	srcs   *source.Repo
-	allow  []policy.AllowRule
 	clock  time.Time
 	mu     sync.Mutex
 	alerts []AlertInput

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -169,14 +168,6 @@ func windowsCommand(systemRoot string) toastCommand {
 	}
 }
 
-// systemRoot returns %SystemRoot%, C:\Windows when unset.
-func systemRoot() string {
-	if r := os.Getenv("SystemRoot"); r != "" {
-		return r
-	}
-	return `C:\Windows`
-}
-
 // linuxCommand shows the toast with notify-send, found with lookPath.
 func linuxCommand(lookPath func(string) (string, error)) toastCommand {
 	return func(title, body string) (string, []string, []byte, error) {
@@ -208,9 +199,4 @@ func toastText(title, body string) string {
 // breaks and tabs become spaces.
 func appleScriptEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", " ", "\r", " ", "\t", " ").Replace(s)
-}
-
-// unsupportedCommand is the toast of a system without one.
-func unsupportedCommand(string, string) (string, []string, []byte, error) {
-	return "", nil, nil, errors.New("notify: desktop notifications are not supported on this system")
 }

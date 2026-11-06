@@ -25,7 +25,7 @@ import (
 // RunTimeout bounds one run of a tool.
 const RunTimeout = 30 * time.Minute
 
-// ErrDisabled: the plugin source is off.
+// ErrDisabled means the plugin source is off.
 var ErrDisabled = errors.New("the plugin is off")
 
 // RunDeps are the collaborators of RunPlugin. Exec nil runs the program for
@@ -239,7 +239,7 @@ func RunPlugin(ctx context.Context, deps RunDeps, e source.Entry, p project.Proj
 	return res, errors.Join(auditErrs...)
 }
 
-// ErrAudit: the findings are stored but an audit event could not be written.
+// ErrAudit means the findings are stored but an audit event could not be written.
 var ErrAudit = errors.New("the findings are saved but the audit log cannot be written")
 
 // toFinding is the stored finding of one result of the report.

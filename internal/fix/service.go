@@ -471,16 +471,6 @@ func (d Deps) startAgent(ctx context.Context, ad agent.Deps, s agent.Spec) (Sess
 	return agent.Start(ctx, ad, s)
 }
 
-// shortID is the lowercase start of an attempt id, as in the branch and the
-// skill names.
-func shortID(attemptID string) string {
-	id := strings.ToLower(attemptID)
-	if len(id) > 8 {
-		id = id[:8]
-	}
-	return id
-}
-
 // Branch is the branch Apply creates in the user's repository for the
 // attempt.
 func Branch(attemptID string) string { return "michel/fix-" + strings.ToLower(attemptID) }

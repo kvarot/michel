@@ -72,7 +72,7 @@ func buildFakeTool(t *testing.T, tool string) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	out, err := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", filepath.Join(bin, name), "../plugin/testdata/faketool").CombinedOutput()
+	out, err := exec.Command("go", "build", "-o", filepath.Join(bin, name), "../plugin/testdata/faketool").CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build faketool: %v\n%s", err, out)
 	}

@@ -936,10 +936,8 @@ func TestWorkerCapsThreePerDay(t *testing.T) {
 	f.update(p)
 	// The agent gives up every time, so the project is free again at once.
 	f.agentAct = func(context.Context, Deps, string, string) {}
-	var ids []string
 	for i, osv := range []string{"GHSA-1111-1111-1111", "GHSA-2222-2222-2222", "GHSA-3333-3333-3333", "GHSA-4444-4444-4444"} {
-		fi := f.seed(fmt.Sprintf("acme/pkg%d", i), osv, "1.0.0", "1.0.1", "composer.lock", "Packagist")
-		ids = append(ids, fi.ID)
+		f.seed(fmt.Sprintf("acme/pkg%d", i), osv, "1.0.0", "1.0.1", "composer.lock", "Packagist")
 	}
 	if n, err := QueueEligible(context.Background(), f.d, f.proj.ID); err != nil || n != 5 {
 		t.Fatalf("QueueEligible = %d, %v, want 5", n, err)

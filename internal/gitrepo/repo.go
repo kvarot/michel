@@ -11,7 +11,7 @@ import (
 	"github.com/kvarot/michel/internal/store"
 )
 
-// ErrUnknownDiscovery: the repository is not in the "to discover" list.
+// ErrUnknownDiscovery means the repository is not in the "to discover" list.
 var ErrUnknownDiscovery = errors.New("this repository is not in the list to discover")
 
 // DiscoveryRepo stores the repositories found by topic (table discovery).

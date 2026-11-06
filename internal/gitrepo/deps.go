@@ -14,7 +14,7 @@ import (
 	"github.com/kvarot/michel/internal/store"
 )
 
-// ErrNoSkillsDir: the user's skills folder cannot be found.
+// ErrNoSkillsDir means the user's skills folder cannot be found.
 var ErrNoSkillsDir = errors.New("cannot find the skills folder")
 
 // NewDeps wires an installation the same way for the command line and the

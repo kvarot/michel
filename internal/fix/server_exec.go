@@ -369,7 +369,7 @@ func (r *serverRun) run(ctx context.Context) error {
 	stderrFail := code == 0 && len(res.Stderr) > 0 && cliTest(r.plan)
 	e := classifyResult(res, r.pkg())
 	r.scriptSteps(e, stderrFail)
-	r.fetchBackups(ctx, c)
+	r.fetchBackups(c)
 	if code != 0 {
 		// The state first, then the alert.
 		ferr := r.fail(ctx, e, "exit "+strconv.Itoa(code))
@@ -774,7 +774,7 @@ func (r *serverRun) backupList() []string {
 // one, from its home), and keeps them encrypted on the workstation. Only
 // the fixed paths Michel built are read; a backup that is missing, cut or
 // unreadable is skipped. Nothing on the server is ever deleted.
-func (r *serverRun) fetchBackups(ctx context.Context, c *sshx.Client) {
+func (r *serverRun) fetchBackups(c *sshx.Client) {
 	if c == nil {
 		return
 	}
@@ -970,7 +970,7 @@ func AppliedByMe(ctx context.Context, d Deps, attemptID string) error {
 	dctx, dcancel := r.fresh(d.recordTimeout())
 	defer dcancel()
 	if c, err := sshx.Dial(dctx, d.SSH, r.t); err == nil {
-		r.fetchBackups(ctx, c)
+		r.fetchBackups(c)
 		c.Close()
 	}
 	r.step("apply", "run by you", true)

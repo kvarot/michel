@@ -92,8 +92,7 @@ func newTargetFixture(t *testing.T, opts ...func(tf *targetFixture)) *targetFixt
 		return tf.shell(s, script, out, errw)
 	}})
 	ag := tf.ssh.NewAgent(t)
-	var agentFn func() (agent.ExtendedAgent, io.Closer, error)
-	agentFn = func() (agent.ExtendedAgent, io.Closer, error) {
+	agentFn := func() (agent.ExtendedAgent, io.Closer, error) {
 		if tf.agentErr != nil {
 			return nil, nil, tf.agentErr
 		}
