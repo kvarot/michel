@@ -63,6 +63,8 @@
       </article>
     </div>
 
+    <OpenCurve :stats="openStats" :state="openStatsState" />
+
     <div class="m-ov__cards">
       <article class="m-card" aria-labelledby="ov-weeks">
         <h3 id="ov-weeks" class="m-card__title">{{ $t('overview.weeks.title') }}</h3>
@@ -147,6 +149,7 @@
 </template>
 
 <script>
+import OpenCurve from './OpenCurve.vue'
 import Unread from './UnreadValue.vue'
 import { findingsHash } from '../lib/findingsView.js'
 import {
@@ -156,7 +159,7 @@ import {
 
 export default {
   name: 'OverviewPanel',
-  components: { Unread },
+  components: { OpenCurve, Unread },
   props: {
     digest: { type: Object, default: null },
     // attempts, projects, servers and runs are null when they could not be read.
@@ -168,6 +171,9 @@ export default {
     // when the projects could not be read.
     lists: { type: Object, default: () => ({}) },
     listsState: { type: String, default: 'reading' },
+    // openStats is GET /stats/open, null when it could not be read; openStatsState is reading, read or unread.
+    openStats: { type: Object, default: null },
+    openStatsState: { type: String, default: 'reading' },
     now: { type: Date, required: true },
   },
   data() {
