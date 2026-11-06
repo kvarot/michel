@@ -210,7 +210,7 @@ func newDecideCmd(deps *Deps) *cobra.Command {
 // decidePackage applies d to every finding of pkg in the project that waits
 // for a decision (new or pending), and to decided ones with force.
 func decidePackage(ctx context.Context, deps *Deps, repo *decide.Repo, d decide.Decision, projectName, pkg string, force, defaulted, verbose bool) error {
-	p, err := projectRepo(deps).Get(ctx, projectName)
+	p, err := projectRepo(deps).GetActive(ctx, projectName)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
 			return deps.Errorf("cli.decide.project_not_found", projectName)
@@ -291,7 +291,7 @@ func newDecisionsCmd(deps *Deps) *cobra.Command {
 			if status != "" && !oneOf(status, decisionFilters) {
 				return deps.Errorf("cli.decisions.unknown_status", status, strings.Join(decisionFilters, ", "))
 			}
-			p, err := projectRepo(deps).Get(ctx, name)
+			p, err := projectRepo(deps).GetActive(ctx, name)
 			if err != nil {
 				if errors.Is(err, project.ErrNotFound) {
 					return deps.Errorf("cli.decisions.not_found", name)

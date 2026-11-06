@@ -21,7 +21,7 @@ func TestProjectSetAutoScan(t *testing.T) {
 	if !strings.Contains(list, `"auto_scan":false`) {
 		t.Errorf("list = %s", list)
 	}
-	rows := auditRows(t, dir, "project.set")
+	rows := auditRows(t, dir, "project.update")
 	if len(rows) != 1 || rows[0].result != "ok" || rows[0].evidence["auto_scan"] != false {
 		t.Errorf("events = %+v", rows)
 	}

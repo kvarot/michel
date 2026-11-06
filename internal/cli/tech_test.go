@@ -81,7 +81,7 @@ func TestProjectSetTech(t *testing.T) {
 	if got := tech(); len(got) != 0 {
 		t.Errorf("after clearing: %v", got)
 	}
-	ev := auditRows(t, dir, "project.set")
+	ev := auditRows(t, dir, "project.update")
 	if len(ev) != 3 || ev[0].evidence["tech"] == nil {
 		t.Errorf("project.set events = %+v", ev)
 	}

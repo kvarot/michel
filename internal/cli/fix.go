@@ -696,7 +696,7 @@ func newFixConsentCmd(deps *Deps) *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			p, err := project.NewRepo(deps.Store).Get(ctx, args[0])
+			p, err := project.NewRepo(deps.Store).GetActive(ctx, args[0])
 			if errors.Is(err, project.ErrNotFound) {
 				return deps.Errorf("cli.fix.project_not_found", scan.SanitizeText(args[0]))
 			}

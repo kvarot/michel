@@ -704,3 +704,32 @@ func TestPostDecisionOnGoneFindingIsConflict(t *testing.T) {
 		t.Errorf("audited: %+v", rows)
 	}
 }
+
+func TestPatchProjectRefusalsAreAudited(t *testing.T) {
+	f := newFixture(t, nil)
+	count := func(result string) int {
+		var n int
+		if err := f.st.DB().QueryRow(`SELECT COUNT(*) FROM audit_event WHERE action = 'project.update' AND result = ?`, result).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if resp, _ := f.do("PATCH", "/api/v1/projects/demo", testToken, `{"fix_level":4}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad level: %d", resp.StatusCode)
+	}
+	if n := count("denied"); n != 1 {
+		t.Errorf("denied rows = %d", n)
+	}
+	if resp, _ := f.do("PATCH", "/api/v1/projects/nope", testToken, `{"fix_level":1}`); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown: %d", resp.StatusCode)
+	}
+	if n := count("not_found"); n != 1 {
+		t.Errorf("not_found rows = %d", n)
+	}
+	if _, err := project.NewRepo(f.st).Remove(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := f.do("PATCH", "/api/v1/projects/demo", testToken, `{"fix_level":1}`); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("removed project: %d", resp.StatusCode)
+	}
+}

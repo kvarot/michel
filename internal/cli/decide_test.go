@@ -436,3 +436,26 @@ func TestDecideFixRefusedOnExposure(t *testing.T) {
 		t.Errorf("decision.set = %+v", rows)
 	}
 }
+
+func TestDecideOnRemovedProjectIsRefused(t *testing.T) {
+	dir, _ := scannedDemo(t, false)
+	id := findingByOSV(t, dir, "ACME-2026-0002")
+	if _, _, _, err := run(t, dir, "project", "remove", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := run(t, dir, "--lang", "en", "decide", id, "fix"); err == nil || !strings.Contains(err.Error(), "No finding has the id") {
+		t.Errorf("decide by id: %v", err)
+	}
+	if _, _, _, err := run(t, dir, "--lang", "en", "decide", "--project", "demo", "--package", "acme", "fix"); err == nil || !strings.Contains(err.Error(), "no project has this name") {
+		t.Errorf("decide by package: %v", err)
+	}
+	if _, _, _, err := run(t, dir, "--lang", "en", "findings", "--project", "demo"); err == nil {
+		t.Error("findings of a removed project listed")
+	}
+	if s := findingStatusIn(t, dir, id); s != "new" {
+		t.Errorf("status = %s", s)
+	}
+	if rows := auditRows(t, dir, "decision.set"); len(rows) != 0 {
+		t.Errorf("decision audited: %+v", rows)
+	}
+}

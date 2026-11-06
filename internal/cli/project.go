@@ -16,6 +16,7 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 func newProjectCmd(deps *Deps) *cobra.Command {
@@ -245,19 +246,6 @@ func newProjectRemoveCmd(deps *Deps) *cobra.Command {
 	return c
 }
 
-// isValidationErr reports whether err is a refusal of the input, as opposed to
-// a storage or system failure.
-func isValidationErr(err error) bool {
-	for _, s := range []error{project.ErrNotADirectory, project.ErrDuplicateName, project.ErrEmptyName,
-		project.ErrInvalidFixLevel, project.ErrInvalidClassification, project.ErrInvalidSourceType,
-		project.ErrInvalidRiskOverride, project.ErrInvalidExclude, project.ErrInvalidTech} {
-		if errors.Is(err, s) {
-			return true
-		}
-	}
-	return false
-}
-
 // cleanList trims, drops empty entries and removes duplicates, keeping order.
 func cleanList(in []string) []string {
 	out := []string{}
@@ -270,6 +258,42 @@ func cleanList(in []string) []string {
 		}
 	}
 	return out
+}
+
+// changedFlags names the settings flags of project set that were passed.
+func changedFlags(fl *pflag.FlagSet) []string {
+	var fields []string
+	for _, f := range []string{"core-package", "exclude", "tech", "risk", "fix-level", "auto-fix-minor", "auto-scan", "classification", "test-cmd", "install-cmd"} {
+		if fl.Changed(f) {
+			fields = append(fields, f)
+		}
+	}
+	return fields
+}
+
+// setError turns a failure of project.Update into a message in the user's
+// language.
+func setError(deps *Deps, name string, err error) error {
+	var auditErr *project.AuditError
+	if errors.As(err, &auditErr) {
+		if auditErr.After == nil {
+			return deps.Wrapf("cli.project.set.audit_failed", auditErr.Err, name)
+		}
+		return deps.Wrapf("cli.common.audit_also", auditErr.Err, setError(deps, name, auditErr.After).Error())
+	}
+	var refusal *project.RefusalError
+	var thr *project.ThresholdError
+	switch {
+	case errors.As(err, &thr):
+		return deps.Errorf("cli.project.set.bad_thresholds", name, thr.AutoFixBelow, thr.HandoffUpTo)
+	case errors.As(err, &refusal) && refusal.Key == "api.project.patch.nothing":
+		return deps.Errorf("cli.project.set.nothing")
+	case errors.As(err, &refusal):
+		return deps.Errorf("cli.project.set.failed", name, err)
+	case errors.Is(err, project.ErrNotFound):
+		return deps.Errorf("cli.project.set.not_found", name)
+	}
+	return deps.Errorf("cli.project.set.save_failed", name, err)
 }
 
 func newProjectSetCmd(deps *Deps) *cobra.Command {
@@ -288,88 +312,65 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, name := cmd.Context(), args[0]
-			// fail records the refusal with its English reason and returns it
-			// in the user's language.
-			fail := func(result, key string, ev map[string]any, vals ...any) error {
-				ev["reason"] = i18n.T(i18n.EN, key, vals...)
-				msg := deps.T(key, vals...)
-				if _, aerr := deps.Audit.Record(ctx, audit.Event{
-					Actor: "cli", Action: "project.set", Target: name, Result: result, Evidence: ev,
-				}); aerr != nil {
-					return deps.Wrapf("cli.common.audit_also", aerr, msg)
-				}
-				return errors.New(msg)
-			}
 			fl := cmd.Flags()
-			var fields []string
-			for _, f := range []string{"core-package", "exclude", "tech", "risk", "fix-level", "auto-fix-minor", "auto-scan", "classification", "test-cmd", "install-cmd"} {
-				if fl.Changed(f) {
-					fields = append(fields, f)
-				}
-			}
-			ev := map[string]any{"fields": fields}
-			if len(fields) == 0 {
-				return fail("denied", "cli.project.set.nothing", ev)
-			}
-			repo := projectRepo(deps)
-			p, err := repo.Get(ctx, name)
-			if err != nil {
-				if errors.Is(err, project.ErrNotFound) {
-					return fail("not_found", "cli.project.set.not_found", ev, name)
-				}
-				return fail("error", "cli.project.set.failed", ev, name, err)
-			}
+			var pt project.Patch
 			if fl.Changed("core-package") {
-				p.CorePackages = cleanList(corePkgs)
+				v := cleanList(corePkgs)
+				pt.CorePackages = &v
 			}
 			if fl.Changed("exclude") {
-				p.Exclude = cleanList(exclude)
-				ev["exclude"] = p.Exclude
+				v := cleanList(exclude)
+				pt.Exclude = &v
 			}
 			if fl.Changed("tech") {
-				p.Tech = cleanList(tech)
-				ev["tech"] = p.Tech
+				v := cleanList(tech)
+				pt.Tech = &v
 			}
 			for _, kv := range risk {
 				k, v, ok := strings.Cut(kv, "=")
 				n, convErr := strconv.Atoi(strings.TrimSpace(v))
 				if !ok || convErr != nil {
-					return fail("denied", "cli.project.set.bad_risk", ev, name, kv)
+					// Not a setting yet: the audit keeps the refusal.
+					msg := deps.T("cli.project.set.bad_risk", name, kv)
+					ev := map[string]any{"reason": "cli.project.set.bad_risk"}
+					if _, aerr := deps.Audit.Record(ctx, audit.Event{Actor: "cli", Action: "project.update",
+						Target: name, Result: "denied", Evidence: ev}); aerr != nil {
+						return deps.Wrapf("cli.common.audit_also", aerr, msg)
+					}
+					return errors.New(msg)
 				}
-				p.RiskOverrides[strings.TrimSpace(k)] = n
+				if pt.RiskOverrides == nil {
+					pt.RiskOverrides = map[string]int{}
+				}
+				pt.RiskOverrides[strings.TrimSpace(k)] = n
 			}
 			if fl.Changed("fix-level") {
-				p.FixLevel = fixLevel
+				pt.FixLevel = &fixLevel
 			}
 			if fl.Changed("auto-fix-minor") {
-				p.AutoFixMinor, ev["auto_fix_minor"] = autoFixMinor, autoFixMinor
+				pt.AutoFixMinor = &autoFixMinor
 			}
 			if fl.Changed("auto-scan") {
-				p.AutoScan, ev["auto_scan"] = autoScan, autoScan
+				pt.AutoScan = &autoScan
 			}
 			if fl.Changed("classification") {
-				p.Classification = policy.Classification(class)
+				c := policy.Classification(class)
+				pt.Classification = &c
 			}
 			if fl.Changed("test-cmd") {
-				p.TestCmd = testCmd
+				pt.TestCmd = &testCmd
 			}
 			if fl.Changed("install-cmd") {
-				p.InstallCmd = installCmd
+				pt.InstallCmd = &installCmd
 			}
-			if merged := deps.Policy().Risk.WithOverrides(p.RiskOverrides); policy.ValidateRisk(merged) != nil {
-				return fail("denied", "cli.project.set.bad_thresholds", ev, name, merged.AutoFixBelow, merged.HandoffUpTo)
+			baseRisk := deps.Policy().Risk
+			p, err := project.Update(ctx, projectRepo(deps), deps.Audit, project.UpdateRequest{
+				Actor: "cli", Name: name, Patch: pt, Risk: &baseRisk, AllowInactive: true,
+			})
+			if err != nil {
+				return setError(deps, name, err)
 			}
-			if err := repo.Update(ctx, p); err != nil {
-				if isValidationErr(err) {
-					return fail("denied", "cli.project.set.failed", ev, name, err)
-				}
-				return fail("error", "cli.project.set.save_failed", ev, name, err)
-			}
-			if _, err := deps.Audit.Record(ctx, audit.Event{
-				Actor: "cli", Action: "project.set", Target: p.Name, Result: "ok", Evidence: ev,
-			}); err != nil {
-				return deps.Wrapf("cli.project.set.audit_failed", err, p.Name)
-			}
+			fields := changedFlags(fl)
 			fmt.Fprintln(deps.Stdout, deps.T("cli.project.set.done", p.Name, strings.Join(fields, ", ")))
 			if fl.Changed("core-package") || fl.Changed("risk") || fl.Changed("exclude") {
 				// The stored analyses no longer match these settings (their

@@ -352,7 +352,7 @@ func TestProjectSetUpdatesAndAudits(t *testing.T) {
 			t.Errorf("list lacks %s: %s", want, list)
 		}
 	}
-	ev := auditRows(t, dir, "project.set")
+	ev := auditRows(t, dir, "project.update")
 	if len(ev) != 1 || ev[0].result != "ok" || ev[0].target != "shop" {
 		t.Fatalf("events = %+v", ev)
 	}
@@ -380,7 +380,7 @@ func TestProjectSetRejectsBadInput(t *testing.T) {
 			t.Errorf("%v: err = %v", args, err)
 		}
 	}
-	if n := len(auditRows(t, dir, "project.set")); n != 6 {
+	if n := len(auditRows(t, dir, "project.update")); n != 6 {
 		t.Errorf("audit rows = %d", n)
 	}
 }
@@ -394,7 +394,7 @@ func TestProjectSetRefusesInconsistentThresholds(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "auto_fix_below=70") || !strings.Contains(err.Error(), "handoff_up_to=60") {
 		t.Fatalf("err = %v", err)
 	}
-	ev := auditRows(t, dir, "project.set")
+	ev := auditRows(t, dir, "project.update")
 	if len(ev) != 1 || ev[0].result != "denied" {
 		t.Fatalf("events = %+v", ev)
 	}
@@ -421,7 +421,7 @@ func TestProjectSetExclude(t *testing.T) {
 	if _, list, _, err := run(t, dir, "project", "list", "--json"); err != nil || !strings.Contains(list, `"exclude":["build","dist"]`) {
 		t.Errorf("after set: %v %s", err, list)
 	}
-	ev := auditRows(t, dir, "project.set")
+	ev := auditRows(t, dir, "project.update")
 	if len(ev) != 1 || ev[0].result != "ok" {
 		t.Fatalf("events = %+v", ev)
 	}
@@ -438,7 +438,7 @@ func TestProjectSetExclude(t *testing.T) {
 	if err == nil || !strings.HasPrefix(err.Error(), "Cannot update project") || !strings.Contains(err.Error(), "folder name") {
 		t.Errorf("path refused? err = %v", err)
 	}
-	if rows := auditRows(t, dir, "project.set"); len(rows) != 3 || rows[2].result != "denied" {
+	if rows := auditRows(t, dir, "project.update"); len(rows) != 3 || rows[2].result != "denied" {
 		t.Errorf("events = %+v", rows)
 	}
 }
