@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -181,25 +180,15 @@ func (s *server) projectView(ctx context.Context, lang i18n.Lang, p project.Proj
 		}
 		v.Open[severityOf(effective(f))]++
 	}
-	var at, status string
-	err = s.deps.Store.DB().QueryRowContext(ctx, `SELECT started_at, status FROM scan WHERE project_id = ?
-		ORDER BY started_at DESC, id DESC LIMIT 1`, p.ID).Scan(&at, &status)
-	switch {
-	case err == nil:
-		v.LastScanAt, v.LastScanStatus = at, status
-	case !errors.Is(err, sql.ErrNoRows):
+	st, err := watch.ProjectStatus(ctx, watch.NewRepo(s.deps.Store), p, s.currentPolicy(), s.deps.Now())
+	if err != nil {
 		return ProjectView{}, err
 	}
 	v.AutoScan = p.AutoScan
-	if h, m, on := s.currentPolicy().WatchHour(); on && p.AutoScan {
-		// From the last check that counts, as the watch itself: an
-		// interrupted or running scan is checked again.
-		last, counted, err := watch.NewRepo(s.deps.Store).LastStart(ctx, p.ID)
-		if err != nil {
-			return ProjectView{}, err
-		}
-		v.NextScanAt = watch.Next(last, counted, s.deps.Now(), h, m).UTC().Format(time.RFC3339)
+	if st.HasScan {
+		v.LastScanAt, v.LastScanStatus = st.LastScanAt, st.LastScanStatus
 	}
+	v.NextScanAt = st.NextCheck
 	s.scanState(lang, p, &v)
 	return v, nil
 }
@@ -471,6 +460,10 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.finding_not_found"), "")
+		return
+	}
+	if err := decide.ValidateFor(f, &d, now); errors.Is(err, decide.ErrNoFixForExposure) {
+		refuse("api.target.exposure_no_fix")
 		return
 	}
 	evID, ok := s.applyDecision(w, r, d, f, now)
