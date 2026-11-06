@@ -48,6 +48,25 @@ func (r *Repo) LastStarts(ctx context.Context) (map[string]time.Time, error) {
 	return out, rows.Err()
 }
 
+// LastStart is the start of the newest scan of the project that counts as
+// a check (see countedStatuses), has false when there is none.
+func (r *Repo) LastStart(ctx context.Context, projectID string) (at time.Time, has bool, err error) {
+	var started sql.NullString
+	err = r.s.DB().QueryRowContext(ctx, `SELECT MAX(started_at) FROM scan WHERE project_id = ? AND `+countedStatuses,
+		projectID).Scan(&started)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("cannot read the last check: %w", err)
+	}
+	if !started.Valid {
+		return time.Time{}, false, nil
+	}
+	at, err = time.Parse(time.RFC3339, started.String)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("a check has an unreadable start %q: %w", started.String, err)
+	}
+	return at, true, nil
+}
+
 // LastScan is the newest scan of the project: its start and status, has
 // false when it was never scanned.
 func (r *Repo) LastScan(ctx context.Context, projectID string) (at time.Time, status string, has bool, err error) {

@@ -487,3 +487,31 @@ func TestLoopFailedSourceReadReleasesTheDay(t *testing.T) {
 		t.Errorf("scans = %v", got)
 	}
 }
+
+// A project checked by another process while this pass checked the ones
+// before it is not checked again.
+func TestLoopSkipsAProjectCheckedMeanwhile(t *testing.T) {
+	r := newRig(t, at("2026-11-05", "08:00"), "demo", "shop")
+	d := r.deps()
+	scan := d.Scan
+	d.Scan = func(ctx context.Context, p project.Project) error {
+		if p.ID == "p0" {
+			if _, err := r.st.DB().Exec(`INSERT INTO scan (id, project_id, started_at, status) VALUES ('other','p1',?,'ok')`,
+				at("2026-11-05", "08:00").UTC().Format(time.RFC3339)); err != nil {
+				t.Error(err)
+			}
+		}
+		return scan(ctx, p)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Loop(ctx, d, 5*time.Millisecond); close(done) }()
+	for start := r.ticks.Load(); r.ticks.Load()-start < 3; {
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if got := r.scanned(); len(got) != 1 || got[0] != "demo" {
+		t.Errorf("scans = %v, want only demo", got)
+	}
+}

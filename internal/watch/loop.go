@@ -150,6 +150,18 @@ func Loop(ctx context.Context, d Deps, every time.Duration) {
 				if !Due(at, has, now, h, m) {
 					continue
 				}
+				// The pass may have run for minutes: another process may
+				// have checked this project meanwhile.
+				at, has, err := d.Repo.LastStart(ctx, p.ID)
+				if err != nil {
+					if ctx.Err() == nil {
+						log.Warn("serve: the daily watch cannot read the last check of a project", "project", p.Name, "err", err)
+					}
+					continue
+				}
+				if !Due(at, has, now, h, m) {
+					continue
+				}
 				t = &try{}
 				tries[p.ID] = t
 			}
