@@ -1,11 +1,13 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/history"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/scan"
@@ -47,6 +49,7 @@ type OpenStatsView struct {
 func (s *server) historyRoutes() {
 	s.mux.HandleFunc("GET /api/v1/findings/{id}/timeline", s.timeline)
 	s.mux.HandleFunc("GET /api/v1/stats/open", s.statsOpen)
+	s.mux.HandleFunc("GET /api/v1/reports", s.reports)
 }
 
 // isServerKind tells a server finding apart: the timeline is for project
@@ -102,9 +105,7 @@ func (s *server) statsOpen(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, r)
 		return
 	}
-	list, err := history.OpenByDay(ctx, db, s.deps.Now(), time.Local, days, func(row history.FindingRow) string {
-		return severityOf(effective(scan.Finding{SeverityLabel: row.SeverityLabel, CVSSEnriched: row.CVSSEnriched, Malicious: row.Malicious}))
-	})
+	list, err := history.OpenByDay(ctx, db, s.deps.Now(), time.Local, days, reportSeverity)
 	if err != nil {
 		s.internal(w, r)
 		return
@@ -118,4 +119,41 @@ func (s *server) statsOpen(w http.ResponseWriter, r *http.Request) {
 		v.Days = append(v.Days, OpenDayView{Date: d.Date, Open: open, Reconstructed: d.Reconstructed})
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// reportSeverity is the severity of a finding in the curve and the reports:
+// its effective severity of today.
+func reportSeverity(row history.FindingRow) string {
+	return severityOf(effective(scan.Finding{SeverityLabel: row.SeverityLabel, CVSSEnriched: row.CVSSEnriched, Malicious: row.Malicious}))
+}
+
+// withSeverities gives m every severity label, at 0 when absent.
+func withSeverities(m map[string]int) map[string]int {
+	out := map[string]int{}
+	for _, sev := range severities {
+		out[sev] = m[sev]
+	}
+	return out
+}
+
+func (s *server) reports(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	rep, err := history.BuildReport(r.Context(), s.deps.Store.DB(), q.Get("from"), q.Get("to"), time.Local, s.deps.Now(), reportSeverity)
+	if errors.Is(err, history.ErrBadPeriod) {
+		s.fail(w, http.StatusBadRequest, i18n.T(s.answerLang(r), "api.bad_period"), i18n.T(s.answerLang(r), "api.bad_period_hint", history.MaxReportDays))
+		return
+	}
+	if err != nil {
+		s.internal(w, r)
+		return
+	}
+	for _, m := range []*map[string]int{&rep.Found, &rep.GoneByMichel, &rep.GoneElsewhere, &rep.OpenStart, &rep.OpenEnd} {
+		*m = withSeverities(*m)
+	}
+	for _, a := range []decide.Action{decide.Fix, decide.Defer, decide.Ignore} {
+		if _, ok := rep.Decisions[string(a)]; !ok {
+			rep.Decisions[string(a)] = 0
+		}
+	}
+	writeJSON(w, http.StatusOK, rep)
 }

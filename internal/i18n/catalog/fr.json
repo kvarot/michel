@@ -14,6 +14,8 @@
   "api.bad_last": "Michel ne peut pas lire le nombre de résumés à montrer.",
   "api.bad_last_hint": "Utilise last= avec un nombre entier de 1 à %d.",
   "api.bad_origin": "Refusé : la demande vient d'un autre site.",
+  "api.bad_period": "Michel ne peut pas lire cette période.",
+  "api.bad_period_hint": "Utilise from= et to= avec des dates AAAA-MM-JJ : to pas avant from, from pas après aujourd'hui, et %d jours au plus.",
   "api.bad_severity": "Filtre de gravité inconnu.",
   "api.bad_severity_hint": "Utilise l'une de ces valeurs : %s.",
   "api.bad_status": "Filtre de statut inconnu.",

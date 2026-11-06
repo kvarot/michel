@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,5 +132,90 @@ func TestStatsOpenRoute(t *testing.T) {
 		if resp, body := f.do("GET", "/api/v1/stats/open?days="+bad, testToken, ""); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("days=%s = %d %s", bad, resp.StatusCode, body)
 		}
+	}
+}
+
+// today is the local date of the fixture's now, moved by days.
+func today(days int) string {
+	y, m, d := now.In(time.Local).Date()
+	return time.Date(y, m, d+days, 0, 0, 0, 0, time.Local).Format("2006-01-02")
+}
+
+func TestReportsRefusesFuture(t *testing.T) {
+	f := newFixture(t, nil)
+	if resp, body := f.do("GET", "/api/v1/reports?from="+today(1)+"&to="+today(7), testToken, ""); resp.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(body, "Michel cannot read this period") {
+		t.Errorf("a period after today = %d %s", resp.StatusCode, body)
+	}
+	// the current week, ending after today, is accepted.
+	var got struct {
+		From      string         `json:"from"`
+		To        string         `json:"to"`
+		Found     map[string]int `json:"found"`
+		OpenEnd   map[string]int `json:"open_end"`
+		Decisions map[string]int `json:"decisions"`
+		Checks    struct {
+			Projects struct{ Done, Failed int } `json:"projects"`
+			Servers  struct {
+				Done   int  `json:"done"`
+				Failed *int `json:"failed"`
+			} `json:"servers"`
+		} `json:"checks"`
+		Projects []struct {
+			Name string `json:"name"`
+		} `json:"projects"`
+	}
+	f.get("/api/v1/reports?from="+today(0)+"&to="+today(6), &got)
+	if got.From != today(0) || got.To != today(6) {
+		t.Errorf("period = %s..%s", got.From, got.To)
+	}
+	for _, sev := range severities {
+		if _, ok := got.Found[sev]; !ok {
+			t.Errorf("found = %v, missing %s", got.Found, sev)
+		}
+		if _, ok := got.OpenEnd[sev]; !ok {
+			t.Errorf("open_end = %v, missing %s", got.OpenEnd, sev)
+		}
+	}
+	for _, a := range []string{"fix", "defer", "ignore"} {
+		if _, ok := got.Decisions[a]; !ok {
+			t.Errorf("decisions = %v, missing %s", got.Decisions, a)
+		}
+	}
+	if got.Checks.Projects.Done != 1 || got.Checks.Servers.Failed != nil {
+		t.Errorf("checks = %+v", got.Checks)
+	}
+	if len(got.Projects) != 1 || got.Projects[0].Name != "demo" {
+		t.Errorf("projects = %+v", got.Projects)
+	}
+}
+
+func TestReportsRefusesBadRange(t *testing.T) {
+	f := newFixture(t, nil)
+	for _, q := range []string{"", "from=" + today(-3), "to=" + today(0), "from=abc&to=" + today(0), "from=2026-1-05&to=" + today(0),
+		"from=2026-02-30&to=2026-03-02", "from=" + today(0) + "&to=" + today(-1), "from=" + today(-62) + "&to=" + today(0),
+		"from=" + today(-3) + "%20&to=" + today(0)} {
+		if resp, body := f.do("GET", "/api/v1/reports?"+q, testToken, ""); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s = %d %s", q, resp.StatusCode, body)
+		}
+	}
+	f.get("/api/v1/reports?from="+today(-61)+"&to="+today(0), nil)
+}
+
+func TestReportNoPathOrSecret(t *testing.T) {
+	f := newFixture(t, nil)
+	id := f.ids["ACME-2026-0001"]
+	f.event(id, now.Add(-2*time.Hour), history.KindSeen)
+	f.event(f.ids["ACME-2026-0002"], now.Add(-3*time.Hour), history.KindSeen)
+	f.event(f.ids["ACME-2026-0002"], now.Add(-time.Hour), history.KindGone)
+	f.outsideFindings()
+	body := f.get("/api/v1/reports?from="+today(-6)+"&to="+today(0), nil)
+	for _, leak := range []string{f.proj.Path, f.dir, filepath.ToSlash(f.proj.Path), filepath.ToSlash(f.dir), testToken, `\`} {
+		if strings.Contains(body, leak) {
+			t.Errorf("the report holds %q:\n%s", leak, body)
+		}
+	}
+	if !strings.Contains(body, `"package":"acme/vuln"`) {
+		t.Errorf("the oldest open finding is missing:\n%s", body)
 	}
 }
