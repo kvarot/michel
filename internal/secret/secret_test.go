@@ -162,3 +162,27 @@ func TestFileMode0600Elsewhere(t *testing.T) {
 		t.Fatalf("dir mode %o, want 700", m)
 	}
 }
+
+func TestCreateIsExclusive(t *testing.T) {
+	dir := t.TempDir()
+	st, err := secret.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := st.(secret.Creator)
+	if err := c.Create("demo", []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create("demo", []byte("second")); !errors.Is(err, secret.ErrExists) {
+		t.Errorf("second create = %v, want ErrExists", err)
+	}
+	if v, err := st.Get("demo"); err != nil || string(v) != "first" {
+		t.Errorf("value = %q %v, want the first one", v, err)
+	}
+	if files, err := os.ReadDir(filepath.Join(dir, "secrets")); err != nil || len(files) != 1 {
+		t.Errorf("files = %v %v (a temporary file left?)", files, err)
+	}
+	if err := c.Create("Bad Name", []byte("x")); !errors.Is(err, secret.ErrInvalidName) {
+		t.Errorf("bad name = %v", err)
+	}
+}

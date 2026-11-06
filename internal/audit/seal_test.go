@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/kvarot/michel/internal/secret"
@@ -117,5 +118,49 @@ func TestLoadOrCreateKey(t *testing.T) {
 	}
 	if k3, ok, err := LoadKey(st); !ok || err != nil || string(k3) != string(k1) {
 		t.Errorf("LoadKey = %v %v", ok, err)
+	}
+}
+
+// Several processes start on a fresh data folder at once: they all end with
+// the one key that is stored, so no event is sealed with a lost key.
+func TestLoadOrCreateKeyConcurrent(t *testing.T) {
+	for round := 0; round < 5; round++ {
+		dir := t.TempDir()
+		const n = 16
+		keys := make([][]byte, n)
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				st, err := secret.Open(dir)
+				if err != nil {
+					errs[i] = err
+					return
+				}
+				<-start
+				keys[i], errs[i] = LoadOrCreateKey(st)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		st, err := secret.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, ok, err := LoadKey(st)
+		if !ok || err != nil {
+			t.Fatalf("round %d: stored key = %v %v", round, ok, err)
+		}
+		for i := range keys {
+			if errs[i] != nil {
+				t.Fatalf("round %d, process %d: %v", round, i, errs[i])
+			}
+			if string(keys[i]) != string(stored) {
+				t.Fatalf("round %d, process %d uses a key that is not the stored one", round, i)
+			}
+		}
 	}
 }

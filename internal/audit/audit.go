@@ -78,7 +78,11 @@ func LoadKey(s secret.Store) (key []byte, ok bool, err error) {
 	return key, true, nil
 }
 
-// LoadOrCreateKey reads the seal key, creating 32 random bytes the first time.
+// LoadOrCreateKey reads the seal key, creating 32 random bytes the first
+// time. Several processes may start at once on a fresh data folder: the key
+// is created only when none is stored (secret.Creator), else the stored
+// value is read back after the write, so every process seals with the key
+// that stays.
 func LoadOrCreateKey(s secret.Store) ([]byte, error) {
 	key, ok, err := LoadKey(s)
 	if err != nil || ok {
@@ -88,8 +92,24 @@ func LoadOrCreateKey(s secret.Store) ([]byte, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("cannot create the key of the audit seals: %w", err)
 	}
-	if err := s.Set(secret.ReservedAuditKey, []byte(hex.EncodeToString(key))); err != nil {
+	value := []byte(hex.EncodeToString(key))
+	if c, ok := s.(secret.Creator); ok {
+		err = c.Create(secret.ReservedAuditKey, value)
+		if errors.Is(err, secret.ErrExists) {
+			err = nil
+		}
+	} else {
+		err = s.Set(secret.ReservedAuditKey, value)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("cannot save the key of the audit seals: %w", err)
+	}
+	key, ok, err = LoadKey(s)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("the key of the audit seals was saved but cannot be read back")
 	}
 	return key, nil
 }

@@ -16,6 +16,9 @@ import (
 // ErrNotFound is returned when no secret has that name.
 var ErrNotFound = errors.New("secret not found")
 
+// ErrExists is returned by Create when a secret already has that name.
+var ErrExists = errors.New("secret already exists")
+
 // ErrInvalidName is returned for a name outside [a-z0-9-]{1,64}.
 var ErrInvalidName = errors.New("invalid secret name: use 1 to 64 lowercase letters, digits or hyphens")
 
@@ -41,6 +44,12 @@ type Store interface {
 	Get(name string) ([]byte, error)
 	Delete(name string) error
 	List() ([]string, error)
+}
+
+// Creator is a Store that can create a secret only when it does not exist
+// yet (see the file store's Create).
+type Creator interface {
+	Create(name string, value []byte) error
 }
 
 // fileStore keeps one file per secret in dir.
@@ -77,16 +86,59 @@ func checkName(name string) error {
 // Set stores value under name, replacing any previous value. The write is
 // atomic: a temporary file is renamed over the old one.
 func (s *fileStore) Set(name string, value []byte) error {
-	if err := checkName(name); err != nil {
+	tmp, err := s.writeTemp(name, value)
+	if err != nil {
 		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(s.dir, name)); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("cannot write secret %s: %w", name, err)
+	}
+	return nil
+}
+
+// Create stores value under name only when no secret has that name yet,
+// else it returns ErrExists and leaves the stored value: of several
+// processes creating the same secret at once, exactly one wins. The value
+// appears whole (a hard link of a complete temporary file). On a file system
+// without hard links it falls back to a rename, exclusive only between the
+// existence check and the rename.
+func (s *fileStore) Create(name string, value []byte) error {
+	tmp, err := s.writeTemp(name, value)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	dst := filepath.Join(s.dir, name)
+	err = os.Link(tmp, dst)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, os.ErrExist) {
+		return ErrExists
+	}
+	if _, serr := os.Lstat(dst); serr == nil {
+		return ErrExists
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("cannot write secret %s: %w", name, err)
+	}
+	return nil
+}
+
+// writeTemp writes the protected value to a new temporary file of the
+// store and returns its path.
+func (s *fileStore) writeTemp(name string, value []byte) (string, error) {
+	if err := checkName(name); err != nil {
+		return "", err
 	}
 	data, err := protect(value)
 	if err != nil {
-		return fmt.Errorf("cannot encrypt secret %s: %w", name, err)
+		return "", fmt.Errorf("cannot encrypt secret %s: %w", name, err)
 	}
 	f, err := os.CreateTemp(s.dir, tempPrefix+name+"-*")
 	if err != nil {
-		return fmt.Errorf("cannot write secret %s: %w", name, err)
+		return "", fmt.Errorf("cannot write secret %s: %w", name, err)
 	}
 	tmp := f.Name()
 	ok := false
@@ -97,23 +149,20 @@ func (s *fileStore) Set(name string, value []byte) error {
 		}
 	}()
 	if err := f.Chmod(0o600); err != nil { // CreateTemp already uses 0600; keep it explicit
-		return fmt.Errorf("cannot restrict secret %s: %w", name, err)
+		return "", fmt.Errorf("cannot restrict secret %s: %w", name, err)
 	}
 	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("cannot write secret %s: %w", name, err)
+		return "", fmt.Errorf("cannot write secret %s: %w", name, err)
 	}
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("cannot write secret %s: %w", name, err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("cannot write secret %s: %w", name, err)
-	}
-	if err := os.Rename(tmp, filepath.Join(s.dir, name)); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("cannot write secret %s: %w", name, err)
+		return "", fmt.Errorf("cannot write secret %s: %w", name, err)
 	}
 	ok = true
-	return nil
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return "", fmt.Errorf("cannot write secret %s: %w", name, err)
+	}
+	return tmp, nil
 }
 
 // Get returns the value stored under name.
