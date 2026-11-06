@@ -191,3 +191,6 @@ func NewUserEntry(req UserEntryRequest) (Entry, *Refusal) {
 	e.Config = Config{Catalog: map[string]any{}, User: user}
 	return e, nil
 }
+
+// Error makes a Refusal an error for the functions that return one.
+func (r *Refusal) Error() string { return "the source is refused: " + r.Code }

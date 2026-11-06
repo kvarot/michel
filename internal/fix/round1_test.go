@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
 )
 
@@ -227,5 +228,35 @@ func TestPurgeProjectForgetsSecrets(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(f.d.DataDir, sub, f.proj.ID)); err == nil {
 			t.Errorf("%s of the project survived the purge", sub)
 		}
+	}
+}
+
+func TestConsentStatus(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	st, err := ConsentStatus(ctx, f.d, f.proj, f.d.Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Refusal != nil || len(st.Lines) == 0 || st.Ready {
+		t.Errorf("before consent: %+v", st)
+	}
+	f.consent()
+	st, err = ConsentStatus(ctx, f.d, f.proj, f.d.Policy)
+	if err != nil || !st.Consented || st.GivenAt.IsZero() {
+		t.Fatalf("after consent: %+v %v", st, err)
+	}
+	if st.Ready != (len(st.Lines) == 0) || st.Refusal != nil {
+		t.Errorf("ready = %v with %d lines, refusal %v", st.Ready, len(st.Lines), st.Refusal)
+	}
+	strict := f.d.Policy
+	strict.Sovereignty.Mode = policy.ModeStrictLocal
+	if st, _ = ConsentStatus(ctx, f.d, f.proj, strict); !errors.Is(st.Refusal, ErrStrictLocal) || st.Ready {
+		t.Errorf("strict_local: %+v", st)
+	}
+	health := f.proj
+	health.Classification = policy.ClassHealth
+	if st, _ = ConsentStatus(ctx, f.d, health, strict); !errors.Is(st.Refusal, ErrHealthForbidden) || st.Ready {
+		t.Errorf("health wins over strict_local: %+v", st)
 	}
 }

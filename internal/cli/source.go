@@ -377,18 +377,9 @@ func newSourceAddCmd(deps *Deps) *cobra.Command {
 			if refusal != nil {
 				return addRefusal(deps, refusal)
 			}
-			repoR := source.NewRepo(deps.Store)
-			if _, err := repoR.Get(ctx, e.Key); err == nil {
-				return deps.Errorf("cli.source.add.exists", e.Key)
-			} else if !errors.Is(err, source.ErrNotFound) {
-				return sourceErr(deps, e.Key, err)
-			}
-			added, err := repoR.Upsert(ctx, e)
+			added, err := source.AddUserEntry(ctx, deps.Store, deps.Audit, "cli", e, "", nil)
 			if err != nil {
-				return deps.Wrapf("cli.source.add.invalid", err)
-			}
-			if err := recordSource(cmd, deps, "source.add", added.Key, "ok", map[string]any{"key": added.Key, "kind": string(added.Kind)}); err != nil {
-				return err
+				return addErr(deps, "", added.Key, err)
 			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.source.add.done", added.Key, added.Key))
 			return nil

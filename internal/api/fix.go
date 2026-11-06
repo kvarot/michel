@@ -13,7 +13,6 @@ import (
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
 	"github.com/kvarot/michel/internal/mask"
-	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servererr"
@@ -935,23 +934,18 @@ func (s *server) agentStatus(w http.ResponseWriter, r *http.Request) {
 
 // consentView is the consent screen of p in lang.
 func (s *server) consentView(ctx context.Context, p project.Project, lang i18n.Lang) (AIConsentView, error) {
-	at, _, consented, err := fix.NewRepo(s.deps.Store).Consent(ctx, p.ID)
+	pol := s.currentPolicy()
+	st, err := fix.ConsentStatus(ctx, fix.Deps{Store: s.deps.Store}, p, pol)
 	if err != nil {
 		return AIConsentView{}, err
 	}
-	pol := s.currentPolicy()
-	lines := fix.ConsentNeeded(p, pol, consented)
-	v := AIConsentView{Project: p.Name, Consented: consented, Ready: consented && len(lines) == 0, Lines: consentLines(lang, lines)}
-	if consented {
-		v.GivenAt = stamp(at)
+	v := AIConsentView{Project: p.Name, Consented: st.Consented, Ready: st.Ready, Lines: consentLines(lang, st.Lines)}
+	if st.Consented {
+		v.GivenAt = stamp(st.GivenAt)
 	}
-	switch {
-	case p.Classification == policy.ClassHealth:
-		v.Ready, v.RefusalCode = false, fix.ErrorKey(fix.ErrHealthForbidden)
-		v.Refusal = fix.Explain(lang, fix.ErrHealthForbidden)
-	case pol.Sovereignty.Mode == policy.ModeStrictLocal:
-		v.Ready, v.RefusalCode, v.SwitchMode = false, fix.ErrorKey(fix.ErrStrictLocal), true
-		v.Refusal = fix.Explain(lang, fix.ErrStrictLocal)
+	if st.Refusal != nil {
+		v.RefusalCode, v.Refusal = fix.ErrorKey(st.Refusal), fix.Explain(lang, st.Refusal)
+		v.SwitchMode = errors.Is(st.Refusal, fix.ErrStrictLocal)
 	}
 	return v, nil
 }

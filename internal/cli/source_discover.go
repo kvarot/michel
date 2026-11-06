@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/kvarot/michel/internal/gitrepo"
@@ -29,16 +28,17 @@ func newSourceDiscoverCmd(deps *Deps) *cobra.Command {
 			case add != "" && ignore != "":
 				return deps.Errorf("cli.source.discover.usage")
 			case ignore != "":
-				if err := dr.SetState(ctx, ignore, gitrepo.StateIgnored); err != nil {
+				repo, err := discovery(cmd, deps).Ignore(ctx, ignore)
+				if errors.Is(err, source.ErrAuditFailed) {
+					return deps.Wrapf("cli.source.audit_failed", err, repo)
+				}
+				if err != nil {
 					return discoverErr(deps, ignore, err)
 				}
-				if err := recordSource(cmd, deps, "source.discover", ignore, "ok", map[string]any{"repo": ignore, "state": gitrepo.StateIgnored}); err != nil {
-					return err
-				}
-				fmt.Fprintln(deps.Stdout, deps.T("cli.source.discover.ignored", ignore))
+				fmt.Fprintln(deps.Stdout, deps.T("cli.source.discover.ignored", repo))
 				return nil
 			case add != "":
-				return discoverAdd(cmd, deps, dr, add, kind, pin, path, name)
+				return discoverAdd(cmd, deps, add, kind, pin, path, name)
 			}
 			list, err := dr.List(ctx, gitrepo.StateNew)
 			if err != nil {
@@ -80,47 +80,38 @@ func discoverErr(deps *Deps, repo string, err error) error {
 	return err
 }
 
+func discovery(cmd *cobra.Command, deps *Deps) gitrepo.DiscoveryActions {
+	return gitrepo.DiscoveryActions{Store: deps.Store, Audit: deps.Audit, Actor: "cli"}
+}
+
 // discoverAdd creates a user skill or mcp entry from a discovery, like
 // michel source add, and marks the discovery added.
-func discoverAdd(cmd *cobra.Command, deps *Deps, dr *gitrepo.DiscoveryRepo, repo, kind, pin, path, name string) error {
-	ctx := cmd.Context()
-	k := source.Kind(kind)
-	if k != source.KindSkill && k != source.KindMCP {
-		return deps.Errorf("cli.source.discover.add_kind")
-	}
-	found, err := dr.List(ctx, "")
+func discoverAdd(cmd *cobra.Command, deps *Deps, repo, kind, pin, path, name string) error {
+	added, err := discovery(cmd, deps).Add(cmd.Context(), repo, source.UserEntryRequest{Kind: source.Kind(kind), Name: name, Pin: pin, Path: path})
 	if err != nil {
-		return err
-	}
-	known := false
-	for _, d := range found {
-		if strings.EqualFold(d.Repo, repo) {
-			known, repo = true, d.Repo
-		}
-	}
-	if !known {
-		return deps.Errorf("cli.source.discover.unknown", repo)
-	}
-	e, refusal := source.NewUserEntry(source.UserEntryRequest{Kind: k, Name: name, Repo: repo, Pin: pin, Path: path})
-	if refusal != nil {
-		return addRefusal(deps, refusal)
-	}
-	r := source.NewRepo(deps.Store)
-	if _, err := r.Get(ctx, e.Key); err == nil {
-		return deps.Errorf("cli.source.add.exists", e.Key)
-	} else if !errors.Is(err, source.ErrNotFound) {
-		return sourceErr(deps, e.Key, err)
-	}
-	added, err := r.Upsert(ctx, e)
-	if err != nil {
-		return deps.Wrapf("cli.source.add.invalid", err)
-	}
-	if err := dr.SetState(ctx, repo, gitrepo.StateAdded); err != nil {
-		return discoverErr(deps, repo, err)
-	}
-	if err := recordSource(cmd, deps, "source.add", added.Key, "ok", map[string]any{"key": added.Key, "kind": string(added.Kind), "from": "discover"}); err != nil {
-		return err
+		return addErr(deps, repo, added.Key, err)
 	}
 	fmt.Fprintln(deps.Stdout, deps.T("cli.source.add.done", added.Key, added.Key))
 	return nil
+}
+
+// addErr is the sentence of an error of source.AddUserEntry or of
+// gitrepo.Discovery.Add; key is the entry's key when it is known.
+func addErr(deps *Deps, repo, key string, err error) error {
+	var refusal *source.Refusal
+	switch {
+	case errors.As(err, &refusal):
+		return addRefusal(deps, refusal)
+	case errors.Is(err, gitrepo.ErrBadDiscoveryKind):
+		return deps.Errorf("cli.source.discover.add_kind")
+	case errors.Is(err, source.ErrExists):
+		return deps.Errorf("cli.source.add.exists", key)
+	case errors.Is(err, source.ErrInvalid):
+		return deps.Wrapf("cli.source.add.invalid", err)
+	case errors.Is(err, source.ErrAuditFailed):
+		return deps.Wrapf("cli.source.audit_failed", err, key)
+	case errors.Is(err, source.ErrRead):
+		return sourceErr(deps, key, err)
+	}
+	return discoverErr(deps, repo, err)
 }
