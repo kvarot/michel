@@ -252,7 +252,7 @@ func TestVerifyIgnoresEventsWrittenAfterHeadWasRead(t *testing.T) {
 		t.Fatalf("head = %d %s %v", n, h, ok)
 	}
 	record3(t, l) // ...a concurrent writer appends before the walk
-	res, err := verifyAgainst(context.Background(), s, n, h, ok, VerifyOptions{})
+	res, err := verifyAgainst(context.Background(), s.DB(), n, h, ok, VerifyOptions{})
 	if err != nil || res.Broken != nil || res.Reason != "" || res.Checked != 6 {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
@@ -304,7 +304,7 @@ func TestVerifyDetectsReplacedEventAtHeadPosition(t *testing.T) {
 	if _, err := l.Record(context.Background(), Event{Actor: "t", Action: "x", Target: "y", Result: "ok"}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := verifyAgainst(context.Background(), s, n, h, true, VerifyOptions{})
+	res, err := verifyAgainst(context.Background(), s.DB(), n, h, true, VerifyOptions{})
 	if err != nil || res.Reason != ReasonTailTruncated || res.Expected != 3 {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
