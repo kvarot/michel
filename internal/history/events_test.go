@@ -98,3 +98,47 @@ func TestAddFindingEventRefusesAPath(t *testing.T) {
 		}
 	}
 }
+
+func TestAddAttemptEventNumbersPerAttempt(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	at := time.Date(2026, 11, 6, 9, 30, 15, 0, time.FixedZone("x", 3600))
+	tx, err := st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range [][2]string{{"a1", "preparing"}, {"a1", "proposed"}, {"a2", "preparing"}} {
+		if err := AddAttemptEvent(ctx, tx, c[0], at, c[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// also works straight on the DB
+	if err := AddAttemptEvent(ctx, st.DB(), "a1", at, "approved"); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	rows, err := st.DB().Query(`SELECT attempt_id, seq, at, state, reconstructed FROM fix_attempt_event ORDER BY attempt_id, seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, atS, state string
+		var seq, rec int
+		if err := rows.Scan(&id, &seq, &atS, &state, &rec); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, id+" "+strconv.Itoa(seq)+" "+atS+" "+state+" "+strconv.Itoa(rec))
+	}
+	want := "a1 1 2026-11-06T08:30:15Z preparing 0|a1 2 2026-11-06T08:30:15Z proposed 0|a1 3 2026-11-06T08:30:15Z approved 0|a2 1 2026-11-06T08:30:15Z preparing 0"
+	if strings.Join(got, "|") != want {
+		t.Errorf("rows = %v", got)
+	}
+}

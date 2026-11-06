@@ -97,3 +97,20 @@ func AddStatusEvents(ctx context.Context, tx *sql.Tx, findingID, from, to, reaso
 	}
 	return nil
 }
+
+// execQuerier is what *sql.DB and *sql.Tx both offer.
+type execQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// AddAttemptEvent writes one state of a fix attempt, numbered after the
+// states the attempt already has. The caller writes it only when the state
+// really changed, in the transaction of the change.
+func AddAttemptEvent(ctx context.Context, q execQuerier, attemptID string, at time.Time, state string) error {
+	if _, err := q.ExecContext(ctx, `INSERT INTO fix_attempt_event (attempt_id, seq, at, state, reconstructed)
+		SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, 0 FROM fix_attempt_event WHERE attempt_id = ?`,
+		attemptID, at.UTC().Format(time.RFC3339), state, attemptID); err != nil {
+		return fmt.Errorf("cannot write the history of the fix attempt: %w", err)
+	}
+	return nil
+}
