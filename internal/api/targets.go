@@ -510,55 +510,26 @@ func (s *server) resolveLinks(w http.ResponseWriter, r *http.Request, lang i18n.
 	return out, true
 }
 
-// changeRules writes the network rules to add, then removes those to remove
-// (one edit each, in the policy file), reloads the policy and hands it to the
-// gateway. It returns the rules to add that were not in force yet, so a
-// caller can take them back. Adding a server is the user's opt-in; removing
-// it takes the opt-in back.
-func (s *server) changeRules(add, remove []policy.AllowRule) (added, removed []policy.AllowRule, err error) {
-	if s.deps.PolicyPath == "" || s.deps.Reload == nil {
-		return nil, nil, nil
+// targetDeps are the dependencies of the server operations shared with the
+// command line: the policy file of the server receives the network rules, a
+// reload keeps the new policy and the gateway learns its rules.
+func (s *server) targetDeps() target.Deps {
+	d := target.Deps{Repo: s.targets(), Audit: s.deps.Audit, Actor: targetActor, PolicyPath: s.deps.PolicyPath,
+		Current: s.currentPolicy, Gateway: s.deps.Sources.Gateway}
+	if s.deps.Reload != nil {
+		d.Reload = s.reload
 	}
+	return d
+}
+
+// changeRules is target.ChangeRules under policyMu, which serializes the
+// writes of the policy file in this process. It returns the rules to add that
+// were not in force yet, so a caller can take them back, and those it
+// removed.
+func (s *server) changeRules(add, remove []policy.AllowRule) (added, removed []policy.AllowRule, err error) {
 	s.policyMu.Lock()
 	defer s.policyMu.Unlock()
-	ctx := context.Background()
-	repo := s.targets()
-	// What is in force is read from the file itself: a rule the user wrote
-	// since Michel started counts as theirs.
-	present := s.currentPolicy().Sovereignty.Network.Allow
-	if p, err := s.deps.Reload(); err == nil {
-		present = p.Sovereignty.Network.Allow
-	}
-	added = target.NewRules(present, add)
-	// Only the rules Michel wrote are taken back: a rule the user wrote by
-	// hand stays.
-	if removed, err = repo.OwnedOnly(ctx, remove); err != nil {
-		return nil, nil, err
-	}
-	if len(add) > 0 {
-		if _, err := policy.AddAllowRules(s.deps.PolicyPath, add...); err != nil {
-			return nil, nil, err
-		}
-		if err := repo.RecordRules(ctx, added); err != nil {
-			return added, nil, err
-		}
-	}
-	if len(removed) > 0 {
-		if _, err := policy.RemoveAllowRules(s.deps.PolicyPath, removed...); err != nil {
-			return added, nil, err
-		}
-		if err := repo.ForgetRules(ctx, removed); err != nil {
-			return added, removed, err
-		}
-	}
-	p, err := s.reload()
-	if err != nil {
-		return added, removed, err
-	}
-	if g := s.deps.Sources.Gateway; g != nil {
-		g.SetRules(p.Sovereignty.Network.Allow)
-	}
-	return added, removed, nil
+	return target.ChangeRules(context.Background(), s.targetDeps(), add, remove)
 }
 
 // otherTargets are the servers other than id.
@@ -920,62 +891,31 @@ func (s *server) targetAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	t := target.Target{Name: strings.TrimSpace(b.Name), Alias: strings.TrimSpace(b.Alias), Host: strings.TrimSpace(b.Host), Port: b.Port,
-		User: strings.TrimSpace(b.User), Kind: target.Kind(b.Kind), Env: target.Env(b.Env), Classification: policy.Classification(b.Classification),
-		Executor: target.Executor(b.Executor), Sudo: target.SudoMode(b.Sudo), SiteURL: strings.TrimSpace(b.SiteURL), AutoConfig: b.AutoConfig,
-		FixLevel: 1}
-	if t.Name == "" {
-		t.Name = t.Alias
-	}
-	if t.Name == "" {
-		t.Name = t.Host
-	}
-	if t.Kind == "" {
-		t.Kind = target.KindVPS
-	}
-	if b.FixLevel != nil {
-		t.FixLevel = *b.FixLevel
-	}
-	if err := target.Check(t); err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	var err error
-	if t.CheckInterval, err = target.ParseInterval(b.CheckInterval); err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	if t.PreprodID, err = s.targets().ResolvePreprod(ctx, t, b.Preprod); err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
 	links, ok := s.resolveLinks(w, r, lang, b.Links)
 	if !ok {
 		return
 	}
-	added, err := s.targets().Add(ctx, t)
-	if err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	for _, l := range links {
-		l.TargetID = added.ID
-		if err := s.targets().Link(ctx, l); err != nil {
-			_ = s.targets().Remove(ctx, added.ID)
-			s.internal(w, r)
-			return
-		}
-	}
-	fresh, _, err := s.changeRules(target.AllowRules(added), nil)
-	n := len(fresh)
-	if err != nil {
-		_ = s.targets().Remove(ctx, added.ID)
+	req := target.RegisterRequest{Name: b.Name, Alias: b.Alias, Host: b.Host, Port: b.Port, User: b.User, Kind: target.Kind(b.Kind),
+		Env: target.Env(b.Env), Classification: policy.Classification(b.Classification), Executor: target.Executor(b.Executor),
+		Sudo: target.SudoMode(b.Sudo), SiteURL: b.SiteURL, AutoConfig: b.AutoConfig, FixLevel: b.FixLevel,
+		CheckInterval: b.CheckInterval, Preprod: b.Preprod, Links: links}
+	// The policy file is written by one request at a time.
+	s.policyMu.Lock()
+	added, err := target.Register(ctx, s.targetDeps(), req)
+	s.policyMu.Unlock()
+	switch {
+	case err == nil:
+	case errors.As(err, new(*target.RulesError)):
 		s.failedBody(w, http.StatusInternalServerError, lang, "api.target.allow_failed", "api.target.allow_failed_hint")
 		return
-	}
-	if err := s.targetAudit(ctx, "target.add", added.ID, "ok", map[string]any{"name": added.Name, "kind": string(added.Kind), "env": string(added.Env),
-		"fix_level": added.FixLevel, "links": len(links), "rules_written": n}); err != nil {
+	case errors.As(err, new(*target.LinkError)):
+		s.internal(w, r)
+		return
+	case errors.As(err, new(*target.AuditError)):
 		s.targetAuditFailed(w, lang)
+		return
+	default:
+		s.targetRefused(w, r, lang, err, false)
 		return
 	}
 	v, err := s.targetView(ctx, added, lang, true)

@@ -227,42 +227,21 @@ func newTargetDiscoverCmd(deps *Deps) *cobra.Command {
 	}
 }
 
-// changeRules writes the network rules to add, then removes those to remove,
-// in the policy file, and hands the reloaded policy to the gateway: adding a
-// server is the user's opt-in, removing it takes the opt-in back. It returns
-// the rules to add that were not in force yet.
-func changeRules(cmd *cobra.Command, deps *Deps, add, remove []policy.AllowRule) (added, removed []policy.AllowRule, err error) {
+// targetDeps are the dependencies of the server operations shared with the
+// page: the policy file of --config receives the network rules, a reload puts
+// the new policy in force and the gateway learns its rules.
+func targetDeps(cmd *cobra.Command, deps *Deps) target.Deps {
 	sd := sourceDeps(cmd, deps)
-	ctx := cmd.Context()
-	repo := target.NewRepo(deps.Store)
-	added = target.NewRules(deps.Policy().Sovereignty.Network.Allow, add)
-	// Only the rules Michel wrote are taken back: a rule the user wrote by
-	// hand stays.
-	if removed, err = repo.OwnedOnly(ctx, remove); err != nil {
-		return nil, nil, err
-	}
-	if len(add) > 0 {
-		if _, err := policy.AddAllowRules(sd.PolicyPath, add...); err != nil {
-			return nil, nil, err
-		}
-		if err := repo.RecordRules(ctx, added); err != nil {
-			return added, nil, err
-		}
-	}
-	if len(removed) > 0 {
-		if _, err := policy.RemoveAllowRules(sd.PolicyPath, removed...); err != nil {
-			return added, nil, err
-		}
-		if err := repo.ForgetRules(ctx, removed); err != nil {
-			return added, removed, err
-		}
-	}
-	p, err := sd.Reload()
-	if err != nil {
-		return added, removed, err
-	}
-	deps.Gateway.SetRules(p.Sovereignty.Network.Allow)
-	return added, removed, nil
+	return target.Deps{Repo: target.NewRepo(deps.Store), Audit: deps.Audit, Actor: "cli", PolicyPath: sd.PolicyPath,
+		Reload: sd.Reload, Current: deps.Policy, Gateway: deps.Gateway}
+}
+
+// changeRules writes the network rules to add, then removes those to remove,
+// in the policy file, and hands the reloaded policy to the gateway
+// (target.ChangeRules). It returns the rules to add that were not in force
+// yet, and those it removed.
+func changeRules(cmd *cobra.Command, deps *Deps, add, remove []policy.AllowRule) (added, removed []policy.AllowRule, err error) {
+	return target.ChangeRules(cmd.Context(), targetDeps(cmd, deps), add, remove)
 }
 
 // otherTargets are the servers other than id.
@@ -293,23 +272,24 @@ func newTargetAddCmd(deps *Deps) *cobra.Command {
 			"policy file. Next, confirm its fingerprint with 'michel target trust'.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, arg := cmd.Context(), strings.TrimSpace(args[0])
-			repo := target.NewRepo(deps.Store)
+			arg := strings.TrimSpace(args[0])
 			fl := cmd.Flags()
-			t := target.Target{Host: arg, Name: name, User: user, Port: port, Kind: target.Kind(kind), Env: target.Env(env),
-				Executor: target.Executor(executor), Sudo: target.SudoMode(sudo), SiteURL: strings.TrimSpace(siteURL), FixLevel: 1}
-			var links []target.Link
+			req := target.RegisterRequest{Host: arg, Name: name, User: user, Port: port, Kind: target.Kind(kind), Env: target.Env(env),
+				Executor: target.Executor(executor), Sudo: target.SudoMode(sudo), SiteURL: siteURL, CheckInterval: interval, Preprod: preprod}
+			if fl.Changed("level") {
+				req.FixLevel = &level
+			}
 			if cands, err := discover(cmd, deps); err == nil {
 				for _, c := range cands {
 					if !strings.EqualFold(c.Alias, arg) && !strings.EqualFold(c.Host, arg) {
 						continue
 					}
-					t.Alias, t.Host = c.Alias, c.Host
+					req.Alias, req.Host = c.Alias, c.Host
 					if !fl.Changed("port") && c.Port != 0 {
-						t.Port = c.Port
+						req.Port = c.Port
 					}
 					if !fl.Changed("user") {
-						t.User = c.User
+						req.User = c.User
 					}
 					for _, l := range c.Projects {
 						// A folder the registry would refuse (none, the root, a
@@ -320,56 +300,27 @@ func newTargetAddCmd(deps *Deps) *cobra.Command {
 							}
 							continue
 						}
-						links = append(links, target.Link{ProjectID: l.ProjectID, RemoteDir: l.RemoteDir})
+						req.Links = append(req.Links, target.Link{ProjectID: l.ProjectID, RemoteDir: l.RemoteDir})
 					}
 					break
 				}
 			}
-			if t.Name == "" {
-				t.Name = t.Alias
-			}
-			if t.Name == "" {
-				t.Name = t.Host
-			}
-			if strings.TrimSpace(t.User) == "" {
+			added, err := target.Register(cmd.Context(), targetDeps(cmd, deps), req)
+			var rulesErr *target.RulesError
+			var linkErr *target.LinkError
+			var auditErr *target.AuditError
+			switch {
+			case err == nil:
+			case errors.Is(err, target.ErrEmptyUser):
 				return deps.Errorf("cli.target.add.need_user", arg)
-			}
-			if t.Kind == "" {
-				t.Kind = target.KindVPS
-			}
-			if fl.Changed("level") {
-				t.FixLevel = level
-			}
-			var err error
-			if t.CheckInterval, err = target.ParseInterval(interval); err != nil {
+			case errors.As(err, &rulesErr):
+				return deps.Wrapf("cli.target.add.allow_failed", rulesErr.Err)
+			case errors.As(err, &linkErr):
+				return targetFailure(deps, linkErr.Err, false)
+			case errors.As(err, &auditErr):
+				return deps.Wrapf("cli.target.audit_failed", auditErr.Err)
+			default:
 				return targetFailure(deps, err, false)
-			}
-			if err := target.Check(t); err != nil {
-				return targetFailure(deps, err, false)
-			}
-			if t.PreprodID, err = repo.ResolvePreprod(ctx, t, preprod); err != nil {
-				return targetFailure(deps, err, false)
-			}
-			added, err := repo.Add(ctx, t)
-			if err != nil {
-				return targetFailure(deps, err, false)
-			}
-			for _, l := range links {
-				l.TargetID = added.ID
-				if err := repo.Link(ctx, l); err != nil {
-					_ = repo.Remove(ctx, added.ID)
-					return targetFailure(deps, err, false)
-				}
-			}
-			fresh, _, err := changeRules(cmd, deps, target.AllowRules(added), nil)
-			n := len(fresh)
-			if err != nil {
-				_ = repo.Remove(ctx, added.ID)
-				return deps.Wrapf("cli.target.add.allow_failed", err)
-			}
-			if err := targetRecord(cmd, deps, "target.add", added.ID, "ok", map[string]any{"name": added.Name, "kind": string(added.Kind),
-				"env": string(added.Env), "fix_level": added.FixLevel, "links": len(links), "rules_written": n}); err != nil {
-				return err
 			}
 			if asJSON(cmd) {
 				return json.NewEncoder(deps.Stdout).Encode(added)
