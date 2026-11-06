@@ -422,3 +422,32 @@ func TestProjectAutoFixMinor(t *testing.T) {
 		t.Fatalf("got %+v %v", got, err)
 	}
 }
+
+func TestPurgeDeletesEvents(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	p, _ := r.Add(ctx, Project{Name: "a", Path: t.TempDir()})
+	other, _ := r.Add(ctx, Project{Name: "b", Path: t.TempDir()})
+	seedHistory(t, r, p.ID, "s1")
+	seedHistory(t, r, other.ID, "s2")
+	for _, q := range []string{
+		`INSERT INTO finding_event (finding_id, seq, at, kind) VALUES ('s1-f', 1, '2026-10-22T12:00:00Z', 'seen'), ('s2-f', 1, '2026-10-22T12:00:00Z', 'seen')`,
+		`INSERT INTO fix_attempt (id, finding_id, project_id, origin, state, created_at, updated_at)
+			VALUES ('a1', 's1-f', '` + p.ID + `', 'manual', 'preparing', '2026-10-22T12:00:00Z', '2026-10-22T12:00:00Z'),
+			('a2', 's2-f', '` + other.ID + `', 'manual', 'preparing', '2026-10-22T12:00:00Z', '2026-10-22T12:00:00Z')`,
+		`INSERT INTO fix_attempt_event (attempt_id, seq, at, state) VALUES ('a1', 1, '2026-10-22T12:00:00Z', 'preparing'), ('a2', 1, '2026-10-22T12:00:00Z', 'preparing')`,
+	} {
+		if _, err := r.s.DB().Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.Purge(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if countRows(t, r, "finding_event", "finding_id = ?", "s1-f") != 0 || countRows(t, r, "fix_attempt_event", "attempt_id = ?", "a1") != 0 {
+		t.Error("the history of the purged project remains")
+	}
+	if countRows(t, r, "finding_event", "finding_id = ?", "s2-f") != 1 || countRows(t, r, "fix_attempt_event", "attempt_id = ?", "a2") != 1 {
+		t.Error("purge touched the history of another project")
+	}
+}

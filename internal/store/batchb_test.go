@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // oldDatabase builds at path a database of the version that ends with
@@ -104,6 +105,113 @@ func TestMigration0026KeepsTheChainOfAnOldDatabase(t *testing.T) {
 		var n int
 		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&n); err != nil || n != 1 {
 			t.Errorf("%s: n=%d err=%v", idx, n, err)
+		}
+	}
+}
+
+// 0028 reconstructs the past of an old database: a seen event per finding, a
+// gone event for the gone ones, a start and a current state per attempt, all
+// flagged as reconstructed, and notes when the history begins.
+func TestMigrationReconstructsHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "michel.db")
+	finding := func(id, status, changed string) string {
+		return `INSERT INTO finding (id, project_id, manifest_rel_path, ecosystem, package, osv_id, installed_version, status,
+			first_seen_scan, last_seen_scan, first_seen_at, last_seen_at, status_changed_at)
+			VALUES ('` + id + `','p1','composer.lock','Packagist','acme/lib','ACME-` + id + `','1.0.0','` + status + `',
+			's1','s2','2026-01-01T00:00:00Z','2026-01-05T00:00:00Z','` + changed + `')`
+	}
+	attempt := func(id, state, updated string) string {
+		return `INSERT INTO fix_attempt (id, finding_id, project_id, origin, state, created_at, updated_at)
+			VALUES ('` + id + `','f1','p1','manual','` + state + `','2026-01-02T00:00:00Z','` + updated + `')`
+	}
+	oldDatabase(t, path, 27,
+		finding("f1", "gone", "2026-01-04T00:00:00Z"),
+		finding("f2", "pending", "2026-01-03T00:00:00Z"),
+		attempt("a1", "applied", "2026-01-03T12:00:00Z"),
+		attempt("a2", "preparing", "2026-01-02T00:00:00Z"))
+	before := time.Now().UTC().Truncate(time.Second)
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { s.Close() }()
+	rows, err := s.DB().Query(`SELECT finding_id, seq, at, kind, detail FROM finding_event ORDER BY finding_id, seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for rows.Next() {
+		var id, at, kind, detail string
+		var seq int
+		if err := rows.Scan(&id, &seq, &at, &kind, &detail); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, id+":"+strconv.Itoa(seq)+":"+at+":"+kind+":"+detail)
+	}
+	rows.Close()
+	want := `f1:1:2026-01-01T00:00:00Z:seen:{"reconstructed":true} f1:2:2026-01-04T00:00:00Z:gone:{"reconstructed":true} ` +
+		`f2:1:2026-01-01T00:00:00Z:seen:{"reconstructed":true}`
+	if strings.Join(got, " ") != want {
+		t.Errorf("finding events =\n%s\nwant\n%s", strings.Join(got, " "), want)
+	}
+	rows, err = s.DB().Query(`SELECT attempt_id, seq, at, state, reconstructed FROM fix_attempt_event ORDER BY attempt_id, seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	for rows.Next() {
+		var id, at, state string
+		var seq, rec int
+		if err := rows.Scan(&id, &seq, &at, &state, &rec); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, id+":"+strconv.Itoa(seq)+":"+at+":"+state+":"+strconv.Itoa(rec))
+	}
+	rows.Close()
+	want = "a1:1:2026-01-02T00:00:00Z:preparing:1 a1:2:2026-01-03T12:00:00Z:applied:1 a2:1:2026-01-02T00:00:00Z:preparing:1"
+	if strings.Join(got, " ") != want {
+		t.Errorf("attempt events =\n%s\nwant\n%s", strings.Join(got, " "), want)
+	}
+	var startText string
+	if err := s.DB().QueryRow(`SELECT at FROM history_start WHERE id = 1`).Scan(&startText); err != nil {
+		t.Fatal(err)
+	}
+	start, err := time.Parse(time.RFC3339, startText)
+	if err != nil || start.Before(before) || start.After(time.Now()) || start.Location() != time.UTC {
+		t.Errorf("history_start = %q (%v), want the migration instant in UTC", startText, err)
+	}
+	for _, idx := range []string{"idx_finding_event_at", "idx_finding_event_finding", "idx_fix_attempt_event_at"} {
+		var n int
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s: n=%d err=%v", idx, n, err)
+		}
+	}
+	// Opening again neither adds events nor moves the start.
+	s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	var again string
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM finding_event`).Scan(&n); err != nil || n != 3 {
+		t.Errorf("finding events after reopening = %d %v", n, err)
+	}
+	if err := s.DB().QueryRow(`SELECT at FROM history_start`).Scan(&again); err != nil || again != startText {
+		t.Errorf("history_start after reopening = %q %v", again, err)
+	}
+}
+
+// 0028 is portable like the others: no rowid, no SQLite date function.
+func TestMigration0028IsPortable(t *testing.T) {
+	body, err := migrationFS.ReadFile("migrations/0028_history.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(body))
+	for _, banned := range []string{"rowid", "autoincrement", "datetime(", "strftime(", "insert or replace"} {
+		if strings.Contains(lower, banned) {
+			t.Errorf("0028 is not portable: it contains %q", banned)
 		}
 	}
 }

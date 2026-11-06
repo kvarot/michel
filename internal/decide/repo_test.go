@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -396,5 +397,72 @@ func TestSetStoresSeenKEV(t *testing.T) {
 	}
 	if changed, reason := Changed(cur, "low", []string{"1.0.1"}, false); !changed || reason != KEVChanged {
 		t.Errorf("Changed on KEV = %v %q", changed, reason)
+	}
+}
+
+func (f fixture) findingEvents(t *testing.T, id string) (kinds string, reasons []string) {
+	t.Helper()
+	rows, err := f.st.DB().Query(`SELECT kind, detail FROM finding_event WHERE finding_id = ? ORDER BY seq`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ks []string
+	for rows.Next() {
+		var k, d string
+		if err := rows.Scan(&k, &d); err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(d), &m); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := m["reason"].(string)
+		ks, reasons = append(ks, k), append(reasons, r)
+	}
+	return strings.Join(ks, ","), reasons
+}
+
+func TestSupersedeWritesReopened(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	f.seedFinding(t, f.proj.ID, "f1", scan.StatusPending, "high")
+	if _, err := f.repo.Set(ctx, Decision{FindingID: "f1", Action: Fix, Author: "cli"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if kinds, _ := f.findingEvents(t, "f1"); kinds != "" {
+		t.Fatalf("pending -> decided wrote %q", kinds)
+	}
+	if err := f.repo.Supersede(ctx, nil, "f1", SeverityChanged, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	kinds, reasons := f.findingEvents(t, "f1")
+	if kinds != "reopened" || reasons[0] != string(SeverityChanged) {
+		t.Errorf("events = %q %v", kinds, reasons)
+	}
+	// Superseding again leaves it pending: nothing more.
+	if err := f.repo.Supersede(ctx, nil, "f1", SeverityChanged, now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if kinds, _ := f.findingEvents(t, "f1"); kinds != "reopened" {
+		t.Errorf("events after a second supersession = %q", kinds)
+	}
+}
+
+func TestExpireDueWritesReopened(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	f.seedFinding(t, f.proj.ID, "f1", scan.StatusPending, "high")
+	if _, err := f.repo.Set(ctx, Decision{FindingID: "f1", Action: Defer, Justification: "later", DueAt: now.Add(24 * time.Hour), Author: "cli"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repo.ExpireDue(ctx, now.Add(48*time.Hour), nil); err != nil {
+		t.Fatal(err)
+	}
+	kinds, reasons := f.findingEvents(t, "f1")
+	if kinds != "reopened" || reasons[0] != string(DueReached) {
+		t.Errorf("events = %q %v", kinds, reasons)
 	}
 }

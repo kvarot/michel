@@ -18,6 +18,13 @@ var migrationFS embed.FS
 // and the migration transaction.
 var beforeMigrationTx func()
 
+// afterMigration holds, by version, a statement run right after that
+// migration in its transaction, with the migration instant (RFC 3339, UTC,
+// to the second) as its only argument: what plain portable SQL cannot write.
+var afterMigration = map[int]string{
+	28: `INSERT INTO history_start (id, at) VALUES (1, ?)`,
+}
+
 func migrate(db *sql.DB) error {
 	ctx := context.Background()
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -74,8 +81,15 @@ func migrate(db *sql.DB) error {
 			tx.Rollback()
 			return fmt.Errorf("migration %s: %w", name, err)
 		}
+		now := time.Now().UTC()
+		if q, ok := afterMigration[version]; ok {
+			if _, err := tx.ExecContext(ctx, q, now.Format(time.RFC3339)); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %s: %w", name, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)`,
-			version, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			version, now.Format(time.RFC3339Nano)); err != nil {
 			tx.Rollback()
 			return err
 		}
