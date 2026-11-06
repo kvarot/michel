@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 )
 
 // ErrNotFound is returned when no secret has that name.
@@ -54,6 +55,9 @@ type Creator interface {
 
 // fileStore keeps one file per secret in dir.
 type fileStore struct{ dir string }
+
+// link is os.Link; tests replace it to act as a file system without hard links.
+var link = os.Link
 
 // tempPrefix starts the name of a file being written; such files are never
 // listed (a name cannot start with a dot).
@@ -101,8 +105,8 @@ func (s *fileStore) Set(name string, value []byte) error {
 // else it returns ErrExists and leaves the stored value: of several
 // processes creating the same secret at once, exactly one wins. The value
 // appears whole (a hard link of a complete temporary file). On a file system
-// without hard links it falls back to a rename, exclusive only between the
-// existence check and the rename.
+// without hard links, a claim file made with O_EXCL picks the winner, which
+// then renames its complete file; the others wait for that value.
 func (s *fileStore) Create(name string, value []byte) error {
 	tmp, err := s.writeTemp(name, value)
 	if err != nil {
@@ -110,20 +114,63 @@ func (s *fileStore) Create(name string, value []byte) error {
 	}
 	defer os.Remove(tmp)
 	dst := filepath.Join(s.dir, name)
-	err = os.Link(tmp, dst)
+	err = link(tmp, dst)
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, os.ErrExist) {
 		return ErrExists
 	}
-	if _, serr := os.Lstat(dst); serr == nil {
-		return ErrExists
+	return s.createByClaim(name, tmp, dst)
+}
+
+// claimPrefix starts the name of the claim file of a Create without hard
+// links; like temporary files, claim files are never listed.
+const claimPrefix = ".claim-"
+
+// claimWait bounds how long a Create waits for the value of the process
+// that holds the claim; a claim older than claimStale is left by a process
+// that stopped before its rename, and is taken over (two takers of one
+// stale claim at the same instant can both win; that needs a crash first).
+var (
+	claimWait  = 5 * time.Second
+	claimStale = time.Minute
+)
+
+// createByClaim is Create on a file system without hard links.
+func (s *fileStore) createByClaim(name, tmp, dst string) error {
+	claim := filepath.Join(s.dir, claimPrefix+name)
+	deadline := time.Now().Add(claimWait)
+	for {
+		f, err := os.OpenFile(claim, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			f.Close()
+			defer os.Remove(claim)
+			if _, err := os.Lstat(dst); err == nil {
+				return ErrExists
+			}
+			if err := os.Rename(tmp, dst); err != nil {
+				return fmt.Errorf("cannot write secret %s: %w", name, err)
+			}
+			return nil
+		}
+		// On Windows a claim being removed answers "access denied" until
+		// it is gone: wait for it like for a held claim.
+		if !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("cannot write secret %s: %w", name, err)
+		}
+		if _, err := os.Lstat(dst); err == nil {
+			return ErrExists
+		}
+		if fi, err := os.Lstat(claim); err == nil && time.Since(fi.ModTime()) > claimStale {
+			os.Remove(claim)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("cannot write secret %s: %s stays in the way: %w", name, claim, err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return fmt.Errorf("cannot write secret %s: %w", name, err)
-	}
-	return nil
 }
 
 // writeTemp writes the protected value to a new temporary file of the
