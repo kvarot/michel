@@ -67,4 +67,4 @@ michel project set my-shop --core-package symfony/http-kernel --core-package rea
 michel project set my-shop --risk major_jump=10 --risk no_tests=30
 ```
 
-`--core-package` remplace toute la liste ; `--risk` change une valeur et conserve les autres surcharges. Les analyses stockées gardent une empreinte de ces réglages (et des valeurs de la politique) : après un changement, elles sont recalculées au scan suivant ou avec `michel analyze --project my-shop`. Les clés inconnues et les valeurs hors de 0..100 sont refusées. Chaque changement est consigné dans le journal d'audit sous `project.set` (noms des champs seulement, jamais le contenu des commandes).
+`--core-package` remplace toute la liste ; `--risk` change une valeur et conserve les autres surcharges. Les analyses stockées gardent une empreinte de ces réglages (et des valeurs de la politique) : après un changement, elles sont recalculées au scan suivant ou avec `michel analyze --project my-shop`. Les clés inconnues et les valeurs hors de 0..100 sont refusées. Chaque changement est consigné dans le journal d'audit sous `project.update` (noms des champs seulement, jamais le contenu des commandes).

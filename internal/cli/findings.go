@@ -55,7 +55,7 @@ func newFindingsCmd(deps *Deps) *cobra.Command {
 			if severity != "" && !oneOf(severity, validSeverities) {
 				return deps.Errorf("cli.findings.unknown_severity", severity, strings.Join(validSeverities, ", "))
 			}
-			p, err := projectRepo(deps).Get(ctx, name)
+			p, err := projectRepo(deps).GetActive(ctx, name)
 			if err != nil {
 				if errors.Is(err, project.ErrNotFound) {
 					return deps.Errorf("cli.findings.not_found", name)

@@ -101,21 +101,14 @@ func newWatchStatusCmd(deps *Deps) *cobra.Command {
 					continue
 				}
 				v := watchProjectView{Name: p.Name, AutoScan: p.AutoScan, LastScanStatus: "never"}
-				at, status, has, err := repo.LastScan(ctx, p.ID)
+				st, err := watch.ProjectStatus(ctx, repo, p, deps.Policy(), now)
 				if err != nil {
 					return err
 				}
-				if has {
-					v.LastScanAt, v.LastScanStatus = at.UTC().Format(time.RFC3339), status
+				if st.HasScan {
+					v.LastScanAt, v.LastScanStatus = st.LastScanAt, st.LastScanStatus
 				}
-				if on && p.AutoScan {
-					// From the last check that counts, as the watch itself.
-					start, counted, err := repo.LastStart(ctx, p.ID)
-					if err != nil {
-						return err
-					}
-					v.NextScanAt = watch.Next(start, counted, now, h, m).UTC().Format(time.RFC3339)
-				}
+				v.NextScanAt = st.NextCheck
 				views = append(views, v)
 			}
 			next := ""

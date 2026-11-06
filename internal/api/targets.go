@@ -448,6 +448,8 @@ func codeOfCheck(err error) string {
 
 // ---- helpers --------------------------------------------------------------------
 
+func ptrTo[T any](v T) *T { return &v }
+
 func (s *server) targets() *target.Repo { return target.NewRepo(s.deps.Store) }
 
 // targetOf reads the server of the route's {id} (its id or its name); it
@@ -510,70 +512,16 @@ func (s *server) resolveLinks(w http.ResponseWriter, r *http.Request, lang i18n.
 	return out, true
 }
 
-// changeRules writes the network rules to add, then removes those to remove
-// (one edit each, in the policy file), reloads the policy and hands it to the
-// gateway. It returns the rules to add that were not in force yet, so a
-// caller can take them back. Adding a server is the user's opt-in; removing
-// it takes the opt-in back.
-func (s *server) changeRules(add, remove []policy.AllowRule) (added, removed []policy.AllowRule, err error) {
-	if s.deps.PolicyPath == "" || s.deps.Reload == nil {
-		return nil, nil, nil
+// targetDeps are the dependencies of the server operations shared with the
+// command line: the policy file of the server receives the network rules, a
+// reload keeps the new policy and the gateway learns its rules.
+func (s *server) targetDeps() target.Deps {
+	d := target.Deps{Repo: s.targets(), Audit: s.deps.Audit, Actor: targetActor, PolicyPath: s.deps.PolicyPath,
+		Current: s.currentPolicy, Gateway: s.deps.Sources.Gateway}
+	if s.deps.Reload != nil {
+		d.Reload = s.reload
 	}
-	s.policyMu.Lock()
-	defer s.policyMu.Unlock()
-	ctx := context.Background()
-	repo := s.targets()
-	// What is in force is read from the file itself: a rule the user wrote
-	// since Michel started counts as theirs.
-	present := s.currentPolicy().Sovereignty.Network.Allow
-	if p, err := s.deps.Reload(); err == nil {
-		present = p.Sovereignty.Network.Allow
-	}
-	added = target.NewRules(present, add)
-	// Only the rules Michel wrote are taken back: a rule the user wrote by
-	// hand stays.
-	if removed, err = repo.OwnedOnly(ctx, remove); err != nil {
-		return nil, nil, err
-	}
-	if len(add) > 0 {
-		if _, err := policy.AddAllowRules(s.deps.PolicyPath, add...); err != nil {
-			return nil, nil, err
-		}
-		if err := repo.RecordRules(ctx, added); err != nil {
-			return added, nil, err
-		}
-	}
-	if len(removed) > 0 {
-		if _, err := policy.RemoveAllowRules(s.deps.PolicyPath, removed...); err != nil {
-			return added, nil, err
-		}
-		if err := repo.ForgetRules(ctx, removed); err != nil {
-			return added, removed, err
-		}
-	}
-	p, err := s.reload()
-	if err != nil {
-		return added, removed, err
-	}
-	if g := s.deps.Sources.Gateway; g != nil {
-		g.SetRules(p.Sovereignty.Network.Allow)
-	}
-	return added, removed, nil
-}
-
-// otherTargets are the servers other than id.
-func (s *server) otherTargets(ctx context.Context, id string) ([]target.Target, error) {
-	all, err := s.targets().List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := all[:0:0]
-	for _, t := range all {
-		if t.ID != id {
-			out = append(out, t)
-		}
-	}
-	return out, nil
+	return d
 }
 
 var ruleKeys = sync.OnceValue(func() map[string]string {
@@ -920,62 +868,31 @@ func (s *server) targetAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	t := target.Target{Name: strings.TrimSpace(b.Name), Alias: strings.TrimSpace(b.Alias), Host: strings.TrimSpace(b.Host), Port: b.Port,
-		User: strings.TrimSpace(b.User), Kind: target.Kind(b.Kind), Env: target.Env(b.Env), Classification: policy.Classification(b.Classification),
-		Executor: target.Executor(b.Executor), Sudo: target.SudoMode(b.Sudo), SiteURL: strings.TrimSpace(b.SiteURL), AutoConfig: b.AutoConfig,
-		FixLevel: 1}
-	if t.Name == "" {
-		t.Name = t.Alias
-	}
-	if t.Name == "" {
-		t.Name = t.Host
-	}
-	if t.Kind == "" {
-		t.Kind = target.KindVPS
-	}
-	if b.FixLevel != nil {
-		t.FixLevel = *b.FixLevel
-	}
-	if err := target.Check(t); err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	var err error
-	if t.CheckInterval, err = target.ParseInterval(b.CheckInterval); err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	if t.PreprodID, err = s.targets().ResolvePreprod(ctx, t, b.Preprod); err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
 	links, ok := s.resolveLinks(w, r, lang, b.Links)
 	if !ok {
 		return
 	}
-	added, err := s.targets().Add(ctx, t)
-	if err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	for _, l := range links {
-		l.TargetID = added.ID
-		if err := s.targets().Link(ctx, l); err != nil {
-			_ = s.targets().Remove(ctx, added.ID)
-			s.internal(w, r)
-			return
-		}
-	}
-	fresh, _, err := s.changeRules(target.AllowRules(added), nil)
-	n := len(fresh)
-	if err != nil {
-		_ = s.targets().Remove(ctx, added.ID)
+	req := target.RegisterRequest{Name: b.Name, Alias: b.Alias, Host: b.Host, Port: b.Port, User: b.User, Kind: target.Kind(b.Kind),
+		Env: target.Env(b.Env), Classification: policy.Classification(b.Classification), Executor: target.Executor(b.Executor),
+		Sudo: target.SudoMode(b.Sudo), SiteURL: b.SiteURL, AutoConfig: b.AutoConfig, FixLevel: b.FixLevel,
+		CheckInterval: b.CheckInterval, Preprod: b.Preprod, Links: links}
+	// The policy file is written by one request at a time.
+	s.policyMu.Lock()
+	added, err := target.Register(ctx, s.targetDeps(), req)
+	s.policyMu.Unlock()
+	switch {
+	case err == nil:
+	case errors.As(err, new(*target.RulesError)):
 		s.failedBody(w, http.StatusInternalServerError, lang, "api.target.allow_failed", "api.target.allow_failed_hint")
 		return
-	}
-	if err := s.targetAudit(ctx, "target.add", added.ID, "ok", map[string]any{"name": added.Name, "kind": string(added.Kind), "env": string(added.Env),
-		"fix_level": added.FixLevel, "links": len(links), "rules_written": n}); err != nil {
+	case errors.As(err, new(*target.LinkError)):
+		s.internal(w, r)
+		return
+	case errors.As(err, new(*target.AuditError)):
 		s.targetAuditFailed(w, lang)
+		return
+	default:
+		s.targetRefused(w, r, lang, err, false)
 		return
 	}
 	v, err := s.targetView(ctx, added, lang, true)
@@ -1000,110 +917,36 @@ func (s *server) targetPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	old := t
-	var changed []string
-	set := func(name string, do func()) {
-		do()
-		changed = append(changed, name)
-	}
-	str := func(v *string, name string, dst *string) {
-		if v != nil {
-			set(name, func() { *dst = strings.TrimSpace(*v) })
-		}
-	}
-	str(p.Alias, "alias", &t.Alias)
-	str(p.Host, "host", &t.Host)
-	str(p.User, "user", &t.User)
-	str(p.SiteURL, "site_url", &t.SiteURL)
-	if p.Port != nil {
-		set("port", func() { t.Port = *p.Port })
-	}
+	tp := target.Patch{Alias: p.Alias, Host: p.Host, User: p.User, SiteURL: p.SiteURL, Port: p.Port, FixLevel: p.FixLevel,
+		AutoConfig: p.AutoConfig, Active: p.Active, CheckInterval: p.CheckInterval, Preprod: p.Preprod}
 	if p.Kind != nil {
-		set("kind", func() { t.Kind = target.Kind(*p.Kind) })
+		tp.Kind = ptrTo(target.Kind(*p.Kind))
 	}
 	if p.Env != nil {
-		set("env", func() { t.Env = target.Env(*p.Env) })
+		tp.Env = ptrTo(target.Env(*p.Env))
 	}
 	if p.Classification != nil {
-		set("classification", func() { t.Classification = policy.Classification(*p.Classification) })
-	}
-	if p.FixLevel != nil {
-		set("fix_level", func() { t.FixLevel = *p.FixLevel })
+		tp.Classification = ptrTo(policy.Classification(*p.Classification))
 	}
 	if p.Executor != nil {
-		set("executor", func() { t.Executor = target.Executor(*p.Executor) })
+		tp.Executor = ptrTo(target.Executor(*p.Executor))
 	}
 	if p.Sudo != nil {
-		set("sudo", func() { t.Sudo = target.SudoMode(*p.Sudo) })
+		tp.Sudo = ptrTo(target.SudoMode(*p.Sudo))
 	}
-	if p.AutoConfig != nil {
-		set("auto_config", func() { t.AutoConfig = *p.AutoConfig })
-	}
-	if p.Active != nil {
-		set("active", func() { t.Active = *p.Active })
-	}
-	var err error
-	if p.CheckInterval != nil {
-		if t.CheckInterval, err = target.ParseInterval(*p.CheckInterval); err != nil {
-			s.targetRefused(w, r, lang, err, false)
-			return
-		}
-		changed = append(changed, "check_interval")
-	}
-	if err := target.Check(t); err != nil {
-		s.targetRefused(w, r, lang, err, false)
+	// policyMu serializes the writes of the policy file in this process.
+	s.policyMu.Lock()
+	_, err := target.ApplyUpdate(ctx, s.targetDeps(), t, tp)
+	s.policyMu.Unlock()
+	switch {
+	case errors.As(err, new(*target.RulesError)):
+		s.failedBody(w, http.StatusInternalServerError, lang, "api.target.allow_failed", "api.target.allow_failed_hint")
 		return
-	}
-	if err := s.targets().CheckEnv(ctx, t); err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	if p.Preprod != nil {
-		if t.PreprodID, err = s.targets().ResolvePreprod(ctx, t, *p.Preprod); err != nil {
-			s.targetRefused(w, r, lang, err, false)
-			return
-		}
-		changed = append(changed, "preprod")
-	}
-	// A server that moved is not the one whose fingerprint was confirmed:
-	// Update clears the pin with the address.
-	portOf := func(p int) int {
-		if p == 0 {
-			return 22
-		}
-		return p
-	}
-	moved := t.Host != old.Host || portOf(t.Port) != portOf(old.Port)
-	// The new rules go in first, so a refusal of the policy file changes
-	// nothing; they come out again when the update fails.
-	var fresh []policy.AllowRule
-	if t.Host != old.Host || t.SiteURL != old.SiteURL {
-		if fresh, _, err = s.changeRules(target.AllowRules(t), nil); err != nil {
-			s.failedBody(w, http.StatusInternalServerError, lang, "api.target.allow_failed", "api.target.allow_failed_hint")
-			return
-		}
-	}
-	if err := s.targets().Update(ctx, t); err != nil {
-		if len(fresh) > 0 {
-			_, _, _ = s.changeRules(nil, fresh)
-		}
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	// What the old address and site needed, and no other server uses, goes.
-	released := 0
-	if t.Host != old.Host || t.SiteURL != old.SiteURL {
-		if others, err := s.otherTargets(ctx, t.ID); err == nil {
-			gone := target.ReleasedRules(old, append(others, t))
-			if _, done, err := s.changeRules(nil, gone); err == nil {
-				released = len(done)
-			}
-		}
-	}
-	rules := len(fresh)
-	if err := s.targetAudit(ctx, "target.update", t.ID, "ok", map[string]any{"name": t.Name, "changed": changed, "rules_written": rules,
-		"rules_removed": released, "host_key_reset": moved && old.HostKey != ""}); err != nil {
+	case errors.As(err, new(*target.AuditError)):
 		s.targetAuditFailed(w, lang)
+		return
+	case err != nil:
+		s.targetRefused(w, r, lang, err, false)
 		return
 	}
 	got, err := s.targets().Get(ctx, t.ID)
@@ -1163,44 +1006,28 @@ func (s *server) targetDelete(w http.ResponseWriter, r *http.Request) {
 		s.failedBody(w, http.StatusConflict, lang, "api.target.busy", "api.target.busy_hint")
 		return
 	}
-	others, err := s.otherTargets(ctx, t.ID)
-	if err != nil {
-		s.internal(w, r)
-		return
-	}
-	dependents := 0
-	for _, o := range others {
-		if o.PreprodID == t.ID {
-			dependents++
-		}
-	}
-	// What Michel read in its logs goes first: errors, text, sources, settings. If
-	// that fails the server stays, and removing it can be tried again (once it is
-	// gone, nothing could erase the logs). The page leaving does not interrupt it.
+	// What Michel read in its logs goes first (target.Remove); from there on,
+	// the page leaving does not interrupt the removal. The erasure keeps the
+	// time bound of the page's long work, and stops with the server.
 	dctx, cancel := s.detached(r)
 	defer cancel()
-	erased, forgetErr := serverlog.ForgetTargetAudited(dctx, s.serverLogs(), s.deps.Audit, targetActor, t.ID)
-	if !erased {
+	s.policyMu.Lock()
+	res, err := target.Remove(ctx, s.targetDeps(), t, func(context.Context) (bool, error) {
+		return serverlog.ForgetTargetAudited(dctx, s.serverLogs(), s.deps.Audit, targetActor, t.ID)
+	})
+	s.policyMu.Unlock()
+	switch {
+	case errors.Is(err, target.ErrLogsNotErased):
 		s.failedBody(w, http.StatusInternalServerError, lang, "api.target.logs_failed", "api.target.logs_failed_hint")
 		return
-	}
-	if err := s.targets().Remove(dctx, t.ID); err != nil {
+	case errors.As(err, new(*target.AuditError)):
+		s.targetAuditFailed(w, lang)
+		return
+	case err != nil:
 		s.targetRefused(w, r, lang, err, false)
 		return
 	}
-	// The opt-in goes with the server, except for what another still uses.
-	released := target.ReleasedRules(t, others)
-	removed, rulesFailed := 0, false
-	if len(released) > 0 {
-		_, gone, err := s.changeRules(nil, released)
-		removed, rulesFailed = len(gone), err != nil
-	}
-	if err := s.targetAudit(dctx, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed, "rules_error": rulesFailed,
-		"preprod_cleared": dependents, "logs_error": forgetErr != nil}); err != nil {
-		s.targetAuditFailed(w, lang)
-		return
-	}
-	if rulesFailed {
+	if res.RulesFailed {
 		// The server is gone; its network rules could not be taken back.
 		writeJSON(w, http.StatusOK, map[string]bool{"removed": true, "rules_not_removed": true})
 		return
@@ -1262,28 +1089,22 @@ func (s *server) targetHostKeyConfirm(w http.ResponseWriter, r *http.Request) {
 		s.targetRefused(w, r, lang, err, true)
 		return
 	}
-	if fp != b.Fingerprint {
-		if err := s.targetAudit(ctx, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "fingerprint mismatch"}); err != nil {
-			s.failedBody(w, http.StatusInternalServerError, lang, "api.target.refusal_audit_failed", "api.internal_hint")
-			return
-		}
+	_, err = target.ConfirmHostKey(ctx, s.targetDeps(), t, b.Fingerprint, fp, b.Replace)
+	switch {
+	case errors.As(err, new(*target.RefusalAuditError)):
+		s.failedBody(w, http.StatusInternalServerError, lang, "api.target.refusal_audit_failed", "api.internal_hint")
+		return
+	case errors.Is(err, target.ErrFingerprintMismatch):
 		s.failedBody(w, http.StatusConflict, lang, "api.target.hostkey_mismatch", "api.target.hostkey_mismatch_hint")
 		return
-	}
-	if t.HostKey != "" && t.HostKey != fp && !b.Replace {
-		if err := s.targetAudit(ctx, "target.hostkey", t.ID, "refused", map[string]any{"name": t.Name, "reason": "key changed, replace not asked"}); err != nil {
-			s.failedBody(w, http.StatusInternalServerError, lang, "api.target.refusal_audit_failed", "api.internal_hint")
-			return
-		}
+	case errors.Is(err, target.ErrHostKeyReplaceNotAsked):
 		s.failedBody(w, http.StatusConflict, lang, "api.target.hostkey_changed", "api.target.hostkey_changed_hint")
 		return
-	}
-	if err := s.targets().SetHostKey(ctx, t.ID, fp); err != nil {
-		s.targetRefused(w, r, lang, err, false)
-		return
-	}
-	if err := s.targetAudit(ctx, "target.hostkey", t.ID, "ok", map[string]any{"name": t.Name, "fingerprint": fp, "replaced": t.HostKey != "" && t.HostKey != fp}); err != nil {
+	case errors.As(err, new(*target.AuditError)):
 		s.targetAuditFailed(w, lang)
+		return
+	case err != nil:
+		s.targetRefused(w, r, lang, err, false)
 		return
 	}
 	got, err := s.targets().Get(ctx, t.ID)

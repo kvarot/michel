@@ -134,44 +134,35 @@ func (s *server) discoveryAction(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.discover.bad_action"), "")
 		return
 	}
-	dr := gitrepo.NewDiscoveryRepo(s.deps.Store)
-	found, err := dr.List(ctx, "")
-	if err != nil {
-		s.internal(w, r)
-		return
-	}
-	known := false
-	for _, d := range found {
-		if strings.EqualFold(d.Repo, repo) {
-			known, repo = true, d.Repo
-		}
-	}
-	if !known {
-		s.fail(w, http.StatusNotFound, i18n.T(lang, "cli.source.discover.unknown", repo), "")
-		return
-	}
+	disc := gitrepo.DiscoveryActions{Store: s.deps.Store, Audit: s.deps.Audit, Actor: sourceActor}
 	if req.Action == "ignore" {
-		if err := dr.SetState(ctx, repo, gitrepo.StateIgnored); err != nil {
-			s.internal(w, r)
-			return
-		}
-		if err := s.record(ctx, "source.discover", repo, "ok", map[string]any{"repo": repo, "state": gitrepo.StateIgnored}); err != nil {
+		listed, err := disc.Ignore(ctx, repo)
+		switch {
+		case errors.Is(err, gitrepo.ErrUnknownDiscovery):
+			s.fail(w, http.StatusNotFound, i18n.T(lang, "cli.source.discover.unknown", repo), "")
+		case errors.Is(err, source.ErrAuditFailed):
 			s.auditFailed(w, r)
-			return
+		case err != nil:
+			s.internal(w, r)
+		default:
+			writeJSON(w, http.StatusOK, map[string]string{"repo": listed, "state": gitrepo.StateIgnored})
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"repo": repo, "state": gitrepo.StateIgnored})
 		return
 	}
-	if req.Kind != string(source.KindSkill) && req.Kind != string(source.KindMCP) {
+	added, err := disc.Add(ctx, repo, source.UserEntryRequest{Kind: source.Kind(req.Kind), Name: req.Name, Pin: req.Pin, Path: req.Path})
+	var refusal *source.Refusal
+	switch {
+	case err == nil:
+		s.viewOf(w, r, http.StatusCreated, added.Key, lang)
+	case errors.Is(err, gitrepo.ErrUnknownDiscovery):
+		s.fail(w, http.StatusNotFound, i18n.T(lang, "cli.source.discover.unknown", repo), "")
+	case errors.Is(err, gitrepo.ErrBadDiscoveryKind):
 		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.source.add.refused"), i18n.T(lang, "api.discover.add_kind"))
-		return
-	}
-	e, refusal := source.NewUserEntry(source.UserEntryRequest{Kind: source.Kind(req.Kind), Name: req.Name, Repo: repo, Pin: req.Pin, Path: req.Path})
-	if refusal != nil {
+	case errors.As(err, &refusal):
 		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.source.add.refused"), refusalText(lang, refusal))
-		return
+	default:
+		s.addFailed(w, r, lang, added.Key, err)
 	}
-	s.addEntry(w, r, lang, e, "discover", func() error { return dr.SetState(ctx, repo, gitrepo.StateAdded) })
 }
 
 func (s *server) techList(w http.ResponseWriter, r *http.Request) {

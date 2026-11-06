@@ -411,35 +411,29 @@ type AddSourceRequest struct {
 // discovery marks itself added), audits it and answers its view; from says
 // where it comes from ("" for the form). It answers the request itself.
 func (s *server) addEntry(w http.ResponseWriter, r *http.Request, lang i18n.Lang, e source.Entry, from string, after func() error) {
-	repo := source.NewRepo(s.deps.Store)
-	refused := i18n.T(lang, "api.source.add.refused")
-	if _, err := repo.Get(r.Context(), e.Key); err == nil {
-		s.fail(w, http.StatusConflict, refused, i18n.T(lang, "api.source.add.exists", e.Key))
-		return
-	} else if !errors.Is(err, source.ErrNotFound) {
-		s.internal(w, r)
-		return
-	}
-	added, err := repo.Upsert(r.Context(), e)
+	added, err := source.AddUserEntry(r.Context(), s.deps.Store, s.deps.Audit, sourceActor, e, from, after)
 	if err != nil {
-		s.fail(w, http.StatusBadRequest, refused, noPaths(err.Error()))
-		return
-	}
-	if after != nil {
-		if err := after(); err != nil {
-			s.failed(w, r, added.Key, err)
-			return
-		}
-	}
-	ev := map[string]any{"key": added.Key, "kind": string(added.Kind)}
-	if from != "" {
-		ev["from"] = from
-	}
-	if err := s.record(r.Context(), "source.add", added.Key, "ok", ev); err != nil {
-		s.auditFailed(w, r)
+		s.addFailed(w, r, lang, added.Key, err)
 		return
 	}
 	s.viewOf(w, r, http.StatusCreated, added.Key, lang)
+}
+
+// addFailed answers an error of source.AddUserEntry.
+func (s *server) addFailed(w http.ResponseWriter, r *http.Request, lang i18n.Lang, key string, err error) {
+	refused := i18n.T(lang, "api.source.add.refused")
+	switch {
+	case errors.Is(err, source.ErrExists):
+		s.fail(w, http.StatusConflict, refused, i18n.T(lang, "api.source.add.exists", key))
+	case errors.Is(err, source.ErrRead):
+		s.internal(w, r)
+	case errors.Is(err, source.ErrInvalid):
+		s.fail(w, http.StatusBadRequest, refused, noPaths(err.Error()))
+	case errors.Is(err, source.ErrAuditFailed):
+		s.auditFailed(w, r)
+	default:
+		s.failed(w, r, key, err)
+	}
 }
 
 // refusalText is the reason of a refused user entry (source.NewUserEntry),

@@ -61,6 +61,10 @@ func resolveFinding(ctx context.Context, deps *Deps, idOrPrefix string) (scan.Fi
 	if len(pick) > 1 {
 		return scan.Finding{}, project.Project{}, errors.New(ambiguousPrefixMessageIn(deps.Lang, idOrPrefix, pick, names))
 	}
+	// A finding of a removed project is out of reach, as for the page.
+	if p, ok := byID[pick[0].ProjectID]; !ok || !p.Active {
+		return scan.Finding{}, project.Project{}, deps.Errorf("cli.finding.not_found", idOrPrefix)
+	}
 	return pick[0], byID[pick[0].ProjectID], nil
 }
 

@@ -69,6 +69,7 @@ var (
 	ErrFindingGone           = errors.New("the finding is no longer seen")
 	ErrDueInPast             = errors.New("the deferral date is not in the future")
 	ErrJustificationTooLong  = errors.New("the justification is too long")
+	ErrNoFixForExposure      = errors.New("an open service cannot be fixed by Michel")
 	ErrFindingNotFound       = errors.New("no finding has this id")
 	ErrInvalidFilter         = errors.New("unknown filter: use fix, defer, ignore, superseded or all")
 )
@@ -97,6 +98,17 @@ func Validate(d *Decision, now time.Time) error {
 		return ErrJustificationRequired
 	}
 	return nil
+}
+
+// ValidateFor is Validate for a decision on the finding f: it also refuses
+// "fix" on an exposure finding (Michel cannot close an open service, "fix"
+// would only hide the finding with nobody to fix it). The CLI and the local
+// API both decide through it.
+func ValidateFor(f scan.Finding, d *Decision, now time.Time) error {
+	if d.Action == Fix && f.Kind == scan.KindServerExposure {
+		return ErrNoFixForExposure
+	}
+	return Validate(d, now)
 }
 
 // Changed tells whether the finding's severity, fixed versions or KEV mark differ from the snapshot (fixed versions compared as sorted sets).

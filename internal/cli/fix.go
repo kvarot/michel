@@ -696,25 +696,22 @@ func newFixConsentCmd(deps *Deps) *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			p, err := project.NewRepo(deps.Store).Get(ctx, args[0])
+			p, err := project.NewRepo(deps.Store).GetActive(ctx, args[0])
 			if errors.Is(err, project.ErrNotFound) {
 				return deps.Errorf("cli.fix.project_not_found", scan.SanitizeText(args[0]))
 			}
 			if err != nil {
 				return err
 			}
-			if p.Classification == policy.ClassHealth {
-				return fixError(deps, fix.ErrHealthForbidden, "")
-			}
-			if deps.Policy().Sovereignty.Mode == policy.ModeStrictLocal {
-				return fixError(deps, fix.ErrStrictLocal, "")
-			}
-			_, _, consented, err := fix.NewRepo(deps.Store).Consent(ctx, p.ID)
+			st, err := fix.ConsentStatus(ctx, fixDeps(cmd, deps, nil, "cli"), p, deps.Policy())
 			if err != nil {
 				return err
 			}
-			lines := fix.ConsentNeeded(p, deps.Policy(), consented)
-			if consented && len(lines) == 0 {
+			if st.Refusal != nil {
+				return fixError(deps, st.Refusal, "")
+			}
+			lines := st.Lines
+			if st.Consented && len(lines) == 0 {
 				fmt.Fprintln(deps.Stdout, deps.T("cli.fix.consent.already", p.Name))
 				return nil
 			}

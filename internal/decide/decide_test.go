@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kvarot/michel/internal/scan"
 )
 
 var now = time.Date(2026, 10, 23, 9, 30, 0, 0, time.UTC)
@@ -112,5 +114,28 @@ func TestChangedDetectsSeverityThenFix(t *testing.T) {
 	none := Decision{SeenSeverity: "low"}
 	if changed, _ := Changed(none, "low", []string{}, false); changed {
 		t.Error("no fixed version before and after counts as a change")
+	}
+}
+
+// "fix" on an open service is refused; ignore and defer pass, and so does
+// "fix" on a dependency.
+func TestValidateForRefusesFixOnExposure(t *testing.T) {
+	exposure := scan.Finding{Kind: scan.KindServerExposure}
+	dep := scan.Finding{Kind: scan.KindDependency}
+	d := Decision{Action: Fix}
+	if err := ValidateFor(exposure, &d, now); !errors.Is(err, ErrNoFixForExposure) {
+		t.Errorf("fix on exposure: %v", err)
+	}
+	d = Decision{Action: Fix}
+	if err := ValidateFor(dep, &d, now); err != nil {
+		t.Errorf("fix on dependency: %v", err)
+	}
+	d = Decision{Action: Defer}
+	if err := ValidateFor(exposure, &d, now); err != nil {
+		t.Errorf("defer on exposure: %v", err)
+	}
+	d = Decision{Action: Ignore, Justification: "closed on purpose"}
+	if err := ValidateFor(exposure, &d, now); err != nil {
+		t.Errorf("ignore on exposure: %v", err)
 	}
 }

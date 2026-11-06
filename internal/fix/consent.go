@@ -415,3 +415,38 @@ func (d *Deps) reload() error {
 	}
 	return nil
 }
+
+// ConsentState is the AI consent screen of a project: what to accept, whether
+// the project consented (and when), whether an agent may work on it now, and
+// the refusal when no consent can be given.
+type ConsentState struct {
+	Lines     []ConsentText
+	Consented bool
+	GivenAt   time.Time
+	// Ready: consent given and every rule in force; never true with a Refusal.
+	Ready bool
+	// Refusal is ErrHealthForbidden (a health project), ErrStrictLocal (a
+	// strict_local policy) or nil. A health project wins over strict_local.
+	Refusal error
+}
+
+// ConsentStatus computes the consent state of p under pol; the CLI and the
+// page both show it.
+func ConsentStatus(ctx context.Context, d Deps, p project.Project, pol policy.Policy) (ConsentState, error) {
+	at, _, consented, err := d.repo().Consent(ctx, p.ID)
+	if err != nil {
+		return ConsentState{}, err
+	}
+	lines := ConsentNeeded(p, pol, consented)
+	st := ConsentState{Lines: lines, Consented: consented, Ready: consented && len(lines) == 0}
+	if consented {
+		st.GivenAt = at
+	}
+	switch {
+	case p.Classification == policy.ClassHealth:
+		st.Ready, st.Refusal = false, ErrHealthForbidden
+	case pol.Sovereignty.Mode == policy.ModeStrictLocal:
+		st.Ready, st.Refusal = false, ErrStrictLocal
+	}
+	return st, nil
+}

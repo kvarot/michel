@@ -69,7 +69,8 @@ func TestProjectAddDeniedIsAudited(t *testing.T) {
 	if len(ev) != 1 || ev[0].result != "denied" || ev[0].target != "shop" {
 		t.Fatalf("events = %+v", ev)
 	}
-	if r, _ := ev[0].evidence["reason"].(string); !strings.Contains(r, "is not a directory") {
+	// The reason is the catalog key, as the page records it.
+	if ev[0].evidence["reason"] != "api.project.not_dir" {
 		t.Errorf("reason = %v", ev[0].evidence)
 	}
 	if n := countProjects(t, dir); n != 0 {
@@ -108,7 +109,8 @@ func TestProjectAddDefaultsFromPolicyAndFixLevelZero(t *testing.T) {
 	if err != nil || !strings.Contains(out, "classification sensitive, fix level 1.") {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
-	_, out, _, err = run(t, dir, "project", "add", proj, "--name", "b", "--fix-level", "0")
+	// One active project per folder: the second one gets its own.
+	_, out, _, err = run(t, dir, "project", "add", t.TempDir(), "--name", "b", "--fix-level", "0")
 	if err != nil || !strings.Contains(out, "fix level 0.") {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
@@ -125,8 +127,10 @@ func TestProjectAddRejectsDuplicateAndBadValues(t *testing.T) {
 		{"--name", "b", "--classification", "secret"},
 		{"--name", " "},
 	}
+	// Another folder, so that each case is refused for its own value.
+	other := t.TempDir()
 	for _, c := range cases {
-		_, _, _, err := run(t, dir, append([]string{"project", "add", proj}, c...)...)
+		_, _, _, err := run(t, dir, append([]string{"project", "add", other}, c...)...)
 		if err == nil || !strings.HasPrefix(err.Error(), "Cannot add project") {
 			t.Errorf("%v: err = %v", c, err)
 		}
@@ -143,7 +147,8 @@ func TestProjectAddRejectsDuplicateAndBadValues(t *testing.T) {
 func TestProjectListTable(t *testing.T) {
 	dir, proj := t.TempDir(), t.TempDir()
 	run(t, dir, "project", "add", proj, "--name", "zeta")
-	run(t, dir, "project", "add", proj, "--name", "alpha", "--classification", "health", "--fix-level", "3")
+	proj2 := t.TempDir()
+	run(t, dir, "project", "add", proj2, "--name", "alpha", "--classification", "health", "--fix-level", "3")
 	_, out, _, err := run(t, dir, "project", "list")
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +160,7 @@ func TestProjectListTable(t *testing.T) {
 	if f := strings.Fields(lines[0]); strings.Join(f, " ") != "name classification fix_level active path" {
 		t.Errorf("header = %q", lines[0])
 	}
-	if f := strings.Fields(lines[1]); len(f) < 5 || f[0] != "alpha" || f[1] != "health" || f[2] != "3" || f[3] != "true" || f[4] != filepath.Clean(proj) {
+	if f := strings.Fields(lines[1]); len(f) < 5 || f[0] != "alpha" || f[1] != "health" || f[2] != "3" || f[3] != "true" || f[4] != filepath.Clean(proj2) {
 		t.Errorf("row = %q", lines[1])
 	}
 	if !strings.HasPrefix(lines[2], "zeta") {
@@ -347,7 +352,7 @@ func TestProjectSetUpdatesAndAudits(t *testing.T) {
 			t.Errorf("list lacks %s: %s", want, list)
 		}
 	}
-	ev := auditRows(t, dir, "project.set")
+	ev := auditRows(t, dir, "project.update")
 	if len(ev) != 1 || ev[0].result != "ok" || ev[0].target != "shop" {
 		t.Fatalf("events = %+v", ev)
 	}
@@ -375,7 +380,7 @@ func TestProjectSetRejectsBadInput(t *testing.T) {
 			t.Errorf("%v: err = %v", args, err)
 		}
 	}
-	if n := len(auditRows(t, dir, "project.set")); n != 6 {
+	if n := len(auditRows(t, dir, "project.update")); n != 6 {
 		t.Errorf("audit rows = %d", n)
 	}
 }
@@ -389,7 +394,7 @@ func TestProjectSetRefusesInconsistentThresholds(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "auto_fix_below=70") || !strings.Contains(err.Error(), "handoff_up_to=60") {
 		t.Fatalf("err = %v", err)
 	}
-	ev := auditRows(t, dir, "project.set")
+	ev := auditRows(t, dir, "project.update")
 	if len(ev) != 1 || ev[0].result != "denied" {
 		t.Fatalf("events = %+v", ev)
 	}
@@ -416,7 +421,7 @@ func TestProjectSetExclude(t *testing.T) {
 	if _, list, _, err := run(t, dir, "project", "list", "--json"); err != nil || !strings.Contains(list, `"exclude":["build","dist"]`) {
 		t.Errorf("after set: %v %s", err, list)
 	}
-	ev := auditRows(t, dir, "project.set")
+	ev := auditRows(t, dir, "project.update")
 	if len(ev) != 1 || ev[0].result != "ok" {
 		t.Fatalf("events = %+v", ev)
 	}
@@ -433,7 +438,7 @@ func TestProjectSetExclude(t *testing.T) {
 	if err == nil || !strings.HasPrefix(err.Error(), "Cannot update project") || !strings.Contains(err.Error(), "folder name") {
 		t.Errorf("path refused? err = %v", err)
 	}
-	if rows := auditRows(t, dir, "project.set"); len(rows) != 3 || rows[2].result != "denied" {
+	if rows := auditRows(t, dir, "project.update"); len(rows) != 3 || rows[2].result != "denied" {
 		t.Errorf("events = %+v", rows)
 	}
 }
@@ -456,5 +461,68 @@ func TestProjectSetAutoFixMinor(t *testing.T) {
 	}
 	if _, _, _, err := run(t, dir, "project", "set", "shop", "--fix-level", "4"); err == nil || !strings.HasPrefix(err.Error(), "Cannot update project") {
 		t.Errorf("level 4: err = %v", err)
+	}
+}
+
+// michel project add checks the folder as the page does: never Michel's own
+// data, never a second active project on the same folder.
+func TestProjectAddRefusesTheDataFolderAndASecondProjectOnAFolder(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	_, _, _, err := run(t, dir, "project", "add", dir, "--name", "demo")
+	if err == nil || !strings.HasPrefix(err.Error(), "Cannot add project: Michel refuses this folder") {
+		t.Errorf("data folder: err = %v", err)
+	}
+	if _, _, _, err := run(t, dir, "project", "add", proj, "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = run(t, dir, "project", "add", proj, "--name", "other")
+	if err == nil || !strings.Contains(err.Error(), "another active project already uses this folder") {
+		t.Errorf("same folder: err = %v", err)
+	}
+	_, _, _, err = run(t, dir, "--lang", "fr", "project", "add", proj, "--name", "other")
+	if err == nil || !strings.Contains(err.Error(), "Impossible d'ajouter le projet") {
+		t.Errorf("same folder in French: err = %v", err)
+	}
+	ev := auditRows(t, dir, "project.add")
+	if len(ev) != 4 || ev[0].result != "denied" || ev[0].evidence["reason"] != "api.project.forbidden_path" ||
+		ev[1].result != "ok" || ev[2].result != "denied" || ev[2].evidence["reason"] != "api.project.duplicate" {
+		t.Errorf("events = %+v", ev)
+	}
+	if n := countProjects(t, dir); n != 1 {
+		t.Errorf("project rows = %d", n)
+	}
+}
+
+// A relative path is made absolute first, as before.
+func TestProjectAddMakesARelativePathAbsolute(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	t.Chdir(filepath.Dir(proj))
+	if _, _, _, err := run(t, dir, "project", "add", filepath.Base(proj), "--name", "demo"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// No project without its trace, on the command line as on the page.
+func TestProjectAddPurgesWhenTheAuditFails(t *testing.T) {
+	dir, proj := t.TempDir(), t.TempDir()
+	if _, _, _, err := run(t, dir, "noop"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(dir, "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.DB().Exec(`CREATE TRIGGER fail_add BEFORE INSERT ON audit_event WHEN NEW.action = 'project.add'
+		BEGIN SELECT RAISE(ABORT, 'disk on fire'); END`)
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = run(t, dir, "project", "add", proj, "--name", "demo")
+	if err == nil || !strings.Contains(err.Error(), "was not added") || !strings.Contains(err.Error(), "disk on fire") {
+		t.Errorf("err = %v", err)
+	}
+	if n := countProjects(t, dir); n != 0 {
+		t.Errorf("project rows = %d, want the project purged", n)
 	}
 }

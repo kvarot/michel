@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/analyze"
-	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/decide"
 	"github.com/kvarot/michel/internal/digest"
 	"github.com/kvarot/michel/internal/explain"
@@ -182,25 +180,15 @@ func (s *server) projectView(ctx context.Context, lang i18n.Lang, p project.Proj
 		}
 		v.Open[severityOf(effective(f))]++
 	}
-	var at, status string
-	err = s.deps.Store.DB().QueryRowContext(ctx, `SELECT started_at, status FROM scan WHERE project_id = ?
-		ORDER BY started_at DESC, id DESC LIMIT 1`, p.ID).Scan(&at, &status)
-	switch {
-	case err == nil:
-		v.LastScanAt, v.LastScanStatus = at, status
-	case !errors.Is(err, sql.ErrNoRows):
+	st, err := watch.ProjectStatus(ctx, watch.NewRepo(s.deps.Store), p, s.currentPolicy(), s.deps.Now())
+	if err != nil {
 		return ProjectView{}, err
 	}
 	v.AutoScan = p.AutoScan
-	if h, m, on := s.currentPolicy().WatchHour(); on && p.AutoScan {
-		// From the last check that counts, as the watch itself: an
-		// interrupted or running scan is checked again.
-		last, counted, err := watch.NewRepo(s.deps.Store).LastStart(ctx, p.ID)
-		if err != nil {
-			return ProjectView{}, err
-		}
-		v.NextScanAt = watch.Next(last, counted, s.deps.Now(), h, m).UTC().Format(time.RFC3339)
+	if st.HasScan {
+		v.LastScanAt, v.LastScanStatus = st.LastScanAt, st.LastScanStatus
 	}
+	v.NextScanAt = st.NextCheck
 	s.scanState(lang, p, &v)
 	return v, nil
 }
@@ -220,40 +208,28 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 	if !s.readJSONHint(w, r, &body, i18n.T(lang, "api.project.patch.bad_json_hint")) {
 		return
 	}
-	if body.FixLevel == nil && body.AutoFixMinor == nil {
+	p, err := project.Update(ctx, project.NewRepo(s.deps.Store), s.deps.Audit, project.UpdateRequest{
+		Actor: decisionAuthor, Name: r.PathValue("name"),
+		Patch: project.Patch{FixLevel: body.FixLevel, AutoFixMinor: body.AutoFixMinor},
+	})
+	var refusal *project.RefusalError
+	var auditErr *project.AuditError
+	switch {
+	case err == nil:
+	case errors.As(err, &auditErr):
+		s.auditFailed(w, r)
+		return
+	case errors.As(err, &refusal) && refusal.Key == "api.project.patch.nothing":
 		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.nothing"), i18n.T(lang, "api.project.patch.bad_json_hint"))
 		return
-	}
-	if l := body.FixLevel; l != nil && (*l < 0 || *l > 3) {
+	case errors.As(err, &refusal) && refusal.Key == "api.project.patch.bad_level":
 		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.bad_level"), i18n.T(lang, "api.project.patch.bad_level_hint"))
 		return
-	}
-	p, found, err := s.activeProject(ctx, r.PathValue("name"))
-	if err != nil {
-		s.internal(w, r)
-		return
-	}
-	if !found {
+	case errors.Is(err, project.ErrNotFound):
 		s.fail(w, http.StatusNotFound, i18n.T(lang, "api.project_not_found"), "")
 		return
-	}
-	ev := map[string]any{}
-	if body.FixLevel != nil {
-		p.FixLevel, ev["fix_level"] = *body.FixLevel, *body.FixLevel
-	}
-	if body.AutoFixMinor != nil {
-		p.AutoFixMinor, ev["auto_fix_minor"] = *body.AutoFixMinor, *body.AutoFixMinor
-	}
-	if err := project.NewRepo(s.deps.Store).Update(ctx, p); err != nil {
-		if errors.Is(err, project.ErrInvalidFixLevel) {
-			s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.project.patch.bad_level"), i18n.T(lang, "api.project.patch.bad_level_hint"))
-			return
-		}
+	default:
 		s.internal(w, r)
-		return
-	}
-	if _, err := s.deps.Audit.Record(ctx, audit.Event{Actor: decisionAuthor, Action: "project.update", Target: p.Name, Result: "ok", Evidence: ev}); err != nil {
-		s.auditFailed(w, r)
 		return
 	}
 	v, err := s.projectView(ctx, lang, p)
@@ -266,16 +242,11 @@ func (s *server) patchProject(w http.ResponseWriter, r *http.Request) {
 
 // activeProject returns the active project named name.
 func (s *server) activeProject(ctx context.Context, name string) (project.Project, bool, error) {
-	list, err := project.NewRepo(s.deps.Store).List(ctx)
-	if err != nil {
-		return project.Project{}, false, err
+	p, err := project.NewRepo(s.deps.Store).GetActive(ctx, name)
+	if errors.Is(err, project.ErrNotFound) {
+		return project.Project{}, false, nil
 	}
-	for _, p := range list {
-		if p.Active && p.Name == name {
-			return p, true, nil
-		}
-	}
-	return project.Project{}, false, nil
+	return p, err == nil, err
 }
 
 func (s *server) projectFindings(w http.ResponseWriter, r *http.Request) {
@@ -488,6 +459,13 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		s.fail(w, http.StatusNotFound, i18n.T(s.answerLang(r), "api.finding_not_found"), "")
+		return
+	}
+	// validateDecision above already ran decide.Validate; ValidateFor only adds
+	// the check that needs the finding, so ErrNoFixForExposure is the only
+	// refusal left to handle here.
+	if err := decide.ValidateFor(f, &d, now); errors.Is(err, decide.ErrNoFixForExposure) {
+		refuse("api.target.exposure_no_fix")
 		return
 	}
 	evID, ok := s.applyDecision(w, r, d, f, now)

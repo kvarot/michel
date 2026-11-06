@@ -67,4 +67,4 @@ michel project set my-shop --core-package symfony/http-kernel --core-package rea
 michel project set my-shop --risk major_jump=10 --risk no_tests=30
 ```
 
-`--core-package` replaces the whole list; `--risk` changes one value and keeps the other overrides. Stored analyses remember a fingerprint of these settings (and of the policy values): after a change they are recomputed on the next scan or `michel analyze --project my-shop`. Unknown keys and values outside 0..100 are refused. Each change is recorded in the audit log as `project.set` (field names only, never command contents).
+`--core-package` replaces the whole list; `--risk` changes one value and keeps the other overrides. Stored analyses remember a fingerprint of these settings (and of the policy values): after a change they are recomputed on the next scan or `michel analyze --project my-shop`. Unknown keys and values outside 0..100 are refused. Each change is recorded in the audit log as `project.update` (field names only, never command contents).

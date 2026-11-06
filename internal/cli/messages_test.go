@@ -72,9 +72,9 @@ func TestProjectAddDeniedInFrench(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 	wantAll(t, "error", err.Error(), "n'est pas un dossier", "composer.lock")
-	// The audit log keeps the English reason: stored text is never translated.
+	// The audit log keeps the catalog key: stored text is never translated.
 	ev := auditRows(t, dir, "project.add")
-	if r, _ := ev[0].evidence["reason"].(string); len(ev) != 1 || !strings.Contains(r, "is not a directory") {
+	if len(ev) != 1 || ev[0].evidence["reason"] != "api.project.not_dir" {
 		t.Errorf("stored reason = %v", ev[0].evidence)
 	}
 }
