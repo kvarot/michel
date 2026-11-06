@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kvarot/michel/internal/api"
+	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/sourceupdate"
 	"github.com/kvarot/michel/internal/watch"
@@ -25,7 +26,7 @@ var watchLoop = watch.Loop
 // as michel source update does (a source waiting for consent reads nothing and
 // says so), then the due projects are checked with scanOne, the same pass and
 // the same one-at-a-time lock as a check from the page.
-func serveWatchDeps(cmd *cobra.Command, deps *Deps, scanOne func(ctx context.Context, p project.Project) error) watch.Deps {
+func serveWatchDeps(cmd *cobra.Command, deps *Deps, fd fix.Deps, scanOne func(ctx context.Context, p project.Project) error) watch.Deps {
 	return watch.Deps{
 		Now:    deps.Now,
 		Policy: deps.Policy,
@@ -43,6 +44,13 @@ func serveWatchDeps(cmd *cobra.Command, deps *Deps, scanOne func(ctx context.Con
 			return err
 		},
 		Scan: func(ctx context.Context, p project.Project) error {
+			// As the page's check: no reading of a folder a click is
+			// writing, and no click during the check (R35).
+			unlock, free := fix.TryGitLock(fd, p.ID)
+			if !free {
+				return watch.ErrBusy
+			}
+			defer unlock()
 			err := scanOne(ctx, p)
 			if errors.Is(err, api.ErrNothingToScan) {
 				return nil // a folder without dependencies is checked, not failed
@@ -101,7 +109,12 @@ func newWatchStatusCmd(deps *Deps) *cobra.Command {
 					v.LastScanAt, v.LastScanStatus = at.UTC().Format(time.RFC3339), status
 				}
 				if on && p.AutoScan {
-					v.NextScanAt = watch.Next(at, has, now, h, m).UTC().Format(time.RFC3339)
+					// From the last check that counts, as the watch itself.
+					start, counted, err := repo.LastStart(ctx, p.ID)
+					if err != nil {
+						return err
+					}
+					v.NextScanAt = watch.Next(start, counted, now, h, m).UTC().Format(time.RFC3339)
 				}
 				views = append(views, v)
 			}

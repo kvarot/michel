@@ -18,10 +18,18 @@ import (
 // no scan (no database) is tried once more at each restart, never in a loop;
 // one whose check was interrupted, or left running by a crash, is checked
 // again.
+//
+// A check that cannot start (another check of the project runs, or a click
+// works on its folder: ErrBusy) is not a try: the project is looked at
+// again RetryAfter later.
 const (
 	MaxRetries = 2
 	RetryAfter = 30 * time.Minute
 )
+
+// ErrBusy is returned by Deps.Scan when the project's folder is held by a
+// click: the check waits, as for a check already running.
+var ErrBusy = errors.New("the project's folder is busy")
 
 // Deps are the collaborators of Loop.
 type Deps struct {
@@ -61,7 +69,7 @@ func Loop(ctx context.Context, d Deps, every time.Duration) {
 	if log == nil {
 		log = slog.Default()
 	}
-	window, tries := "", map[string]*try{}
+	window, tries, busy := "", map[string]*try{}, map[string]time.Time{}
 	// sourcesDone is the window whose source read this process has handled
 	// (read, failed, or claimed by another process); claimWarned the window
 	// whose claim error was already logged.
@@ -80,7 +88,7 @@ func Loop(ctx context.Context, d Deps, every time.Duration) {
 		// hour in the policy, starts again from the database.
 		key := start.Format(time.RFC3339)
 		if key != window {
-			window, tries = key, map[string]*try{}
+			window, tries, busy = key, map[string]*try{}, map[string]time.Time{}
 		}
 		// The source read of the day is claimed in the database, then read.
 		// A claim that cannot be recorded is tried again at the next look. A
@@ -139,8 +147,14 @@ func Loop(ctx context.Context, d Deps, every time.Duration) {
 			if !p.Active || !p.AutoScan {
 				continue
 			}
-			t := tries[p.ID]
 			now := d.Now()
+			if until, ok := busy[p.ID]; ok {
+				if now.Before(until) {
+					continue
+				}
+				delete(busy, p.ID)
+			}
+			t := tries[p.ID]
 			if t != nil {
 				if t.done || t.n > MaxRetries || now.Before(t.next) {
 					continue
@@ -169,9 +183,17 @@ func Loop(ctx context.Context, d Deps, every time.Duration) {
 			if ctx.Err() != nil {
 				return
 			}
+			if errors.Is(err, scan.ErrScanRunning) || errors.Is(err, ErrBusy) {
+				// Not a try: a check elsewhere, a scan row left by a crash
+				// (swept after an hour) or a click on the folder. Look again
+				// later, from the last check, as for a project never tried.
+				delete(tries, p.ID)
+				busy[p.ID] = d.Now().Add(RetryAfter)
+				continue
+			}
 			t.n++
 			switch {
-			case err == nil, errors.Is(err, scan.ErrScanRunning):
+			case err == nil:
 				t.done = true
 			default:
 				t.next = d.Now().Add(RetryAfter)

@@ -247,7 +247,7 @@ func newServeCmd(deps *Deps) *cobra.Command {
 			watchDone := make(chan struct{})
 			go func() {
 				defer close(watchDone)
-				watchLoop(schedCtx, serveWatchDeps(cmd, deps, scanOne), watchTick)
+				watchLoop(schedCtx, serveWatchDeps(cmd, deps, fd, scanOne), watchTick)
 			}()
 			// Server fixes left running by a process that stopped end
 			// unknown, with an urgent alert, once past their own bound.

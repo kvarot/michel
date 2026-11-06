@@ -91,8 +91,8 @@ func (r *rig) deps() Deps {
 			err := r.fail[p.Name]
 			now := r.now
 			r.mu.Unlock()
-			if errors.Is(err, errNoRow) {
-				return err
+			if errors.Is(err, errNoRow) || errors.Is(err, ErrBusy) || errors.Is(err, scan.ErrScanRunning) {
+				return err // no scan row of this check
 			}
 			status := "ok"
 			if err != nil {
@@ -277,14 +277,52 @@ func TestLoopClockGoesBack(t *testing.T) {
 	}
 }
 
-func TestLoopScanRunningElsewhereIsNotAFailure(t *testing.T) {
-	r := newRig(t, at("2026-11-05", "07:00"), "demo")
-	r.fail["demo"] = fmt.Errorf("%w: demo", scan.ErrScanRunning)
-	r.look(3)
-	r.set(at("2026-11-05", "08:00"))
-	r.look(3)
-	if got := r.scanned(); len(got) != 1 {
-		t.Errorf("tries = %v", got)
+// A check that cannot start (a scan of the project running elsewhere or left
+// by a crash, or a click on the folder) is not a try: the project is looked
+// at again 30 minutes later, as long as it takes, and once checked it is
+// done for the day.
+func TestLoopBusyCheckWaitsAndIsNotATry(t *testing.T) {
+	for _, cause := range []error{fmt.Errorf("%w: demo", scan.ErrScanRunning), ErrBusy} {
+		r := newRig(t, at("2026-11-05", "07:00"), "demo")
+		r.fail["demo"] = cause
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { Loop(ctx, r.deps(), 5*time.Millisecond); close(done) }()
+		wait := func() {
+			start := r.ticks.Load()
+			for r.ticks.Load()-start < 3 {
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+		wait()
+		if got := r.scanned(); len(got) != 1 {
+			t.Fatalf("%v: first look: %v", cause, got)
+		}
+		r.set(at("2026-11-05", "07:20"))
+		wait()
+		if got := r.scanned(); len(got) != 1 {
+			t.Errorf("%v: looked again before 30 minutes: %v", cause, got)
+		}
+		// More busy looks than MaxRetries: none of them is a try.
+		for i, hm := range []string{"07:31", "08:02", "08:33", "09:04"} {
+			r.set(at("2026-11-05", hm))
+			wait()
+			if got := r.scanned(); len(got) != i+2 {
+				t.Errorf("%v at %s: %d looks, want %d", cause, hm, len(got), i+2)
+			}
+		}
+		r.mu.Lock()
+		delete(r.fail, "demo")
+		r.mu.Unlock()
+		r.set(at("2026-11-05", "09:35"))
+		wait()
+		r.set(at("2026-11-05", "10:10"))
+		wait()
+		if got := r.scanned(); len(got) != 6 {
+			t.Errorf("%v: after the folder is free: %d scans, want 6", cause, len(got))
+		}
+		cancel()
+		<-done
 	}
 }
 

@@ -193,8 +193,13 @@ func (s *server) projectView(ctx context.Context, lang i18n.Lang, p project.Proj
 	}
 	v.AutoScan = p.AutoScan
 	if h, m, on := s.currentPolicy().WatchHour(); on && p.AutoScan {
-		last, perr := time.Parse(time.RFC3339, at)
-		v.NextScanAt = watch.Next(last, perr == nil, s.deps.Now(), h, m).UTC().Format(time.RFC3339)
+		// From the last check that counts, as the watch itself: an
+		// interrupted or running scan is checked again.
+		last, counted, err := watch.NewRepo(s.deps.Store).LastStart(ctx, p.ID)
+		if err != nil {
+			return ProjectView{}, err
+		}
+		v.NextScanAt = watch.Next(last, counted, s.deps.Now(), h, m).UTC().Format(time.RFC3339)
 	}
 	s.scanState(lang, p, &v)
 	return v, nil

@@ -31,3 +31,18 @@ func TestProjectsSayTheNextScan(t *testing.T) {
 		t.Errorf("watch off for the project: %+v", v)
 	}
 }
+
+// An interrupted check does not count: the watch checks the project again
+// at its next look, and the card says so rather than "tomorrow".
+func TestNextScanIgnoresAnInterruptedCheck(t *testing.T) {
+	later := time.Date(2026, 10, 23, 9, 30, 0, 0, time.UTC)
+	f := newFixtureWith(t, nil, func(f *fixture) { f.deps.Now = func() time.Time { return later } })
+	if _, err := f.st.DB().Exec(`INSERT INTO scan (id, project_id, started_at, status) VALUES ('s-cut', ?, ?, 'interrupted')`,
+		f.proj.ID, later.Add(-10*time.Minute).Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 23, 7, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	if v := f.viewOf("en", "demo"); v.NextScanAt != want {
+		t.Errorf("next %q, want %q (today: the interrupted check does not count)", v.NextScanAt, want)
+	}
+}
