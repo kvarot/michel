@@ -19,6 +19,7 @@ import (
 	"github.com/kvarot/michel/internal/explain"
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/mask"
 	"github.com/kvarot/michel/internal/osvdb"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
@@ -109,6 +110,21 @@ type Superseded struct {
 	Severity string `json:"severity"`
 }
 
+// Review is an ignore that reached its review date in the window: the user
+// is asked to look at the finding again.
+type Review struct {
+	Package   string `json:"package"`
+	OSVID     string `json:"osv_id"`
+	FindingID string `json:"finding_id"`
+	// IgnoredAt is the day the ignore was taken (RFC 3339).
+	IgnoredAt string `json:"ignored_at"`
+	// Why is the justification given then, with secrets and paths masked.
+	// It stays out of the JSON form.
+	Why string `json:"-"`
+	// Severity is the finding's severity label now.
+	Severity string `json:"severity"`
+}
+
 // Due is a deferral in force whose date is within DueHorizon.
 type Due struct {
 	Package   string `json:"package"`
@@ -149,6 +165,7 @@ type ProjectDigest struct {
 	New        []Package    `json:"new,omitempty"`
 	Gone       []Package    `json:"gone,omitempty"`
 	Superseded []Superseded `json:"superseded,omitempty"`
+	Review     []Review     `json:"review,omitempty"`
 	Due        []Due        `json:"due,omitempty"`
 	// ProvenFixed and ReportedFixed stay empty until fixes are tracked.
 	ProvenFixed   []Package `json:"proven_fixed,omitempty"`
@@ -659,10 +676,17 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 			latest[dec.FindingID] = dec
 		}
 	}
+	masker := mask.New()
 	for _, id := range order {
 		dec := latest[id]
 		f := byID[dec.FindingID]
 		name, ref, _ := scan.Ref(f)
+		if dec.SupersededReason == decide.ReviewDue {
+			pd.Review = append(pd.Review, Review{Package: scan.SanitizeText(name), OSVID: scan.SanitizeText(ref), FindingID: dec.FindingID,
+				IgnoredAt: dec.CreatedAt.UTC().Format(time.RFC3339), Why: masker.Mask(scan.SanitizeText(dec.Justification)),
+				Severity: severityLabel(effective(f))})
+			continue
+		}
 		pd.Superseded = append(pd.Superseded, Superseded{Package: scan.SanitizeText(name), OSVID: scan.SanitizeText(ref),
 			FindingID: dec.FindingID, PreviousAction: string(dec.Action), Reason: string(dec.SupersededReason), Justification: dec.Justification,
 			Severity: severityLabel(effective(f))})
@@ -677,7 +701,14 @@ func (c computer) project(ctx context.Context, p project.Project) (ProjectDigest
 	if err := c.fixes(ctx, p, &pd, byID); err != nil {
 		return ProjectDigest{}, 0, 0, nil, err
 	}
-	attention += len(pd.Superseded) + len(pd.Due) + len(pd.FixWaiting) + len(pd.FixHeld)
+	sort.SliceStable(pd.Review, func(i, j int) bool {
+		a, b := pd.Review[i], pd.Review[j]
+		if a.Package != b.Package {
+			return a.Package < b.Package
+		}
+		return a.OSVID < b.OSVID
+	})
+	attention += len(pd.Superseded) + len(pd.Review) + len(pd.Due) + len(pd.FixWaiting) + len(pd.FixHeld)
 	pd.Attention = attention
 
 	first, status, err := c.scans(ctx, p.ID)

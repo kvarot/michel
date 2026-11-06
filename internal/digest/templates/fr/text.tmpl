@@ -30,6 +30,9 @@ failles ouvertes : {{sum .Open}} (critiques {{index .Open "critical"}}, élevée
 {{- if .Superseded}}Décisions à revoir, car quelque chose a changé :
 {{range .Superseded}}  {{.Package}} {{.OSVID}} : était {{template "action" .PreviousAction}}, {{reason .Reason}}
 {{end}}{{end}}
+{{- if .Review}}{{reviewTitle}} :
+{{range .Review}}  {{.Package}} {{.OSVID}} : {{reviewLine .}}
+{{end}}{{end}}
 {{- if .FixWaiting}}{{fixWaiting (len .FixWaiting)}} :
 {{range .FixWaiting}}  {{.Package}} {{.OSVID}}{{if .Target}} → {{.Target}}{{end}}
 {{end}}{{end}}

@@ -227,7 +227,7 @@ func (r *Repo) List(ctx context.Context, projectID, filter string) ([]Decision, 
 	return r.query(ctx, q+` ORDER BY created_at DESC, id DESC`, args...)
 }
 
-// ExpireDue supersedes (due_reached) every current defer whose due_at <= now, in all projects, moves those findings to pending, writes one decision.superseded audit event each, and returns the finding ids. Called by digest --send only (scan does the same inside applyScan).
+// ExpireDue supersedes every current defer (due_reached) and ignore (review_due) whose due_at <= now, in all projects, moves those findings to pending, writes one decision.superseded audit event each, and returns the finding ids. Called by digest --send only (scan does the same inside applyScan).
 // Only findings still decided are touched: a gone finding keeps its
 // decision, and the scan checks the date if it comes back. The read and the
 // updates share one transaction, and each update is guarded, so a decision
@@ -238,14 +238,14 @@ func (r *Repo) ExpireDue(ctx context.Context, now time.Time, log *audit.Logger) 
 		return nil, fmt.Errorf("cannot supersede the decisions: %w", err)
 	}
 	defer tx.Rollback()
-	list, err := queryWith(ctx, tx, `SELECT `+columns+` FROM decision WHERE action = ? AND superseded_at = ''
-		AND finding_id IN (SELECT id FROM finding WHERE status = ?) ORDER BY finding_id`, string(Defer), scan.StatusDecided)
+	list, err := queryWith(ctx, tx, `SELECT `+columns+` FROM decision WHERE action IN (?, ?) AND superseded_at = ''
+		AND finding_id IN (SELECT id FROM finding WHERE status = ?) ORDER BY finding_id`, string(Defer), string(Ignore), scan.StatusDecided)
 	if err != nil {
 		return nil, err
 	}
 	var due []Decision
 	for _, d := range list {
-		if !d.DueAt.After(now) {
+		if !d.DueAt.IsZero() && !d.DueAt.After(now) {
 			due = append(due, d)
 		}
 	}
@@ -268,15 +268,24 @@ func (r *Repo) ExpireDue(ctx context.Context, now time.Time, log *audit.Logger) 
 		return ids, nil
 	}
 	for _, d := range due {
-		if _, err := RecordSuperseded(ctx, log, "decide", d, DueReached); err != nil {
+		if _, err := RecordSuperseded(ctx, log, "decide", d, expiryReason(d.Action)); err != nil {
 			return ids, err
 		}
 	}
 	return ids, nil
 }
 
-// expire takes each decision of due out of force (due_reached) inside tx, but
-// only while it is still in force, still a deferral and still due at now, and
+// expiryReason is the reason a decision of action is taken out of force when
+// its date is reached: review_due for an ignore, due_reached for a defer.
+func expiryReason(a Action) Reason {
+	if a == Ignore {
+		return ReviewDue
+	}
+	return DueReached
+}
+
+// expire takes each decision of due out of force (due_reached or review_due)
+// inside tx, but only while it is still in force, still the same action and still due at now, and
 // moves its finding to pending. It returns the decisions it took out of force.
 func (r *Repo) expire(ctx context.Context, tx *sql.Tx, due []Decision, now time.Time) ([]Decision, error) {
 	ts := timeText(now.UTC().Truncate(time.Second))
@@ -284,7 +293,7 @@ func (r *Repo) expire(ctx context.Context, tx *sql.Tx, due []Decision, now time.
 	for _, d := range due {
 		res, err := tx.ExecContext(ctx, `UPDATE decision SET superseded_at = ?, superseded_reason = ?
 			WHERE id = ? AND superseded_at = '' AND action = ? AND due_at <> '' AND due_at <= ?`,
-			ts, string(DueReached), d.ID, string(Defer), timeText(now))
+			ts, string(expiryReason(d.Action)), d.ID, string(d.Action), timeText(now))
 		if err != nil {
 			return nil, fmt.Errorf("cannot supersede the decision: %w", err)
 		}
@@ -293,7 +302,7 @@ func (r *Repo) expire(ctx context.Context, tx *sql.Tx, due []Decision, now time.
 		} else if n == 0 {
 			continue
 		}
-		if err := setStatus(ctx, tx, d.FindingID, scan.StatusPending, ts, DueReached); err != nil {
+		if err := setStatus(ctx, tx, d.FindingID, scan.StatusPending, ts, expiryReason(d.Action)); err != nil {
 			return nil, err
 		}
 		done = append(done, d)

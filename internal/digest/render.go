@@ -46,6 +46,16 @@ func funcs(d Digest) map[string]any {
 			}
 			return s
 		},
+		"reviewTitle": func() string { return i18n.T(lang, "digest.review.title") },
+		"reviewLine": func(r Review) string {
+			return i18n.T(lang, "digest.review.line", func() string {
+				t, err := time.Parse(time.RFC3339, r.IgnoredAt)
+				if err != nil {
+					return r.IgnoredAt
+				}
+				return t.UTC().Format(dateLayout(lang))
+			}(), r.Why)
+		},
 		"reason": func(code string) string {
 			if k := "digest.reason." + code; i18n.Has(k) {
 				return i18n.T(lang, k)

@@ -30,6 +30,9 @@ open: {{sum .Open}} (critical {{index .Open "critical"}}, high {{index .Open "hi
 {{- if .Superseded}}Decisions to review:
 {{range .Superseded}}  {{.Package}} {{.OSVID}}: was {{template "action" .PreviousAction}}, {{reason .Reason}}
 {{end}}{{end}}
+{{- if .Review}}{{reviewTitle}} :
+{{range .Review}}  {{.Package}} {{.OSVID}} : {{reviewLine .}}
+{{end}}{{end}}
 {{- if .FixWaiting}}{{fixWaiting (len .FixWaiting)}}:
 {{range .FixWaiting}}  {{.Package}} {{.OSVID}}{{if .Target}} → {{.Target}}{{end}}
 {{end}}{{end}}

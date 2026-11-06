@@ -108,6 +108,8 @@ type DecisionRequest struct {
 	Why    string `json:"why"`
 	// Until is the deferral date, YYYY-MM-DD; empty means 30 days.
 	Until string `json:"until"`
+	// Review is when an ignore comes back: 1y, 6m, 3m or never; empty means 1y.
+	Review string `json:"review"`
 }
 
 // ErrorBody is every error answer: what went wrong and, when there is one,

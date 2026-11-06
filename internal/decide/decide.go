@@ -32,6 +32,7 @@ const (
 	SeverityChanged     Reason = scan.ReasonSeverityChanged
 	FixedVersionChanged Reason = scan.ReasonFixedVersionChanged
 	DueReached          Reason = scan.ReasonDueReached
+	ReviewDue           Reason = scan.ReasonReviewDue
 	ReappearedChanged   Reason = scan.ReasonReappearedChanged
 	KEVChanged          Reason = scan.ReasonKEVChanged
 )
@@ -42,7 +43,8 @@ type Decision struct {
 	ID, FindingID, ProjectID string
 	Action                   Action
 	Justification            string
-	// DueAt is the deferral date; zero unless Action is Defer.
+	// DueAt is the deferral date of a Defer, or the review date of an
+	// Ignore (zero = never reviewed); zero for a Fix.
 	DueAt     time.Time
 	Author    string
 	CreatedAt time.Time
@@ -59,6 +61,28 @@ type Decision struct {
 // DefaultDefer is the deferral given when the user names no date.
 const DefaultDefer = 30 * 24 * time.Hour
 
+// DefaultReview is the review delay of an ignore when the caller asks for the
+// default; Validate never applies it (a zero DueAt means "never").
+const DefaultReview = 365 * 24 * time.Hour
+
+// ReviewDate turns a review choice ("1y", "6m", "3m" or "never") into the
+// DueAt of an ignore at now. "never" gives the zero time. ok is false for any
+// other value.
+func ReviewDate(choice string, now time.Time) (due time.Time, ok bool) {
+	now = now.UTC().Truncate(time.Second)
+	switch choice {
+	case "1y":
+		return now.Add(DefaultReview), true
+	case "6m":
+		return now.AddDate(0, 6, 0), true
+	case "3m":
+		return now.AddDate(0, 3, 0), true
+	case "never":
+		return time.Time{}, true
+	}
+	return time.Time{}, false
+}
+
 // MaxJustification is the longest justification accepted, in characters.
 const MaxJustification = 1000
 
@@ -67,7 +91,7 @@ var (
 	ErrJustificationRequired = errors.New("ignoring a finding needs a justification")
 	ErrInvalidAction         = errors.New("unknown action: use fix, defer or ignore")
 	ErrFindingGone           = errors.New("the finding is no longer seen")
-	ErrDueInPast             = errors.New("the deferral date is not in the future")
+	ErrDueInPast             = errors.New("the date is not in the future")
 	ErrJustificationTooLong  = errors.New("the justification is too long")
 	ErrNoFixForExposure      = errors.New("an open service cannot be fixed by Michel")
 	ErrFindingNotFound       = errors.New("no finding has this id")
@@ -75,11 +99,19 @@ var (
 )
 
 // Validate checks action/justification/due; it sanitizes and trims the justification.
-// A defer without a date gets now + DefaultDefer; other actions lose any date.
+// A defer without a date gets now + DefaultDefer; a fix loses any date; an
+// ignore keeps its review date (zero = never) and refuses one in the past.
 func Validate(d *Decision, now time.Time) error {
 	switch d.Action {
-	case Fix, Ignore:
+	case Fix:
 		d.DueAt = time.Time{}
+	case Ignore:
+		if !d.DueAt.IsZero() {
+			if !d.DueAt.After(now) {
+				return ErrDueInPast
+			}
+			d.DueAt = d.DueAt.UTC()
+		}
 	case Defer:
 		if d.DueAt.IsZero() {
 			d.DueAt = now.UTC().Add(DefaultDefer).Truncate(time.Second)

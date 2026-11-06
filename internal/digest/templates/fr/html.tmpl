@@ -37,6 +37,11 @@
 {{range .Superseded}}<li><strong>{{.Package}}</strong> {{.OSVID}} : était {{template "action" .PreviousAction}}, {{reason .Reason}}</li>
 {{end}}</ul>
 {{end}}
+{{- if .Review}}<h3>{{reviewTitle}}</h3>
+<ul>
+{{range .Review}}<li><strong>{{.Package}}</strong> {{.OSVID}} : {{reviewLine .}}</li>
+{{end}}</ul>
+{{end}}
 {{- if .FixWaiting}}<h3>{{fixWaiting (len .FixWaiting)}}</h3>
 <ul>
 {{range .FixWaiting}}<li><strong>{{.Package}}</strong> {{.OSVID}}{{if .Target}} → {{.Target}}{{end}}</li>

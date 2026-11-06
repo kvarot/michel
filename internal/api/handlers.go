@@ -455,6 +455,19 @@ func (s *server) decision(w http.ResponseWriter, r *http.Request) {
 		}
 		d.DueAt = t
 	}
+	if review := strings.TrimSpace(req.Review); review != "" || action == decide.Ignore {
+		if review == "" {
+			review = "1y"
+		}
+		due, ok := decide.ReviewDate(review, now)
+		if !ok {
+			refuse("api.decision.bad_review")
+			return
+		}
+		if action == decide.Ignore {
+			d.DueAt = due
+		}
+	}
 	if !validateDecision(refuse, &d, now) {
 		return
 	}

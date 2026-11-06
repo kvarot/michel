@@ -130,6 +130,11 @@ func decidedSentence(deps *Deps, d decide.Decision, replaced *decide.Decision, f
 		s = deps.T("cli.decide.done.defer", pkg, osv, p.Name) + " " + dueSentence(deps, d, defaulted, false)
 	default:
 		s = deps.T("cli.decide.done.ignore", pkg, osv, p.Name, strings.TrimRight(oneLine(d.Justification), "."))
+		if d.DueAt.IsZero() {
+			s += " " + deps.T("cli.decide.review_never")
+		} else {
+			s += " " + deps.T("cli.decide.review_on", dayText(d.DueAt))
+		}
 	}
 	if replaced != nil {
 		s += " " + deps.T("cli.decide.replaced", string(replaced.Action))
@@ -138,7 +143,7 @@ func decidedSentence(deps *Deps, d decide.Decision, replaced *decide.Decision, f
 }
 
 func newDecideCmd(deps *Deps) *cobra.Command {
-	var projectName, pkg, why, until, forDays string
+	var projectName, pkg, why, until, forDays, review string
 	var force, verbose bool
 	c := &cobra.Command{
 		Use:   "decide <id-or-prefix> <fix|defer|ignore>",
@@ -173,6 +178,18 @@ func newDecideCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if review = strings.TrimSpace(review); review != "" && action != decide.Ignore {
+				return deps.Errorf("cli.decide.review_not_ignore")
+			}
+			if action == decide.Ignore {
+				if review == "" {
+					review = "1y"
+				}
+				var ok bool
+				if due, ok = decide.ReviewDate(review, now); !ok {
+					return deps.Errorf("cli.decide.bad_review", review)
+				}
+			}
 			d := decide.Decision{Action: action, Justification: why, DueAt: due, Author: decideAuthor}
 			if err := decide.Validate(&d, now); err != nil {
 				return validationError(deps, d, why, err)
@@ -198,6 +215,7 @@ func newDecideCmd(deps *Deps) *cobra.Command {
 	f.StringVar(&why, "why", "", "why you decide this (required for ignore, at most 1000 characters); kept in the audit log")
 	f.StringVar(&until, "until", "", "for defer: the date to ask again, as YYYY-MM-DD")
 	f.StringVar(&forDays, "for", "", "for defer: how long to wait, as a number of days such as 30d (default 30d)")
+	f.StringVar(&review, "review", "", "for ignore: when it comes back to review: 1y, 6m, 3m or never (default 1y)")
 	f.StringVar(&projectName, "project", "", "with --package: the project whose findings to decide on")
 	f.StringVar(&pkg, "package", "", "decide on every finding of this package in --project that waits for a decision")
 	f.BoolVar(&force, "force", false, "with --package: also decide again on findings already decided")

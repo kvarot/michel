@@ -31,7 +31,9 @@ const (
 	ReasonSeverityChanged     = "severity_changed"
 	ReasonFixedVersionChanged = "fixed_version_changed"
 	ReasonDueReached          = "due_reached"
-	ReasonReappearedChanged   = "reappeared_changed"
+	// ReasonReviewDue: an ignore reached its review date.
+	ReasonReviewDue         = "review_due"
+	ReasonReappearedChanged = "reappeared_changed"
 	// ReasonKEVChanged: the finding entered (or left) CISA's list of
 	// vulnerabilities exploited in the wild since the decision.
 	ReasonKEVChanged = "kev_changed"
@@ -77,14 +79,29 @@ type decisionView struct {
 	KEV      bool
 }
 
-// dueReached tells whether a defer decision has reached its date at now. A
-// date Michel cannot read counts as reached, so the finding is asked again.
-func (d decisionView) dueReached(now time.Time) bool {
-	if d.Action != "defer" || d.DueAt == "" {
-		return false
+// expiry tells whether a defer or an ignore has reached its date at now, and
+// gives the reason to supersede it: ReasonDueReached for a defer,
+// ReasonReviewDue for an ignore, "" otherwise. An ignore without a date never
+// expires. A date Michel cannot read counts as reached, so the finding is
+// asked again.
+func (d decisionView) expiry(now time.Time) string {
+	var reason string
+	switch d.Action {
+	case "defer":
+		reason = ReasonDueReached
+	case "ignore":
+		reason = ReasonReviewDue
+	default:
+		return ""
+	}
+	if d.DueAt == "" {
+		return ""
 	}
 	due, err := time.Parse(time.RFC3339, d.DueAt)
-	return err != nil || !due.After(now)
+	if err != nil || !due.After(now) {
+		return reason
+	}
+	return ""
 }
 
 // currentDecisions reads, inside tx, the decisions in force of one project,
@@ -376,9 +393,10 @@ func apply(ctx context.Context, tx *sql.Tx, projectID, sourceKey, scanID string,
 		status, reason := StatusPending, ""
 		if d, ok := current[f.ID]; ok && (k.status == StatusDecided || k.status == StatusGone) {
 			changed, why := SnapshotChanged(d.Severity, d.Fixed, d.KEV, f.SeverityLabel, f.FixedVersions, f.KEV)
+			expiry := d.expiry(now)
 			switch {
-			case d.dueReached(now):
-				reason = ReasonDueReached
+			case expiry != "":
+				reason = expiry
 			case changed && k.status == StatusGone:
 				reason = ReasonReappearedChanged
 			case changed:
