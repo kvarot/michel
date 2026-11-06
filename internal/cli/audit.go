@@ -13,7 +13,7 @@ import (
 
 func newAuditCmd(deps *Deps) *cobra.Command {
 	c := &cobra.Command{Use: "audit", Short: "Inspect the tamper-evident audit log"}
-	c.AddCommand(newAuditVerifyCmd(deps), newAuditListCmd(deps))
+	c.AddCommand(newAuditVerifyCmd(deps), newAuditListCmd(deps), newAuditResealCmd(deps))
 	return c
 }
 
@@ -152,5 +152,74 @@ func newAuditListCmd(deps *Deps) *cobra.Command {
 		},
 	}
 	c.Flags().IntVar(&last, "last", 20, "number of most recent events to show")
+	return c
+}
+
+// newAuditResealCmd is michel audit reseal: the explicit repair of seals that
+// fail while the chain holds (a key kept with a database made again). Never
+// automatic: from outside it looks like a removal of sealed events.
+func newAuditResealCmd(deps *Deps) *cobra.Command {
+	var yes bool
+	c := &cobra.Command{
+		Use:   "reseal",
+		Short: "Start the seals of the audit log again after the last event, when only the seals fail",
+		Long: "When michel.db was made again or restored while the secrets folder was kept, or after a change of the key, " +
+			"michel audit verify fails on the seals for ever. Without --yes, reseal shows what fails and what it would do. " +
+			"With --yes, Michel starts the seals again after the last event: the events already there are no longer covered " +
+			"by the seals, and the reseal is recorded in the log (audit.reseal). A chain whose events were changed or removed " +
+			"is never resealed: keep it as evidence.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if !sealRequired(deps.Policy()) {
+				return errors.New(deps.T("cli.audit.reseal.none"))
+			}
+			dir, _ := cmd.Flags().GetString("data-dir")
+			key, err := loadSealKey(ctx, dir, nil)
+			if err != nil || key == nil {
+				return errors.New(deps.T("cli.audit.reseal.key_missing"))
+			}
+			refused := func(res audit.VerifyResult) error {
+				if !res.Failed(true) {
+					fmt.Fprintln(deps.Stdout, deps.T("cli.audit.reseal.not_needed"))
+					return nil
+				}
+				msg := deps.T("cli.audit.reseal.refused", res.Reason)
+				fmt.Fprintln(deps.Stdout, msg)
+				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
+			}
+			if !yes {
+				res, n, err := audit.ResealPlan(ctx, deps.Store, key)
+				if err != nil {
+					return err
+				}
+				if !audit.ResealAllowed(res) {
+					return refused(res)
+				}
+				fmt.Fprintln(deps.Stdout, deps.T("cli.audit.reseal.plan", res.Reason, n))
+				return nil
+			}
+			r, err := audit.Reseal(ctx, deps.Store, key)
+			if errors.Is(err, audit.ErrResealRefused) {
+				res, _, perr := audit.ResealPlan(ctx, deps.Store, key)
+				if perr != nil {
+					return perr
+				}
+				return refused(res)
+			}
+			if err != nil {
+				return err
+			}
+			// michel audit is read-only at start: no key was set on the logger.
+			deps.Audit.SetKey(key)
+			if _, err := deps.Audit.Record(ctx, audit.Event{Actor: "cli", Action: "audit.reseal", Target: "audit", Result: "ok",
+				Evidence: map[string]any{"reason": r.Reason, "previous_from": r.PreviousFrom, "from": r.From, "unprotected": r.Unprotected}}); err != nil {
+				return err
+			}
+			fmt.Fprintln(deps.Stdout, deps.T("cli.audit.reseal.done", r.From, r.Unprotected))
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&yes, "yes", false, "start the seals again (without it, Michel only shows what it would do)")
 	return c
 }

@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"crypto/hmac"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -78,21 +79,27 @@ func Verify(ctx context.Context, s *store.Store) (VerifyResult, error) {
 // key can therefore neither drop nor rewrite sealed events unseen.
 func VerifyWith(ctx context.Context, s *store.Store, opt VerifyOptions) (VerifyResult, error) {
 	n, h, ok := readHead(s.Path())
-	return verifyAgainst(ctx, s, n, h, ok, opt)
+	return verifyAgainst(ctx, s.DB(), n, h, ok, opt)
+}
+
+// dbReader is a database or a transaction of it.
+type dbReader interface {
+	querier
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // verifyAgainst walks the chain and checks it against a head read earlier.
-func verifyAgainst(ctx context.Context, s *store.Store, headCount int, headHash string, headOK bool, opt VerifyOptions) (VerifyResult, error) {
+func verifyAgainst(ctx context.Context, q dbReader, headCount int, headHash string, headOK bool, opt VerifyOptions) (VerifyResult, error) {
 	// The sealed anchor is read before the walk, as the head: events written
 	// after are walked and checked as any other.
 	var anchor sealedAnchor
 	if opt.Required {
 		var err error
-		if anchor, err = readSealedAnchor(ctx, s.DB()); err != nil {
+		if anchor, err = readSealedAnchor(ctx, q); err != nil {
 			return VerifyResult{}, err
 		}
 	}
-	rows, err := s.DB().QueryContext(ctx, `SELECT seq, id, ts, actor, action, target, result,
+	rows, err := q.QueryContext(ctx, `SELECT seq, id, ts, actor, action, target, result,
 		correlation_id, evidence, prev_hash, hash, hmac FROM audit_event ORDER BY seq`)
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("cannot read the audit log: %w", err)
@@ -123,8 +130,14 @@ func verifyAgainst(ctx context.Context, s *store.Store, headCount int, headHash 
 			}
 		}
 		if reason == "" && opt.Required {
-			mustSeal := sealedSeen || (anchorOK && e.Seq >= anchor.From)
+			// With a good anchor, the events before its start are outside
+			// the seals, even with a seal (one made before a reseal, maybe
+			// with another key): they are only counted.
+			before := anchorOK && e.Seq < anchor.From
+			mustSeal := !before && (sealedSeen || anchorOK)
 			switch {
+			case before:
+				res.Unsealed++
 			case e.HMAC == "" && mustSeal:
 				reason = ReasonSealMissing
 			case e.HMAC == "":
