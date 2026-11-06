@@ -23,4 +23,10 @@ Ruling: the API gets the hook's exe from os.Executable() and dataDir/cfg from it
 Task 1: review 1 spec ok, quality: 0 crit/imp; controller found store tests failing (migration count) — Important; fix round 1 dispatched to same implementer (+2 minors: no-op audit, catalog order)
 Task 1: fix round 1/5 (3 addressed, 0 open; commits 9c4f9e8..d33c91c)
 Task 1: complete (commits 8473c95..d33c91c, review clean)
-Task 2: dispatched (BASE d33c91c)
+Task 2: dispatched (BASE c72cfee, sonnet)
+Task 2: implemented 1be2a2b; review dispatched
+Task 2: minor (deferred): fixture has no vulnerable package (still proves non-vulnerable ones are stored); dev-merge of duplicates untested; failed/empty not tested (same guard)
+Task 2: complete (commits c72cfee..1be2a2b, review clean)
+Task 3: dispatched (BASE 1be2a2b, sonnet)
+Task 3: stopped by Kévin mid-implementation (no commit beyond 1be2a2b; working tree left as is)
+Task 3: unfinished work saved on branch wip/guards-task3 (untested, not reviewed)
