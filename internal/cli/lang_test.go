@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kvarot/michel/internal/i18n"
+	"github.com/kvarot/michel/internal/watch"
 )
 
 // TestMain pins the system language to English: the default policy says
@@ -14,6 +17,9 @@ import (
 // English unless a test asks otherwise.
 func TestMain(m *testing.M) {
 	restore := i18n.SetSystemLocaleForTest("en")
+	// The daily watch of serve checks the projects of a test by itself at the
+	// real hour: off unless a test turns it on.
+	watchLoop = func(context.Context, watch.Deps, time.Duration) {}
 	code := m.Run()
 	restore()
 	os.Exit(code)

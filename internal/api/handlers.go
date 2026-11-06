@@ -23,6 +23,7 @@ import (
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/source"
+	"github.com/kvarot/michel/internal/watch"
 	"github.com/kvarot/michel/internal/workcopy"
 )
 
@@ -189,6 +190,16 @@ func (s *server) projectView(ctx context.Context, lang i18n.Lang, p project.Proj
 		v.LastScanAt, v.LastScanStatus = at, status
 	case !errors.Is(err, sql.ErrNoRows):
 		return ProjectView{}, err
+	}
+	v.AutoScan = p.AutoScan
+	if h, m, on := s.currentPolicy().WatchHour(); on && p.AutoScan {
+		// From the last check that counts, as the watch itself: an
+		// interrupted or running scan is checked again.
+		last, counted, err := watch.NewRepo(s.deps.Store).LastStart(ctx, p.ID)
+		if err != nil {
+			return ProjectView{}, err
+		}
+		v.NextScanAt = watch.Next(last, counted, s.deps.Now(), h, m).UTC().Format(time.RFC3339)
 	}
 	s.scanState(lang, p, &v)
 	return v, nil

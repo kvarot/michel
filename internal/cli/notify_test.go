@@ -257,7 +257,11 @@ func TestDigestSendWithoutSecretStoreStillSendsOthers(t *testing.T) {
 	dir, _ := scannedDemo(t, false)
 	h := newHookRecorder(t)
 	writeNotifyCfg(t, dir, h.URL, "")
-	// A file where the secrets folder should be: the store cannot be opened.
+	// A file where the secrets folder should be: the store cannot be opened
+	// (the folder the setup made for the audit key goes first).
+	if err := os.RemoveAll(filepath.Join(dir, "secrets")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "secrets"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}

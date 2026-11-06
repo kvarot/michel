@@ -430,8 +430,10 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 			}
 		}
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO scan (id, project_id, started_at, osv_db_fetched_at, scanner_version, status)
-		VALUES (?,?,?,?,?,?)`, res.ScanID, p.ID, started.Format(time.RFC3339), dbFetched, deps.Version, "running"); err != nil {
+	if err := claimScan(ctx, db, p.ID, res.ScanID, started, dbFetched, deps.Version); err != nil {
+		if errors.Is(err, ErrScanRunning) {
+			return res, fmt.Errorf("%w: %s", ErrScanRunning, p.Name)
+		}
 		return res, fmt.Errorf("Michel cannot record the scan: %w. Check that the data folder is writable", err)
 	}
 	// The scan result is already stored when most events are written; a
@@ -449,14 +451,25 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 
 	failWith := func(stored string, err error, ev map[string]any) (Result, error) {
 		res.Status = ScanFailed
-		_, _ = db.ExecContext(context.WithoutCancel(ctx), `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=?`,
+		upd, uerr := db.ExecContext(context.WithoutCancel(ctx), `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=? AND status='running'`,
 			ScanFailed, deps.Now().UTC().Format(time.RFC3339), stored, res.ScanID)
+		if n, _ := rowsAffected(upd, uerr); n == 0 && uerr == nil {
+			// Another process marked it interrupted meanwhile: that status stays.
+			res.Status = ScanInterrupted
+		}
 		ev["error"] = stored
 		record("scan.finish", p.Name, ScanFailed, ev)
 		return res, err
 	}
 	fail := func(err error) (Result, error) {
 		return failWith(err.Error(), err, map[string]any{})
+	}
+	// markedElsewhere ends a scan another process marked interrupted while it
+	// ran (its sweep): nothing of this scan is stored over that status.
+	markedElsewhere := func() (Result, error) {
+		res.Status = ScanInterrupted
+		record("scan.finish", p.Name, ScanInterrupted, map[string]any{"reason": "marked_elsewhere"})
+		return res, fmt.Errorf("Michel did not store the scan of %s: %w. Run it again", p.Name, errMarkedElsewhere)
 	}
 	// A panic must not leave the scan "running": record it as failed with
 	// its cause, then let it go on. A scan already stored keeps its status.
@@ -482,9 +495,13 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		// Not an error: the project may have no dependencies yet. Existing
 		// findings keep their status: an empty or unmounted folder proves
 		// nothing about what was fixed.
-		if _, err := db.ExecContext(ctx, `UPDATE scan SET status=?, finished_at=? WHERE id=?`,
-			ScanEmpty, deps.Now().UTC().Format(time.RFC3339), res.ScanID); err != nil {
+		upd, err := db.ExecContext(ctx, `UPDATE scan SET status=?, finished_at=? WHERE id=? AND status='running'`,
+			ScanEmpty, deps.Now().UTC().Format(time.RFC3339), res.ScanID)
+		if err != nil {
 			return fail(fmt.Errorf("Michel cannot store the scan of %s: %w. Check that the data folder is writable", p.Name, err))
+		}
+		if n, _ := rowsAffected(upd, nil); n == 0 {
+			return markedElsewhere()
 		}
 		res.Status = ScanEmpty
 		record("scan.finish", p.Name, ScanEmpty, map[string]any{"reason": "no_manifests", "ignored_config_files": configs})
@@ -512,7 +529,7 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		// Cancelled: the scan is interrupted, whatever the scanner returns
 		// later is dropped and nothing else is stored.
 		res.Status = ScanInterrupted
-		_, _ = db.ExecContext(context.WithoutCancel(ctx), `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=?`,
+		_, _ = db.ExecContext(context.WithoutCancel(ctx), `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=? AND status='running'`,
 			ScanInterrupted, deps.Now().UTC().Format(time.RFC3339), "the scan was cancelled", res.ScanID)
 		record("scan.finish", p.Name, ScanInterrupted, map[string]any{"reason": "cancelled"})
 		return res, fmt.Errorf("the scan of %s was cancelled: %w", p.Name, cerr)
@@ -626,6 +643,16 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 			return err
 		}
 		defer tx.Rollback()
+		// The end is stored only over a scan still running: one another
+		// process marked interrupted meanwhile stays so, without findings.
+		upd, err := tx.ExecContext(ctx, `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=? AND status='running'`,
+			status, finished.Format(time.RFC3339), strings.Join(res.ErrorTexts, "; "), res.ScanID)
+		if err != nil {
+			return err
+		}
+		if n, err := upd.RowsAffected(); err != nil || n == 0 {
+			return errors.Join(errMarkedElsewhere, err)
+		}
 		if err := insertManifests(ctx, tx, res.ScanID, manifests); err != nil {
 			return err
 		}
@@ -637,12 +664,11 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE scan SET status=?, finished_at=?, error=? WHERE id=?`,
-			status, finished.Format(time.RFC3339), strings.Join(res.ErrorTexts, "; "), res.ScanID); err != nil {
-			return err
-		}
 		return tx.Commit()
 	}()
+	if errors.Is(err, errMarkedElsewhere) {
+		return markedElsewhere()
+	}
 	if err != nil {
 		return fail(fmt.Errorf("Michel cannot store the scan of %s: %w. Nothing was changed; check that the data folder is writable and run it again", p.Name, err))
 	}
@@ -673,6 +699,31 @@ func Run(ctx context.Context, deps Deps, p project.Project, opt Options) (Result
 		"ignored_config_files": configs,
 	})
 	return res, nil
+}
+
+// claimScan records the scan as running, unless the project already has a
+// running scan started less than StaleScanAfter before (ErrScanRunning): the
+// look and the insert are one immediate transaction, so two processes never
+// both start a scan of the same project.
+func claimScan(ctx context.Context, db *sql.DB, projectID, scanID string, started time.Time, dbFetched, version string) error {
+	tx, err := db.BeginTx(ctx, nil) // immediate: holds the write lock from the look on
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var busy int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM scan WHERE project_id = ? AND status = 'running' AND started_at >= ?`,
+		projectID, started.Add(-StaleScanAfter).Format(time.RFC3339)).Scan(&busy); err != nil {
+		return err
+	}
+	if busy > 0 {
+		return ErrScanRunning
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO scan (id, project_id, started_at, osv_db_fetched_at, scanner_version, status)
+		VALUES (?,?,?,?,?,?)`, scanID, projectID, started.Format(time.RFC3339), dbFetched, version, "running"); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // rowsAffected is the row count of an Exec result, 0 when it failed.

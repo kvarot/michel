@@ -127,7 +127,33 @@ export function withScanState(project, view) {
     git_answer: view.git_answer ?? '',
     git_attached: !!view.git_attached,
     git_repo: view.git_repo,
+    auto_scan: view.auto_scan,
+    next_scan_at: view.next_scan_at,
   }
+}
+
+/**
+ * nextScanText says when the daily watch of Michel checks the project next,
+ * in the local time of this computer, or that the watch is off. '' before the
+ * page has read the projects.
+ * @param {{auto_scan?: boolean, next_scan_at?: string}} project
+ * @param {string} lang
+ * @param {Date} [now]
+ * @returns {string}
+ */
+export function nextScanText(project, lang, now = new Date()) {
+  const t = (key, params) => translate(lang, key, params)
+  if (project.auto_scan === false) return t('project.next_scan.off_project')
+  if (typeof project.next_scan_at !== 'string') return ''
+  if (project.next_scan_at === '') return t('project.next_scan.off')
+  const at = new Date(project.next_scan_at)
+  if (Number.isNaN(at.getTime())) return ''
+  const time = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
+  if (day(at) <= day(now)) return t('project.next_scan.today', { time })
+  if (day(at) === tomorrow) return t('project.next_scan.tomorrow', { time })
+  return t('project.next_scan.date', { date: at.toLocaleDateString(lang), time })
 }
 
 /** @param {{scanning?: boolean, last_scan_status?: string}[]|null} views @returns {boolean} a check is running somewhere, here or in another window: the page keeps looking. */

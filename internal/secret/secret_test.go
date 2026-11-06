@@ -3,12 +3,15 @@ package secret_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kvarot/michel/internal/secret"
 )
@@ -160,5 +163,103 @@ func TestFileMode0600Elsewhere(t *testing.T) {
 	}
 	if m := di.Mode().Perm(); m != 0o700 {
 		t.Fatalf("dir mode %o, want 700", m)
+	}
+}
+
+func TestCreateIsExclusive(t *testing.T) {
+	dir := t.TempDir()
+	st, err := secret.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := st.(secret.Creator)
+	if err := c.Create("demo", []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create("demo", []byte("second")); !errors.Is(err, secret.ErrExists) {
+		t.Errorf("second create = %v, want ErrExists", err)
+	}
+	if v, err := st.Get("demo"); err != nil || string(v) != "first" {
+		t.Errorf("value = %q %v, want the first one", v, err)
+	}
+	if files, err := os.ReadDir(filepath.Join(dir, "secrets")); err != nil || len(files) != 1 {
+		t.Errorf("files = %v %v (a temporary file left?)", files, err)
+	}
+	if err := c.Create("Bad Name", []byte("x")); !errors.Is(err, secret.ErrInvalidName) {
+		t.Errorf("bad name = %v", err)
+	}
+}
+
+// On a file system without hard links, Create stays exclusive: of several
+// creators at once exactly one wins, and an existing value is never replaced.
+func TestCreateWithoutHardLinksIsExclusive(t *testing.T) {
+	defer secret.SetLink(func(string, string) error { return errors.New("hard links not supported") })()
+	for round := 0; round < 10; round++ {
+		dir := t.TempDir()
+		st, err := secret.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := st.(secret.Creator)
+		const n = 8
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				errs[i] = c.Create("demo", []byte(fmt.Sprintf("value-%d", i)))
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		won := -1
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				if won >= 0 {
+					t.Fatalf("round %d: %d and %d both created the secret", round, won, i)
+				}
+				won = i
+			case !errors.Is(err, secret.ErrExists):
+				t.Fatalf("round %d, creator %d: %v", round, i, err)
+			}
+		}
+		if won < 0 {
+			t.Fatalf("round %d: nobody created the secret", round)
+		}
+		if v, err := st.Get("demo"); err != nil || string(v) != fmt.Sprintf("value-%d", won) {
+			t.Fatalf("round %d: value %q %v, want the winner's", round, v, err)
+		}
+	}
+}
+
+// Without hard links, a claim left by a process that stopped before its
+// rename does not block Create for ever.
+func TestCreateWithoutHardLinksTakesOverStaleClaim(t *testing.T) {
+	defer secret.SetLink(func(string, string) error { return errors.New("hard links not supported") })()
+	dir := t.TempDir()
+	st, err := secret.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := filepath.Join(dir, "secrets", ".claim-demo")
+	if err := os.WriteFile(claim, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(claim, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.(secret.Creator).Create("demo", []byte("v")); err != nil {
+		t.Fatalf("Create = %v", err)
+	}
+	if v, err := st.Get("demo"); err != nil || string(v) != "v" {
+		t.Fatalf("Get = %q %v", v, err)
+	}
+	if names, _ := st.List(); !reflect.DeepEqual(names, []string{"demo"}) {
+		t.Errorf("List = %v, want only demo", names)
 	}
 }

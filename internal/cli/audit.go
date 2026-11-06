@@ -23,13 +23,26 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 		Short: "Check that no audit event was changed or removed",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res, err := audit.Verify(cmd.Context(), deps.Store)
+			required := sealRequired(deps.Policy())
+			var opt audit.VerifyOptions
+			if required {
+				dir, _ := cmd.Flags().GetString("data-dir")
+				key, err := loadSealKey(cmd.Context(), dir, nil)
+				if err != nil {
+					// Read-only: a key that cannot be read leaves the seals unchecked,
+					// which the walk reports at the first sealed event.
+					key = nil
+				}
+				opt = audit.VerifyOptions{Key: key, Required: true}
+			}
+			res, err := audit.VerifyWith(cmd.Context(), deps.Store, opt)
 			if err != nil {
 				return err
 			}
 			asJSON, _ := cmd.Flags().GetBool("json")
 			if asJSON {
-				out := map[string]any{"checked": res.Checked, "broken": nil, "reason": res.Reason, "expected": res.Expected}
+				out := map[string]any{"checked": res.Checked, "broken": nil, "reason": res.Reason, "expected": res.Expected,
+					"sealed": res.Sealed, "unsealed": res.Unsealed, "failed": res.Failed(required)}
 				if res.Broken != nil {
 					out["broken"] = res.Broken
 				}
@@ -45,8 +58,31 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 				}
 				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
 			}
+			if res.Reason == audit.ReasonSealedAnchor {
+				msg := deps.T("cli.audit.verify.broken_sealed_anchor")
+				if !asJSON {
+					fmt.Fprintln(deps.Stdout, msg)
+				}
+				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
+			}
+			if res.Reason == audit.ReasonSealKeyMissing {
+				msg := deps.T("cli.audit.verify.key_missing")
+				if !asJSON {
+					fmt.Fprintln(deps.Stdout, msg)
+				}
+				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
+			}
 			if res.Broken != nil {
 				msg := deps.T("cli.audit.verify.broken_event", res.Broken.ID, res.Reason)
+				if !asJSON {
+					fmt.Fprintln(deps.Stdout, msg)
+				}
+				return &ExitError{Code: ExitCodeAuditBroken, Err: errors.New(msg), Quiet: true}
+			}
+			if res.Failed(required) {
+				// The protection is required and the anchor is gone: the newest
+				// events may have been removed.
+				msg := deps.T("cli.audit.verify.broken_head", audit.HeadFile(deps.Store.Path()), res.Checked)
 				if !asJSON {
 					fmt.Fprintln(deps.Stdout, msg)
 				}
@@ -57,6 +93,12 @@ func newAuditVerifyCmd(deps *Deps) *cobra.Command {
 					fmt.Fprintln(deps.Stdout, deps.N("cli.audit.verify.ok_head", res.Checked, res.Head))
 				} else {
 					fmt.Fprintln(deps.Stdout, deps.N("cli.audit.verify.ok", res.Checked))
+				}
+				if required {
+					fmt.Fprintln(deps.Stdout, deps.N("cli.audit.verify.sealed", res.Sealed))
+					if res.Unsealed > 0 {
+						fmt.Fprintln(deps.Stdout, deps.N("cli.audit.verify.unsealed", res.Unsealed))
+					}
 				}
 				if res.Reason == audit.ReasonHeadAbsent {
 					fmt.Fprintln(deps.Stdout, deps.T("cli.audit.verify.head_absent", audit.HeadFile(deps.Store.Path())))
@@ -78,7 +120,7 @@ func newAuditListCmd(deps *Deps) *cobra.Command {
 				return deps.Errorf("cli.audit.list.bad_last")
 			}
 			rows, err := deps.Store.DB().QueryContext(cmd.Context(), `SELECT id, ts, actor, action, target, result
-				FROM (SELECT rowid AS rid, * FROM audit_event ORDER BY rowid DESC LIMIT ?) ORDER BY rid`, last)
+				FROM (SELECT * FROM audit_event ORDER BY seq DESC LIMIT ?) AS last ORDER BY seq`, last)
 			if err != nil {
 				return deps.Wrapf("cli.audit.list.read_failed", err)
 			}

@@ -35,7 +35,7 @@ func NewRepo(s *store.Store) *Repo {
 	return &Repo{s: s, entropy: ulid.Monotonic(rand.Reader, 0)}
 }
 
-const cols = `id, name, source_type, path, classification, fix_level, test_cmd, install_cmd, active, created_at, core_packages, risk_overrides, exclude, tech, tech_auto, auto_fix_minor`
+const cols = `id, name, source_type, path, classification, fix_level, test_cmd, install_cmd, active, created_at, core_packages, risk_overrides, exclude, tech, tech_auto, auto_fix_minor, auto_scan`
 
 func validClassification(c policy.Classification) bool {
 	switch c {
@@ -79,7 +79,7 @@ func (r *Repo) Add(ctx context.Context, p Project) (Project, error) {
 	if fi, err := os.Stat(p.Path); err != nil || !fi.IsDir() {
 		return Project{}, fmt.Errorf("%w: %s", ErrNotADirectory, p.Path)
 	}
-	p.Active = true
+	p.Active, p.AutoScan = true, true
 	if err := normalizeExtras(&p); err != nil {
 		return Project{}, err
 	}
@@ -128,10 +128,10 @@ func (r *Repo) insert(ctx context.Context, p Project) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO project (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = r.s.DB().ExecContext(ctx, `INSERT INTO project (`+cols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.SourceType, p.Path, string(p.Classification), p.FixLevel,
 		p.TestCmd, p.InstallCmd, active, p.CreatedAt.UTC().Format(time.RFC3339), string(core), string(over), string(exclude),
-		tech, techAuto, boolInt(p.AutoFixMinor))
+		tech, techAuto, boolInt(p.AutoFixMinor), boolInt(p.AutoScan))
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return fmt.Errorf("%w: %s", ErrDuplicateName, p.Name)
@@ -166,8 +166,8 @@ type scanner interface{ Scan(...any) error }
 func scan(s scanner) (Project, error) {
 	var p Project
 	var class, created, core, over, exclude, tech, techAuto string
-	var active, autoMinor int
-	if err := s.Scan(&p.ID, &p.Name, &p.SourceType, &p.Path, &class, &p.FixLevel, &p.TestCmd, &p.InstallCmd, &active, &created, &core, &over, &exclude, &tech, &techAuto, &autoMinor); err != nil {
+	var active, autoMinor, autoScan int
+	if err := s.Scan(&p.ID, &p.Name, &p.SourceType, &p.Path, &class, &p.FixLevel, &p.TestCmd, &p.InstallCmd, &active, &created, &core, &over, &exclude, &tech, &techAuto, &autoMinor, &autoScan); err != nil {
 		return Project{}, err
 	}
 	p.Classification = policy.Classification(class)
@@ -195,7 +195,7 @@ func scan(s scanner) (Project, error) {
 		p.TechAuto = []string{}
 	}
 	_ = normalizeExtras(&p) // a stored JSON null becomes an empty value; unknown stored keys are left as they are
-	p.Active, p.AutoFixMinor = active != 0, autoMinor != 0
+	p.Active, p.AutoFixMinor, p.AutoScan = active != 0, autoMinor != 0, autoScan != 0
 	t, err := time.Parse(time.RFC3339, created)
 	if err != nil {
 		return Project{}, fmt.Errorf("project %s has an unreadable creation date %q: %w", p.Name, created, err)
@@ -290,7 +290,7 @@ func (r *Repo) Purge(ctx context.Context, nameOrID string) (Project, error) {
 }
 
 // Update rewrites the editable fields of p (found by ID): classification,
-// fix levels, automatic minor fixes, commands, core packages, risk overrides, excluded folders and
+// fix levels, automatic minor fixes, the daily watch, commands, core packages, risk overrides, excluded folders and
 // technologies (declared and detected). Values are validated like in Add.
 func (r *Repo) Update(ctx context.Context, p Project) error {
 	if !validClassification(p.Classification) {
@@ -319,9 +319,9 @@ func (r *Repo) Update(ctx context.Context, p Project) error {
 		return err
 	}
 	res, err := r.s.DB().ExecContext(ctx, `UPDATE project SET classification = ?, fix_level = ?, test_cmd = ?, install_cmd = ?,
-		core_packages = ?, risk_overrides = ?, exclude = ?, tech = ?, tech_auto = ?, auto_fix_minor = ? WHERE id = ?`,
+		core_packages = ?, risk_overrides = ?, exclude = ?, tech = ?, tech_auto = ?, auto_fix_minor = ?, auto_scan = ? WHERE id = ?`,
 		string(p.Classification), p.FixLevel, p.TestCmd, p.InstallCmd, string(core), string(over), string(exclude), tech, techAuto,
-		boolInt(p.AutoFixMinor), p.ID)
+		boolInt(p.AutoFixMinor), boolInt(p.AutoScan), p.ID)
 	if err != nil {
 		return fmt.Errorf("cannot save the project: %w", err)
 	}

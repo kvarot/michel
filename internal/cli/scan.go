@@ -116,7 +116,11 @@ func newScanCmd(deps *Deps) *cobra.Command {
 					if errors.Is(err, osvdb.ErrDatabaseMissing) && !all {
 						return err
 					}
-					failures = append(failures, failure{Project: p.Name, Error: err.Error()})
+					msg := err.Error()
+					if errors.Is(err, scan.ErrScanRunning) {
+						msg = deps.T("cli.scan.already_running", p.Name)
+					}
+					failures = append(failures, failure{Project: p.Name, Error: msg})
 					problems = true
 					continue
 				}

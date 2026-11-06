@@ -242,13 +242,16 @@ func TestSSHDepsUseTheAgentPipeOfThePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// list does not open the agent; build the deps the way every command does.
-	d := &Deps{Policy: policy.Defaults()}
-	d.Policy.SSH.AgentPipe = "custom-agent"
+	pol := policy.Defaults()
+	pol.SSH.AgentPipe = "custom-agent"
+	d := &Deps{}
+	d.SetPolicy(pol, policy.SourceDefaults)
 	e.pipes = nil
 	if sshDeps(d).Agent == nil || len(e.pipes) != 1 || e.pipes[0] != "custom-agent" {
 		t.Errorf("pipes = %v", e.pipes)
 	}
-	d.Policy.SSH.AgentPipe = ""
+	pol.SSH.AgentPipe = ""
+	d.SetPolicy(pol, policy.SourceDefaults)
 	sshDeps(d)
 	if len(e.pipes) != 2 || e.pipes[1] != "" {
 		t.Errorf("default agent: pipes = %v", e.pipes)

@@ -110,6 +110,9 @@ func newSecretSetCmd(deps *Deps) *cobra.Command {
 			if name == secret.ReservedAPIToken {
 				return deps.Errorf("cli.secret.reserved", name)
 			}
+			if name == secret.ReservedAuditKey {
+				return deps.Errorf("cli.secret.reserved_audit_key", name)
+			}
 			if !secret.ValidName(name) { // before touching the folder or asking for the value
 				return secretNameError(deps, name, secret.ErrInvalidName)
 			}
@@ -153,9 +156,16 @@ func newSecretListCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			names, err := st.List()
+			all, err := st.List()
 			if err != nil {
 				return deps.Wrapf("cli.secret.list_failed", err)
+			}
+			// The key of the audit seals is Michel's own: it is not listed.
+			names := []string{}
+			for _, n := range all {
+				if n != secret.ReservedAuditKey {
+					names = append(names, n)
+				}
 			}
 			if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
 				enc := json.NewEncoder(deps.Stdout)
@@ -183,6 +193,10 @@ func newSecretDeleteCmd(deps *Deps) *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+			if name == secret.ReservedAuditKey {
+				// Without it, the seals of the audit log can no longer be checked.
+				return deps.Errorf("cli.secret.reserved_audit_key", name)
+			}
 			if !secret.ValidName(name) {
 				return secretNameError(deps, name, secret.ErrInvalidName)
 			}

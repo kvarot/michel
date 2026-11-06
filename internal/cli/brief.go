@@ -53,7 +53,7 @@ func newBriefCmd(deps *Deps) *cobra.Command {
 				return nil
 			}
 			dataDir, _ := cmd.Flags().GetString("data-dir")
-			b, err := brief.Build(ctx, brief.Deps{Store: deps.Store, DataDir: dataDir, Policy: deps.Policy, Lang: deps.Lang}, fi.ID, mask.New())
+			b, err := brief.Build(ctx, brief.Deps{Store: deps.Store, DataDir: dataDir, Policy: deps.Policy(), Lang: deps.Lang}, fi.ID, mask.New())
 			if err != nil {
 				return err
 			}

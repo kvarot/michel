@@ -25,7 +25,7 @@ func newProjectCmd(deps *Deps) *cobra.Command {
 
 func projectRepo(deps *Deps) *project.Repo {
 	r := project.NewRepo(deps.Store)
-	r.DefaultClassification = deps.Policy.Sovereignty.DataClassification
+	r.DefaultClassification = deps.Policy().Sovereignty.DataClassification
 	return r
 }
 
@@ -265,14 +265,15 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 	var corePkgs, risk, exclude, tech []string
 	var class, testCmd, installCmd string
 	var fixLevel int
-	var autoFixMinor bool
+	var autoFixMinor, autoScan bool
 	c := &cobra.Command{
 		Use:   "set <name>",
 		Short: "Change the settings of a registered project",
 		Long: "Set changes only the settings you pass. --core-package replaces the whole list of core packages " +
 			"(repeat it for several; pass --core-package '' to clear). --exclude replaces the list of folder names skipped by scans and " +
 			"analyses the same way (--exclude '' clears it), and --tech the list of technologies the project runs on (--tech '' clears it). --risk key=value replaces one risk-score value " +
-			"for this project (see docs/remediation-risk.md); other keys keep their previous override.",
+			"for this project (see docs/remediation-risk.md); other keys keep their previous override. --auto-scan=false takes the project " +
+			"out of the daily watch of michel serve (it can still be checked by hand).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, name := cmd.Context(), args[0]
@@ -290,7 +291,7 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			}
 			fl := cmd.Flags()
 			var fields []string
-			for _, f := range []string{"core-package", "exclude", "tech", "risk", "fix-level", "auto-fix-minor", "classification", "test-cmd", "install-cmd"} {
+			for _, f := range []string{"core-package", "exclude", "tech", "risk", "fix-level", "auto-fix-minor", "auto-scan", "classification", "test-cmd", "install-cmd"} {
 				if fl.Changed(f) {
 					fields = append(fields, f)
 				}
@@ -332,6 +333,9 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			if fl.Changed("auto-fix-minor") {
 				p.AutoFixMinor, ev["auto_fix_minor"] = autoFixMinor, autoFixMinor
 			}
+			if fl.Changed("auto-scan") {
+				p.AutoScan, ev["auto_scan"] = autoScan, autoScan
+			}
 			if fl.Changed("classification") {
 				p.Classification = policy.Classification(class)
 			}
@@ -341,7 +345,7 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 			if fl.Changed("install-cmd") {
 				p.InstallCmd = installCmd
 			}
-			if merged := deps.Policy.Risk.WithOverrides(p.RiskOverrides); policy.ValidateRisk(merged) != nil {
+			if merged := deps.Policy().Risk.WithOverrides(p.RiskOverrides); policy.ValidateRisk(merged) != nil {
 				return fail("denied", "cli.project.set.bad_thresholds", ev, name, merged.AutoFixBelow, merged.HandoffUpTo)
 			}
 			if err := repo.Update(ctx, p); err != nil {
@@ -371,6 +375,7 @@ func newProjectSetCmd(deps *Deps) *cobra.Command {
 	f.StringArrayVar(&risk, "risk", nil, "risk-score override key=value (repeatable), see docs/remediation-risk.md")
 	f.IntVar(&fixLevel, "fix-level", 1, "how far Michel may go to fix a finding, 0 to 3")
 	f.BoolVar(&autoFixMinor, "auto-fix-minor", false, "let Michel start fixes alone for minor and patch updates (needs fix level 2)")
+	f.BoolVar(&autoScan, "auto-scan", true, "let the daily watch of michel serve check the project")
 	f.StringVar(&class, "classification", "", "data classification: public, internal, confidential, sensitive, health")
 	f.StringVar(&testCmd, "test-cmd", "", "command that runs the project's tests")
 	f.StringVar(&installCmd, "install-cmd", "", "command that installs the project's dependencies")

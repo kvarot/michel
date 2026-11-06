@@ -18,7 +18,7 @@ import (
 // analyzeDeps builds the collaborators of analyze.Run.
 func analyzeDeps(deps *Deps) analyze.Deps {
 	return analyze.Deps{Store: deps.Store, Audit: deps.Audit, Version: buildinfo.Version,
-		Now: deps.Now, Risk: deps.Policy.Risk}
+		Now: deps.Now, Risk: deps.Policy().Risk}
 }
 
 // analyzeProject analyzes the actionable (new or pending) findings of p.

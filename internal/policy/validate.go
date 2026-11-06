@@ -63,6 +63,11 @@ func Validate(p Policy) error {
 			return fmt.Errorf("network.allow[%d]: %w", i, err)
 		}
 	}
+	if at := p.Watch.ScanAt; at != "" {
+		if _, _, ok := parseHourMinute(at); !ok {
+			return fmt.Errorf("watch.scan_at %q must be a time of day as HH:MM (for example 07:00); turn the watch off with watch.enabled: false", at)
+		}
+	}
 	return ValidateNotify(p.Notify, s.Network.Allow)
 }
 

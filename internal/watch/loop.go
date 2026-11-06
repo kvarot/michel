@@ -1,0 +1,225 @@
+package watch
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"time"
+
+	"github.com/kvarot/michel/internal/policy"
+	"github.com/kvarot/michel/internal/project"
+	"github.com/kvarot/michel/internal/scan"
+)
+
+// Retries of a failed check: at most MaxRetries more tries in the day,
+// RetryAfter apart. In memory, as the retries of the digest. After a restart
+// of serve, a project whose check of the day failed and was recorded as
+// failed waits for tomorrow (its failed scan counts); one whose failure left
+// no scan (no database) is tried once more at each restart, never in a loop;
+// one whose check was interrupted, or left running by a crash, is checked
+// again.
+//
+// A check that cannot start (another check of the project runs, or a click
+// works on its folder: ErrBusy) is not a try: the project is looked at
+// again RetryAfter later.
+const (
+	MaxRetries = 2
+	RetryAfter = 30 * time.Minute
+)
+
+// ErrBusy is returned by Deps.Scan when the project's folder is held by a
+// click: the check waits, as for a check already running.
+var ErrBusy = errors.New("the project's folder is busy")
+
+// Deps are the collaborators of Loop.
+type Deps struct {
+	Now func() time.Time
+	// Policy is the policy in force, read at each look: a change of
+	// watch.scan_at counts from the next look.
+	Policy func() policy.Policy
+	// Projects lists the projects (active or not).
+	Projects func(ctx context.Context) ([]project.Project, error)
+	Repo     *Repo
+	// Sources reads the enabled sources, as michel source update; its error
+	// is a warning, the offline checks go on.
+	Sources func(ctx context.Context) error
+	// Scan checks one project as michel scan does. nil and an error wrapping
+	// scan.ErrScanRunning (another process checks it) are not failures; any
+	// other error is, and is tried again.
+	Scan func(ctx context.Context, p project.Project) error
+	// Log receives the warnings; nil is slog's default.
+	Log *slog.Logger
+	// TickHook, when set (tests), is called at the end of each look.
+	TickHook func()
+}
+
+// try is how the watch of the day went for one project, in this process.
+type try struct {
+	n    int
+	done bool
+	next time.Time
+}
+
+// Loop runs the daily watch until ctx ends: it looks at once, then every
+// `every`. A look reads the sources once a day (the first look past the hour),
+// then checks the due projects one after the other. Stopping ctx stops the
+// check in progress (scan.Run is cancellable) and starts no other.
+func Loop(ctx context.Context, d Deps, every time.Duration) {
+	log := d.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	window, tries, busy := "", map[string]*try{}, map[string]time.Time{}
+	// sourcesDone is the window whose source read this process has handled
+	// (read, failed, or claimed by another process); claimWarned the window
+	// whose claim error was already logged.
+	sourcesDone, claimWarned := "", ""
+	look := func() {
+		h, m, on := d.Policy().WatchHour()
+		if !on {
+			return
+		}
+		now := d.Now()
+		start := DayStart(now, h, m)
+		if now.Before(start) {
+			return
+		}
+		// The tries are those of this hour of this day: a new day, or a new
+		// hour in the policy, starts again from the database.
+		key := start.Format(time.RFC3339)
+		if key != window {
+			window, tries, busy = key, map[string]*try{}, map[string]time.Time{}
+		}
+		// The source read of the day is claimed in the database, then read.
+		// A claim that cannot be recorded is tried again at the next look. A
+		// read stopped with serve, or failed, lets the day go so a later serve
+		// reads again; this one does not, so a failing read never loops.
+		if key != sourcesDone {
+			day := start.Format("2006-01-02")
+			claimed, err := d.Repo.ClaimSources(ctx, day, now)
+			switch {
+			case err != nil:
+				if ctx.Err() == nil && claimWarned != key {
+					claimWarned = key
+					log.Warn("serve: the daily watch cannot record its source read; it tries again at the next look", "err", err)
+				}
+			case !claimed:
+				sourcesDone = key
+			default:
+				err := d.Sources(ctx)
+				if err != nil {
+					rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+					if rerr := d.Repo.ReleaseSources(rctx, day); rerr != nil {
+						log.Warn("serve: the daily watch cannot let go of its source read of the day", "err", rerr)
+					}
+					cancel()
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				sourcesDone = key
+				if err != nil {
+					log.Warn("serve: the daily watch could not read every source; the checks go on with the data already here", "err", err)
+				}
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		list, err := d.Projects(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Warn("serve: the daily watch cannot read the projects", "err", err)
+			}
+			return
+		}
+		last, err := d.Repo.LastStarts(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Warn("serve: the daily watch cannot read the last checks", "err", err)
+			}
+			return
+		}
+		for _, p := range list {
+			if ctx.Err() != nil {
+				return
+			}
+			if !p.Active || !p.AutoScan {
+				continue
+			}
+			now := d.Now()
+			if until, ok := busy[p.ID]; ok {
+				if now.Before(until) {
+					continue
+				}
+				delete(busy, p.ID)
+			}
+			t := tries[p.ID]
+			if t != nil {
+				if t.done || t.n > MaxRetries || now.Before(t.next) {
+					continue
+				}
+			} else {
+				at, has := last[p.ID]
+				if !Due(at, has, now, h, m) {
+					continue
+				}
+				// The pass may have run for minutes: another process may
+				// have checked this project meanwhile.
+				at, has, err := d.Repo.LastStart(ctx, p.ID)
+				if err != nil {
+					if ctx.Err() == nil {
+						log.Warn("serve: the daily watch cannot read the last check of a project", "project", p.Name, "err", err)
+					}
+					continue
+				}
+				if !Due(at, has, now, h, m) {
+					continue
+				}
+				t = &try{}
+				tries[p.ID] = t
+			}
+			err := d.Scan(ctx, p)
+			if ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, scan.ErrScanRunning) || errors.Is(err, ErrBusy) {
+				// Not a try: a check elsewhere, a scan row left by a crash
+				// (swept after an hour) or a click on the folder. Look again
+				// later, from the last check, as for a project never tried.
+				delete(tries, p.ID)
+				busy[p.ID] = d.Now().Add(RetryAfter)
+				continue
+			}
+			t.n++
+			switch {
+			case err == nil:
+				t.done = true
+			default:
+				t.next = d.Now().Add(RetryAfter)
+				if t.n > MaxRetries {
+					log.Warn("serve: the daily watch could not check a project; it tries again tomorrow", "project", p.Name)
+				} else {
+					log.Warn("serve: the daily watch could not check a project; it tries again in 30 minutes", "project", p.Name)
+				}
+			}
+		}
+	}
+	tick := func() {
+		look()
+		if d.TickHook != nil {
+			d.TickHook()
+		}
+	}
+	tick()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tick()
+		}
+	}
+}

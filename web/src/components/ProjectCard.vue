@@ -50,6 +50,7 @@
           {{ running ? $t('project.check_running') : $t('project.check') }}
         </v-btn>
       </div>
+      <p v-if="nextScan" class="m-card__next m-muted m-small">{{ nextScan }}</p>
       <div v-if="refusal" class="m-card__refusal m-small" role="alert">
         <p>{{ refusal.offline ? $t('offline.hint') : refusal.error || $t('error.generic') }}</p>
         <p v-if="refusal.hint" class="m-muted">{{ refusal.hint }}</p>
@@ -85,7 +86,7 @@ import GitUpdateButton from './GitUpdateButton.vue'
 import PackageRow from './PackageRow.vue'
 import { api } from '../api.js'
 import { cardNeedsGit, cardShowsQuestion, readGit } from '../lib/gitView.js'
-import { checkedWell, goneRows, runsHere, scanHintKey, scanPath, scanSentence, showsFailure } from '../lib/projectsView.js'
+import { checkedWell, goneRows, nextScanText, runsHere, scanHintKey, scanPath, scanSentence, showsFailure } from '../lib/projectsView.js'
 
 const checkPath = 'M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z'
 
@@ -136,6 +137,10 @@ export default {
     },
     sentence() {
       return scanSentence(this.project, this.$ui.lang)
+    },
+    // When the daily watch checks the project next, or that it is off.
+    nextScan() {
+      return nextScanText(this.project, this.$ui.lang)
     },
     // The card reads the Git view of a project with a question to ask or a button to show.
     needsGit() {

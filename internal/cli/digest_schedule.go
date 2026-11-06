@@ -70,7 +70,7 @@ func digestDue(last digest.Run, hasLast bool, now time.Time, at string) bool {
 // SMS excluded (the digest never goes by SMS).
 func digestChannels(deps *Deps) int {
 	n := 0
-	for _, c := range deps.Policy.Notify.Channels {
+	for _, c := range deps.Policy().Notify.Channels {
 		if c.IsEnabled() && c.Type != policy.ChannelSMS {
 			n++
 		}
@@ -118,7 +118,7 @@ func runDigestLoop(ctx context.Context, cmd *cobra.Command, deps *Deps, every ti
 			}
 			return
 		}
-		if !digestDue(last, hasLast, now, deps.Policy.Notify.DigestAt) {
+		if !digestDue(last, hasLast, now, deps.Policy().Notify.DigestAt) {
 			return
 		}
 		opt, err := digestOptions(cmd, deps, "")

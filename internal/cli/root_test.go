@@ -70,8 +70,8 @@ func TestRootLoadsPolicyAndReportsSource(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if deps.PolicySource != policy.SourceDefaults || deps.Policy.Sovereignty.Mode != policy.ModeStrictLocal {
-		t.Errorf("source=%q policy=%+v", deps.PolicySource, deps.Policy)
+	if deps.PolicySource() != policy.SourceDefaults || deps.Policy().Sovereignty.Mode != policy.ModeStrictLocal {
+		t.Errorf("source=%q policy=%+v", deps.PolicySource(), deps.Policy())
 	}
 	if !strings.Contains(deps.Stderr.(*bytes.Buffer).String(), "policy: defaults (no file at") {
 		t.Errorf("stderr = %q", deps.Stderr.(*bytes.Buffer).String())
@@ -84,8 +84,8 @@ func TestRootLoadsPolicyAndReportsSource(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if deps2.PolicySource != policy.SourceFile || deps2.Policy.Assistant.Name != "Gaston" {
-		t.Errorf("source=%q name=%q", deps2.PolicySource, deps2.Policy.Assistant.Name)
+	if deps2.PolicySource() != policy.SourceFile || deps2.Policy().Assistant.Name != "Gaston" {
+		t.Errorf("source=%q name=%q", deps2.PolicySource(), deps2.Policy().Assistant.Name)
 	}
 	if !strings.Contains(deps2.Stderr.(*bytes.Buffer).String(), "policy: file "+cfg) {
 		t.Errorf("stderr = %q", deps2.Stderr.(*bytes.Buffer).String())

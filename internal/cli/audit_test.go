@@ -157,8 +157,13 @@ func TestAuditVerifyTailTruncated(t *testing.T) {
 	}
 }
 
+// With integrity_protection: none, an absent anchor is a warning (with
+// required it is a failure: TestAuditVerifyFailsWithoutTheAnchor).
 func TestAuditVerifyHeadAnchorAbsent(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("sovereignty:\n  audit:\n    integrity_protection: none\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	run(t, dir, "noop")
 	if err := os.Remove(audit.HeadFile(filepath.Join(dir, "michel.db"))); err != nil {
 		t.Fatal(err)

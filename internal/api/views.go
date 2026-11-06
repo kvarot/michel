@@ -42,6 +42,11 @@ type ProjectView struct {
 	// scanned; LastScanStatus is its status, or "never".
 	LastScanAt     string `json:"last_scan_at"`
 	LastScanStatus string `json:"last_scan_status"`
+	// AutoScan says the daily watch of michel serve checks the project;
+	// NextScanAt is when it checks it next (RFC 3339), "" when its watch, or
+	// the whole watch, is off.
+	AutoScan   bool   `json:"auto_scan"`
+	NextScanAt string `json:"next_scan_at"`
 	// Scanning says a scan started from the page is running; LastFailure is how
 	// the last one failed, if it did. Both live in the memory of this process.
 	Scanning    bool             `json:"scanning"`

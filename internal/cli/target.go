@@ -235,7 +235,7 @@ func changeRules(cmd *cobra.Command, deps *Deps, add, remove []policy.AllowRule)
 	sd := sourceDeps(cmd, deps)
 	ctx := cmd.Context()
 	repo := target.NewRepo(deps.Store)
-	added = target.NewRules(deps.Policy.Sovereignty.Network.Allow, add)
+	added = target.NewRules(deps.Policy().Sovereignty.Network.Allow, add)
 	// Only the rules Michel wrote are taken back: a rule the user wrote by
 	// hand stays.
 	if removed, err = repo.OwnedOnly(ctx, remove); err != nil {

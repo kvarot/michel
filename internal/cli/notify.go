@@ -74,7 +74,7 @@ func newNotifyListCmd(deps *Deps) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			lines := []channelLine{}
-			for _, c := range deps.Policy.Notify.Channels {
+			for _, c := range deps.Policy().Notify.Channels {
 				projects := c.Projects
 				if projects == nil {
 					projects = []string{}
@@ -113,9 +113,10 @@ func newNotifyTestCmd(deps *Deps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			var ch *policy.ChannelConfig
-			for i, c := range deps.Policy.Notify.Channels {
+			channels := deps.Policy().Notify.Channels
+			for i, c := range channels {
 				if c.Name == name {
-					ch = &deps.Policy.Notify.Channels[i]
+					ch = &channels[i]
 					break
 				}
 			}
@@ -152,7 +153,7 @@ func newNotifyTestCmd(deps *Deps) *cobra.Command {
 // sendChannels sends d on every enabled channel of the policy, except the ones
 // named in skip (they already got this digest).
 func sendChannels(ctx context.Context, cmd *cobra.Command, deps *Deps, d digest.Digest, skip map[string]bool) ([]notify.Delivery, error) {
-	cfg := deps.Policy.Notify
+	cfg := deps.Policy().Notify
 	needSecrets := false
 	for _, c := range cfg.Channels {
 		if c.IsEnabled() && c.Type != policy.ChannelToast {
