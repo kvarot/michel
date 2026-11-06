@@ -16,7 +16,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 			t.Fatalf("open #%d: %v", i, err)
 		}
 		var n int
-		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 25 {
+		if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 26 {
 			t.Fatalf("schema_migrations rows = %d, err %v", n, err)
 		}
 		var mode string
@@ -58,7 +58,7 @@ func TestMigrationAppliedByAnotherProcessMeanwhileIsSkipped(t *testing.T) {
 	}
 	defer s.Close()
 	var n int
-	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 25 {
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil || n != 26 {
 		t.Fatalf("schema_migrations rows = %d err %v", n, err)
 	}
 }
@@ -146,7 +146,7 @@ func TestMigration0002UpgradesExistingDatabase(t *testing.T) {
 		t.Errorf("row = %q %q %q", name, core, over)
 	}
 	var versions string
-	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,24,25,26" {
+	if err := s.DB().QueryRow(`SELECT group_concat(version) FROM (SELECT version FROM schema_migrations ORDER BY version)`).Scan(&versions); err != nil || versions != "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26" {
 		t.Errorf("versions = %q err %v", versions, err)
 	}
 }
@@ -344,5 +344,16 @@ func TestMigrationsAvoidBlobType(t *testing.T) {
 		if strings.Contains(string(body), " BLOB") {
 			t.Errorf("%s uses BLOB", e.Name())
 		}
+	}
+}
+
+func TestMigration0023AddsProposalTree(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "michel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB().Exec(`SELECT tree FROM fix_proposal LIMIT 1`); err != nil {
+		t.Errorf("fix_proposal.tree: %v", err)
 	}
 }

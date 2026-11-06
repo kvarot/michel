@@ -566,7 +566,8 @@ func copyDir(d Deps, c Copy) error {
 
 // runDir checks that c.Dir is a folder Michel runs installs and tests in:
 // an agent copy (copyDir) or the scratch worktree of an attempt,
-// <data>/fix-tmp/<attempt id>/run, holding a .git folder (Materialize).
+// <data>/fix-tmp/<attempt id>/run or tests-<random>, holding a .git folder
+// (Materialize, MaterializeTests).
 func runDir(d Deps, c Copy) error {
 	if err := copyDir(d, c); err == nil {
 		return nil

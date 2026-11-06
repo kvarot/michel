@@ -18,6 +18,7 @@ import (
 	"github.com/kvarot/michel/internal/scan"
 	"github.com/kvarot/michel/internal/servererr"
 	"github.com/kvarot/michel/internal/target"
+	"github.com/kvarot/michel/internal/workcopy"
 )
 
 // fixActor is the audit actor and the author of the fixes started,
@@ -46,6 +47,10 @@ var fixStatus = map[string]int{
 	"fix.err.not_found":         http.StatusNotFound,
 	"fix.err.hold_stale":        http.StatusConflict,
 	"fix.err.hold_person":       http.StatusForbidden,
+	"fix.err.not_awaiting":      http.StatusConflict,
+	"fix.err.no_tree":           http.StatusConflict,
+	"fix.err.tests_interrupted": http.StatusConflict,
+	"fix.err.tests_running":     http.StatusConflict,
 }
 
 // FixErrorBody is the answer to a refusal of the fix service: the sentence
@@ -106,6 +111,20 @@ type ProposalView struct {
 	FromVersion string `json:"from_version"`
 	ToVersion   string `json:"to_version"`
 	CreatedAt   string `json:"created_at"`
+	// CanRunTests is true when the tests wait for the person's click
+	// (tests_status awaiting) and Michel kept the files to run them on:
+	// the page offers « Run the tests ». CodeFiles are then every changed
+	// file with its kind (manifest, lockfile, tests, code), in the order
+	// the page lists them (empty otherwise).
+	CanRunTests bool             `json:"can_run_tests"`
+	CodeFiles   []ReviewFileView `json:"code_files"`
+}
+
+// ReviewFileView is a changed file to read before running the tests: its
+// path in the project and its kind (manifest, lockfile, tests or code).
+type ReviewFileView struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
 }
 
 // MessageView is one line of the conversation. Role is user, agent, michel
@@ -253,6 +272,9 @@ type (
 	FixContinueRequest struct {
 		Hash string `json:"hash"`
 	}
+	FixRunTestsRequest struct {
+		Hash string `json:"hash"`
+	}
 )
 
 // agentCache keeps the last detection of Claude Code.
@@ -270,6 +292,7 @@ func (s *server) fixRoutes() {
 	m.HandleFunc("POST /api/v1/fix/{attempt}/message", s.fixMessage)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/approve", s.fixApprove)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/refuse", s.fixRefuse)
+	m.HandleFunc("POST /api/v1/fix/{attempt}/run-tests", s.fixRunTests)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/continue", s.fixContinue)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/withdraw", s.fixWithdraw)
 	m.HandleFunc("POST /api/v1/fix/{attempt}/snapshot-done", s.fixSnapshotDone)
@@ -396,11 +419,28 @@ func messageView(m *mask.Masker, msg fix.Message) MessageView {
 func proposalView(m *mask.Masker, p fix.Proposal, full bool) *ProposalView {
 	v := &ProposalView{ID: p.ID, Summary: shown(m, p.Summary), Files: sanitizeAll(p.Files), TestsStatus: p.TestsStatus,
 		RescanClean: p.RescanClean, Risk: p.Risk, Hash: p.Hash, StepsServer: sanitizeAll(p.StepsServer),
-		Commands: commandViews(p.Commands), FromVersion: scan.SanitizeText(p.FromVersion), ToVersion: scan.SanitizeText(p.ToVersion), CreatedAt: stamp(p.CreatedAt)}
+		Commands: commandViews(p.Commands), FromVersion: scan.SanitizeText(p.FromVersion), ToVersion: scan.SanitizeText(p.ToVersion), CreatedAt: stamp(p.CreatedAt),
+		CodeFiles: []ReviewFileView{}}
 	if full {
 		// The diff keeps its lines: only secrets and absolute paths go.
 		v.Diff = m.Mask(strings.ToValidUTF8(p.Diff, "�"))
 		v.TestsOutput = shown(m, p.TestsOutput)
+	}
+	return v
+}
+
+// attemptProposalView is proposalView with what the attempt adds: when the
+// tests wait for a click, whether the page may offer it and the code files
+// the agent changed.
+func attemptProposalView(m *mask.Masker, a fix.Attempt, p fix.Proposal, full bool) *ProposalView {
+	v := proposalView(m, p, full)
+	if p.TestsStatus == workcopy.TestsAwaiting && a.Work.Server == nil {
+		v.CanRunTests = fix.CanRunTests(p)
+		// A path in the project, not content: sanitized, never masked, so
+		// the person reads the very file names.
+		for _, f := range fix.ReviewFiles(p) {
+			v.CodeFiles = append(v.CodeFiles, ReviewFileView{Path: scan.SanitizeText(f.Path), Kind: f.Kind})
+		}
 	}
 	return v
 }
@@ -468,7 +508,7 @@ func (s *server) attemptView(ctx context.Context, a fix.Attempt, full bool, lang
 		}
 	}
 	if ok {
-		v.Proposal = proposalView(m, prop, full)
+		v.Proposal = attemptProposalView(m, a, prop, full)
 	}
 	if full {
 		msgs, err := repo.ListMessages(ctx, a.ID)
@@ -670,6 +710,46 @@ func (s *server) fixApprove(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := fix.Apply(ctx, d, a.ID); err != nil {
 		s.applyFailed(w, r, lang, a, err)
+		return
+	}
+	s.answerAttempt(w, r, http.StatusOK, a.ID)
+}
+
+// fixRunTests runs, on the person's click, the tests of the proposal the
+// page showed (its hash), which wait for that click: 200 with the attempt
+// and its new proposal holding the result, 409 when the proposal changed
+// since or its tests do not wait (nothing ran), or when the agent proposed
+// again during the run (the result is dropped).
+func (s *server) fixRunTests(w http.ResponseWriter, r *http.Request) {
+	lang, ok := s.requestLang(w, r)
+	if !ok {
+		return
+	}
+	var req FixRunTestsRequest
+	if !s.readJSONHint(w, r, &req, i18n.T(lang, "api.fix.run_tests_hint")) {
+		return
+	}
+	if strings.TrimSpace(req.Hash) == "" {
+		s.fail(w, http.StatusBadRequest, i18n.T(lang, "api.fix.run_tests_need_hash"), i18n.T(lang, "api.fix.run_tests_hint"))
+		return
+	}
+	d, ok := s.fixDeps(w, r, lang)
+	if !ok {
+		return
+	}
+	a, ok := s.attempt(w, r, lang)
+	if !ok {
+		return
+	}
+	// The install and the tests have their own bound (fix.RunTests), longer
+	// than the server's write timeout and than longTimeout.
+	bound := d.TestsTimeout()
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(bound + time.Minute))
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), bound)
+	stop := context.AfterFunc(s.bg, cancel)
+	defer func() { stop(); cancel() }()
+	if _, err := fix.RunTests(ctx, d, a.ID, strings.TrimSpace(req.Hash)); err != nil {
+		s.fixRefused(w, r, lang, err, nil)
 		return
 	}
 	s.answerAttempt(w, r, http.StatusOK, a.ID)

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   acceptResult, consentProjectOf, offersDecision, activityLine, canApprove, canDecide, decidingAttempt, fixGroups, fixHash, fixRoute, selectAction, groupAttempts, isFinal, isOpen, levelLabel, levels, mergeMessages,
-  proposalFacts, proposalSentence, splitMasked, stateLine,
+  proposalFacts, proposalSentence, splitMasked, stateLine, testsState, reviewFilesShown, canRunTests,
 } from './fixView.js'
 
 /** attempt builds an AttemptView as GET /fixes answers it. */
@@ -305,5 +305,58 @@ describe('offersDecision (D-5)', () => {
   test('an open flaw: as canDecide', () => {
     expect(offersDecision(null, false)).toBe(true)
     expect(offersDecision({ state: 'proposed' }, false)).toBe(false)
+  })
+})
+
+describe('testsState', () => {
+  test('awaiting is waiting, never passed; an unknown status is not run', () => {
+    expect(testsState('awaiting')).toBe('awaiting')
+    expect(testsState('passed')).toBe('passed')
+    expect(testsState('failed')).toBe('failed')
+    for (const s of ['weird', '', undefined, null, 'PASSED', 'passed ']) {
+      expect(testsState(s)).toBe('not_run')
+      expect(testsState(s)).not.toBe('passed')
+    }
+  })
+  test('the sentence of an awaiting proposal says the tests wait, never that they pass', () => {
+    const facts = { package: 'acme/lib', from: '1.0.0', to: '1.0.5', sites: null, tests: 'awaiting' }
+    expect(proposalSentence(facts, 'fr')).toBe('Je passe acme/lib de 1.0.0 à 1.0.5 ; les tests attendent ton accord.')
+    expect(proposalSentence(facts, 'en')).not.toContain('pass.')
+    expect(proposalSentence({ ...facts, tests: 'weird' }, 'fr')).toContain("les tests n'ont pas pu être lancés")
+  })
+})
+
+describe('reviewFilesShown', () => {
+  test('names 10 other files, then says how many more', () => {
+    const files = Array.from({ length: 13 }, (_, i) => ({ path: `src/F${i}.php`, kind: 'code' }))
+    expect(reviewFilesShown(files)).toEqual({ shown: files.slice(0, 10), more: 3 })
+    expect(reviewFilesShown(files.slice(0, 10))).toEqual({ shown: files.slice(0, 10), more: 0 })
+    expect(reviewFilesShown(undefined)).toEqual({ shown: [], more: 0 })
+  })
+  test('never hides the list of software, its versions or a tests file', () => {
+    const risky = [
+      { path: 'composer.json', kind: 'manifest' },
+      { path: 'composer.lock', kind: 'lockfile' },
+      { path: 'tests/AppTest.php', kind: 'tests' },
+    ]
+    const code = Array.from({ length: 12 }, (_, i) => ({ path: `src/F${i}.php`, kind: 'code' }))
+    const { shown, more } = reviewFilesShown([...risky, ...code, { path: 'phpunit.xml', kind: 'tests' }])
+    expect(more).toBe(2)
+    for (const f of [...risky, { path: 'phpunit.xml', kind: 'tests' }]) expect(shown).toContainEqual(f)
+    expect(shown.filter((f) => f.kind === 'code')).toHaveLength(10)
+  })
+  test('a manifest-only change is listed', () => {
+    expect(reviewFilesShown([{ path: 'package.json', kind: 'manifest' }]).shown).toEqual([{ path: 'package.json', kind: 'manifest' }])
+  })
+})
+
+describe('canRunTests', () => {
+  test('only a proposed attempt whose tests wait and can run', () => {
+    const p = { hash: 'h', tests_status: 'awaiting', can_run_tests: true }
+    expect(canRunTests(attempt('a', 'proposed', 'f', { proposal: p }))).toBe(true)
+    expect(canRunTests(attempt('a', 'approved', 'f', { proposal: p }))).toBe(false)
+    expect(canRunTests(attempt('a', 'proposed', 'f', { proposal: { ...p, can_run_tests: false } }))).toBe(false)
+    expect(canRunTests(attempt('a', 'proposed', 'f', { proposal: { ...p, tests_status: 'failed' } }))).toBe(false)
+    expect(canRunTests(null)).toBe(false)
   })
 })

@@ -16,6 +16,10 @@ const (
 	TestsPassed = "passed"
 	TestsFailed = "failed"
 	TestsNotRun = "not_run"
+	// TestsAwaiting: the agent changed the tree Michel's update left, so
+	// Michel did not run the tests: they wait for a person's click (code
+	// the agent wrote never runs without one).
+	TestsAwaiting = "awaiting"
 )
 
 var (

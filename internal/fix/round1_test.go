@@ -98,6 +98,7 @@ func TestMessagesHidePathsAndSecrets(t *testing.T) {
 	secret := "AKIA" + "ABCDEFGHIJKLMNOP"
 	f.rec.fail = "vendor/bin/phpunit"
 	f.rec.failOutput = "FAIL in " + filepath.Join(f.d.DataDir, "worktrees", "x", "src", "app.php") + " token=" + secret + "\n"
+	michelsUpdate(t, f)
 	a, err := Start(context.Background(), f.d, f.finding.ID, OriginAgent)
 	if err != nil {
 		t.Fatal(err)

@@ -13,6 +13,7 @@ michel brief <finding>             # the fix brief (find, understand, fix), noth
 michel fix consent <project> --yes # the project's AI consent (also asked on the page)
 michel fix prepare <finding>       # start an attempt and follow it
 michel fix status [<attempt>]      # attempts, or one attempt with its proposal and conversation
+michel fix test <attempt> --yes    # run the tests of a proposal that waits for your go-ahead
 michel fix approve <attempt>       # approve the proposal status showed, create the branch
 michel fix refuse <attempt>        # refuse; the finding goes back to your decisions
 michel fix clean                   # remove the copies of the attempts that are over
@@ -138,14 +139,31 @@ There is no update for a yarn or pnpm lockfile: the agent works from the project
 Its result is Michel's first message in the conversation. What this update installs (`vendor/`, `node_modules/`) is removed from the copy right after. It is never part of the proposal nor of the branch, unless your repository already versions files in that folder. The proposal holds the manifest and the lockfile (plus what the agent changed). When the agent proposes (`propose_fix`), Michel takes one snapshot of the copy, once and for all (later writes of the agent are ignored), rebuilds that snapshot in a scratch folder (`<data>/fix-tmp/<attempt>/`, never the agent's copy), and there:
 
 1. installs the dependencies (`composer install --no-scripts --no-plugins` or `npm ci --ignore-scripts`), from scratch;
-2. runs the project's tests, if you declared a command (`michel project set <name> --test-cmd "vendor/bin/phpunit"`, split into words without a shell);
+2. runs the project's tests, if you declared a command (`michel project set <name> --test-cmd "vendor/bin/phpunit"`, split into words without a shell), **only when the snapshot is exactly the tree Michel's own update left** (the agent changed nothing else);
 3. scans the result again.
+
+### Tests on the agent's change wait for your click
+
+If the agent changed other files on top of the update Michel planned, running the tests would run code the agent wrote, on your computer, with access to what you can open yourself (your files, your accounts). Then Michel does not run the tests on its own. It still installs the dependencies (no script runs) and scans the copy again (it only reads files). The page says "Tests: waiting for your go-ahead".
+
+This holds for any file, the list of software of the project (composer.json, package.json) included: it can hold commands the tests would run, or a package added whose code would run during the tests.
+
+Michel's message and the page list the changed files: first the list of software of the project and the file that fixes their versions, then tests, scripts and settings, then the other files (10 at most, then "and N more").
+
+Read the change, then choose:
+
+- **Run the tests**, in the proposal. On the command line: `michel fix test <attempt>` lists the files and runs nothing; add `--yes` to run the tests. Michel runs the tests of the proposal you saw: if the agent proposed something else in between, nothing runs. Michel prepares the files in a folder apart on your computer, installs, runs the tests (30 minutes at most), then shows the result in a new version of the proposal. You approve knowing that result. If the agent proposes again while the tests run, the result is dropped.
+- **Approve** without running the tests. Then check yourself that your site works before you bring the branch into your code.
+
+The button works once per proposal. To run the tests again, ask the agent to propose again. The agent cannot run the tests itself.
+
+Technical note: the tests status is then `awaiting`; it applies only when the snapshot differs from the tree Michel's update left (level 3, which requires that tree, does not change). The click carries the proposal's fingerprint (another fingerprint: error 409, nothing runs; `michel fix test --hash` gives it by hand). Michel rebuilds the proposal's tree in `<data>/fix-tmp/<attempt>/tests-<random>` and records a new proposal (same diff, same commit, same re-scan, new fingerprint): an **Approve** sent for the old one is refused. Each click is in the audit log (`fix.tests_run`: `started`, then `ok`, `dropped`, `interrupted`, `error` or `refused`, with the attempt, the proposal, the fingerprint, the author, the result and the number of files). A proposal made by an older version of Michel offers no button.
 
 Only **Composer and npm** are installed. A yarn or pnpm project is read and can be fixed, but Michel runs neither yarn nor pnpm: the proposal comes **without install or tests**, and the page says so. Before any install, Michel refuses the project settings that would make the install run code from the project or go elsewhere (npm settings outside a short allowlist, local or VCS Composer repositories, non-https downloads, old npm lockfiles, lockfile entries without integrity…): nothing is installed and the tests are not run, the page says why. These commands run with a Michel home folder (`<data>/fix-home`), never your real one, behind the allow proxy (purpose `fix.install`).
 
 ## The proposal and the validation by fingerprint
 
-A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed` or `not_run`), the re-scan of the copy (a flaw found by an external tool (Semgrep, Trivy…) cannot be re-scanned on the copy: the page says Michel could not check it), the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
+A proposal is fixed once made: a summary in plain words, the diff **computed by Michel** from the frozen snapshot (not copied from the agent), the files touched, the commands Michel ran, the test result (`passed`, `failed`, `not_run` or `awaiting`), the re-scan of the copy (a flaw found by an external tool (Semgrep, Trivy…) cannot be re-scanned on the copy: the page says Michel could not check it), the risk, and a fingerprint of the whole (SHA-256: a code that changes as soon as any detail of the content changes). If the agent goes on and proposes again, the new proposal replaces the old one (`superseded`) and the page reloads it.
 
 Michel refuses a change that touches a file outside the copy (`..`, absolute path, link), a protected file or an excluded file: the attempt is `failed`, the cause is said in plain words, nothing is applied.
 
@@ -218,7 +236,7 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 
 ## Residual risks
 
-- **Install and tests run with your rights, without a sandbox.** `composer`/`npm` and your tests run on the copy as you, on your computer; when the agent changed code, the tests run that code. Michel hardens what it can (no install scripts, no plugins, settings allowlists, folders reset before each install, scratch folder, a Michel home folder, the proxy), but it is not an isolated environment: a hostile project or a hostile change could reach what you can reach. An isolated environment (Docker) is planned for a later plan.
+- **Install and tests run with your rights, without a sandbox.** `composer`/`npm` and your tests run on the copy as you, on your computer; when the agent changed code, the tests run that code, but only after your click (**Run the tests**, `michel fix test`). Michel hardens what it can (no install scripts, no plugins, settings allowlists, folders reset before each install, scratch folder, a Michel home folder, the proxy), but it is not an isolated environment: a hostile project or a hostile change could reach what you can reach. An isolated environment (Docker) is planned for a later plan.
 - **A tool that ignores the proxy.** Claude Code, git, composer, npm and the tests get `HTTPS_PROXY`/`HTTP_PROXY` toward Michel's allow proxy. But a program can ignore that proxy and open its own connections: Michel would neither stop nor record it. The proxy is a safeguard, not a guarantee.
 - **Claude Code changes.** Michel relies on options of Claude Code to keep the agent away from your settings. It refuses a version that lacks them, but cannot guarantee that a future version honours them the same way. Claude Code still reads its login in your user folder (your profile).
   - Options used (tested with version 2.1.314): `--setting-sources ""`, `--strict-mcp-config`, `--restricted`, `--tools`, the permission rules, and the variables that turn off `CLAUDE.md`, memory and the non-essential traffic.
@@ -240,6 +258,7 @@ A finding of a **server** (a PHP setting, a package) has its own fix, described 
 | "This project is not tracked by git" / "no commit yet" | Michel copies with git: the folder you added must be the main folder of a repository, with a first commit. The check and the brief stay available. |
 | "Your project is too large" | Exclude big folders (`--exclude`), or fix by hand from the brief. |
 | "…would make the install run programs from the project itself" | A setting of your project (npm, Composer) would run code during the install; Michel does not accept it, so nothing ran. Fix by hand, or remove that setting. |
+| "Tests: waiting for your go-ahead" | The AI changed other files on top of the planned update: the tests would run its code on your computer, with access to what you can open yourself. Read the change, then click **Run the tests**, or type `michel fix test <attempt>` (then `--yes` to run them). You can also approve without running them. |
 | "Tests: not run", no test command | Set one: `michel project set <name> --test-cmd "…"`. |
 | "Tests: not run", yarn or pnpm project | Michel does not install with yarn or pnpm: check your site yourself before merging. |
 | "Tests: not run", install refused | The page says which setting blocks: remove it, or check your site yourself before merging. |

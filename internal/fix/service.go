@@ -117,7 +117,10 @@ type Deps struct {
 	// DefaultMaxTurns). WorkerInterval is the pause between two looks at the
 	// queue (0: 30 s). PollInterval is how often a running session's state
 	// is read (0: 1 s).
-	Timeout        time.Duration
+	Timeout time.Duration
+	// TestsBound bounds a run of the tests a person asked for (RunTests):
+	// 0 is DefaultTestsTimeout.
+	TestsBound     time.Duration
 	MaxTurns       int
 	WorkerInterval time.Duration
 	PollInterval   time.Duration
@@ -268,6 +271,8 @@ type Sessions struct {
 	autoTried   map[string]time.Time
 	autoAlerted map[string]bool
 	sims        map[string]int
+	// testing are the attempts whose tests run now on a click (RunTests).
+	testing map[string]bool
 }
 
 // running is one attempt's session: the agent, its proxy, its masker and
@@ -1190,24 +1195,21 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 			lines = append(lines, i18n.T(lang, "fix.msg.tests_not_run", tell(err.Error())))
 		case len(argv) == 0:
 			lines = append(lines, i18n.T(lang, "fix.msg.tests_none"))
+		case !unchanged:
+			// The agent changed Michel's tree: the tests would run code it
+			// wrote (a test, a test setting, a package it added). They wait
+			// for a person's click (RunTests); the agent is never trusted
+			// with this.
+			testsStatus = workcopy.TestsAwaiting
+			lines = append(lines, awaitingText(lang, tell, attemptID, ch.Files))
 		default:
 			var terr error
 			commands = append(commands, RanCommand{What: "tests"})
 			testsStatus, testsOut, terr = workcopy.RunTests(ctx, wd, run, argv)
-			switch {
-			case terr != nil && changeRefused(terr):
+			if terr != nil && changeRefused(terr) {
 				return fail("fix.cause.change_refused", terr)
-			case testsStatus == workcopy.TestsPassed:
-				lines = append(lines, i18n.T(lang, "fix.msg.tests_passed"))
-			case testsStatus == workcopy.TestsFailed:
-				lines = append(lines, i18n.T(lang, "fix.msg.tests_failed", tell(testsOut)))
-			default:
-				reason := ""
-				if terr != nil {
-					reason = tell(noPath(terr).Error())
-				}
-				lines = append(lines, i18n.T(lang, "fix.msg.tests_not_run", reason))
 			}
+			lines = append(lines, testsText(lang, tell, testsStatus, testsOut, terr))
 		}
 	}
 	clean := false
@@ -1245,7 +1247,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	prop := Proposal{
 		AttemptID: attemptID, Summary: summary, Diff: m.Mask(ch.Display), Files: ch.Files,
 		TestsStatus: testsStatus, TestsOutput: tell(testsOut), RescanClean: clean, Risk: risk,
-		CommitSHA: sha, DiffRaw: ch.Raw, StepsServer: []string{}, Commands: commands,
+		CommitSHA: sha, DiffRaw: ch.Raw, StepsServer: []string{}, Commands: commands, Tree: snap.Tree,
 		FromVersion: cleanVersion(fi.InstalledVersion), ToVersion: committedVersion(ctx, wd, c, plan, sha),
 	}
 	prop.Hash = proposalHash(ch.Raw, sha, testsStatus, summary)
@@ -1262,7 +1264,7 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 	if err := d.record(ctx, "fix.propose", attemptID, "ok", map[string]any{
 		"attempt_id": attemptID, "finding_id": fi.ID, "project_id": p.ID, "proposal_id": prop.ID, "hash": prop.Hash,
 		"commit": sha, "files": len(ch.Files), "tests": testsStatus, "rescan_clean": clean, "risk": risk,
-		"superseded": a.State == StateProposed, "tree_unchanged": unchanged,
+		"superseded": a.State == StateProposed, "tree_unchanged": unchanged, "tests_awaiting": testsStatus == workcopy.TestsAwaiting,
 	}); err != nil {
 		return prop, err
 	}
@@ -1300,6 +1302,49 @@ func Propose(ctx context.Context, d Deps, attemptID string, in ProposeInput) (Pr
 		}
 	}
 	return prop, nil
+}
+
+// testsText is Michel's line about a run of the tests.
+func testsText(lang i18n.Lang, tell func(string) string, status, out string, err error) string {
+	switch status {
+	case workcopy.TestsPassed:
+		return i18n.T(lang, "fix.msg.tests_passed")
+	case workcopy.TestsFailed:
+		return i18n.T(lang, "fix.msg.tests_failed", tell(out))
+	}
+	reason := ""
+	if err != nil {
+		reason = tell(noPath(err).Error())
+	}
+	return i18n.T(lang, "fix.msg.tests_not_run", reason)
+}
+
+// reviewText names the changed files as ShownReviewFiles shows them, the
+// manifests and lockfiles said for what they are, then "and N more".
+func reviewText(lang i18n.Lang, tell func(string) string, list []ReviewFile) string {
+	shownFiles, more := ShownReviewFiles(list)
+	names := make([]string, 0, len(shownFiles))
+	for _, f := range shownFiles {
+		name := tell(scan.SanitizeText(f.Path))
+		switch f.Kind {
+		case FileManifest:
+			name = i18n.T(lang, "fix.msg.file_manifest", name)
+		case FileLockfile:
+			name = i18n.T(lang, "fix.msg.file_lockfile", name)
+		}
+		names = append(names, name)
+	}
+	text := strings.Join(names, ", ")
+	if more > 0 {
+		text += " " + i18n.N(lang, "fix.msg.tests_awaiting_more", more)
+	}
+	return text
+}
+
+// awaitingText is Michel's line when the tests wait for a click: why, and
+// every file the agent changed.
+func awaitingText(lang i18n.Lang, tell func(string) string, attemptID string, files []string) string {
+	return i18n.T(lang, "fix.msg.tests_awaiting", reviewText(lang, tell, reviewFiles(files)), attemptID)
 }
 
 // plainConstraint is the only shape of constraint Michel's own update leaves
