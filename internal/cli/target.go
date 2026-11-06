@@ -12,10 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/kvarot/michel/internal/audit"
 	"github.com/kvarot/michel/internal/fix"
 	"github.com/kvarot/michel/internal/i18n"
-	"github.com/kvarot/michel/internal/policy"
 	"github.com/kvarot/michel/internal/project"
 	"github.com/kvarot/michel/internal/servercheck"
 	"github.com/kvarot/michel/internal/servererr"
@@ -61,22 +59,6 @@ func targetFailure(deps *Deps, err error, reach bool) error {
 		msg += " " + deps.T(key+"_hint")
 	}
 	return errors.New(msg)
-}
-
-func targetRecord(cmd *cobra.Command, deps *Deps, action, id, result string, ev map[string]any) error {
-	if _, err := deps.Audit.Record(cmd.Context(), audit.Event{Actor: "cli", Action: action, Target: id, Result: result, Evidence: ev}); err != nil {
-		return deps.Wrapf("cli.target.audit_failed", err)
-	}
-	return nil
-}
-
-// refusalRecord audits a host-key refusal and returns refused, joined with
-// the audit failure when the row could not be written.
-func refusalRecord(cmd *cobra.Command, deps *Deps, id string, ev map[string]any, refused error) error {
-	if _, err := deps.Audit.Record(cmd.Context(), audit.Event{Actor: "cli", Action: "target.hostkey", Target: id, Result: "refused", Evidence: ev}); err != nil {
-		return errors.Join(refused, deps.Wrapf("cli.target.refusal_audit_failed", err))
-	}
-	return refused
 }
 
 // targetRef finds the server named by arg (its id or its name).
@@ -236,29 +218,6 @@ func targetDeps(cmd *cobra.Command, deps *Deps) target.Deps {
 		Reload: sd.Reload, Current: deps.Policy, Gateway: deps.Gateway}
 }
 
-// changeRules writes the network rules to add, then removes those to remove,
-// in the policy file, and hands the reloaded policy to the gateway
-// (target.ChangeRules). It returns the rules to add that were not in force
-// yet, and those it removed.
-func changeRules(cmd *cobra.Command, deps *Deps, add, remove []policy.AllowRule) (added, removed []policy.AllowRule, err error) {
-	return target.ChangeRules(cmd.Context(), targetDeps(cmd, deps), add, remove)
-}
-
-// otherTargets are the servers other than id.
-func otherTargets(ctx context.Context, repo *target.Repo, id string) ([]target.Target, error) {
-	all, err := repo.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := all[:0:0]
-	for _, t := range all {
-		if t.ID != id {
-			out = append(out, t)
-		}
-	}
-	return out, nil
-}
-
 func newTargetAddCmd(deps *Deps) *cobra.Command {
 	var name, user, kind, env, executor, sudo, siteURL, interval, preprod string
 	var port, level int
@@ -368,27 +327,30 @@ func newTargetTrustCmd(deps *Deps) *cobra.Command {
 			if err != nil {
 				return targetFailure(deps, err, true)
 			}
-			repo := target.NewRepo(deps.Store)
 			fingerprint = strings.TrimSpace(fingerprint)
 			if fingerprint == "" {
 				fmt.Fprintln(deps.Stdout, deps.T("cli.target.trust.show", t.Name, typ, fp))
 				fmt.Fprintln(deps.Stdout, deps.T("cli.target.trust.next", t.Name, fp))
 				return nil
 			}
-			if fingerprint != fp {
-				return refusalRecord(cmd, deps, t.ID, map[string]any{"name": t.Name, "reason": "fingerprint mismatch"},
-					deps.Errorf("cli.target.trust.mismatch", t.Name))
+			_, err = target.ConfirmHostKey(cmd.Context(), targetDeps(cmd, deps), t, fingerprint, fp, replace)
+			var refusalAudit *target.RefusalAuditError
+			var auditErr *target.AuditError
+			refusal := func(err error) error {
+				if errors.Is(err, target.ErrFingerprintMismatch) {
+					return deps.Errorf("cli.target.trust.mismatch", t.Name)
+				}
+				return deps.Errorf("cli.target.trust.changed", t.Name)
 			}
-			if t.HostKey != "" && t.HostKey != fp && !replace {
-				return refusalRecord(cmd, deps, t.ID, map[string]any{"name": t.Name, "reason": "key changed, replace not asked"},
-					deps.Errorf("cli.target.trust.changed", t.Name))
-			}
-			if err := repo.SetHostKey(cmd.Context(), t.ID, fp); err != nil {
+			switch {
+			case errors.As(err, &refusalAudit):
+				return errors.Join(refusal(refusalAudit.Refusal), deps.Wrapf("cli.target.refusal_audit_failed", refusalAudit.Err))
+			case errors.Is(err, target.ErrFingerprintMismatch), errors.Is(err, target.ErrHostKeyReplaceNotAsked):
+				return refusal(err)
+			case errors.As(err, &auditErr):
+				return deps.Wrapf("cli.target.audit_failed", auditErr.Err)
+			case err != nil:
 				return targetFailure(deps, err, false)
-			}
-			if err := targetRecord(cmd, deps, "target.hostkey", t.ID, "ok", map[string]any{"name": t.Name, "fingerprint": fp,
-				"replaced": t.HostKey != "" && t.HostKey != fp}); err != nil {
-				return err
 			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.target.trust.done", t.Name))
 			return nil
@@ -459,12 +421,10 @@ func newTargetSetCmd(deps *Deps) *cobra.Command {
 			"--site-url, --interval (a duration such as 12h, or manual) and --preprod (a server's name or id, or '' for none).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
 			t, err := targetRef(cmd, deps, args[0])
 			if err != nil {
 				return err
 			}
-			repo := target.NewRepo(deps.Store)
 			fl := cmd.Flags()
 			var fields []string
 			for _, f := range []string{"level", "executor", "sudo", "site-url", "interval", "preprod", "active"} {
@@ -475,65 +435,39 @@ func newTargetSetCmd(deps *Deps) *cobra.Command {
 			if len(fields) == 0 {
 				return deps.Errorf("cli.target.set.nothing")
 			}
-			old := t
+			var p target.Patch
 			if fl.Changed("level") {
-				t.FixLevel = level
+				p.FixLevel = &level
 			}
 			if fl.Changed("executor") {
-				t.Executor = target.Executor(executor)
+				e := target.Executor(executor)
+				p.Executor = &e
 			}
 			if fl.Changed("sudo") {
-				t.Sudo = target.SudoMode(sudo)
+				m := target.SudoMode(sudo)
+				p.Sudo = &m
 			}
 			if fl.Changed("site-url") {
-				t.SiteURL = strings.TrimSpace(siteURL)
+				p.SiteURL = &siteURL
 			}
 			if fl.Changed("active") {
-				t.Active = active
+				p.Active = &active
 			}
 			if fl.Changed("interval") {
-				if t.CheckInterval, err = target.ParseInterval(interval); err != nil {
-					return targetFailure(deps, err, false)
-				}
-			}
-			if err := target.Check(t); err != nil {
-				return targetFailure(deps, err, false)
-			}
-			if err := repo.CheckEnv(ctx, t); err != nil {
-				return targetFailure(deps, err, false)
+				p.CheckInterval = &interval
 			}
 			if fl.Changed("preprod") {
-				if t.PreprodID, err = repo.ResolvePreprod(ctx, t, preprod); err != nil {
-					return targetFailure(deps, err, false)
-				}
+				p.Preprod = &preprod
 			}
-			// The new rule goes in first (a refusal changes nothing), and comes
-			// out again if the update fails; the old site's rule goes after,
-			// unless another server uses it.
-			var fresh []policy.AllowRule
-			siteMoved := t.SiteURL != old.SiteURL
-			if siteMoved {
-				if fresh, _, err = changeRules(cmd, deps, target.AllowRules(t), nil); err != nil {
-					return deps.Wrapf("cli.target.set.allow_failed", err)
-				}
-			}
-			if err := repo.Update(ctx, t); err != nil {
-				if len(fresh) > 0 {
-					_, _, _ = changeRules(cmd, deps, nil, fresh)
-				}
+			var rulesErr *target.RulesError
+			var auditErr *target.AuditError
+			switch _, err := target.ApplyUpdate(cmd.Context(), targetDeps(cmd, deps), t, p); {
+			case errors.As(err, &rulesErr):
+				return deps.Wrapf("cli.target.set.allow_failed", rulesErr.Err)
+			case errors.As(err, &auditErr):
+				return deps.Wrapf("cli.target.audit_failed", auditErr.Err)
+			case err != nil:
 				return targetFailure(deps, err, false)
-			}
-			released := 0
-			if siteMoved {
-				if others, err := otherTargets(ctx, repo, t.ID); err == nil {
-					gone := target.ReleasedRules(old, append(others, t))
-					if _, done, err := changeRules(cmd, deps, nil, gone); err == nil {
-						released = len(done)
-					}
-				}
-			}
-			if err := targetRecord(cmd, deps, "target.update", t.ID, "ok", map[string]any{"name": t.Name, "changed": fields, "rules_written": len(fresh), "rules_removed": released}); err != nil {
-				return err
 			}
 			fmt.Fprintln(deps.Stdout, deps.T("cli.target.set.done", t.Name, strings.Join(fields, ", ")))
 			return nil
@@ -573,7 +507,6 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 				return deps.Errorf("cli.target.logs.read.busy", t.Name)
 			}
 			defer logUnlock()
-			repo := target.NewRepo(deps.Store)
 			block, err := fix.NewRepo(deps.Store).TargetBlock(ctx, t.ID)
 			if err != nil {
 				return targetFailure(deps, err, false)
@@ -587,36 +520,20 @@ func newTargetRemoveCmd(deps *Deps) *cobra.Command {
 			default:
 				return deps.Errorf("cli.target.remove.busy", t.Name)
 			}
-			others, err := otherTargets(ctx, repo, t.ID)
-			if err != nil {
-				return targetFailure(deps, err, false)
-			}
-			dependents := 0
-			for _, o := range others {
-				if o.PreprodID == t.ID {
-					dependents++
-				}
-			}
-			// What Michel read in its logs goes first. If that fails the server stays and
-			// removing it can be tried again (once it is gone nothing could erase the logs).
-			erased, forgetErr := serverlog.ForgetTargetAudited(context.WithoutCancel(ctx), serverlog.NewRepo(deps.Store), deps.Audit, "cli", t.ID)
-			if !erased {
+			// What Michel read in its logs goes first (target.Remove).
+			res, err := target.Remove(ctx, targetDeps(cmd, deps), t, func(ctx context.Context) (bool, error) {
+				return serverlog.ForgetTargetAudited(ctx, serverlog.NewRepo(deps.Store), deps.Audit, "cli", t.ID)
+			})
+			var auditErr *target.AuditError
+			switch {
+			case errors.Is(err, target.ErrLogsNotErased):
 				return deps.Errorf("cli.target.remove.logs_failed", t.Name)
-			}
-			if err := repo.Remove(ctx, t.ID); err != nil {
+			case errors.As(err, &auditErr):
+				return deps.Wrapf("cli.target.audit_failed", auditErr.Err)
+			case err != nil:
 				return targetFailure(deps, err, false)
 			}
-			// The opt-in goes with the server, except for what another uses.
-			removed, rulesFailed := 0, false
-			if gone := target.ReleasedRules(t, others); len(gone) > 0 {
-				_, done, err := changeRules(cmd, deps, nil, gone)
-				removed, rulesFailed = len(done), err != nil
-			}
-			if err := targetRecord(cmd, deps, "target.remove", t.ID, "ok", map[string]any{"name": t.Name, "rules_removed": removed,
-				"rules_error": rulesFailed, "preprod_cleared": dependents, "logs_error": forgetErr != nil}); err != nil {
-				return err
-			}
-			if rulesFailed {
+			if res.RulesFailed {
 				// The server is gone; its network rules could not be taken back.
 				fmt.Fprintln(deps.Stderr, deps.T("cli.target.remove.rules_failed", t.Name))
 			}

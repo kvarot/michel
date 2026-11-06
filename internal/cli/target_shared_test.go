@@ -64,3 +64,26 @@ func TestTargetAddWithoutUserNamesTheFlag(t *testing.T) {
 		t.Errorf("servers = %+v", list)
 	}
 }
+
+// michel target set leaves the trace the page leaves: the fields are named
+// as the page names them (internal/api TestTargetUpdateAuditIsTheSharedOne).
+func TestTargetSetAuditIsTheSharedOne(t *testing.T) {
+	e := newTargetEnv(t)
+	if _, _, _, err := run(t, e.dir, "target", "add", "192.0.2.98", "--user", "d", "--name", "upd"); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _, err := run(t, e.dir, "target", "set", "upd", "--level", "2", "--site-url", "https://www.example.test/", "--interval", "12h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The sentence keeps the flags' names.
+	if !strings.Contains(out, "level, site-url, interval") {
+		t.Errorf("out = %q", out)
+	}
+	ev := auditRows(t, e.dir, "target.update")
+	want := map[string]any{"name": "upd", "changed": []any{"site_url", "fix_level", "check_interval"}, "rules_written": float64(1),
+		"rules_removed": float64(0), "host_key_reset": false}
+	if len(ev) != 1 || ev[0].result != "ok" || !reflect.DeepEqual(ev[0].evidence, want) {
+		t.Errorf("audit = %+v, want %v", ev, want)
+	}
+}

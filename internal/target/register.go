@@ -65,6 +65,10 @@ func ChangeRules(ctx context.Context, d Deps, add, remove []policy.AllowRule) (a
 	if d.PolicyPath == "" || d.Reload == nil {
 		return nil, nil, nil
 	}
+	// The edit ends even if the caller goes away (Ctrl-C, a closed page): a
+	// rule written to the file but not recorded would count as the user's
+	// and never be taken back.
+	ctx = context.WithoutCancel(ctx)
 	var present []policy.AllowRule
 	if d.Current != nil {
 		present = d.Current().Sovereignty.Network.Allow
